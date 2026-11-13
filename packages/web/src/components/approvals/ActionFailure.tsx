@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react';
 import { failureReading } from '../../lib/action-outcome.js';
 import { auditHref } from '../../lib/audit.js';
+import { gateReasonNextStep } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { capabilityHolders } from '../../lib/role-holders.js';
 import { Button } from '../kit/button.js';
@@ -128,7 +129,13 @@ export function ActionFailureLine({
 }
 
 /** The whole reading, for a detail pane. `check` names the system and the action, so "outcome
- *  unknown" says what to check where. */
+ *  unknown" says what to check where.
+ *
+ *  Legacy 700 (UX acceptance of #1131, P2): when the recorded reason starts with a gate reason the
+ *  console has copy for (`gateReasonNextStep` — the gate's address not an allowed target, not
+ *  sent, the gate's refusals, …), that reason's title and next step take the generic examples'
+ *  place, and the kernel's own text moves into the 「技术细节」 disclosure, as the chat's tool row
+ *  does. "Outcome unknown" keeps its own reading, which already names what to check where. */
 export function ActionFailureNotice({
   row,
   check,
@@ -144,20 +151,48 @@ export function ActionFailureNotice({
   const t = useT();
   const reading = failureReading(row, t, check);
   if (!reading) return null;
+  const reason = reading.kind !== 'withdrawn' ? row.failureReason : null;
+  const named = reason
+    ? gateReasonNextStep(reason, t, check?.action ?? undefined, check?.system ?? undefined)
+    : null;
+  const step = named !== null && named.code !== 'outcome_unknown' ? named : null;
+  const reasonText = reason ? (
+    <FailureReasonText
+      reason={reason}
+      truncated={row.failureReasonTruncated === true}
+      where={reasonWhere}
+      label={t('原因：', 'Reason: ')}
+      testId={testId ? `${testId}-reason` : undefined}
+    />
+  ) : null;
   return (
     <Notice tone={reading.tone} testId={testId}>
       <span className="stack-s" data-failure-kind={reading.kind}>
         <span className="font-medium">{reading.title}</span>
-        <span>{reading.message}</span>
-        {reading.kind !== 'withdrawn' && row.failureReason ? (
-          <FailureReasonText
-            reason={row.failureReason}
-            truncated={row.failureReasonTruncated === true}
-            where={reasonWhere}
-            label={t('原因：', 'Reason: ')}
-            testId={testId ? `${testId}-reason` : undefined}
-          />
-        ) : null}
+        {step ? (
+          <>
+            <span
+              className="stack-s"
+              data-error-code={step.code}
+              data-testid={testId ? `${testId}-next-step` : undefined}
+            >
+              <span className="font-medium">{step.title}</span>
+              <span>{step.message}</span>
+            </span>
+            <details className="error-details">
+              <summary>
+                {t('技术细节', 'Technical details')}
+                <code className="error-banner-code">{step.code}</code>
+              </summary>
+              {reasonText}
+            </details>
+          </>
+        ) : (
+          <>
+            <span>{reading.message}</span>
+            {reasonText}
+          </>
+        )}
       </span>
     </Notice>
   );

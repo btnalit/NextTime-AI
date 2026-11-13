@@ -507,6 +507,10 @@ describe('legacy 700: the gate address is not an allowed target', () => {
   it("another rule reads as the general copy; details.reason decides over the message's text", () => {
     const general = ERROR_NEXT_STEPS.target_refused?.zh;
     expect(general).toContain('指向平台自己的网络或本机');
+    // Review #501: never sends the reader to the allow list (it skips every check).
+    expect(general).not.toContain('允许列表');
+    expect(ERROR_NEXT_STEPS.target_refused?.en).not.toContain('allow list');
+    expect(general).toContain('请平台管理员把它做成平台提供的门');
     expect(
       presentError(refused('platform-subnet', { reason: 'platform-subnet' }), zh).message,
     ).toBe(general);

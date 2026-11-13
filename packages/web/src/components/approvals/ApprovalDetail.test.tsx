@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { describeOutboundTargetRefusal } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -161,6 +162,56 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     // Short: not folded, nothing truncated.
     expect(screen.queryByTestId('approval-failure-reason-toggle')).toBeNull();
     expect(screen.queryByTestId('approval-failure-reason-truncated')).toBeNull();
+  });
+
+  it("legacy 700 (UX acceptance of #1131, P2): a gate reason the console has copy for reads as its next step, the kernel's text folded under the technical details", () => {
+    const failed = { status: 'failed', failedAt: '2026-10-16T07:00:00.000Z' } as const;
+    const refusedReason = `target_refused: gatekeeper client: gate/apply not sent — gate endpoint "gate.example" is refused: ${describeOutboundTargetRefusal('plaintext-public')}`;
+    const first = renderDetail({ ...failed, failureKind: 'refused', failureReason: refusedReason });
+    const notice = screen.getByTestId('approval-failure');
+    expect(notice.textContent).toContain('平台或门明确答复：不执行或执行失败');
+    const step = screen.getByTestId('approval-failure-next-step');
+    expect(step.getAttribute('data-error-code')).toBe('target_refused');
+    expect(step.textContent).toContain('门的地址不允许调用');
+    expect(step.textContent).toContain('用门的 https:// 地址重新接入它');
+    // The generic examples give way to the reason's own next step.
+    expect(notice.textContent).not.toContain('例如操作已被停用');
+    // The kernel's own text is still there, inside the closed disclosure.
+    const reason = screen.getByTestId('approval-failure-reason-text');
+    expect(reason.textContent).toBe(`原因：${refusedReason}`);
+    const details = reason.closest('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toBe('技术细节target_refused');
+    first.unmount();
+
+    // Not sent: the gate could not be reached — the same, with that reason's copy.
+    const second = renderDetail({
+      ...failed,
+      failureKind: 'not_delivered',
+      failureReason: 'gate_unreachable: gatekeeper client: gate/apply not sent — ECONNREFUSED',
+    });
+    expect(screen.getByTestId('approval-failure-next-step').textContent).toContain(
+      '这次调用没有发出：连不上这个系统的门',
+    );
+    second.unmount();
+
+    // Outcome unknown keeps its own reading (it names what to check where), reason in plain view;
+    // so does a reason the console has no copy for.
+    const third = renderDetail({
+      ...failed,
+      failureKind: 'outcome_unknown',
+      failureReason: 'outcome_unknown: the gate never answered',
+    });
+    expect(screen.queryByTestId('approval-failure-next-step')).toBeNull();
+    expect(screen.getByTestId('approval-failure').textContent).toContain(
+      '不要直接重试：先到 docker-prod 上核对',
+    );
+    expect(screen.getByTestId('approval-failure-reason-text').closest('details')).toBeNull();
+    third.unmount();
+    renderDetail({ ...failed, failureKind: 'refused', failureReason: 'apply_timeout: no answer' });
+    expect(screen.queryByTestId('approval-failure-next-step')).toBeNull();
+    expect(screen.getByTestId('approval-failure').textContent).toContain('例如操作已被停用');
   });
 
   it('legacy 339: a long reason starts folded with a toggle; a truncated one says where the whole is, by what the reader may open', async () => {

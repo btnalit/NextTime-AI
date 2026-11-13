@@ -598,9 +598,10 @@ export const ERROR_NEXT_STEPS: Readonly<
   // Legacy 700: a call not sent because the gate's own endpoint is not an allowed target. The usual
   // case since legacy 413 — `http://` to the public internet — has its own copy
   // (`targetRefusedMessage`); this is every other rule's.
+  // Never "ask for the allow list": it skips every check and matches by suffix (review #501).
   target_refused: {
-    zh: '这个门的地址不是平台允许调用的目标（指向平台自己的网络或本机，或者无法解析），调用没有发出。工作区所有者要在「系统与授权」用门可达的地址重新接入它；门在内网时，可以请平台运维把它的地址加入允许列表。',
-    en: 'This gate’s address is not a target the platform calls (it points into the platform’s own networks or the local host, or does not resolve), so nothing was sent. A workspace owner connects the gate again at a reachable address under Systems & access; for a gate inside your network, the platform operator can add its address to the allow list.',
+    zh: '这个门的地址不是平台允许调用的目标（指向平台自己的网络或本机，或者无法解析），调用没有发出。工作区所有者要在「系统与授权」用门可达的地址重新接入它；门只能跑在平台网络上时，请平台管理员把它做成平台提供的门。',
+    en: 'This gate’s address is not a target the platform calls (it points into the platform’s own networks or the local host, or does not resolve), so nothing was sent. A workspace owner connects the gate again at a reachable address under Systems & access; if the gate can only run on the platform’s network, ask a platform admin to make it a platform-provided gate.',
   },
   manifest_fetch_failed: {
     zh: '拿不到接口清单。确认清单地址能访问，再重新导入。',
