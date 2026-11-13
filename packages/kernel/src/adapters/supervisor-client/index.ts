@@ -167,7 +167,8 @@ export interface TaskSpawnInput {
   /** S11 GO18a P3 (independent review N6): `read_only` for a goal reviewer's run — pi starts with
    *  only the built-in tools that read files (worker-supervisor's `builtinTools`, the runtime
    *  image's `NEXTTIME_BUILTIN_TOOLS`), so a reviewer reads what the steps left and runs none of
-   *  it. Set by `spawnWorkerRun` from the Task's own `purpose`, never by a caller. A supervisor
+   *  it; legacy 697: a goal planner's run too. Set by `spawnWorkerRun` from the Task's own
+   *  `purpose` (`review`, `planning`), never by a caller. A supervisor
    *  that predates the field refuses the spawn (strict schema → 400), and one that has it starts
    *  only a runtime image that honours it (runtime contract 3). */
   readonly builtinTools?: 'read_only';

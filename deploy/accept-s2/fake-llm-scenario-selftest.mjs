@@ -1837,9 +1837,16 @@ async function main() {
     //     failed ledger step with `report-runner` among the workers: `revise`, the step moved onto
     //     it. A round for the goal's own acceptance (`failedAcceptance`, no `failedStep`):
     //     `no_revision`, naming the verification round. Both reports pass the Worker result contract
-    //     and their `output` the planner's own schema.
+    //     and their `output` the planner's own schema. Legacy 697: only when pi offered it the
+    //     read-only set (read, and none of bash, edit, write), as the reviewer (6r); otherwise a
+    //     text answer and no report.
     {
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const fn = (name) => ({
+        type: 'function',
+        function: { name, parameters: { type: 'object' } },
+      });
+      const readOnly = ['read', 'grep', 'find', 'ls', 'report_result'].map(fn);
       const plannerInput = (rest) => ({
         role: 'custom',
         content: `## NextTime worker context\n\n### Task input\n${JSON.stringify({ kind: 'goal_planning', basedOnRevision: 1, ...rest })}\n\n### Rules\nreport_result once.`,
@@ -1856,9 +1863,8 @@ async function main() {
         acceptance: [{ kind: 'observe_predicate', key: 'stock-visible', check: {} }],
       };
       const workers = [{ name: 'report-runner', definitionId: 'd-rr', version: 3 }];
-      const revise = toolCallOf(
-        (await post([plannerInput({ plan, failedStep: { key: 'write' }, workers }), begin])).json,
-      );
+      const reviseMessages = [plannerInput({ plan, failedStep: { key: 'write' }, workers }), begin];
+      const revise = toolCallOf((await post(reviseMessages, false, { tools: readOnly })).json);
       const revised = revise?.args?.output?.plan?.steps?.[0];
       check(
         'goal-planner-revise',
@@ -1891,17 +1897,21 @@ async function main() {
       };
       const none = toolCallOf(
         (
-          await post([
-            plannerInput({
-              plan: accepted,
-              failedAcceptance: {
-                round: 2,
-                checks: [{ key: 'stock-unseen', kind: 'observe_predicate', status: 'failed' }],
-              },
-              workers,
-            }),
-            begin,
-          ])
+          await post(
+            [
+              plannerInput({
+                plan: accepted,
+                failedAcceptance: {
+                  round: 2,
+                  checks: [{ key: 'stock-unseen', kind: 'observe_predicate', status: 'failed' }],
+                },
+                workers,
+              }),
+              begin,
+            ],
+            false,
+            { tools: readOnly },
+          )
         ).json,
       );
       check(
@@ -1919,6 +1929,23 @@ async function main() {
         noneOutput.success,
         noneOutput.success ? '' : JSON.stringify(noneOutput.error.issues),
       );
+      // Not read-only: pi's full set, or no tools at all — no report, a sentence saying why.
+      for (const [label, tools, why] of [
+        [
+          'goal-planner-write-tools',
+          [...readOnly, fn('bash'), fn('edit'), fn('write')],
+          'was offered bash, edit, write',
+        ],
+        ['goal-planner-no-tools', undefined, 'was not offered read'],
+      ]) {
+        const { json } = await post(reviseMessages, false, tools ? { tools } : {});
+        const message = json.choices?.[0]?.message;
+        check(
+          label,
+          message?.tool_calls === undefined && String(message?.content ?? '').includes(why),
+          JSON.stringify(message),
+        );
+      }
     }
 
     // 6r. S11 GO18 goalReviewerScenario: the reviewer's Task input as the kernel writes it
