@@ -12,6 +12,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { ChangeSegmentRolledBackError } from '../change-plan/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -89,6 +90,9 @@ describe.runIf(DATABASE_URL !== undefined)(
                     ($1, $4, 'human', 'auditor', 'auditor'), ($1, $5, 'service', 'owner', 'ci-bot')`,
             [workspaceId, ownerId, memberId, auditorId, serviceId],
           );
+          // Every workspace is born with platform-meta (`createWorkspaceWithOwner`); ops-assets
+          // v2's `served_by` LinkType names its `Gatekeeper` type (legacy 303).
+          await seedPlatformMetaOntology(client, workspaceId, ownerId);
         },
         { skipRoleSwitch: true },
       );

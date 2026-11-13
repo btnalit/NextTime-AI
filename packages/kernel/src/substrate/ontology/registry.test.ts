@@ -10,7 +10,7 @@ import {
   publishOntologyDomainPack,
   publishOntologyVersion,
 } from './loader.js';
-import { OntologyNamespaceConflictError } from './namespace.js';
+import { OntologyLinkEndpointError, OntologyNamespaceConflictError } from './namespace.js';
 import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
@@ -698,6 +698,190 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
         }),
       );
       expect(sibling.status).toBe('published');
+    });
+  });
+
+  // Legacy 303: every LinkType end names "*" or an ObjectType some published family declares; both
+  // publish paths refuse a version that would break that, and write nothing.
+  describe('legacy 303 — LinkType ends name a declared ObjectType', () => {
+    const countRows = async (): Promise<number> =>
+      (
+        await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+          client.query<{ n: number }>(
+            'select count(*)::int as n from ontology_versions where workspace_id = $1',
+            [workspaceId],
+          ),
+        )
+      ).rows[0]?.n ?? -1;
+
+    it('publishOntologyDraft refuses a draft whose LinkType names a type nobody declares; the draft stays a draft', async () => {
+      const own = minimalDefinition();
+      const typo = `Wigdet_${randomUUID().slice(0, 8)}`;
+      const draft = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
+          change: {
+            ...own.definition,
+            linkTypes: [
+              ...own.definition.linkTypes,
+              { name: 'feeds', domain: own.widget, range: typo, description: 'typo' },
+            ],
+          },
+          proposedBy: bob,
+        }),
+      );
+      const refusal = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        publishOntologyDraft(client, workspaceId, {
+          id: draft.id,
+          version: draft.version,
+          publishedBy: bob,
+        }),
+      ).catch((err: unknown) => err);
+      expect(refusal).toBeInstanceOf(OntologyLinkEndpointError);
+      expect((refusal as OntologyLinkEndpointError).code).toBe('ontology_link_endpoint_undeclared');
+      expect((refusal as OntologyLinkEndpointError).problems).toEqual({
+        undeclared: [{ ontologyId: draft.id, linkType: 'feeds', end: 'range', objectType: typo }],
+        orphaned: [],
+      });
+      const rows = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        listOntologyVersions(client, workspaceId, bob),
+      );
+      expect(rows.items.find((item) => item.id === draft.id)?.status).toBe('draft');
+    });
+
+    it('an end may name another published family’s ObjectType; that family may not then drop it', async () => {
+      const target = minimalDefinition();
+      const targetV1 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition: target.definition,
+          principalId: alice,
+        }),
+      );
+      const referrer = minimalDefinition();
+      const referrerV1 = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition: {
+            ...referrer.definition,
+            linkTypes: [
+              ...referrer.definition.linkTypes,
+              {
+                name: 'served_by',
+                domain: referrer.widget,
+                range: target.widget,
+                description: 'across families',
+              },
+            ],
+          },
+          principalId: bob,
+        }),
+      );
+      expect(referrerV1.status).toBe('published');
+
+      // The target family's next version drops the type the referrer's LinkType names.
+      const replacement = minimalDefinition();
+      const before = await countRows();
+      const refusal = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          id: targetV1.id,
+          definition: replacement.definition,
+          principalId: alice,
+        }),
+      ).catch((err: unknown) => err);
+      expect(refusal).toBeInstanceOf(OntologyLinkEndpointError);
+      expect((refusal as OntologyLinkEndpointError).problems).toEqual({
+        undeclared: [],
+        orphaned: [
+          {
+            ontologyId: referrerV1.id,
+            linkType: 'served_by',
+            end: 'range',
+            objectType: target.widget,
+          },
+        ],
+      });
+      expect(await countRows()).toBe(before);
+
+      // Keeping the type (and adding another) is fine.
+      const kept = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          id: targetV1.id,
+          definition: {
+            ...target.definition,
+            objectTypes: [...target.definition.objectTypes, ...replacement.definition.objectTypes],
+          },
+          principalId: alice,
+        }),
+      );
+      expect(kept.version).toBe(2);
+    });
+
+    it('an end that already named nothing does not stop another family from publishing', async () => {
+      // Written before the check existed (or by a path that bypasses it): a published head whose
+      // LinkType names a missing type.
+      const stale = minimalDefinition();
+      const missing = `Gone_${randomUUID().slice(0, 8)}`;
+      const staleId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: alice },
+        (client) =>
+          client.query(
+            `insert into ontology_versions
+               (workspace_id, id, version, status, definition, proposed_by, origin, published_by,
+                published_at)
+             values ($1, $2, 1, 'published', $3::jsonb, $4, 'human', $4, now())`,
+            [
+              workspaceId,
+              staleId,
+              JSON.stringify({
+                ...stale.definition,
+                linkTypes: [
+                  { name: 'points_at', domain: stale.widget, range: missing, description: 'd' },
+                ],
+              }),
+              alice,
+            ],
+          ),
+        { skipRoleSwitch: true },
+      );
+      const unrelated = minimalDefinition();
+      const published = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition: unrelated.definition,
+          principalId: alice,
+        }),
+      );
+      expect(published.status).toBe('published');
+      // Its own family's next version must fix it, though.
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+          publishOntologyVersion(client, workspaceId, {
+            origin: 'human',
+            id: staleId,
+            definition: {
+              ...stale.definition,
+              linkTypes: [
+                { name: 'points_at', domain: stale.widget, range: missing, description: 'd' },
+              ],
+            },
+            principalId: alice,
+          }),
+        ),
+      ).rejects.toThrow(OntologyLinkEndpointError);
+      const fixed = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          id: staleId,
+          definition: stale.definition,
+          principalId: alice,
+        }),
+      );
+      expect(fixed.version).toBe(2);
     });
   });
 });

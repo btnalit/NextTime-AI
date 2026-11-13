@@ -2,6 +2,7 @@ import type { ChangeItemClassification } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { GraphTypeUsage } from '../../substrate/graph/index.js';
+import type { PendingOntologyHead } from '../../substrate/ontology/index.js';
 import { assertChangeApplierIsPerson } from './applier.js';
 import { type WideningReason, classificationOf } from './classify.js';
 import {
@@ -124,13 +125,21 @@ async function planItemRollback(
   workspaceId: string,
   record: ChangeItemRecord,
   lock: boolean,
+  pendingOntology: PendingOntologyHead[],
 ): Promise<PlannedItemRollback> {
   const kind = record.kind;
   switch (kind) {
     case 'ontology_version': {
       const item = parseStoredOntologyItem(record);
-      const ontology = await planOntologyRollback(client, workspaceId, item);
+      const ontology = await planOntologyRollback(client, workspaceId, item, pendingOntology);
       const blocker = ontology.blocker;
+      // Legacy 303: undone in this order, so the items after this one see its family returned.
+      if (!blocker) {
+        pendingOntology.push({
+          id: item.target.ontologyId,
+          definition: ontology.restoredDefinition,
+        });
+      }
       let conflict: ChangeRollbackConflict | null = null;
       if (blocker) {
         const segmentId =
@@ -151,6 +160,16 @@ async function planItemRollback(
           conflicts:
             blocker.reason === 'namespace_conflict'
               ? blocker.conflicts.map((c) => ({ kind: c.kind, name: c.name }))
+              : [],
+          linkEnds:
+            blocker.reason === 'link_endpoint_undeclared'
+              ? [...blocker.problems.undeclared, ...blocker.problems.orphaned].map((p) => ({
+                  // A rollback's candidate is always an existing family, never a new one.
+                  ontologyId: p.ontologyId ?? item.target.ontologyId,
+                  linkType: p.linkType,
+                  end: p.end,
+                  objectType: p.objectType,
+                }))
               : [],
         };
       }
@@ -187,6 +206,7 @@ async function planItemRollback(
           blocker: blocker.reason,
           blockedBy: segmentId ? { segmentId } : null,
           conflicts: [],
+          linkEnds: [],
         };
       }
       return {
@@ -222,6 +242,7 @@ async function planItemRollback(
           blocker: blocker.reason,
           blockedBy: segmentId ? { segmentId } : null,
           conflicts: [],
+          linkEnds: [],
         };
       }
       return {
@@ -254,8 +275,9 @@ async function planRollback(
     for (const record of inLockOrder(records)) await lockItemRollback(client, workspaceId, record);
   }
   const items: PlannedItemRollback[] = [];
+  const pendingOntology: PendingOntologyHead[] = [];
   for (const record of [...records].reverse()) {
-    items.push(await planItemRollback(client, workspaceId, record, lock));
+    items.push(await planItemRollback(client, workspaceId, record, lock, pendingOntology));
   }
   return {
     segment,

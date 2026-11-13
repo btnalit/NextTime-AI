@@ -9,6 +9,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   type ActionTypeDefinition,
   type OntologyDefinition,
+  OntologyLinkEndpointError,
   OntologyNamespaceConflictError,
   deriveOntologyPackId,
   publishOntologyVersion,
@@ -511,6 +512,47 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('one transaction per segment', () => {
+      it('a LinkType end naming a type no family declares is refused at review (legacy 303); one the segment’s earlier item adds is not', async () => {
+        const ws = await newWorkspace();
+        const dangling = segment('fam-e', {
+          objectTypes: [{ name: 'ObjE', description: 'd' }],
+          linkTypes: [{ name: 'refers_to', domain: 'ObjE', range: 'ObjMissing', description: 'd' }],
+        });
+        const refusal = await plan(ws, dangling).catch((err: unknown) => err);
+        expect(refusal).toBeInstanceOf(OntologyLinkEndpointError);
+        expect((refusal as OntologyLinkEndpointError).problems.undeclared).toEqual([
+          {
+            ontologyId: deriveOntologyPackId('fam-e'),
+            linkType: 'refers_to',
+            end: 'range',
+            objectType: 'ObjMissing',
+          },
+        ]);
+
+        // The type comes from an earlier item of the same segment: published first when applied.
+        const pair: WorkspaceSegmentInput = {
+          source: { kind: 'pack', name: 'pair', version: '1', digest: contentDigest('pair') },
+          items: [
+            { kind: 'ontology_version', family: 'fam-k1', definition: definitionOf('ObjK') },
+            {
+              kind: 'ontology_version',
+              family: 'fam-k2',
+              definition: {
+                objectTypes: [{ name: 'ObjK2', description: 'd' }],
+                linkTypes: [
+                  { name: 'refers_to', domain: 'ObjK2', range: 'ObjK', description: 'd' },
+                ],
+              },
+            },
+          ],
+        };
+        const planned = await plan(ws, pair);
+        await apply(ws, applyInput(ws, pair, planned.digest));
+        expect(await familyVersions(ws, 'fam-k2')).toEqual([
+          { version: 1, published_by: ws.ownerId },
+        ]);
+      });
+
       it('a name another family owns is refused at review (I-P1)', async () => {
         const ws = await newWorkspace();
         const owner = segment('fam-f', definitionOf('Shared'));

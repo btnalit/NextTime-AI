@@ -7,6 +7,7 @@ import {
   type ChangeSegmentDetailWire,
   type ChangeSegmentWire,
   type ChangeWideningReasonWire,
+  type OntologyLinkEndWire,
   type OntologyTypeNamesWire,
   type OperationFieldChangeWire,
   type ReceivedAdminProposalSegmentWire,
@@ -872,7 +873,22 @@ const BLOCKER_TEXT: Readonly<
     zh: '这个 Operation 有一份待审的修订草稿，撤销会越过它，所以不撤销。先在「Operation」页发布或丢弃那份草稿。',
     en: 'This Operation has a revision draft under review; rolling back would go past it, so it is not rolled back. Publish or discard that draft on the Operations tab first.',
   },
+  // Legacy 303: afterwards a link type would start or end at an object type no ontology declares.
+  link_endpoint_undeclared: {
+    zh: '撤销后会有关系类型指向工作区里没有任何本体声明的对象类型：要么是要退回的那一版用到的类型已经不在了，要么是撤销会去掉别的本体的关系类型还在用的类型。先改动那个本体，或先撤销用到它的那条记录。',
+    en: 'Afterwards a link type would point at an object type no ontology in the workspace declares: either the version to return to uses a type that is gone, or the rollback would take away a type another ontology’s link type still uses. Change that ontology first, or roll back the record that uses it.',
+  },
 };
+
+/** One LinkType end a rollback would leave pointing at nothing (legacy 303), as a short phrase:
+ *  whose link type it is (this item's family, or another), which end, and the type it names. */
+function linkEndText(end: OntologyLinkEndWire, ownOntologyId: string, t: Translate): string {
+  const own = end.ontologyId === ownOntologyId;
+  return t(
+    `${own ? '' : '另一个本体的'}关系类型 ${end.linkType} 的 ${end.end}（${end.objectType}）`,
+    `${own ? '' : 'another ontology’s '}link type ${end.linkType}, ${end.end} ${end.objectType}`,
+  );
+}
 
 function workerGatesOf(items: readonly ChangeItemWire[], ordinal: number): WorkerItemGates | null {
   const item = items.find((candidate) => candidate.ordinal === ordinal);
@@ -1061,6 +1077,14 @@ function RollBackSegment({
                       ? t(
                           `（${item.conflicts.map((c) => `${c.kind === 'object' ? '对象类型' : '动作类型'} ${c.name}`).join('、')}）`,
                           ` (${item.conflicts.map((c) => `${c.kind} type ${c.name}`).join(', ')})`,
+                        )
+                      : null}
+                    {item.kind === 'ontology_version' &&
+                    item.blocker === 'link_endpoint_undeclared' &&
+                    item.linkEnds.length > 0
+                      ? t(
+                          `（${item.linkEnds.map((e) => linkEndText(e, item.target.ontologyId, t)).join('、')}）`,
+                          ` (${item.linkEnds.map((e) => linkEndText(e, item.target.ontologyId, t)).join('; ')})`,
                         )
                       : null}
                     {item.blocker === 'replaced' ? (

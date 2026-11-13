@@ -354,6 +354,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           blocker: 'replaced',
           blockedBy: { segmentId: second },
           conflicts: [],
+          linkEnds: [],
         });
         const refused = rollBack(ws, first);
         await expect(refused).rejects.toBeInstanceOf(ChangeRollbackConflictError);
@@ -446,6 +447,85 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         await expect(rollBack(ws, moved)).rejects.toBeInstanceOf(ChangeRollbackConflictError);
         expect((await provenance(ws, 'fam-n1')).status).toBe('recorded');
+      });
+    });
+
+    // Legacy 303: a rollback may not leave a LinkType end naming an ObjectType no published
+    // family declares — another family's end naming a type it takes away, or the restored
+    // version's own end naming a type that is gone since.
+    describe('LinkType ends after a rollback (legacy 303)', () => {
+      /** Family `family` declaring `own`, with a LinkType `refers_to` from it to `target`. */
+      const referring = (own: string, target: string): OntologyDefinition => ({
+        objectTypes: [{ name: own, description: 'd' }],
+        linkTypes: [{ name: 'refers_to', domain: own, range: target, description: 'd' }],
+      });
+
+      it('retiring a family another family’s LinkType names: refused, naming the end; the referrer first, then it goes through', async () => {
+        const ws = await newWorkspace();
+        const named = await apply(ws, segment('fam-l1', definitionOf(['ObjL'])));
+        const referrer = await apply(ws, segment('fam-l2', referring('ObjL2', 'ObjL')));
+        const end = {
+          ontologyId: deriveOntologyPackId('fam-l2'),
+          linkType: 'refers_to',
+          end: 'range',
+          objectType: 'ObjL',
+        };
+        expect((await preview(ws, named)).items[0]?.conflict).toMatchObject({
+          blocker: 'link_endpoint_undeclared',
+          blockedBy: null,
+          conflicts: [],
+          linkEnds: [end],
+        });
+        const refused = rollBack(ws, named);
+        await expect(refused).rejects.toBeInstanceOf(ChangeRollbackConflictError);
+        await expect(refused).rejects.toMatchObject({
+          details: { items: [expect.objectContaining({ linkEnds: [end] })] },
+        });
+        expect(await familyVersions(ws, 'fam-l1')).toEqual([{ version: 1, status: 'published' }]);
+
+        await rollBack(ws, referrer);
+        await rollBack(ws, named);
+        expect(await familyVersions(ws, 'fam-l1')).toEqual([{ version: 1, status: 'deprecated' }]);
+      });
+
+      it('the restored version names a type that is gone since: refused, naming its own end', async () => {
+        const ws = await newWorkspace();
+        const target = await apply(ws, segment('fam-m1', definitionOf(['ObjM'])));
+        await apply(ws, segment('fam-m2', referring('ObjM2', 'ObjM')));
+        // fam-m2 stops naming ObjM, so fam-m1 can go; then rolling fam-m2 back would bring the
+        // end back with nothing to name.
+        const stopped = await apply(ws, segment('fam-m2', definitionOf(['ObjM2']), '2'));
+        await rollBack(ws, target);
+        expect((await preview(ws, stopped)).items[0]?.conflict).toMatchObject({
+          blocker: 'link_endpoint_undeclared',
+          linkEnds: [
+            {
+              ontologyId: deriveOntologyPackId('fam-m2'),
+              linkType: 'refers_to',
+              end: 'range',
+              objectType: 'ObjM',
+            },
+          ],
+        });
+        await expect(rollBack(ws, stopped)).rejects.toBeInstanceOf(ChangeRollbackConflictError);
+      });
+
+      it('one segment whose second family names the first’s type rolls back whole: the referrer is undone first', async () => {
+        const ws = await newWorkspace();
+        const both: WorkspaceSegmentInput = {
+          source: { kind: 'pack', name: 'pair', version: '1', digest: contentDigest('pair') },
+          items: [
+            { kind: 'ontology_version', family: 'fam-p1', definition: definitionOf(['ObjP']) },
+            { kind: 'ontology_version', family: 'fam-p2', definition: referring('ObjP2', 'ObjP') },
+          ],
+        };
+        const pair = await apply(ws, both);
+        const dryRun = await preview(ws, pair);
+        expect(dryRun.possible).toBe(true);
+        expect(dryRun.items.map((item) => item.conflict)).toEqual([null, null]);
+        await rollBack(ws, pair);
+        expect(await familyVersions(ws, 'fam-p1')).toEqual([{ version: 1, status: 'deprecated' }]);
+        expect(await familyVersions(ws, 'fam-p2')).toEqual([{ version: 1, status: 'deprecated' }]);
       });
     });
 

@@ -465,6 +465,28 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('legacy 303: a link type pointing at an object type no ontology declares reads as its own sentence in the review', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+      preview_pack_install: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'ontology LinkType ends must name a declared ObjectType or "*": LinkType "served_by" range "Gatekeeper" (ontology —) names no ObjectType this workspace\'s ontology declares',
+            'ontology_link_endpoint_undeclared',
+          ),
+        ),
+    });
+    renderTab(http, 'ops-assets');
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toMatch(/多半是它依赖的能力包还没装/);
+    expect(banner.textContent).toContain('ontology_link_endpoint_undeclared');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('someone’s pending draft of a Skill the pack upgrades reads as its own sentence in the review (S11 W1a E2-0)', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

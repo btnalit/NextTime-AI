@@ -1140,7 +1140,10 @@ export const PackRequirementStateSchema = asEnum(PACK_REQUIREMENT_STATE_VALUES);
  * version_missing` — the state it would return to is gone; `namespace_conflict` — what it would
  * restore declares a type name another ontology family has taken since (I-P1); `revision_pending`
  * — its target, an Operation, has a revision draft under review, which a rollback would neither
- * overwrite nor publish past (P1-E: publish or discard that draft first).
+ * overwrite nor publish past (P1-E: publish or discard that draft first);
+ * `link_endpoint_undeclared` — afterwards a LinkType end would name an ObjectType no published
+ * ontology family declares: one the restored version names that is gone, or one another family
+ * names that the rollback takes away (legacy 303).
  */
 export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
   'replaced',
@@ -1148,6 +1151,7 @@ export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
   'restored_version_missing',
   'namespace_conflict',
   'revision_pending',
+  'link_endpoint_undeclared',
 ] as const;
 export type ChangeRollbackBlocker = (typeof CHANGE_ROLLBACK_BLOCKER_VALUES)[number];
 export const ChangeRollbackBlockerSchema = asEnum(CHANGE_ROLLBACK_BLOCKER_VALUES);

@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { ReviewedVersionChangedError } from '../../governance/capability/index.js';
+import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { ChangePlanChangedError } from '../change-plan/index.js';
 import { PackNotFoundError } from '../packs/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -27,7 +28,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * with one component). Every result is checked against its own `resultSchema`
  * (`KERNEL_VALIDATE_RESULTS=1`, vitest.config.ts).
  *
- * Gated on `DATABASE_URL`; uses the repo's own `packs/` (`ops-assets`, no ActionType).
+ * Gated on `DATABASE_URL`; uses the repo's own `packs/` (`ops-assets`, no ActionType) on top of
+ * platform-meta, as every workspace has it.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -84,6 +86,10 @@ describe.runIf(DATABASE_URL !== undefined)(
                     ($1, $4, 'human', 'auditor', 'auditor')`,
             [workspaceId, ownerId, memberId, auditorId],
           );
+          // Every workspace is born with platform-meta (`createWorkspaceWithOwner`); ops-assets
+          // v2's `served_by` ends at its `Gatekeeper` (legacy 303: an end must name a declared
+          // ObjectType).
+          await seedPlatformMetaOntology(client, workspaceId, ownerId);
         },
         { skipRoleSwitch: true },
       );

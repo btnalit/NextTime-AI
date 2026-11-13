@@ -47,12 +47,16 @@ const ObjectTypeDefinitionSchema = z
   .strict();
 export type ObjectTypeDefinition = z.infer<typeof ObjectTypeDefinitionSchema>;
 
-/** `domain`/`range` name an ObjectType from this same definition's `objectTypes`, or the sentinel
- *  `"*"` for a Link whose other end is not confined to one platform-meta ObjectType — e.g.
+/** `domain`/`range` name an ObjectType — declared by this definition's `objectTypes` or by another
+ *  ontology family published in the same workspace (`ops-assets` v2's `served_by` ends at
+ *  platform-meta's `Gatekeeper`) — or are the sentinel `"*"` for a Link whose other end is not
+ *  confined to one platform-meta ObjectType — e.g.
  *  `Operation --reads/writes--> ObjectType` (any domain ObjectType, not one of the six platform
  *  meta-ontology types) and `Gatekeeper --connects_to--> 系统对象` (an arbitrary connected-system
  *  object). I2 ("Link 符合 LinkType 的 domain/range") still holds — `"*"` is an explicit, named
- *  wildcard, not an omitted field.
+ *  wildcard, not an omitted field. This schema checks shape only: whether a named type is declared
+ *  depends on the workspace, so publishing refuses an end naming none (legacy 303, the kernel's
+ *  `substrate/ontology/namespace.ts`).
  *
  *  S3.1 note: two entries may share the same `name` with different concrete `domain`/`range`
  *  pairs (e.g. `runs_on` has one entry per "thing that runs on a Host") — a LinkType name is not

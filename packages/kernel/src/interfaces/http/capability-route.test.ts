@@ -54,6 +54,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   OntologyViolationError,
   PrincipalOperationRefusedError,
   SupersedeIdentityMismatchError,
@@ -215,6 +216,7 @@ describe('mapCapabilityError — S11 P1-B change segment rollback (unit)', () =>
       blocker: 'replaced' as const,
       blockedBy: { segmentId: 'seg-2' },
       conflicts: [],
+      linkEnds: [],
     };
     const mapped = mapCapabilityError(new ChangeRollbackConflictError('seg-1', [item]));
     expect(mapped).toMatchObject({
@@ -788,6 +790,30 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new OntologyDraftNotFoundError('ont-1', 2));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('not_found');
+  });
+
+  it('OntologyLinkEndpointError (legacy 303) → 409 ontology_link_endpoint_undeclared with each end in details', () => {
+    const problems = {
+      undeclared: [
+        {
+          ontologyId: 'ont-1',
+          linkType: 'served_by',
+          end: 'range' as const,
+          objectType: 'Gatekeepr',
+        },
+      ],
+      orphaned: [
+        { ontologyId: 'ont-2', linkType: 'runs_on', end: 'domain' as const, objectType: 'Host' },
+      ],
+    };
+    const mapped = mapCapabilityError(new OntologyLinkEndpointError(problems));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'ontology_link_endpoint_undeclared',
+      details: problems,
+    });
+    expect(mapped.message).toContain('"served_by" range "Gatekeepr"');
+    expect(mapped.message).toContain('(ontology ont-2)');
   });
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) → 409 ontology_base_moved', () => {

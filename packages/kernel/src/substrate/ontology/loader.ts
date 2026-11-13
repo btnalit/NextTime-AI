@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DraftOrigin } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { assertOntologyNamespace, lockOntologyNamespace } from './namespace.js';
+import { assertOntologyPublishable, lockOntologyNamespace } from './namespace.js';
 import { OntologyDefinitionParseError, parseOntologyDefinition } from './schema.js';
 import type { OntologyDefinition } from './schema.js';
 
@@ -172,7 +172,8 @@ export async function lockOntologyFamily(
 /** Publishes `input.definition` as a `published` `ontology_versions` row for `workspaceId`
  *  (bootstrap-time seeding — see this module's doc comment). I-P1: refuses with
  *  `OntologyNamespaceConflictError` (nothing written) when an ObjectType / ActionType name is
- *  already another family's. */
+ *  already another family's, and with `OntologyLinkEndpointError` when a LinkType end would name
+ *  an ObjectType no published family declares (legacy 303). */
 export async function publishOntologyVersion(
   client: PoolClient,
   workspaceId: string,
@@ -180,7 +181,7 @@ export async function publishOntologyVersion(
 ): Promise<OntologyVersionRow> {
   if (input.id) await lockOntologyFamily(client, workspaceId, input.id);
   else await lockOntologyNamespace(client, workspaceId);
-  await assertOntologyNamespace(client, workspaceId, input.id ?? null, input.definition);
+  await assertOntologyPublishable(client, workspaceId, input.id ?? null, input.definition);
   const nextVersion = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
     `insert into ontology_versions

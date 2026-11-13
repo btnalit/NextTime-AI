@@ -552,7 +552,7 @@ async function checkIS53(client: PoolClient): Promise<InvariantCheckResult> {
 /**
  * S10 P0 (docs/s10-evolution-plan-2026-10-04.md §3.3; `substrate/ontology/namespace.ts`): within
  * one workspace, the latest published version of each family is compared with every other
- * family's — the same "latest published per family" set `assertOntologyNamespace` checks at write
+ * family's — the same "latest published per family" set `assertOntologyPublishable` checks at write
  * time and `loadPublishedLinkTypes` reads writes against. Both publish paths refuse a collision
  * under a workspace-wide advisory lock, so this is defence in depth on that mechanism (the I4 / I7
  * / I12 posture): it reads non-zero only for a collision written before the check existed (the
@@ -595,6 +595,68 @@ async function checkIP1(client: PoolClient): Promise<InvariantCheckResult> {
     sample: result.rows
       .slice(0, SAMPLE_LIMIT)
       .map((row) => `${row.workspace_id}:${row.kind}:${row.name} (${row.families.join(', ')})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// I-P1-LINK — every LinkType end of a published ontology names a declared ObjectType or "*".
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Legacy 303 (`substrate/ontology/namespace.ts`'s `assertOntologyPublishable`): within one
+ * workspace, each `domain` / `range` of a LinkType in a family's latest published version is `"*"`
+ * or an ObjectType some family's latest published version declares. Every publish path, a pack's
+ * review and an ontology item's rollback refuse to break it, so this reads non-zero only for a
+ * version published before the check existed (docs/runbooks/release.md, this check's SQL is the
+ * pre-upgrade query) or by a path that bypasses them. One violation per (workspace, family,
+ * LinkType, end, type); drafts are not counted.
+ */
+async function checkIP1Link(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    id: string;
+    link_type: string;
+    side: string;
+    object_type: string;
+  }>(
+    `with heads as (
+       select t.workspace_id, t.id, t.definition
+       from ontology_versions t
+       where t.status = 'published'
+         and t.version = (
+           select max(t2.version) from ontology_versions t2
+           where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+         )
+     ),
+     declared as (
+       select distinct workspace_id, e ->> 'name' as name
+       from heads, jsonb_array_elements(coalesce(definition -> 'objectTypes', '[]'::jsonb)) e
+     ),
+     ends as (
+       select workspace_id, id, l ->> 'name' as link_type, 'domain' as side,
+              l ->> 'domain' as object_type
+       from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+       union
+       select workspace_id, id, l ->> 'name', 'range', l ->> 'range'
+       from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+     )
+     select e.workspace_id, e.id, e.link_type, e.side, e.object_type
+     from ends e
+     where e.object_type <> '*'
+       and not exists (
+         select 1 from declared d
+         where d.workspace_id = e.workspace_id and d.name = e.object_type
+       )
+     order by e.workspace_id, e.id, e.link_type, e.side, e.object_type`,
+  );
+  return {
+    invariant: 'I-P1-LINK',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map(
+        (row) => `${row.workspace_id}:${row.id}:${row.link_type}.${row.side} -> ${row.object_type}`,
+      ),
   };
 }
 
@@ -730,6 +792,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-2',
   'I-S5-3',
   'I-P1',
+  'I-P1-LINK',
   'I-G1',
   'I-G2',
   'I-G5',
@@ -770,6 +833,7 @@ export async function runInvariantChecks(
       await checkIS52(client),
       await checkIS53(client),
       await checkIP1(client),
+      await checkIP1Link(client),
       await checkIG1(client, SAMPLE_LIMIT),
       await checkIG2(client, SAMPLE_LIMIT),
       await checkIG5(client, SAMPLE_LIMIT),

@@ -1,3 +1,4 @@
+import { quotedName } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { OntologyDefinition } from './schema.js';
 
@@ -10,10 +11,27 @@ import type { OntologyDefinition } from './schema.js';
  * never fired; capability packs make it reachable at once.
  *
  * Refuse, never override: both paths that make a version `published` — `loader.ts`'s
- * `publishOntologyVersion` (bootstrap seed, domain pack, `install_module` / `upgrade_module`) and
- * `registry.ts`'s `publishOntologyDraft` (`publish_ontology_version`) — call
- * `assertOntologyNamespace` with the definition about to become their family's head, under
- * `lockOntologyNamespace`, and nothing is written when it throws.
+ * `publishOntologyVersion` (bootstrap seed, domain pack, `install_module` / `upgrade_module`, a
+ * pack's ontology item) and `registry.ts`'s `publishOntologyDraft` (`publish_ontology_version`) —
+ * call `assertOntologyPublishable` with the definition about to become their family's head, under
+ * `lockOntologyNamespace`, and nothing is written when it throws. A ChangePlan review
+ * (`planOntologyItem`) and an ontology item's rollback (`planOntologyRollback`) run the same check
+ * before they write anything.
+ *
+ * Legacy 303 (the plan's "P1 起另加" half of I-P1, without its `requires` scoping): every
+ * LinkType's `domain` and `range` is `"*"` or names an ObjectType some published family declares —
+ * the candidate itself or another family's head (`ops-assets` v2's `served_by` ends at
+ * platform-meta's `Gatekeeper`, so a reference across families is legal). Two ways to break it,
+ * both refused with `OntologyLinkEndpointError`:
+ *  - the candidate's own LinkType names a type nobody declares (a typo, a type from a family not
+ *    installed here): `undeclared`;
+ *  - the candidate drops an ObjectType its family declares now that another family's LinkType
+ *    still names: `orphaned`. A reference that already named nothing before this publish is not
+ *    the candidate's to answer for — it is that other family's own `undeclared` at its next publish.
+ * Without this, a published LinkType could name a type no Object can have, and the write guard
+ * (`substrate/graph/ontology-guard.ts`, I2) would be checking Links against a signature that says
+ * nothing. Whether the type belongs to a family the referring pack `requires` is not checked: a
+ * draft published from the console belongs to no pack.
  *
  * Scope, deliberately the plan's and no wider:
  *  - LinkTypes may share a name across families; their signatures accumulate (unchanged).
@@ -21,7 +39,8 @@ import type { OntologyDefinition } from './schema.js';
  *    draft that collides is refused when it is published, not when it is proposed.
  *  - Names are unique per kind, not across kinds (an ObjectType and an ActionType may share a
  *    name, as `get_type`'s kind order already resolves).
- *  - Whether a type a family references belongs to a family it `requires` is P1's check, not this.
+ *  - A LinkType end is checked against the published namespace too (legacy 303, above); whether
+ *    the type it names belongs to a family the referring pack `requires` is not.
  */
 
 export type OntologyNamespaceKind = 'object' | 'action';
@@ -51,8 +70,60 @@ export class OntologyNamespaceConflictError extends Error {
   }
 }
 
+export type OntologyLinkEnd = 'domain' | 'range';
+
+/** One LinkType end naming an ObjectType that no published family would declare. */
+export interface OntologyLinkEndpointProblem {
+  /** The family whose LinkType it is — `null`: the candidate, when it is a family not published
+   *  yet. */
+  readonly ontologyId: string | null;
+  readonly linkType: string;
+  readonly end: OntologyLinkEnd;
+  readonly objectType: string;
+}
+
+export interface OntologyLinkEndpointProblems {
+  /** The candidate's own LinkType ends naming a type neither it nor another family's head
+   *  declares. */
+  readonly undeclared: readonly OntologyLinkEndpointProblem[];
+  /** Another family's LinkType ends naming a type the candidate's family declares now and the
+   *  candidate no longer does. */
+  readonly orphaned: readonly OntologyLinkEndpointProblem[];
+}
+
+const describeEnd = (p: OntologyLinkEndpointProblem): string =>
+  `LinkType ${quotedName(p.linkType)} ${p.end} ${quotedName(p.objectType)}`;
+
+/** Legacy 303: publishing the candidate would leave a LinkType end naming an ObjectType no
+ *  published family declares. Mapped to 409 `ontology_link_endpoint_undeclared` (with the two
+ *  lists in `details`); nothing was published. */
+export class OntologyLinkEndpointError extends Error {
+  readonly code = 'ontology_link_endpoint_undeclared' as const;
+  readonly problems: OntologyLinkEndpointProblems;
+  constructor(problems: OntologyLinkEndpointProblems) {
+    const parts: string[] = [];
+    if (problems.undeclared.length > 0) {
+      parts.push(
+        `${problems.undeclared.map(describeEnd).join(', ')} ${problems.undeclared.length === 1 ? 'names' : 'name'} no ObjectType this workspace's ontology declares`,
+      );
+    }
+    if (problems.orphaned.length > 0) {
+      parts.push(
+        `${problems.orphaned
+          .map((p) => `${describeEnd(p)} (ontology ${p.ontologyId})`)
+          .join(', ')} would name an ObjectType this version removes`,
+      );
+    }
+    super(
+      `ontology LinkType ends must name a declared ObjectType or "*": ${parts.join('; ')} — declare the type, or change the LinkType`,
+    );
+    this.name = 'OntologyLinkEndpointError';
+    this.problems = problems;
+  }
+}
+
 /** Serializes every publish into one workspace's ontology until the transaction ends, so two
- *  families published concurrently cannot both pass `assertOntologyNamespace` with the same new
+ *  families published concurrently cannot both pass `assertOntologyPublishable` with the same new
  *  name. Taken before any family lock (`loader.ts`'s `lockOntologyFamily` takes it first), so a
  *  transaction that publishes several families never waits on this lock while holding a family
  *  lock another publisher needs. Same `pg_advisory_xact_lock(hashtext(...))` convention. */
@@ -93,23 +164,66 @@ export function findOntologyNamespaceConflicts(
   return conflicts;
 }
 
-/** Throws `OntologyNamespaceConflictError` when publishing `candidate` as family `candidateId`'s
- *  head (null: a family that does not exist yet) would give an ObjectType or ActionType name a
- *  second owner in `workspaceId`. Compares against every other family's latest published version
- *  — the same "latest published per family" rule `loadPublishedLinkTypes` reads writes against.
- *  Caller holds `lockOntologyNamespace`. */
-export async function assertOntologyNamespace(
-  client: PoolClient,
-  workspaceId: string,
+/** Pure half of legacy 303: the LinkType ends that would name no declared ObjectType once
+ *  `candidate` replaces `current` (its family's published head now; `null`: none) beside `others`
+ *  (every other family's published head). `"*"` names any type. Each end is listed once. */
+export function findOntologyLinkEndpointProblems(
   candidateId: string | null,
   candidate: OntologyDefinition,
-): Promise<void> {
+  current: OntologyDefinition | null,
+  others: readonly { readonly id: string; readonly definition: OntologyDefinition }[],
+): OntologyLinkEndpointProblems {
+  const otherFamilies = others.filter((family) => family.id !== candidateId);
+  const declaredElsewhere = new Set<string>();
+  for (const family of otherFamilies) {
+    for (const t of family.definition.objectTypes) declaredElsewhere.add(t.name);
+  }
+  const declaredByCandidate = new Set(candidate.objectTypes.map((t) => t.name));
+  const declaredAfter = (name: string): boolean =>
+    declaredByCandidate.has(name) || declaredElsewhere.has(name);
+  const removed = new Set(
+    (current?.objectTypes ?? []).map((t) => t.name).filter((name) => !declaredAfter(name)),
+  );
+
+  const collect = (
+    ontologyId: string | null,
+    definition: OntologyDefinition,
+    fails: (objectType: string) => boolean,
+  ): OntologyLinkEndpointProblem[] => {
+    const seen = new Set<string>();
+    const problems: OntologyLinkEndpointProblem[] = [];
+    for (const linkType of definition.linkTypes) {
+      for (const end of ['domain', 'range'] as const) {
+        const objectType = linkType[end];
+        if (objectType === '*' || !fails(objectType)) continue;
+        const key = JSON.stringify([linkType.name, end, objectType]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        problems.push({ ontologyId, linkType: linkType.name, end, objectType });
+      }
+    }
+    return problems;
+  };
+
+  return {
+    undeclared: collect(candidateId, candidate, (name) => !declaredAfter(name)),
+    orphaned: otherFamilies.flatMap((family) =>
+      collect(family.id, family.definition, (name) => removed.has(name)),
+    ),
+  };
+}
+
+/** Every family's latest published version in `workspaceId` — the same "latest published per
+ *  family" rule `loadPublishedLinkTypes` reads writes against. */
+async function loadPublishedHeads(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<{ id: string; definition: OntologyDefinition }[]> {
   const result = await client.query<{ id: string; definition: OntologyDefinition }>(
     `select t.id, t.definition
      from ontology_versions t
      where t.workspace_id = $1
        and t.status = 'published'
-       and ($2::uuid is null or t.id <> $2::uuid)
        and t.version = (
          select max(t2.version)
          from ontology_versions t2
@@ -118,8 +232,62 @@ export async function assertOntologyNamespace(
            and t2.status = 'published'
        )
      order by t.id`,
-    [workspaceId, candidateId],
+    [workspaceId],
   );
-  const conflicts = findOntologyNamespaceConflicts(candidateId, candidate, result.rows);
+  return result.rows;
+}
+
+/** What a retired family declares once its last version is gone: nothing. Only ever compared,
+ *  never stored (a stored definition has at least one ObjectType and LinkType). */
+const EMPTY_DEFINITION: OntologyDefinition = { objectTypes: [], linkTypes: [] };
+
+/** A family's head as it will be once the steps before this one in the same transaction have
+ *  run — `definition: null`: retired, no version left. */
+export interface PendingOntologyHead {
+  readonly id: string;
+  readonly definition: OntologyDefinition | null;
+}
+
+/** Throws when `candidate` (`null`: the family `candidateId` is retired with no version left)
+ *  may not become family `candidateId`'s published head (`candidateId` null: a family that does
+ *  not exist yet) in `workspaceId`:
+ *  - `OntologyNamespaceConflictError` — an ObjectType or ActionType name would get a second owner
+ *    (I-P1);
+ *  - `OntologyLinkEndpointError` — a LinkType end would name an ObjectType no published family
+ *    declares (legacy 303).
+ *  Compared against every family's latest published version. `pending`: what a dry run's earlier
+ *  steps will have done by the time this one runs (a ChangePlan segment's earlier items, a
+ *  rollback's items undone before this one). The LinkType-end check counts it, so a segment whose
+ *  second family names a type its first one adds is not refused at review, nor a rollback that
+ *  retires the referring family before the one it names; I-P1 keeps comparing with what is
+ *  published now, as before. Caller holds `lockOntologyNamespace`. */
+export async function assertOntologyPublishable(
+  client: PoolClient,
+  workspaceId: string,
+  candidateId: string | null,
+  candidate: OntologyDefinition | null,
+  pending: readonly PendingOntologyHead[] = [],
+): Promise<void> {
+  const heads = await loadPublishedHeads(client, workspaceId);
+  const next = candidate ?? EMPTY_DEFINITION;
+  const conflicts = findOntologyNamespaceConflicts(
+    candidateId,
+    next,
+    heads.filter((head) => head.id !== candidateId),
+  );
   if (conflicts.length > 0) throw new OntologyNamespaceConflictError(conflicts);
+
+  const after = new Map(heads.map((head) => [head.id, head.definition] as const));
+  for (const step of pending) {
+    if (step.definition === null) after.delete(step.id);
+    else after.set(step.id, step.definition);
+  }
+  const current = candidateId === null ? null : (after.get(candidateId) ?? null);
+  const others = [...after]
+    .filter(([id]) => id !== candidateId)
+    .map(([id, definition]) => ({ id, definition }));
+  const problems = findOntologyLinkEndpointProblems(candidateId, next, current, others);
+  if (problems.undeclared.length > 0 || problems.orphaned.length > 0) {
+    throw new OntologyLinkEndpointError(problems);
+  }
 }

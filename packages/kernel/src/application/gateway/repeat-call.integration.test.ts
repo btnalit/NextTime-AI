@@ -36,6 +36,7 @@ import {
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
@@ -790,8 +791,22 @@ async function userUpdatedAt(ctx: RecipeContext, userId: string): Promise<string
   return result.rows[0]?.at;
 }
 
+/** Platform-meta, as every workspace is born with it (`createWorkspaceWithOwner`): ops-assets
+ *  v2's `served_by` LinkType names its `Gatekeeper` type (legacy 303). Only the module and pack
+ *  rows seed it — a published ontology turns on link-write enforcement for every other row. */
+async function withPlatformMeta(ctx: RecipeContext): Promise<void> {
+  await withWorkspace(
+    ctx.pool,
+    { workspaceId: ctx.seed.workspaceId, principalId: ctx.seed.ownerId },
+    async (client) => {
+      await seedPlatformMetaOntology(client, ctx.seed.workspaceId, ctx.seed.ownerId);
+    },
+  );
+}
+
 /** The ChangePlan segment of a shipped pack installed here, as its dry run showed it. */
 async function installedPackSegment(ctx: RecipeContext): Promise<string> {
+  await withPlatformMeta(ctx);
   const installed = await as<{ segmentId: string }>(
     ctx,
     'install_pack',
@@ -1683,13 +1698,19 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
   install_module: {
     'a module not installed here': {
       first: expect.objectContaining({ provenance: expect.objectContaining(APPLIED_HERE) }),
-      setUp: (ctx) => latestModule(ctx, 'ops-assets'),
+      setUp: async (ctx) => {
+        await withPlatformMeta(ctx);
+        return latestModule(ctx, 'ops-assets');
+      },
     },
   },
   upgrade_module: {
     'a module not installed here': {
       first: expect.objectContaining({ provenance: expect.objectContaining(APPLIED_HERE) }),
-      setUp: (ctx) => latestModule(ctx, 'ops-assets'),
+      setUp: async (ctx) => {
+        await withPlatformMeta(ctx);
+        return latestModule(ctx, 'ops-assets');
+      },
     },
   },
   install_pack: {
@@ -1697,13 +1718,17 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     // refused before anything is written: preview again to see it is up to date.
     'a pack not installed here, as its dry run showed it': {
       first: expect.objectContaining({ segmentId: expect.any(String) }),
-      setUp: (ctx) => reviewedPack(ctx, 'ops-assets'),
+      setUp: async (ctx) => {
+        await withPlatformMeta(ctx);
+        return reviewedPack(ctx, 'ops-assets');
+      },
     },
     // Reviewed again once installed: up to date, so neither call records anything.
     'a pack already up to date, as its dry run shows it': {
       repeat: 'idempotent',
       first: expect.objectContaining({ segmentId: null }),
       setUp: async (ctx) => {
+        await withPlatformMeta(ctx);
         await as(ctx, 'install_pack', await reviewedPack(ctx, 'ops-assets'));
         return reviewedPack(ctx, 'ops-assets');
       },

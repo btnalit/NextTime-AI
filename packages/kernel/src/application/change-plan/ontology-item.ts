@@ -3,10 +3,13 @@ import { z } from 'zod';
 import {
   type OntologyDefinition,
   OntologyDefinitionSchema,
+  OntologyLinkEndpointError,
+  type OntologyLinkEndpointProblems,
   type OntologyNamespaceConflict,
   OntologyNamespaceConflictError,
   type OntologyVersionRow,
-  assertOntologyNamespace,
+  type PendingOntologyHead,
+  assertOntologyPublishable,
   deprecatePublishedOntologyVersion,
   deriveOntologyPackId,
   loadOntologyVersion,
@@ -145,11 +148,15 @@ export async function lockOntologyItem(
 
 /** The item's dry run: validates the definition, reads the family's published head, classifies the
  *  change, and checks I-P1 (another family's ObjectType / ActionType name refuses with
- *  `OntologyNamespaceConflictError` here, at review, rather than only at apply). Writes nothing. */
+ *  `OntologyNamespaceConflictError` here, at review, rather than only at apply) and legacy 303 (a
+ *  LinkType end naming no declared ObjectType refuses with `OntologyLinkEndpointError`, likewise —
+ *  `pending` are the segment's earlier ontology items, published before this one when it applies).
+ *  Writes nothing. */
 export async function planOntologyItem(
   client: PoolClient,
   workspaceId: string,
   intent: OntologyVersionIntent,
+  pending: readonly PendingOntologyHead[] = [],
 ): Promise<PlannedOntologyItem> {
   const definition = OntologyDefinitionSchema.parse(intent.definition);
   const ontologyId = deriveOntologyPackId(intent.family);
@@ -159,7 +166,9 @@ export async function planOntologyItem(
     ? { version: head.version, definitionDigest: contentDigest(head.definition) }
     : null;
   const unchanged = before?.definitionDigest === definitionDigest;
-  if (!unchanged) await assertOntologyNamespace(client, workspaceId, ontologyId, definition);
+  if (!unchanged) {
+    await assertOntologyPublishable(client, workspaceId, ontologyId, definition, pending);
+  }
   return {
     target: { family: intent.family, ontologyId },
     before,
@@ -266,6 +275,10 @@ export type OntologyRollbackBlocker =
   | {
       readonly reason: 'namespace_conflict';
       readonly conflicts: readonly OntologyNamespaceConflict[];
+    }
+  | {
+      readonly reason: 'link_endpoint_undeclared';
+      readonly problems: OntologyLinkEndpointProblems;
     };
 
 export interface PlannedOntologyRollback {
@@ -283,19 +296,26 @@ export interface PlannedOntologyRollback {
     readonly linkTypes: readonly string[];
     readonly actionTypes: readonly string[];
   };
+  /** The definition the family's head will have afterwards (`null`: none — retired, or blocked):
+   *  what a later item of the same rollback is checked against (legacy 303). */
+  readonly restoredDefinition: OntologyDefinition | null;
   readonly blocker: OntologyRollbackBlocker | null;
 }
 
 const NOTHING_REMOVED = { objectTypes: [], linkTypes: [], actionTypes: [] } as const;
 
 /** The item's rollback dry run (§3.4 "逆操作…先比较再写"): blocked unless the family's head is still
- *  the version the item published and the version before it is still there to return to, and the
- *  restored definition does not give a type name a second owner (I-P1). Writes nothing; a rollback
- *  calls it under `lockOntologyRollback`. */
+ *  the version the item published and the version before it is still there to return to, the
+ *  restored definition does not give a type name a second owner (I-P1), and no LinkType end would
+ *  name an ObjectType no published family declares — the restored version's own, or another
+ *  family's naming a type the rollback takes away, retiring the family included (legacy 303;
+ *  `pending` are the families the same rollback returns before this item). Writes nothing; a
+ *  rollback calls it under `lockOntologyRollback`. */
 export async function planOntologyRollback(
   client: PoolClient,
   workspaceId: string,
   item: StoredOntologyItem,
+  pending: readonly PendingOntologyHead[] = [],
 ): Promise<PlannedOntologyRollback> {
   const blocked = (blocker: OntologyRollbackBlocker): PlannedOntologyRollback => ({
     target: item.target,
@@ -303,6 +323,7 @@ export async function planOntologyRollback(
     to: item.before,
     widening: [],
     removes: NOTHING_REMOVED,
+    restoredDefinition: null,
     blocker,
   });
   const { ontologyId } = item.target;
@@ -318,12 +339,23 @@ export async function planOntologyRollback(
       return blocked({ reason: 'restored_version_missing' });
     }
     restored = row;
-    try {
-      await assertOntologyNamespace(client, workspaceId, ontologyId, row.definition);
-    } catch (err) {
-      if (!(err instanceof OntologyNamespaceConflictError)) throw err;
+  }
+  try {
+    await assertOntologyPublishable(
+      client,
+      workspaceId,
+      ontologyId,
+      restored?.definition ?? null,
+      pending,
+    );
+  } catch (err) {
+    if (err instanceof OntologyNamespaceConflictError) {
       return blocked({ reason: 'namespace_conflict', conflicts: err.conflicts });
     }
+    if (err instanceof OntologyLinkEndpointError) {
+      return blocked({ reason: 'link_endpoint_undeclared', problems: err.problems });
+    }
+    throw err;
   }
   const to = restored?.definition ?? null;
   return {
@@ -332,6 +364,7 @@ export async function planOntologyRollback(
     to: item.before,
     widening: classifyOntologyDefinitionChange(head.definition, to),
     removes: ontologyTypeChanges(head.definition, to).removed,
+    restoredDefinition: to,
     blocker: null,
   };
 }

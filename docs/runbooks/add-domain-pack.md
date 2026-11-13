@@ -25,6 +25,10 @@ objectTypes:
     description: >-
       一个可库存的物品——示例，替换成真实概念。
     identityKey: [warehouseId, sku]      # 同类型对象按这些键去重（`objects.identity_key` 唯一索引）
+  - name: Warehouse
+    description: >-
+      一个仓库——示例。
+    identityKey: [warehouseId]
 
 linkTypes:
   - name: stored_in
@@ -37,6 +41,10 @@ linkTypes:
 - `identityKey` 声明后，`submit_observations` 会拒绝缺键的观察（`ObservationIdentityError`）。
 - 同名 LinkType 可以多条（不同 domain / range），写入时按已发布版本校验（S5.1：`reject` 模式 400
   `ontology_violation`，`warn` 模式写入 + 审计 + I-S5-1 计数）。
+- LinkType 的 `domain` / `range` 只能是 `"*"`，或者工作区里某个已发布本体声明了的 ObjectType：本包自己的，
+  或别的包 / 平台元本体（`ontology/platform-meta.yaml`，例如 `Gatekeeper`）的（遗留 303）。写了谁都没声明的
+  类型，发布时 409 `ontology_link_endpoint_undeclared`，什么也不写；引用别的包的类型，先装那个包。反过来，
+  新版本去掉一个别的本体的 LinkType 还在用的 ObjectType，同样被拒。
 - 同一个 pack 的每次 seed 是该 id 族的下一个版本；写入校验只认**最新已发布**版本。
 
 ## 3. 放文件
@@ -87,3 +95,4 @@ curl -s https://<host>:8443/api/cap/get_type -H "Authorization: Bearer ${OWNER_K
 | `seed-domain-pack` 报文件不存在 | `--dir` 缺省指向 `DOMAIN_PACK_DIR`（主机 `config/ontology/`），文件没放进去或名字不是 `<pack>.yaml` | 放文件，或 `--file-name` 指定 |
 | seed 后写入仍 400 `ontology_violation` | 工作区是 `reject`，且这条边的 domain / range 与最新已发布版本不符 | 看 `details.expected`；或按 S5.1 推出流程先把工作区切 `warn` |
 | `OntologyDefinitionParseError` | schema 之外的字段（`.strict()`），或漏了 `description` / `domain` / `range` | 对照 §2 |
+| 发布 409 `ontology_link_endpoint_undeclared` | 某条 LinkType 的 `domain` / `range` 写的 ObjectType 工作区里没有任何已发布本体声明（`details.undeclared`），或这一版去掉了别的本体的 LinkType 还在用的类型（`details.orphaned`） | 改正拼写或补上 ObjectType；依赖别的包的类型就先装那个包；`orphaned` 的先改用到它的那个本体 |

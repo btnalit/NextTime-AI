@@ -226,6 +226,7 @@ function toRollbackItemWire(item: PlannedItemRollback): ChangeRollbackItemWire {
           actionTypes: [...ontology.removes.actionTypes],
         },
         conflicts: conflict ? conflict.conflicts.map((c) => ({ kind: c.kind, name: c.name })) : [],
+        linkEnds: conflict ? conflict.linkEnds.map((e) => ({ ...e })) : [],
       };
     }
     case 'skill_version': {

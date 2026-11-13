@@ -1206,6 +1206,13 @@ export function InstallPack({
                 '这个能力包里有对象类型或动作类型的名字已经被工作区里另一个本体用了，装上会让两个本体重名，所以现在装不上，什么也没有改。「技术细节」里写着是哪个类型；占用它的本体是从能力包装上的话，可以在「安装历史」里撤销那条记录，否则请平台管理员处理。',
                 'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
               ),
+              // Legacy 303: the pack's ontology points at a type this workspace has no ontology
+              // for (usually a pack it builds on that is not installed), or upgrading it would
+              // drop a type another ontology still uses.
+              ontology_link_endpoint_undeclared: t(
+                '这个能力包的本体里有关系类型指向的对象类型，工作区里没有任何本体声明它（多半是它依赖的能力包还没装），或者装上会去掉别的本体还在用的对象类型，所以现在装不上，什么也没有改。「技术细节」里写着是哪个关系类型和对象类型；先装好提供这个类型的能力包，或请平台管理员处理。',
+                'A link type in this pack’s ontology points at an object type no ontology in the workspace declares (usually a pack it builds on is not installed yet), or installing it would drop an object type another ontology still uses, so it cannot be installed now and nothing changed. The technical details name the link type and object type; install the pack that provides that type first, or ask a platform administrator.',
+              ),
               draft_pending: packDraftPendingText(t),
               skill_name_conflict: t(
                 '这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名；Worker 按名字挂载 Skill，同名会让它挂错，所以现在装不上，什么也没有改。「技术细节」里写着是哪个名字；可以在「Skill」页停用那个 Skill 后再来安装。',
