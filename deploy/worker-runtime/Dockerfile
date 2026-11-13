@@ -109,10 +109,18 @@ FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.
+#
+# Two of these ARE what pi's own built-in tools run: `ripgrep` (`rg`, the `grep` tool) and
+# `fd-find` (the `find` tool, STATUS leftover 698). pi looks for a copy under its agent directory,
+# then on PATH, and otherwise downloads one from GitHub — which PI_OFFLINE=1 (below) switches off,
+# so without the package every `find` call failed. Debian names the binary `fdfind`; pi looks for
+# that name too, and the `fd` link is for the agent's own shell, where `fd` is the usual name. The
+# self-check after `ENV PI_OFFLINE=1` runs both tools, so a missing binary fails the build.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git curl ca-certificates python3 python3-pip python3-venv build-essential ripgrep \
- && rm -rf /var/lib/apt/lists/*
+      git curl ca-certificates python3 python3-pip python3-venv build-essential ripgrep fd-find \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -s "$(command -v fdfind)" /usr/local/bin/fd
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
 # agent@<pi.version>", currently 1.1.0). --ignore-scripts matches pi's own containerization.md
@@ -200,6 +208,13 @@ ENV HOME=/workspace
 # container's outbound traffic should be the agent's own, not the runtime's. Image-level ENV: it
 # does not depend on worker-supervisor's env allowlist, which deliberately passes nothing else.
 ENV PI_OFFLINE=1
+
+# Self-check (STATUS leftover 698): pi's own `find` and `grep` tools, from the pi installed above,
+# run as this image's user, offline, against a scratch directory under /tmp (removed afterwards). A
+# tool that cannot run fails the build here instead of failing every Worker call. The script says
+# why running the tools beats checking the binaries; it is bind-mounted, not copied into the image.
+RUN --mount=type=bind,source=deploy/worker-runtime/selfcheck-search-tools.mjs,target=/tmp/selfcheck-search-tools.mjs \
+    node /tmp/selfcheck-search-tools.mjs
 
 # S7-E (docs/platform-admin-design.md §6.5 "镜像 label"; docs/development-tasks.md §5d S7-E):
 # `worker-supervisor`'s `GET /images` (packages/worker-supervisor/src/docker-client.ts

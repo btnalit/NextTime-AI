@@ -355,7 +355,7 @@ flowchart TB
 
 ### 7.3 agent 运行时（入口与 Worker 同一镜像）
 
-- **镜像**：`node:24-bookworm-slim` + pi 1.1.0（`deploy/worker-runtime/pi/` 锁文件钉死整棵依赖树）+ 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
+- **镜像**：`node:24-bookworm-slim` + pi 1.1.0（`deploy/worker-runtime/pi/` 锁文件钉死整棵依赖树）+ 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep、fd-find）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
 - **真实工作环境（默认全开、只记录）**：读写自己的工作目录；跑 bash / python / node；装包（pip / npm / apt 经代理）；抓公网（HTTP / HTTPS、公开仓库 clone）；调模型（经 `llm-proxy`）；观察图。**只有经门去动有凭证的系统才受策略与审批。**
 - **出网**：容器没有直接路由；`HTTP_PROXY` / `HTTPS_PROXY` 指向出网代理（§7.9）。
 - **启动**：Worker 由 supervisor 一次性运行 `pi --mode rpc`（或 pi subagent 示例同款的 `--mode json -p`）；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE / HTTP(S)_PROXY`；**不继承宿主 env**。`CAPABILITY_HANDLE` 只是固定标记 `source-bound`（`models.json` 用它作 provider key 模板），WorkerRun 的 Handle 本身按容器地址绑定，不进容器（I19，§11「agent 容器」）。Task 工作目录 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` 挂载，Task 结束后保留为 artifact，按保留策略清理。
