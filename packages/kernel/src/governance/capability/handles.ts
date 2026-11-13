@@ -94,9 +94,12 @@ export type { CapabilityScope, HandleClaims };
  *   - whoever revokes more than one session takes all their rows in one statement, ordered by id,
  *     before it changes any of them or their Handles ({@link lockSessions}, {@link revokeSessions};
  *     `order by id for no key update` ahead of 0043's bulk UPDATEs). It takes live sessions only:
- *     a revoked session has no valid Handle (I-H1), so nothing locks one to revoke Handles, and a
- *     later statement of the same transaction finds the sessions it would take already held or
- *     already revoked.
+ *     a revoked session has no valid Handle (I-H1), so nothing locks one to revoke Handles. A later
+ *     statement of the same transaction finds the sessions that statement saw already held or
+ *     already revoked; a session inserted without an authority lock (`ensureEntrySession`) and
+ *     committed between the two statements is taken in scan order — a cycle through it needs a
+ *     third revoker on it as well, and ends at worst in a deadlock error (40P01), never in a
+ *     Handle left valid.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -798,8 +801,10 @@ export class AttenuationError extends Error {
 /** Why `issueHandle` refused a session, parent or authority that exists: the session or the
  *  parent Handle is revoked (legacy 699, I-H1); the Principal it acts for, their user or their
  *  workspace is disabled (`acting_principal_disabled`, I-H2), or what the Handle was computed from
- *  changed before it could be issued (`authority_changed`: another role, another user, a parent
- *  revoked or expired) — legacy 702. */
+ *  changed before it could be issued (`authority_changed`: the Principal holds another role than
+ *  the role basis, or belongs to another user than when the issue began) — legacy 702. A parent
+ *  Handle revoked meanwhile is `parent_revoked`; one that expired is refused by its remaining
+ *  lifetime, with no code. */
 export type HandleIssuanceRefusal =
   | 'session_revoked'
   | 'parent_revoked'

@@ -17,6 +17,7 @@ import {
   mergeUserHandler,
   setWorkspaceStatusHandler,
 } from '../../application/gateway/platform-handlers.js';
+import { revokeUserCredentials } from '../../application/identity/credentials.js';
 import { runInvariantChecks } from '../../substrate/audit/invariant-checks.js';
 import {
   HandleIssuanceError,
@@ -588,6 +589,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Their ids run against the order they are stored in, so a revoker that took rows in storage
       // order would meet them the other way round from one that takes them by id. A third
       // transaction holds one of the two first, so both revokers queue behind it and then race.
+      // The bulk writer plans its scans as sequential ones (`scanInStorageOrder`): through the
+      // primary key (workspace_id, id) the planner would meet one workspace's rows in id order by
+      // chance, and a writer missing its `order by id` pre-lock would pass here and still deadlock
+      // where the planner scans the table (#1152 review P2-1).
+      async function scanInStorageOrder(client: PoolClient): Promise<void> {
+        await client.query('set local enable_indexscan = off');
+        await client.query('set local enable_bitmapscan = off');
+      }
       const bulk: readonly {
         readonly writer: string;
         readonly fragment: string;
@@ -597,36 +606,61 @@ describe.runIf(DATABASE_URL !== undefined)(
           writer: 'disable_principal',
           fragment: 'set disabled_at',
           write: (at, owner) =>
-            asApp(owner, (client) =>
-              disablePrincipalHandler(
+            asApp(owner, async (client) => {
+              await scanInStorageOrder(client);
+              return disablePrincipalHandler(
                 client,
                 at.workspaceId,
                 { principalId: at.principalId },
                 { channel: 'human', principalId: owner.principalId },
-              ),
-            ),
+              );
+            }),
         },
         {
           writer: 'set_principal_role',
           fragment: 'and on_behalf_of = $2',
           write: (at) =>
-            asApp(at, (client) =>
-              setPrincipalRoleHandler(client, at.workspaceId, {
+            asApp(at, async (client) => {
+              await scanInStorageOrder(client);
+              return setPrincipalRoleHandler(client, at.workspaceId, {
                 principalId: at.principalId,
                 role: 'member',
-              }),
-            ),
+              });
+            }),
         },
         {
           writer: 'set_workspace_status',
           fragment: 'update workspaces',
           write: (at) =>
-            asPlatform((client) =>
-              setWorkspaceStatusHandler(client, at.workspaceId, {
+            asPlatform(async (client) => {
+              await scanInStorageOrder(client);
+              return setWorkspaceStatusHandler(client, at.workspaceId, {
                 workspaceId: at.workspaceId,
                 status: 'disabled',
-              }),
-            ),
+              });
+            }),
+        },
+        // #1152 review P2-1: the users trigger's own pre-lock, and revokeUserCredentials'.
+        {
+          writer: 'a user disabled by hand (users trigger)',
+          fragment: "set status = 'disabled'",
+          write: (at) =>
+            asOwner(at.workspaceId, async (client) => {
+              await scanInStorageOrder(client);
+              return client.query(`update users set status = 'disabled' where id = $1`, [
+                at.userId,
+              ]);
+            }),
+        },
+        {
+          writer: 'revokeUserCredentials (platform plane)',
+          // In its pre-lock, and in the per-Principal UPDATE a writer without one would block on.
+          fragment: 'on_behalf_of = ',
+          write: (at) =>
+            asPlatform(async (client) => {
+              await scanInStorageOrder(client);
+              return revokeUserCredentials(client, at.userId);
+            }),
         },
       ];
       const cases = bulk.flatMap((b) =>
@@ -639,15 +673,23 @@ describe.runIf(DATABASE_URL !== undefined)(
           const at = await member();
           const owner = await member({ workspaceId: at.workspaceId, role: 'owner' });
           const [low, high] = [randomUUID(), randomUUID()].sort() as [string, string];
-          for (const id of [high, low]) {
-            await asApp(at, (client) =>
-              client.query(
-                `insert into sessions (id, workspace_id, principal_id, kind, on_behalf_of, status)
-                 values ($1, $2, $3, 'entry', $3, 'active')`,
-                [id, at.workspaceId, at.principalId],
-              ),
-            );
-          }
+          // One statement, so both rows go to the same page in that order (two transactions may
+          // land on different pages through the free-space map, and a revoker that scans would
+          // meet them in id order after all — the deadlock this guards against then never forms).
+          await asApp(at, (client) =>
+            client.query(
+              `insert into sessions (id, workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $3, $4, 'entry', $4, 'active'), ($2, $3, $4, 'entry', $4, 'active')`,
+              [high, low, at.workspaceId, at.principalId],
+            ),
+          );
+          const stored = await asOwner(at.workspaceId, (client) =>
+            client.query<{ id: string }>(
+              'select id from sessions where id = any($1::uuid[]) order by ctid',
+              [[low, high]],
+            ),
+          );
+          expect(stored.rows.map((row) => row.id)).toEqual([high, low]);
           const handles = [
             await asApp(at, (client) => issue(client, at, low)),
             await asApp(at, (client) => issue(client, at, high)),

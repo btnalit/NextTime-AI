@@ -1005,7 +1005,9 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // request, same 400 bucket every other Handle-mint failure mode above already uses.
   if (err instanceof HandleIssuanceError) {
     // Legacy 699: the caller's session or the Handle it attenuates from was revoked while the call
-    // ran — its credential is gone, the same generic 401 as a revoked Handle.
+    // ran — its credential is gone, the same generic 401 as a revoked Handle. Legacy 702's codes
+    // (`acting_principal_disabled`, `authority_changed`) take the same 401: the Principal, their
+    // user or workspace was disabled, or their role or user changed, while the call ran.
     if (err.code !== undefined)
       return { status: 401, code: 'unauthorized', message: 'unauthorized' };
     return { status: 400, code: 'invalid_params', message: err.message };
