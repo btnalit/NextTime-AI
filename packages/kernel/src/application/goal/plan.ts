@@ -29,7 +29,9 @@ import {
   type StepReconcile,
   StepReconcileSchema,
   type WorkerSpec,
+  boundedEcho,
   operationAbsentAnswers,
+  quotedName,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
@@ -56,6 +58,7 @@ import {
   lintPredicate,
   predicateLiterals,
 } from '../../substrate/epistemic/index.js';
+import { getType } from '../../substrate/ontology/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
   observeRefusal,
@@ -1070,7 +1073,12 @@ export async function validatePlan(
     }
     for (const [index, check] of (step.acceptance ?? []).entries()) {
       const where = `step "${step.key}": acceptance[${index}] "${check.key}"`;
-      for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
+      for (const problem of await acceptanceReferenceProblems(
+        client,
+        workspaceId,
+        requester,
+        check,
+      )) {
         problems.push(`${where}: ${problem}`);
       }
     }
@@ -1080,7 +1088,7 @@ export async function validatePlan(
     const found =
       check.kind === 'review'
         ? await reviewModelProblems(client, workspaceId, requester, check.model, sources)
-        : await acceptanceReferenceProblems(client, workspaceId, check);
+        : await acceptanceReferenceProblems(client, workspaceId, requester, check);
     for (const problem of found) problems.push(`${where}: ${problem}`);
   }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
@@ -1178,11 +1186,13 @@ async function reviewModelProblems(
 /** What an acceptance check refers to, as of now: an observation's what
  *  {@link observationCheckProblems} accepts — an absence check's Operation declaring, besides,
  *  which answers mean "does not exist" (without, nothing it answers could meet the check); a fact
- *  check's Objects named by id exist in the workspace (one named by identity may be created by the
- *  goal's own work; a link type is not checked against the ontology here). */
+ *  check's Objects named by id exist in the workspace, and one named by identity is one an identity
+ *  could ever name ({@link factIdentityProblems}; it may be created by the goal's own work; a link
+ *  type is not checked against the ontology here). */
 async function acceptanceReferenceProblems(
   client: PoolClient,
   workspaceId: string,
+  requester: string,
   check: AcceptanceCheck | StepAcceptanceCheck,
 ): Promise<readonly string[]> {
   if (check.kind === 'requester_confirm' || check.kind === 'review') return [];
@@ -1196,12 +1206,136 @@ async function acceptanceReferenceProblems(
     ['source', check.fact.source],
     ['target', check.fact.target],
   ] as const) {
-    if (!('objectId' in ref)) continue;
+    if (!('objectId' in ref)) {
+      for (const problem of await factIdentityProblems(client, workspaceId, requester, ref)) {
+        problems.push(`fact: the ${end}'s ${problem}`);
+      }
+      continue;
+    }
     if (!(await objectExists(client, workspaceId, ref))) {
       problems.push(`fact: the ${end} Object ${ref.objectId} does not exist in this workspace`);
     }
   }
   return problems;
+}
+
+/** How many of an ObjectType's Objects {@link factIdentityProblems} reads to see how the type's
+ *  identities are written (which fields, which JSON types) — bounded, so a large type costs a
+ *  proposal no more than this. */
+const IDENTITY_SAMPLE = 1000;
+
+/** JSON's name for a value's type, as Postgres `jsonb_typeof` gives it. */
+function jsonTypeOf(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value === 'object' ? 'object' : typeof value;
+}
+
+/**
+ * Legacy 466: why a fact check's Object named by ObjectType and identity could never be the one
+ * the check means. Such an Object is matched as written — `objects.identity_key` equal to the
+ * identity, as jsonb (`fact-check.ts`, and goal/0007's `goal_fact_endpoint_is` in the database) —
+ * so `"3"` is not `3`, and a field more or fewer is another identity: a wrong one used to leave the
+ * check waiting forever for evidence that could not exist, with nothing said.
+ *
+ * An Object of that type with exactly this identity already in the workspace settles it: the
+ * check names something that is there. Otherwise the identity must be one such an Object could be
+ * written with:
+ *   - **its fields** are the ObjectType's `identityKey`, no more and no fewer, when the requester's
+ *     ontology declares one — unless an Object of the type in the workspace is identified by
+ *     exactly these fields: a gate's observe and a Worker's result write identities as they come,
+ *     not held to the ontology (`submit_observations` is), so a shape the graph already holds is
+ *     one its writers use;
+ *   - **each value's JSON type** is one the type's Objects in the workspace store that field with,
+ *     when they store it at all — the ontology declares no property types, so what the graph holds
+ *     is the only evidence of them.
+ * Both read at most {@link IDENTITY_SAMPLE} of the type's Objects. An ObjectType the ontology does
+ * not declare has no key to check (an `observed` Link reaches anything a gate observes), only its
+ * stored types. Nothing here reads a Fact or a property.
+ */
+async function factIdentityProblems(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+  ref: Extract<FactObjectRef, { objectType: string }>,
+): Promise<readonly string[]> {
+  const exact = await client.query(
+    `select 1 from objects
+      where workspace_id = $1 and object_type = $2 and identity_key = $3::jsonb
+      limit 1`,
+    [workspaceId, ref.objectType, JSON.stringify(ref.identity)],
+  );
+  if ((exact.rowCount ?? 0) > 0) return [];
+
+  const problems: string[] = [];
+  const type = quotedName(ref.objectType);
+  const fields = Object.keys(ref.identity);
+  const declared = await getType(client, workspaceId, requester, ref.objectType);
+  const identityKey = declared?.kind === 'object' ? declared.identityKey : undefined;
+  if (identityKey && identityKey.length > 0) {
+    const missing = identityKey.filter((field) => !fields.includes(field));
+    const extra = fields.filter((field) => !identityKey.includes(field));
+    if (
+      (missing.length > 0 || extra.length > 0) &&
+      !(await someObjectIdentifiedBy(client, workspaceId, ref.objectType, fields))
+    ) {
+      const names = (list: readonly string[]) => list.map((field) => quotedName(field)).join(', ');
+      const parts = [
+        missing.length > 0 ? `${names(missing)} missing` : '',
+        extra.length > 0 ? `${names(extra)} not part of it` : '',
+      ].filter((part) => part !== '');
+      problems.push(
+        `identity does not have the fields of ObjectType ${type}'s identityKey (${names(identityKey)}): ${parts.join('; ')} — and no ${type} Object in this workspace is identified by these fields, so none could match`,
+      );
+    }
+  }
+
+  const stored = await client.query<{ field: string; types: string[] }>(
+    `select e.key as field,
+            array_agg(distinct jsonb_typeof(e.value) order by jsonb_typeof(e.value)) as types
+       from (select identity_key from objects
+              where workspace_id = $1 and object_type = $2
+                and jsonb_typeof(identity_key) = 'object'
+              limit $4) o
+       cross join lateral jsonb_each(o.identity_key) e
+      where e.key = any($3::text[])
+      group by e.key`,
+    [workspaceId, ref.objectType, fields, IDENTITY_SAMPLE],
+  );
+  const storedTypes = new Map(stored.rows.map((row) => [row.field, row.types]));
+  for (const field of fields) {
+    const types = storedTypes.get(field);
+    const value = ref.identity[field];
+    const written = jsonTypeOf(value);
+    if (!types || types.includes(written)) continue;
+    problems.push(
+      `identity field ${quotedName(field)} is a ${written} (${boundedEcho(JSON.stringify(value))}), but the ${type} Objects in this workspace store it as ${types.length === 1 ? 'a ' : ''}${types.join(' or ')} — an identity is matched as written`,
+    );
+  }
+  return problems;
+}
+
+/** Whether one of the first {@link IDENTITY_SAMPLE} `objectType` Objects in the workspace is
+ *  identified by exactly `fields` (jsonb keys are unique, as are an object's own keys: holding all
+ *  of them and as many is the same set). */
+async function someObjectIdentifiedBy(
+  client: PoolClient,
+  workspaceId: string,
+  objectType: string,
+  fields: readonly string[],
+): Promise<boolean> {
+  const found = await client.query(
+    `select 1
+       from (select identity_key from objects
+              where workspace_id = $1 and object_type = $2
+                and jsonb_typeof(identity_key) = 'object'
+              limit $4) o
+      where o.identity_key ?& $3::text[]
+        and (select count(*) from jsonb_object_keys(o.identity_key)) = cardinality($3::text[])
+      limit 1`,
+    [workspaceId, objectType, fields, IDENTITY_SAMPLE],
+  );
+  return (found.rowCount ?? 0) > 0;
 }
 
 async function objectExists(
