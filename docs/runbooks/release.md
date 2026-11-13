@@ -2734,6 +2734,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级前后**：§3.157 的升级前只读核对照旧执行；查到的门，升级后由工作区所有者用 https:// 重新接入。自接门不能改地址（遗留 701），重新接入会成为一扇新门，操作要重新导入、发布，引用旧门的目标和流程要改。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.159 reaper 结束已决 Task 下的活 WorkerRun（#1133，遗留 206、207，0.68.0 之后的下一版）
+
+无迁移，线上契约不变。
+
+- **行为变化**：升级后第一个 reaper tick（30 秒内）会结束已决（cancelled / failed / completed）Task 下仍是活状态的 WorkerRun，撤销 Handle 并停掉容器，审计 `worker_run.terminate`、`reason: task_ended`；Task 保持原终态。以前这些 run 要等到时长上限。对终态 Task 再调一次 `cancel_task` 也会立刻收掉残留 run。
+- **升级前只读核对**（可选，结果记 `docs/private/`）：想事先知道会被结束哪些，跑 §3.22 的 Q3。主机从 v0.46 起已按 §3.22 处置过，预计为空。
+- **回滚**：回代码即可，没有迁移。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
