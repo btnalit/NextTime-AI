@@ -34,7 +34,7 @@ import {
   quotedName,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import { WORKER_CEILING_CAPABILITIES, seesEveryDraft } from '../../governance/capability/index.js';
 import {
   existingGatekeeperIds,
   getGatekeeper,
@@ -58,6 +58,7 @@ import {
   lintPredicate,
   predicateLiterals,
 } from '../../substrate/epistemic/index.js';
+import { type GraphReadViewer, operationDraftHiddenSql } from '../../substrate/graph/index.js';
 import { getType } from '../../substrate/ontology/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
@@ -1186,7 +1187,8 @@ async function reviewModelProblems(
 /** What an acceptance check refers to, as of now: an observation's what
  *  {@link observationCheckProblems} accepts — an absence check's Operation declaring, besides,
  *  which answers mean "does not exist" (without, nothing it answers could meet the check); a fact
- *  check's Objects named by id exist in the workspace, and one named by identity is one an identity
+ *  check's Objects named by id exist in the workspace for its requester (legacy 704: an Operation
+ *  draft they may not see does not), and one named by identity is one an identity
  *  could ever name ({@link factIdentityProblems}; it may be created by the goal's own work; a link
  *  type is not checked against the ontology here). */
 async function acceptanceReferenceProblems(
@@ -1202,17 +1204,24 @@ async function acceptanceReferenceProblems(
     );
   }
   const problems: string[] = [];
+  const viewer = await factCheckViewer(client, workspaceId, requester);
   for (const [end, ref] of [
     ['source', check.fact.source],
     ['target', check.fact.target],
   ] as const) {
     if (!('objectId' in ref)) {
-      for (const problem of await factIdentityProblems(client, workspaceId, requester, ref)) {
+      for (const problem of await factIdentityProblems(
+        client,
+        workspaceId,
+        requester,
+        viewer,
+        ref,
+      )) {
         problems.push(`fact: the ${end}'s ${problem}`);
       }
       continue;
     }
-    if (!(await objectExists(client, workspaceId, ref))) {
+    if (!(await objectExists(client, workspaceId, viewer, ref))) {
       problems.push(`fact: the ${end} Object ${ref.objectId} does not exist in this workspace`);
     }
   }
@@ -1251,19 +1260,28 @@ function jsonTypeOf(value: unknown): string {
  *     is the only evidence of them.
  * Both read at most {@link IDENTITY_SAMPLE} of the type's Objects. An ObjectType the ontology does
  * not declare has no key to check (an `observed` Link reaches anything a gate observes), only its
- * stored types. Nothing here reads a Fact or a property.
+ * stored types. Nothing here reads a Fact or a property. Every read is the requester's
+ * (`viewer`, legacy 704): an Operation draft they may not see neither settles it nor shapes it.
  */
 async function factIdentityProblems(
   client: PoolClient,
   workspaceId: string,
   requester: string,
+  viewer: GraphReadViewer,
   ref: Extract<FactObjectRef, { objectType: string }>,
 ): Promise<readonly string[]> {
   const exact = await client.query(
-    `select 1 from objects
-      where workspace_id = $1 and object_type = $2 and identity_key = $3::jsonb
+    `select 1 from objects o
+      where o.workspace_id = $1 and o.object_type = $2 and o.identity_key = $3::jsonb
+        and not ${operationDraftHiddenSql('o', '$4', '$5')}
       limit 1`,
-    [workspaceId, ref.objectType, JSON.stringify(ref.identity)],
+    [
+      workspaceId,
+      ref.objectType,
+      JSON.stringify(ref.identity),
+      viewer.seesEveryDraft,
+      viewer.principalId,
+    ],
   );
   if ((exact.rowCount ?? 0) > 0) return [];
 
@@ -1277,7 +1295,7 @@ async function factIdentityProblems(
     const extra = fields.filter((field) => !identityKey.includes(field));
     if (
       (missing.length > 0 || extra.length > 0) &&
-      !(await someObjectIdentifiedBy(client, workspaceId, ref.objectType, fields))
+      !(await someObjectIdentifiedBy(client, workspaceId, viewer, ref.objectType, fields))
     ) {
       const names = (list: readonly string[]) => list.map((field) => quotedName(field)).join(', ');
       const parts = [
@@ -1293,14 +1311,22 @@ async function factIdentityProblems(
   const stored = await client.query<{ field: string; types: string[] }>(
     `select e.key as field,
             array_agg(distinct jsonb_typeof(e.value) order by jsonb_typeof(e.value)) as types
-       from (select identity_key from objects
-              where workspace_id = $1 and object_type = $2
-                and jsonb_typeof(identity_key) = 'object'
+       from (select s.identity_key from objects s
+              where s.workspace_id = $1 and s.object_type = $2
+                and jsonb_typeof(s.identity_key) = 'object'
+                and not ${operationDraftHiddenSql('s', '$5', '$6')}
               limit $4) o
        cross join lateral jsonb_each(o.identity_key) e
       where e.key = any($3::text[])
       group by e.key`,
-    [workspaceId, ref.objectType, fields, IDENTITY_SAMPLE],
+    [
+      workspaceId,
+      ref.objectType,
+      fields,
+      IDENTITY_SAMPLE,
+      viewer.seesEveryDraft,
+      viewer.principalId,
+    ],
   );
   const storedTypes = new Map(stored.rows.map((row) => [row.field, row.types]));
   for (const field of fields) {
@@ -1321,19 +1347,21 @@ async function factIdentityProblems(
 async function someObjectIdentifiedBy(
   client: PoolClient,
   workspaceId: string,
+  viewer: GraphReadViewer,
   objectType: string,
   fields: readonly string[],
 ): Promise<boolean> {
   const found = await client.query(
     `select 1
-       from (select identity_key from objects
-              where workspace_id = $1 and object_type = $2
-                and jsonb_typeof(identity_key) = 'object'
+       from (select s.identity_key from objects s
+              where s.workspace_id = $1 and s.object_type = $2
+                and jsonb_typeof(s.identity_key) = 'object'
+                and not ${operationDraftHiddenSql('s', '$5', '$6')}
               limit $4) o
       where o.identity_key ?& $3::text[]
         and (select count(*) from jsonb_object_keys(o.identity_key)) = cardinality($3::text[])
       limit 1`,
-    [workspaceId, objectType, fields, IDENTITY_SAMPLE],
+    [workspaceId, objectType, fields, IDENTITY_SAMPLE, viewer.seesEveryDraft, viewer.principalId],
   );
   return (found.rowCount ?? 0) > 0;
 }
@@ -1341,13 +1369,35 @@ async function someObjectIdentifiedBy(
 async function objectExists(
   client: PoolClient,
   workspaceId: string,
+  viewer: GraphReadViewer,
   ref: Extract<FactObjectRef, { objectId: string }>,
 ): Promise<boolean> {
-  const result = await client.query('select 1 from objects where workspace_id = $1 and id = $2', [
-    workspaceId,
-    ref.objectId,
-  ]);
+  const result = await client.query(
+    `select 1 from objects o
+      where o.workspace_id = $1 and o.id = $2
+        and not ${operationDraftHiddenSql('o', '$3', '$4')}`,
+    [workspaceId, ref.objectId, viewer.seesEveryDraft, viewer.principalId],
+  );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Legacy 704: who a fact check's Objects are read for — its requester, as every graph read is
+ * narrowed for a viewer (`substrate/graph/operation-draft-visibility.ts`): an Operation draft they
+ * may not see is not there, at proposal ({@link validatePlan}: neither "does not exist" nor an
+ * identity's shape or stored types may tell one apart) and when the check is judged
+ * (`fact-check.ts`). A requester who is no principal of the workspace sees no draft.
+ */
+export async function factCheckViewer(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+): Promise<GraphReadViewer> {
+  const viewer = await planViewer(client, workspaceId, requester);
+  return {
+    principalId: requester,
+    seesEveryDraft: viewer !== null && seesEveryDraft(viewer.role),
+  };
 }
 
 /** What a reconcile declaration refers to, as of now: its action a published execute-class
