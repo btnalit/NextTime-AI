@@ -123,9 +123,10 @@ RUN apt-get update \
 # 8.7.0 — 8.6 rejects it, so `find` would still fail in every Worker directory that is not a
 # clone. Instead fd's own static (musl) release build at a pinned version, checked against the
 # SHA-256 recorded here; amd64 and arm64 only, any other architecture stops the build. Bumping fd
-# means changing the version and both digests together (docs/runbooks/pi-upgrade.md 2.2). The
-# self-check after `ENV PI_OFFLINE=1` runs pi's `find` and `grep`, so a binary pi cannot use fails
-# the build.
+# means changing the version and both digests together (docs/runbooks/pi-upgrade.md 2.2); no bot
+# watches this pin, so it is checked in each dependency wave. fd's two license files (MIT / Apache
+# 2.0) go to /usr/local/share/doc/fd beside it. The self-check after `ENV PI_OFFLINE=1` runs pi's
+# `find` and `grep`, so a binary pi cannot use fails the build.
 RUN set -eu; \
     fd_version=10.5.2; \
     case "$(dpkg --print-architecture)" in \
@@ -139,8 +140,12 @@ RUN set -eu; \
     curl -fsSL --retry 3 -o /tmp/fd.tar.gz \
       "https://github.com/sharkdp/fd/releases/download/v${fd_version}/${fd_name}.tar.gz"; \
     echo "${fd_sha256}  /tmp/fd.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/fd.tar.gz -C /tmp "${fd_name}/fd"; \
+    tar -xzf /tmp/fd.tar.gz -C /tmp \
+      "${fd_name}/fd" "${fd_name}/LICENSE-MIT" "${fd_name}/LICENSE-APACHE"; \
     install -m 0755 "/tmp/${fd_name}/fd" /usr/local/bin/fd; \
+    install -d /usr/local/share/doc/fd; \
+    install -m 0644 "/tmp/${fd_name}/LICENSE-MIT" "/tmp/${fd_name}/LICENSE-APACHE" \
+      /usr/local/share/doc/fd/; \
     rm -rf /tmp/fd.tar.gz "/tmp/${fd_name}"
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-

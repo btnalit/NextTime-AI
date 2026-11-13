@@ -113,8 +113,10 @@ reason=unknown_value`）。镜像因此是运行时契约 3（2.6），旧镜像
 - `rg`：apt 的 `ripgrep`（bookworm 13.0.0），pi 用到的参数它都支持。
 - `fd`：**不用** apt 的 `fd-find`。bookworm 是 fd 8.6.0，而 pi 在 git 仓库之外会加 `--no-require-git`（fd 8.7.0
   才有），8.6 直接报参数错误，大多数 Worker 工作目录不是仓库，`find` 照样失败。镜像改装 fd 官方发布的静态
-  （musl）构建，版本和 amd64 / arm64 两个包的 SHA-256 写在 Dockerfile 里，装到 `/usr/local/bin/fd`。升级 fd
-  要同时改版本和两个摘要；从源码构建镜像因此也要能访问 GitHub 的 release 下载。
+  （musl）构建，版本和 amd64 / arm64 两个包的 SHA-256 写在 Dockerfile 里，装到 `/usr/local/bin/fd`，两份许可证
+  （MIT / Apache 2.0）放在 `/usr/local/share/doc/fd/`。升级 fd 要同时改版本和两个摘要；从源码构建镜像因此也要
+  能访问 GitHub 的 release 下载。这个钉子没有 bot 盯（Dependabot 只管 npm 安全告警，`image-pins` 只管镜像
+  digest），每个依赖波次手动核对一次 fd 的新版本与安全公告。
 
 Dockerfile 在 `ENV PI_OFFLINE=1` 之后跑 `selfcheck-search-tools.mjs`：以镜像用户、镜像环境、空的 agent 目录，
 用装进去的 pi 真跑一次 `find` 和 `grep`，跑不通就构建失败。升级 pi 时，如果它改了要找的命令名、换了二进制，
