@@ -2707,6 +2707,25 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：只能整版做，代码、worker-runtime 镜像、worker-supervisor 一起回。只回滚运行时镜像不可行：新 supervisor 拒绝契约 2 及更早的镜像，控制台也不让设为活动；只回滚 supervisor，它会拒绝契约 3 的镜像，并对评审 spawn 回 400。内核部分本身没有迁移。`pi-upgrade.md` 的回滚一节已写明。
 - **演练**：下一次主机大版本升级的 staging 演练（起点等于主机当前版本）把「label 3、selfcheck 日志行、入口容器收敛」列进验收项。
 
+### 3.157 公网门必须 https；JSON 键名里的凭据也拒收和遮蔽（#1129，遗留 413、444，0.68.0 之后的下一版）
+
+无迁移。线上契约只多了 `400 connection_target_refused` 的 `details.reason` 和 `details.field`（`contract:check` 快照不变）。这是一次**收紧**：主机上已经接入、endpoint 是 `http://` 公网地址的自连门，升级后会立刻失效。
+
+- **升级前只读核对**（**主机动作**，结果记 `docs/private/`，写进给主机的升级提示词）：列出未挂起、endpoint 以 `http://` 开头的自连门。用 release.md 惯例的 `psql -U nexttime`（compose 的 `POSTGRES_USER`，超级用户）跑；`workspace_self_connections` 开了 forced RLS，换成应用角色会**静默返回 0 行**，读出来就成了「没有受影响的门」：
+
+  ```sql
+  select workspace_id, gatekeeper_object_id, connector, endpoint
+  from workspace_self_connections
+  where endpoint ilike 'http://%' and suspended_at is null;
+  ```
+
+  逐个看地址：内网地址（RFC 1918、CGNAT 100.64/10、IPv6 ULA）不受影响；解析出公网地址的（一个名字只要有一个公网答案就算），升级后这个门的每次调用都以 `target_refused` 失败、请求不发出。apply 按确定的 `refused` 失败处理，不重试，不会留下要人工对账的 in doubt 调用。
+- **处理方式**：让 owner 把门改成 `https://` 后重新接入。确实不能改的，由操作员把主机名加进 `.env` 的 `NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel，作为临时兜底，记进 `docs/private/`。注意：这个名单**按后缀匹配**，加一个上级域名会把它下面所有子域名一起放行；而且它**跳过全部检查**（含平台子网、回环），不只这条 https 规则。所以只加最窄的主机名。
+- **升级后的表现**：存量 http 公网门经 capability 路由调用得到 `502 gatekeeper_error`，控制台主文案是「目标系统返回了错误」，原因（`not sent — … use https://`）只在「技术细节」里。这是遗留 700，修好之前遇到这种报错先按上一条处理。
+- **444 没有主机动作**：已存储的数据不改写，只在读出时遮蔽键名里的凭据；计划按读出原样回传时保留存储的原值。
+- **回滚**：回代码即可，没有迁移。
+- **演练**：下一次主机大版本升级的 staging 演练把「升级前核对 SQL 用超级用户跑、对 http 公网门调用以 `target_refused` 失败」列进验收项。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
