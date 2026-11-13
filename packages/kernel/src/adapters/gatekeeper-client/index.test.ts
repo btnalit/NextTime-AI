@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runWithCorrelationId } from '../../substrate/correlation/index.js';
-import { OutboundTargetRefusedError } from '../outbound-target/index.js';
+import { OutboundTargetRefusedError, createOutboundTargetGuard } from '../outbound-target/index.js';
 import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
@@ -515,6 +515,56 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
       ),
     ).rejects.toMatchObject({ code: 'target_refused' });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // Legacy 413: a self-connected gate already registered at http:// on a public address is never
+  // called again — the call would carry its connection secret (and, for a connected account, the
+  // credential) across the internet unencrypted. The same gate over https://, or at http:// on a
+  // LAN address, is called as before.
+  it('refuses every call to a self-connected http:// public endpoint, sending nothing', async () => {
+    const { fetchImpl, calls } = recordingFetch();
+    const lanAddress = [192, 168, 1, 20].join('.');
+    const addresses: Record<string, string> = {
+      'gate.owner.example': '93.184.216.34',
+      'gate.home.example': lanAddress,
+    };
+    const client = new HttpGatekeeperClient({
+      fetchImpl,
+      token: GATE_TOKEN,
+      outboundTargetGuard: createOutboundTargetGuard({
+        policy: { platformSubnets: [] },
+        resolve: async (host) => [addresses[host] ?? '93.184.216.34'],
+      }),
+    });
+    const target = (endpoint: string) => ({
+      endpoint,
+      credential: { kind: 'connection' as const, workspaceId: WORKSPACE, salt: SALT },
+    });
+    const plaintextPublic = target('http://gate.owner.example:8090');
+    for (const send of [
+      () => client.health(plaintextPublic),
+      () => client.observe(plaintextPublic, { operation: 'x', operationDigest: DIGEST }),
+      () =>
+        client.apply(plaintextPublic, {
+          operation: 'x',
+          actionRequestId: 'ar-1',
+          operationDigest: DIGEST,
+        }),
+      () =>
+        client.storeConnectedAccount(plaintextPublic, {
+          onBehalfOf: 'p-1',
+          credential: { token: 'synthetic-not-a-secret' },
+        }),
+    ]) {
+      const thrown = await send().catch((err: unknown) => err);
+      expect(thrown).toMatchObject({ name: 'GatekeeperClientError', code: 'target_refused' });
+      expect((thrown as Error).message).toContain('plain http:// URL');
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await client.health(target('https://gate.owner.example:8443'));
+    await client.health(target('http://gate.home.example:8090'));
+    expect(calls).toHaveLength(2);
   });
 
   it('does not run the guard for a platform target (a provisioned gate is not owner-supplied)', async () => {

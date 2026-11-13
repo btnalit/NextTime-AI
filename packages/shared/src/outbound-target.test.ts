@@ -124,6 +124,91 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  describe('legacy 413: plain http:// never reaches the public internet', () => {
+    it.each([
+      ['an IPv4 literal', `http://${PUBLIC_ADDRESS}:8090/`, [], PUBLIC_ADDRESS],
+      ['an IPv6 literal', 'http://[2001:4860:4860::8888]/', [], '2001:4860:4860::8888'],
+      [
+        'a name that resolves to a public address',
+        'http://gate.example.com:8090',
+        [PUBLIC_ADDRESS],
+        'gate.example.com',
+      ],
+      // The fetch re-resolves and may pick either answer, so one public address is enough.
+      [
+        'a name that resolves to a LAN and a public address',
+        'http://split.example.com/',
+        [quad(192, 168, 1, 20), PUBLIC_ADDRESS],
+        'split.example.com',
+      ],
+    ])('refuses %s', async (_label, url, addresses, host) => {
+      await expect(
+        decideOutboundTarget(url, POLICY, resolverReturning(addresses)),
+      ).resolves.toEqual({ allowed: false, reason: 'plaintext-public', host });
+    });
+
+    it('allows the same addresses over https://', async () => {
+      await expect(
+        decideOutboundTarget(`https://${PUBLIC_ADDRESS}:8443/`, POLICY, resolverReturning([])),
+      ).resolves.toEqual({ allowed: true });
+      await expect(
+        decideOutboundTarget(
+          'https://split.example.com/',
+          POLICY,
+          resolverReturning([quad(192, 168, 1, 20), PUBLIC_ADDRESS]),
+        ),
+      ).resolves.toEqual({ allowed: true });
+    });
+
+    it.each([
+      ['RFC 1918', quad(192, 168, 1, 20)],
+      ['RFC 1918 (10/8)', quad(10, 1, 2, 3)],
+      ['RFC 1918 (172.16/12)', quad(172, 20, 0, 4)],
+      ['CGNAT', quad(100, 64, 3, 4)],
+      ['IPv6 unique-local', 'fd12:3456:789a::1'],
+    ])('still allows http:// to a name on the LAN (%s)', async (_label, address) => {
+      await expect(
+        decideOutboundTarget('http://gate.home.example:8090', POLICY, resolverReturning([address])),
+      ).resolves.toEqual({ allowed: true });
+    });
+
+    it('reports where the URL points before asking for https:// (platform, loopback first)', async () => {
+      await expect(
+        decideOutboundTarget(
+          'http://mixed.example.com/',
+          POLICY,
+          resolverReturning([PUBLIC_ADDRESS, quad(10, 77, 0, 9)]),
+        ),
+      ).resolves.toMatchObject({ allowed: false, reason: 'platform-subnet' });
+      await expect(
+        decideOutboundTarget(
+          'http://mixed.example.com/',
+          POLICY,
+          resolverReturning([PUBLIC_ADDRESS, '127.0.0.1']),
+        ),
+      ).resolves.toMatchObject({ allowed: false, reason: 'loopback' });
+    });
+
+    it('lets an operator-allowed host through over http:// (the escape hatch is unchanged)', async () => {
+      const resolve = resolverReturning([PUBLIC_ADDRESS]);
+      await expect(
+        decideOutboundTarget(
+          'http://gate.lab.example:8090',
+          { ...POLICY, allowHosts: ['lab.example', PUBLIC_ADDRESS] },
+          resolve,
+        ),
+      ).resolves.toEqual({ allowed: true });
+      await expect(
+        decideOutboundTarget(
+          `http://${PUBLIC_ADDRESS}/`,
+          { ...POLICY, allowHosts: [PUBLIC_ADDRESS] },
+          resolve,
+        ),
+      ).resolves.toEqual({ allowed: true });
+      expect(resolve).not.toHaveBeenCalled();
+    });
+  });
+
   it('has an owner-facing sentence for every reason', () => {
     for (const reason of [
       'invalid-url',
@@ -133,6 +218,7 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
       'link-local',
       'unspecified',
       'platform-subnet',
+      'plaintext-public',
     ] as const) {
       expect(describeOutboundTargetRefusal(reason).length).toBeGreaterThan(10);
     }

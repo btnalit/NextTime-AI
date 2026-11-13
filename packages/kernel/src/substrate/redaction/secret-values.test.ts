@@ -265,6 +265,81 @@ describe('redactSecrets — structured values', () => {
   });
 });
 
+describe('redactSecrets — object keys (legacy 444)', () => {
+  it('scrubs a key the way it scrubs a value, counts it, and keeps the value under it', () => {
+    const paths: string[] = [];
+    expect(
+      redactSecrets(
+        {
+          [`Bearer ${FAKE}`]: 1,
+          note: 'ok',
+          nested: [{ [HANDLE]: { [`PGPASSWORD=${FAKE}`]: 'v' } }],
+        },
+        { maxNodes: Number.POSITIVE_INFINITY, onRedacted: (path) => paths.push(path) },
+      ),
+    ).toEqual({
+      value: {
+        [`Bearer ${REDACTED}`]: 1,
+        note: 'ok',
+        nested: [{ [REDACTED]: { [`PGPASSWORD=${REDACTED}`]: 'v' } }],
+      },
+      redactedValues: 3,
+      omitted: false,
+    });
+    // Each place by the key as shown — never the original.
+    expect(paths).toEqual([
+      `Bearer ${REDACTED}`,
+      `nested[0].${REDACTED}`,
+      `nested[0].${REDACTED}.PGPASSWORD=${REDACTED}`,
+    ]);
+    expect(paths.join(' ')).not.toContain(FAKE);
+  });
+
+  it('keeps two keys that scrub to the same spelling as two fields, never merging their values', () => {
+    const other = 'zyxwvutsrqponmlkjihgfedcba9876';
+    const { value, redactedValues } = redactSecrets({
+      [`Bearer ${FAKE}`]: 'first',
+      [`Bearer ${other}`]: 'second',
+      [`Bearer ${REDACTED} (2)`]: 'third',
+    });
+    expect(value).toEqual({
+      [`Bearer ${REDACTED}`]: 'first',
+      [`Bearer ${REDACTED} (2)`]: 'second',
+      [`Bearer ${REDACTED} (2) (2)`]: 'third',
+    });
+    expect(redactedValues).toBe(2);
+  });
+
+  it('leaves ordinary keys, secret-named ones included, as they are', () => {
+    const input = {
+      password: 'x',
+      apiKey: 'y',
+      maxTokens: 3,
+      'x-request-id': 'z',
+      __proto__key: 1,
+    };
+    expect(redactSecrets(input).value).toEqual(input);
+    expect(redactSecrets(input).redactedValues).toBe(0);
+  });
+
+  it('is idempotent: a key already shown is not counted again on a second read', () => {
+    const once = redactSecrets({ [`Bearer ${FAKE}`]: 1, [`Authorization: Basic ${FAKE}`]: 2 });
+    expect(once.redactedValues).toBe(2);
+    const twice = redactSecrets(once.value);
+    expect(twice.value).toEqual(once.value);
+    expect(twice.redactedValues).toBe(0);
+  });
+
+  it('runs the high-confidence patterns over keys too (what a refusal reads)', () => {
+    const found = redactSecrets(
+      { [HANDLE]: 1, 'token=expired': 2 },
+      { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS },
+    );
+    expect(found.redactedValues).toBe(1);
+    expect(found.value).toEqual({ [REDACTED]: 1, 'token=expired': 2 });
+  });
+});
+
 describe('redactSecretFieldsInJsonText — the field rule over JSON text (legacy 185)', () => {
   const mask = (text: string) => redactSecretFieldsInJsonText(text, namesASecretField);
 

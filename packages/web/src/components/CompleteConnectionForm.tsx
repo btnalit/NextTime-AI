@@ -107,13 +107,10 @@ export function parseCredentials(text: string): unknown {
   }
 }
 
-/** The 400 codes whose message names the field it is about: `invalid_params`, and R-27's
- *  `connection_target_refused` (an `endpoint` / `manifestSource` aimed at the platform). Legacy
- *  186's `credentials_in_connection_params` names its field in `details.field` instead. */
-const FIELD_ERROR_CODES: ReadonlySet<string> = new Set([
-  'invalid_params',
-  'connection_target_refused',
-]);
+/** The 400 codes whose message names the field it is about: `invalid_params`. R-27's
+ *  `connection_target_refused` and legacy 186's `credentials_in_connection_params` name their
+ *  field in `details.field` instead ({@link targetRefusalField}, {@link connectionCredentialField}). */
+const FIELD_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_params']);
 
 /** Where the credential goes instead, as this form offers it: the 凭证 box once a per-member
  *  credential is chosen, the gate's own configuration otherwise (shared mode has no box). */
@@ -134,6 +131,7 @@ export function fieldErrorExplanation(
   code: string,
   t: Translate,
   credentialKind: CredentialKind = 'shared',
+  targetRefusal?: string,
 ): string {
   if (code === 'credentials_in_connection_params') {
     if (field === 'endpoint') {
@@ -152,6 +150,18 @@ export function fieldErrorExplanation(
       '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称。',
       'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name.',
     )}${credentialPlace(credentialKind, t)}`;
+  }
+  if (code === 'connection_target_refused' && targetRefusal === 'plaintext-public') {
+    // Legacy 413: the kernel refuses http:// to an address on the public internet.
+    return field === 'manifestSource'
+      ? t(
+          '清单来源是公网地址，却用的是 http://，已拒绝，什么也没保存：明文传输时清单可能在路上被换掉。请改成 https:// 地址。',
+          'The manifest source is on the public internet but uses http:// — refused, nothing was saved: a manifest sent in clear text could be swapped on the way. Use its https:// address.',
+        )
+      : t(
+          '门端点是公网地址，却用的是 http://，已拒绝，什么也没保存：连接密钥和凭证会明文经过互联网。请改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
+          'The Gatekeeper endpoint is on the public internet but uses http:// — refused, nothing was saved: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
+        );
   }
   if (code === 'connection_target_refused') {
     return t(
@@ -183,6 +193,13 @@ export function fieldErrorExplanation(
   }
 }
 
+/** Which outbound-target rule a `connection_target_refused` 400 names (`details.reason`, legacy
+ *  413); `undefined` from a kernel that does not send it, which then gets the general text. */
+function targetRefusalOf(err: unknown): string | undefined {
+  const reason = err instanceof HttpError ? err.details?.reason : undefined;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 /** The field a `credentials_in_connection_params` 400 names (`details.field`, legacy 186) — the
  *  kernel's message mentions "credentials" too, so it is never guessed from the text. */
 function connectionCredentialField(err: unknown): keyof FieldErrors | undefined {
@@ -190,6 +207,17 @@ function connectionCredentialField(err: unknown): keyof FieldErrors | undefined 
   return field === 'target' || field === 'endpoint' || field === 'manifestSource'
     ? field
     : undefined;
+}
+
+/** The field a `connection_target_refused` 400 is about: `details.field` (only `endpoint` and
+ *  `manifestSource` are ever refused this way), else — from a kernel that does not send it — the
+ *  field its message opens with (`create_connection: endpoint "…" is refused: …`). Never guessed
+ *  from the rest of the text: the plain-http refusal mentions credentials (UX acceptance of #1129). */
+function targetRefusalField(err: unknown, message: string): keyof FieldErrors | undefined {
+  const field = err instanceof HttpError ? err.details?.field : undefined;
+  if (field === 'endpoint' || field === 'manifestSource') return field;
+  const named = /^create_connection: (endpoint|manifestSource) "/.exec(message)?.[1];
+  return named === 'endpoint' || named === 'manifestSource' ? named : undefined;
 }
 
 /** A kernel 400 shown on a field: which one, and what goes in its 「技术细节」. */
@@ -335,6 +363,14 @@ export function CompleteConnectionForm({
     return errors;
   }
 
+  /** Whether the form shows `field` right now: the 凭证 box only for a per-member credential, the
+   *  manifest source only for a kind that takes one. */
+  function fieldShown(field: keyof FieldErrors): boolean {
+    if (field === 'credentials') return credentialKind === 'connected_account';
+    if (field === 'manifestSource') return supportsManifestSource(kind);
+    return true;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const errors = validate();
@@ -372,14 +408,19 @@ export function CompleteConnectionForm({
     } catch (err) {
       setCredentials('');
       const described = describeError(err);
-      const field =
+      const named =
         described.code === 'credentials_in_connection_params'
           ? connectionCredentialField(err)
-          : described.code === 'endpoint_already_connected'
-            ? 'endpoint'
-            : FIELD_ERROR_CODES.has(described.code)
-              ? fieldForInvalidParams(described.message)
-              : undefined;
+          : described.code === 'connection_target_refused'
+            ? targetRefusalField(err, described.message)
+            : described.code === 'endpoint_already_connected'
+              ? 'endpoint'
+              : FIELD_ERROR_CODES.has(described.code)
+                ? fieldForInvalidParams(described.message)
+                : undefined;
+      // Only a field this form shows can carry the error; otherwise it goes above the buttons, so a
+      // refusal is never silent (UX acceptance of #1129).
+      const field = named && fieldShown(named) ? named : undefined;
       if (field) {
         // The field says what is wrong in the viewer's language; the kernel's own (English) text
         // sits in the field's collapsed 「技术细节」 (#537 convention), never in the line itself.
@@ -393,7 +434,13 @@ export function CompleteConnectionForm({
           [field]:
             described.code === 'endpoint_already_connected'
               ? endpointAlreadyConnectedMessage(existing?.name ?? null, t)
-              : fieldErrorExplanation(field, described.code, t, credentialKind),
+              : fieldErrorExplanation(
+                  field,
+                  described.code,
+                  t,
+                  credentialKind,
+                  targetRefusalOf(err),
+                ),
         });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
       } else {

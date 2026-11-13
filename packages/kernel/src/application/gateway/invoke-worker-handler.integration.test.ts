@@ -398,6 +398,32 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const plain = await invoke({ job: 'plain' });
       expect(await auditOf(plain.id)).not.toHaveProperty('credentialReview');
+
+      // Legacy 444: a credential written as a key is counted and masked like one written as a
+      // value — in the audit copy and on every read of the Task — and the Task keeps it as given.
+      const token = 'abcdefghijklmnopqrstuvwxyz0123';
+      const keyed = await invoke({ job: 'keyed', headers: { [`Bearer ${token}`]: true } });
+      const keyedAudit = await auditOf(keyed.id);
+      expect(JSON.stringify(keyedAudit)).not.toContain(token);
+      expect(keyedAudit.credentialReview).toEqual({
+        suspectedSecretValues: 1,
+        suspectedSecretPaths: ['headers.Bearer [redacted]'],
+      });
+      expect(keyedAudit.params).toMatchObject({
+        input: { headers: { 'Bearer [redacted]': true } },
+      });
+      const read = (await dispatchCapability({ pool }, caller, 'get_task', {
+        taskId: keyed.id,
+      })) as { input: unknown };
+      expect(read.input).toEqual({ job: 'keyed', headers: { 'Bearer [redacted]': true } });
+      const keyedStored = await inTx(principalId, async (client) => {
+        const { rows } = await client.query<{ input: unknown }>(
+          'select input from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, keyed.id],
+        );
+        return rows[0]?.input;
+      });
+      expect(keyedStored).toEqual({ job: 'keyed', headers: { [`Bearer ${token}`]: true } });
     });
 
     describe('S3.13 runtime consumer — AgentProfile.excludedWorkerDefinitions', () => {

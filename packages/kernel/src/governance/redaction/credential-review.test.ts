@@ -116,16 +116,17 @@ describe('findSuspectedSecrets — where, by field path only', () => {
     for (const path of found.paths) expect(path).not.toContain(FAKE);
   });
 
-  it('a field name that itself looks like a secret is scrubbed in the path', () => {
+  it('a field name that itself looks like a secret is counted, and scrubbed in the path (legacy 444)', () => {
     const found = findSuspectedSecrets(
       { [`sk_live_${FAKE}`]: { password: FAKE } },
       {
         secretFields: true,
       },
     );
-    expect(found.count).toBe(1);
-    expect(found.paths[0]).not.toContain(FAKE);
-    expect(found.paths[0]).toMatch(/\.password$/);
+    // The key is a suspected credential of its own, besides the value under `password`.
+    expect(found.count).toBe(2);
+    expect(found.paths).toEqual(['[redacted]', '[redacted].password']);
+    expect(found.paths.join(' ')).not.toContain(FAKE);
   });
 
   it('keeps the count exact but lists at most 20 paths', () => {

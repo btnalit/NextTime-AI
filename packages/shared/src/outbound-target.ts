@@ -27,6 +27,16 @@ import {
  * own LAN, which is the whole point of connecting one, whereas the egress proxy keeps Workers on the
  * public internet. The platform's networks are what this predicate protects.
  *
+ * Legacy 413 (review #501 of #661): over plain `http:`, an address on the public internet is refused
+ * too (`plaintext-public`). Every call to a self-connected gate carries its connection secret in the
+ * `Authorization` header, and `create_connection` posts a connected account's credentials to the
+ * same endpoint, so `http:` to a public address would put both on the internet unencrypted. The
+ * rule covers every owner-supplied URL, `manifestSource` included: one rule is easier to state
+ * than a per-field one, and a manifest fetched in clear text could be swapped on the way. `http:`
+ * stays allowed wherever every address the name resolves to is not public (the owner's LAN: RFC
+ * 1918, CGNAT, IPv6 unique-local), which is where a self-connected gate usually runs. A name that
+ * resolves to both kinds is refused, for the same reason as above: the fetch may pick either.
+ *
  * `allowHosts` is the escape hatch for a self-connected gate that does run on the platform's
  * networks: the operator's `NEXTTIME_CONNECTION_ALLOW_HOSTS` (a gate deliberately run as a compose
  * service without making it a packaged gate) plus the kernel's fixed acceptance-fixture list
@@ -54,7 +64,9 @@ export type OutboundTargetRefusalReason =
   /** `0.0.0.0/8` or `::` — reaches the local host. */
   | 'unspecified'
   /** Inside `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS`. */
-  | 'platform-subnet';
+  | 'platform-subnet'
+  /** Legacy 413: an `http:` URL that reaches an address on the public internet. */
+  | 'plaintext-public';
 
 export type OutboundTargetDecision =
   | { readonly allowed: true }
@@ -92,6 +104,8 @@ export function describeOutboundTargetRefusal(reason: OutboundTargetRefusalReaso
       return 'it points at an unspecified ("this host") address';
     case 'platform-subnet':
       return "it points into the platform's own networks";
+    case 'plaintext-public':
+      return 'it is a plain http:// URL to an address on the public internet — the connection secret and any credentials would cross the internet unencrypted; use https://';
   }
 }
 
@@ -148,6 +162,7 @@ export async function decideOutboundTarget(
     if (addresses.length === 0) return refuse('dns-error', host);
   }
 
+  let reachesPublic = false;
   for (const address of addresses) {
     if (isUnspecifiedAddress(address)) return refuse('unspecified', host);
     const addressClass = classifyAddress(address, policy.platformSubnets);
@@ -155,6 +170,10 @@ export async function decideOutboundTarget(
     if (addressClass === 'loopback') return refuse('loopback', host);
     if (addressClass === 'link-local') return refuse('link-local', host);
     if (addressClass === 'invalid') return refuse('dns-error', host);
+    if (addressClass === 'public') reachesPublic = true;
   }
+  // Legacy 413: after the address rules above, so a URL that is refused for where it points says
+  // that rather than asking for https:// to a place it could never go.
+  if (parsed.protocol === 'http:' && reachesPublic) return refuse('plaintext-public', host);
   return { allowed: true };
 }

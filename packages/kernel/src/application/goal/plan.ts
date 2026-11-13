@@ -803,7 +803,9 @@ interface Reviewed<T> {
 /** What a writer wrote of a call sent exactly as read: nothing the read showed differently from
  *  what is stored (`original`, the same shape) — each such value left out (`null`), the shape
  *  kept for the checks to read the plan by. What the read shows as stored stays: it is the same
- *  value, and the checks find nothing in it but a `[redacted]` mark stored before they ran. */
+ *  value, and the checks find nothing in it but a `[redacted]` mark stored before they ran. A key
+ *  the read showed differently — a credential written as a field name, masked (legacy 444) — is
+ *  left out with all under it: the writer wrote none of it. */
 function writtenOfRead(shown: unknown, original: unknown): unknown {
   if (Array.isArray(shown) && Array.isArray(original)) {
     return shown.map((item, i) => writtenOfRead(item, original[i]));
@@ -811,7 +813,9 @@ function writtenOfRead(shown: unknown, original: unknown): unknown {
   if (isRecord(shown) && isRecord(original)) {
     // `fromEntries` defines own properties, so a `"__proto__"` key stays a field.
     return Object.fromEntries(
-      Object.entries(shown).map(([key, inner]) => [key, writtenOfRead(inner, original[key])]),
+      Object.entries(shown).flatMap(([key, inner]) =>
+        Object.hasOwn(original, key) ? [[key, writtenOfRead(inner, original[key])]] : [],
+      ),
     );
   }
   return isDeepStrictEqual(shown, original) ? shown : null;
