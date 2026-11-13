@@ -3,9 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   ConnectorWire,
+  EnableGateInstanceResultWire,
   GateHostTokenWire,
   GateInstanceWire,
   Operation,
+  PreviewGateInstanceEnableResultWire,
   Role,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader, verifyGateHostToken } from '@nexttime/shared';
@@ -185,6 +187,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
       ) as Promise<T>;
     }
+    /** Legacy 311: enable the way the console does — preview, then enable with the digest of the
+     *  manifest that preview showed. */
+    async function previewThenEnable(gateId: string): Promise<EnableGateInstanceResultWire> {
+      const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+        'preview_gate_instance_enable',
+        { gateId },
+      );
+      return callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+        gateId,
+        manifestDigest: preview.manifestDigest,
+      });
+    }
+    /** Legacy 311: for a refusal the enable makes before it reads the manifest — required, never
+     *  compared. */
+    const UNREAD_DIGEST = 'sha256:refused-before-the-manifest-is-read';
 
     async function expectPlatformError(call: () => Promise<unknown>, code: PlatformErrorCode) {
       const thrown = await call().then(
@@ -381,7 +398,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(mcpConnector.mode).toBe('platform_preset');
 
       await expectNotAvailable(
-        () => callAsOwner('enable_gate_instance', { gateId: 'hosted-mcp' }),
+        () =>
+          callAsOwner('enable_gate_instance', {
+            gateId: 'hosted-mcp',
+            manifestDigest: UNREAD_DIGEST,
+          }),
         'gate_not_ready',
       );
     });
@@ -435,7 +456,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('e. enable_gate_instance now succeeds and publishes both operations', async () => {
       await expectNotAvailable(
-        () => callAsOwner('enable_gate_instance', { gateId: 'hosted-mcp' }),
+        () =>
+          callAsOwner('enable_gate_instance', {
+            gateId: 'hosted-mcp',
+            manifestDigest: UNREAD_DIGEST,
+          }),
         'gate_not_ready',
       );
       const held = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
@@ -446,10 +471,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         digest: held.pendingManifest?.digest,
       });
       expect(confirmed.operationCount).toBe(2);
-      const enabled = await callAsOwner<{
-        gatekeeperId: string;
-        publishedOperationNames: string[];
-      }>('enable_gate_instance', { gateId: 'hosted-mcp' });
+      const enabled = await previewThenEnable('hosted-mcp');
       expect(enabled.publishedOperationNames.sort()).toEqual(['list_widgets', 'restart_widget']);
     });
 
@@ -505,7 +527,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gateId: 'hosted-mcp-ca',
         digest: held.pendingManifest?.digest,
       });
-      await callAsOwner('enable_gate_instance', { gateId: 'hosted-mcp-ca' });
+      await previewThenEnable('hosted-mcp-ca');
 
       const minted = await callAsOwner<GateHostTokenWire>('issue_gate_credential_token', {
         gateId: 'hosted-mcp-ca',
@@ -781,7 +803,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           JSON.stringify([HOSTED_OBSERVE_OP]),
         ],
       );
-      const thrown = await callAsOwner('enable_gate_instance', { gateId }).then(
+      const thrown = await callAsOwner('enable_gate_instance', {
+        gateId,
+        manifestDigest: UNREAD_DIGEST,
+      }).then(
         () => undefined,
         (err: unknown) => err,
       );
@@ -854,10 +879,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(announced.statusCode).toBe(200);
 
       await callAsAdmin('update_gate_instance', { gateId: 'p1-widgets-a', status: 'enabled' });
-      const enabled = await callAsOwner<{ publishedOperationNames: string[] }>(
-        'enable_gate_instance',
-        { gateId: 'p1-widgets-a' },
-      );
+      const enabled = await previewThenEnable('p1-widgets-a');
       expect(enabled.publishedOperationNames.sort()).toEqual(['list_widgets', 'restart_widget']);
       const mcp = await callAsAdmin<{ items: ConnectorWire[] }>('list_connectors');
       expect(mcp.items.find((row) => row.name === 'mcp')?.mode).toBe('self_serve');

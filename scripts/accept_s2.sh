@@ -598,7 +598,13 @@ connections_step() {
   [ "$docker_gate_ready" = "true" ] || fail "connect-docker-ready" "gatekeeper-docker announced no Operations within 60s (last_seen_at / operations on its gate_instances row)"
   pass "connect-docker-ready" "gatekeeper-docker has announced its Operations"
 
-  out=$(cap "$ALICE_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\"}" "d.result.gatekeeperId")
+  # Legacy 311: an enable names the manifest digest its preview showed (R-18).
+  out=$(cap "$ALICE_KEY" preview_gate_instance_enable "{\"gateId\":\"gatekeeper-docker\"}" "d.result.manifestDigest")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-docker-enable" "preview_gate_instance_enable(gatekeeper-docker) HTTP $status: $(parse_kv "$out" BODY)"
+  docker_manifest_digest=$(parse_kv "$out" EXTRACTED)
+  [ -n "$docker_manifest_digest" ] || fail "connect-docker-enable" "no manifestDigest in the preview: $(parse_kv "$out" BODY)"
+  out=$(cap "$ALICE_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\",\"manifestDigest\":\"$docker_manifest_digest\"}" "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-docker-enable" "enable_gate_instance(gatekeeper-docker) HTTP $status: $(parse_kv "$out" BODY)"
   GATEKEEPER_ID_DOCKER=$(parse_kv "$out" EXTRACTED)

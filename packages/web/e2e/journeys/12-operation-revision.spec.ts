@@ -1,4 +1,8 @@
-import type { EnableGateInstanceResultWire, OperationSummaryWire } from '@nexttime/shared';
+import type {
+  EnableGateInstanceResultWire,
+  OperationSummaryWire,
+  PreviewGateInstanceEnableResultWire,
+} from '@nexttime/shared';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
 import { type Page, expect, test } from '../lib/test.js';
 import {
@@ -98,10 +102,16 @@ test.describe('Journey ⑫: 发布 Operation 修订，再与门的公告对齐',
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     await selectOwnedWorkspace(page);
 
+    // Legacy 311: an enable names the manifest digest its preview showed.
+    const { manifestDigest } = await callCap<PreviewGateInstanceEnableResultWire>(
+      page,
+      'preview_gate_instance_enable',
+      { gateId: GATE_ID },
+    );
     const { gatekeeperId } = await callCap<EnableGateInstanceResultWire>(
       page,
       'enable_gate_instance',
-      { gateId: GATE_ID },
+      { gateId: GATE_ID, manifestDigest },
     );
     const before = await publishedOperation(page, gatekeeperId);
     expect(before).toMatchObject({ version: 1, blastRadius: 'medium' });
