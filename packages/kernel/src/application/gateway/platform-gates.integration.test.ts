@@ -99,7 +99,6 @@ import {
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { listGraphNodesForExplorer, searchGraphForExplorer } from './explorer-read-service.js';
-import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
@@ -586,6 +585,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         const again = await previewThenEnable(GATE_ID);
         expect(again.gatekeeperId).toBe(gatekeeperId);
         expect(again.publishedOperationNames).toEqual([]);
+        // Already enabled: the existing link whatever digest is sent (legacy 311) — the manifest
+        // is not read, so a digest no preview ever returned changes nothing.
+        const unread = await callAsOwner<typeof again>('enable_gate_instance', {
+          gateId: GATE_ID,
+          manifestDigest: UNREAD_DIGEST,
+        });
+        expect(unread.gatekeeperId).toBe(gatekeeperId);
+        expect(unread.publishedOperationNames).toEqual([]);
 
         const afterList = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
           'list_available_gate_instances',
@@ -641,7 +648,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             gateId: GATE_ID,
             manifestDigest: UNREAD_DIGEST,
           }),
-        ).rejects.toBeInstanceOf(GateInstanceNotAvailableError);
+        ).rejects.toMatchObject({ code: 'gate_not_enabled' });
         await callAsAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
 
         await callAsAdmin('set_connector_mode', { name: 'fixture-mcp', mode: 'self_serve' });
