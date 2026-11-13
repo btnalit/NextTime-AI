@@ -1032,11 +1032,56 @@ async function withAdminAgentOn<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** A platform segment's one item: a plain http instance of a connector of its own, which applying
+ *  it creates (no gate host is asked). */
+function platformGateItem() {
+  const gateId = `repeat-platform-${randomUUID().slice(0, 8)}`;
+  return {
+    kind: 'gate_instance',
+    gateId,
+    displayName: `Tickets ${gateId}`,
+    transportKind: 'http',
+    target: `https://${gateId}.example.invalid`,
+    credentialMode: 'shared',
+    manifestSource: `https://${gateId}.example.invalid/openapi.json`,
+    connector: `repeat-tickets-${randomUUID().slice(0, 8)}`,
+  };
+}
+
+/** An admin proposal's platform segment applied as its preview showed it: its segment id, and the
+ *  platform change segment the apply recorded. */
+async function appliedPlatformSegment(
+  ctx: RecipeContext,
+): Promise<{ segmentId: string; changeSegmentId: string }> {
+  const { segmentId } = await adminProposal(ctx, 'platform');
+  const applied = await as<{ changeSegment: { id: string } }>(
+    ctx,
+    'apply_platform_segment',
+    await platformApplyParams(ctx, segmentId),
+  );
+  return { segmentId, changeSegmentId: applied.changeSegment.id };
+}
+
+async function platformApplyParams(ctx: RecipeContext, segmentId: string) {
+  const preview = await as<{
+    digest: string;
+    items: { ordinal: number; classification: string }[];
+  }>(ctx, 'preview_platform_segment', { segmentId });
+  return {
+    segmentId,
+    reviewedDigest: preview.digest,
+    confirmedOrdinals: preview.items
+      .filter((item) => item.classification === 'authority_widening')
+      .map((item) => item.ordinal),
+  };
+}
+
 /** An admin proposal with one segment for the case's workspace: an administrator (the case's own
  *  on a platform row, else one made for it) chooses that workspace as their agent's target, and
  *  the agent, on a Handle the task runtime signs, proposes one new Skill there. */
 async function adminProposal(
   ctx: RecipeContext,
+  shape: 'workspace' | 'platform' = 'workspace',
 ): Promise<{ proposalId: string; segmentId: string }> {
   const admin =
     ctx.admin ??
@@ -1075,24 +1120,30 @@ async function adminProposal(
         title: 'Disk triage',
         description: 'What the trial workspace settled on.',
         sourceName: `repeat-${randomUUID().slice(0, 8)}`,
-        segments: [
-          {
-            targetWorkspaceId: ctx.seed.workspaceId,
-            items: [
-              {
-                kind: 'skill_version',
-                skill: {
-                  name: `repeat-triage-${randomUUID().slice(0, 8)}`,
-                  description: 'Triage a full disk.',
-                  markdown: '# Steps\n\n1. Look at the disk.',
+        ...(shape === 'workspace'
+          ? {
+              segments: [
+                {
+                  targetWorkspaceId: ctx.seed.workspaceId,
+                  items: [
+                    {
+                      kind: 'skill_version',
+                      skill: {
+                        name: `repeat-triage-${randomUUID().slice(0, 8)}`,
+                        description: 'Triage a full disk.',
+                        markdown: '# Steps\n\n1. Look at the disk.',
+                      },
+                    },
+                  ],
                 },
-              },
-            ],
-          },
-        ],
+              ],
+            }
+          : { segments: [], platform: { items: [platformGateItem()] } }),
       },
-    )) as { id: string; segments: { id: string }[] };
-    const segmentId = proposal.segments[0]?.id;
+    )) as { id: string; segments: { id: string; authority: string }[] };
+    const segmentId = proposal.segments.find((segment) =>
+      shape === 'workspace' ? segment.authority === 'workspace' : segment.authority === 'platform',
+    )?.id;
     if (segmentId === undefined) throw new Error('adminProposal: no segment');
     return { proposalId: proposal.id, segmentId };
   });
@@ -2443,6 +2494,43 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ proposalId: (await adminProposal(ctx)).proposalId }),
     },
   },
+  reject_platform_segment: {
+    // Rejected by the first call, so the same call again finds it decided (409
+    // admin_proposal_segment_not_open), nothing written.
+    "an admin proposal's platform segment": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ authority: 'platform', status: 'rejected' })],
+      }),
+      setUp: async (ctx) => ({
+        segmentId: (await adminProposal(ctx, 'platform')).segmentId,
+        reason: 'Not on this platform.',
+      }),
+    },
+  },
+  apply_platform_segment: {
+    // Applied by the first call (a new connector and instance here), so the same call again finds
+    // it decided (409 admin_proposal_segment_not_open), nothing written.
+    "an admin proposal's platform segment, as its preview showed it, confirmed": {
+      first: expect.objectContaining({
+        segment: expect.objectContaining({ status: 'applied' }),
+        changeSegment: expect.objectContaining({ status: 'applied' }),
+      }),
+      setUp: async (ctx) =>
+        platformApplyParams(ctx, (await adminProposal(ctx, 'platform')).segmentId),
+    },
+  },
+  roll_back_platform_change_segment: {
+    // Rolled back by the first call (its instance disabled), so the same call again finds it
+    // rolled back (409 platform_change_segment_rolled_back), nothing written.
+    'the platform change segment an applied platform segment recorded': {
+      first: expect.objectContaining({
+        changeSegment: expect.objectContaining({ status: 'rolled_back' }),
+      }),
+      setUp: async (ctx) => ({
+        changeSegmentId: (await appliedPlatformSegment(ctx)).changeSegmentId,
+      }),
+    },
+  },
   create_gate_instance: {
     // The gate id is taken by the first call, so the same call again is refused (409
     // gate_id_taken), nothing written.
@@ -2648,6 +2736,9 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'reject_admin_proposal_segment',
   'apply_admin_proposal_segment',
   'withdraw_admin_proposal',
+  'reject_platform_segment',
+  'apply_platform_segment',
+  'roll_back_platform_change_segment',
   'create_gate_instance',
   'update_gate_instance',
   'delete_gate_instance',
