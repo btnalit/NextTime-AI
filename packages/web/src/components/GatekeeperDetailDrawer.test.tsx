@@ -129,6 +129,66 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.queryByTestId('gatekeeper-platform-suspension')).toBeNull();
   });
 
+  it('legacy 701: an owner sees the address the kernel calls the gate at, and an open move to withdraw', async () => {
+    const pending = {
+      id: 'gac-1',
+      gatekeeperId: 'gk-1',
+      fromEndpoint: 'http://gate-a:8090',
+      toEndpoint: 'https://gate-b.example.com',
+      status: 'proposed',
+      impact: {
+        publishedOperationCount: 0,
+        grantCount: 0,
+        autoApprovedOperations: [],
+        workerDefinitionCount: 0,
+        inFlightActionRequestCount: 0,
+      },
+      previewDigest: 'p'.repeat(64),
+      proposedBy: 'p-owner',
+      createdAt: '2026-11-13T00:00:00.000Z',
+      expiresAt: '2026-11-14T00:00:00.000Z',
+      decidedAt: null,
+      rejectionReason: null,
+    };
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [],
+      health: 'ok',
+      endpoint: 'http://gate-a:8090',
+      pendingAddressChange: pending,
+    });
+    renderDrawer(http);
+    expect((await screen.findByTestId('gatekeeper-endpoint')).textContent).toBe(
+      'http://gate-a:8090',
+    );
+    const notice = screen.getByTestId('gate-address-change-pending');
+    expect(notice.textContent).toContain('换地址的申请在等平台管理员审批');
+    expect(notice.textContent).toContain('https://gate-b.example.com');
+    expect(screen.getByTestId('gate-address-change-withdraw')).toBeTruthy();
+  });
+
+  it('legacy 701: without the address (not an owner, or a platform gate) no address row shows', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [],
+      health: 'ok',
+    });
+    renderDrawer(http);
+    await screen.findByTestId('gatekeeper-health');
+    expect(screen.queryByTestId('gatekeeper-endpoint')).toBeNull();
+    expect(screen.queryByTestId('gate-address-change-pending')).toBeNull();
+  });
+
   it('legacy 232: an old Operation name with a hidden character shows it as \\u{XXXX}', async () => {
     const http = callerReturning({
       id: 'gk-1',

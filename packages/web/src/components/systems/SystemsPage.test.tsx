@@ -995,6 +995,7 @@ describe('SystemsPage', () => {
     const secret = `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`;
     const http = scriptedHttp({
       execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: () => ({ id: 'gk-1', name: '库存', endpoint: 'http://gate-a:8090' }),
       rotate_connection_secret: (params) => {
         expect(params).toEqual({ gatekeeperId: 'gk-1' });
         return { gatekeeperId: 'gk-1', connectionSecret: secret };
@@ -1006,12 +1007,76 @@ describe('SystemsPage', () => {
     fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
     const confirm = await screen.findByTestId('gatekeeper-rotate-secret-confirm');
     expect(confirm.textContent).toContain('旧密钥立即失效');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_gatekeeper')).toBe(true));
+    expect(confirm.textContent).not.toContain('更换地址申请');
     expect(http.calls.some((c) => c.name === 'rotate_connection_secret')).toBe(false);
     fireEvent.click(within(confirm).getByRole('button', { name: '签发' }));
     const sheet = await screen.findByTestId('gatekeeper-rotated-secret');
     expect(within(sheet).getByTestId('connection-secret-value').textContent).toBe(secret);
     fireEvent.click(within(sheet).getByRole('button', { name: '我已复制' }));
     await waitFor(() => expect(screen.queryByTestId('connection-secret-value')).toBeNull());
+  });
+
+  // Review #501 of #1156: approving a move gives the gate the secret made for the move, so a
+  // secret issued while it waits stops working then — the confirm says so before it is issued.
+  it('legacy 701: issuing a new secret while a move waits for approval says the move replaces it', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1' });
+        return {
+          id: 'gk-1',
+          name: '库存',
+          endpoint: 'http://gate-a:8090',
+          pendingAddressChange: {
+            id: 'gac-1',
+            gatekeeperId: 'gk-1',
+            fromEndpoint: 'http://gate-a:8090',
+            toEndpoint: 'https://gate-b.example.com',
+            status: 'proposed',
+          },
+        };
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    // Nothing is read for it until the confirm opens.
+    expect(http.calls.some((c) => c.name === 'get_gatekeeper')).toBe(false);
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
+    const confirm = await screen.findByTestId('gatekeeper-rotate-secret-confirm');
+    await waitFor(() =>
+      expect(confirm.textContent).toContain(
+        '这个门有一个等平台管理员批准的更换地址申请（换到 https://gate-b.example.com）',
+      ),
+    );
+    expect(confirm.textContent).toContain('这次签发的密钥随之作废');
+    expect(http.calls.some((c) => c.name === 'rotate_connection_secret')).toBe(false);
+  });
+
+  // Legacy 701: the same gates — the workspace connected them itself — move to a new address
+  // through 「更换地址」, a proposal a platform administrator decides.
+  it('legacy 701: the owner opens 更换地址 for a self-connected gate from the row’s menu', async () => {
+    const secret = `ntgc1_${'e'.repeat(32)}_${'f'.repeat(64)}`;
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1' });
+        return { id: 'gk-1', name: '库存', endpoint: 'http://gate-a:8090', operations: [] };
+      },
+      mint_connection_secret: () => ({ connectionSecret: secret }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-change-address'));
+    const sheet = await screen.findByTestId('gate-address-change');
+    expect((await within(sheet).findByTestId('connection-secret-value')).textContent).toBe(secret);
+    expect(within(sheet).getByTestId('gate-address-change-current').textContent).toContain(
+      'http://gate-a:8090',
+    );
+    // Nothing is proposed by opening it: the secret is minted, nothing else is written.
+    expect(http.calls.some((c) => c.name.endsWith('_gate_address_change'))).toBe(false);
   });
 
   it('「发布清单」 publishes the drafts this page read; a draft changed since reads them again (review #493 on #592)', async () => {
@@ -1190,6 +1255,8 @@ describe('SystemsPage', () => {
     fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
     expect(await screen.findByText('健康与操作')).toBeTruthy();
     expect(screen.queryByTestId('gatekeeper-rotate-secret')).toBeNull();
+    // Legacy 701: its address is the platform instance's, which the platform administrator changes.
+    expect(screen.queryByTestId('gatekeeper-change-address')).toBeNull();
   });
   it('legacy 456: an owner sees on the row that a deployed operation is classified otherwise than the adopted manifest, and aligns it there', async () => {
     let aligned = false;

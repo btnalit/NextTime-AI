@@ -5,6 +5,7 @@ import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import { RedactedNote } from './kit/redacted-note.js';
+import { PendingGateAddressChange } from './systems/GateAddressChangeSheet.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -28,6 +29,10 @@ export interface GatekeeperDetailDrawerProps {
  * when, the reason given, that nothing here lifts it and who does — above its Operations, which
  * stay listed: they are kept, and refused on every call until it is resumed. The health probe
  * still answers 健康 then (the gate itself is fine), so without the note the page read as working.
+ *
+ * Legacy 701: a workspace owner also sees the address the kernel calls a gate the workspace
+ * connected itself at, and an open proposal to move it (with 撤回) — `get_gatekeeper` gives both
+ * to owners only.
  */
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
   const t = useT();
@@ -94,6 +99,13 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
           </p>
         </Notice>
       ) : null}
+      {gate.pendingAddressChange ? (
+        <PendingGateAddressChange
+          http={http}
+          change={gate.pendingAddressChange}
+          onWithdrawn={() => void detail.reload()}
+        />
+      ) : null}
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>
         <dd>
@@ -104,6 +116,14 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             testId="gatekeeper-health"
           />
         </dd>
+        {gate.endpoint !== undefined ? (
+          <>
+            <dt>{t('地址', 'Address')}</dt>
+            <dd className="mono wrap-anywhere" data-testid="gatekeeper-endpoint">
+              {gate.endpoint}
+            </dd>
+          </>
+        ) : null}
         <dt>{t('清单版本', 'Manifest version')}</dt>
         <dd>{gate.manifestVersion ?? '—'}</dd>
         <dt>{t('操作', 'Operation')}</dt>

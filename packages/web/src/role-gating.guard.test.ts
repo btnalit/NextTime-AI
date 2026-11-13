@@ -923,6 +923,14 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
     names: ['publish_manifest', 'rotate_connection_secret'],
     why: 'SystemsPage hands it canPublish / canManage',
   },
+  'components/systems/GateAddressChangeSheet.tsx': {
+    names: [
+      'mint_connection_secret',
+      'propose_gate_address_change',
+      'withdraw_gate_address_change',
+    ],
+    why: "legacy 701: SystemAccessCard opens the move-address sheet behind canRotateSecret (canManage); its withdraw also shows in GatekeeperDetailDrawer, only when get_gatekeeper gave pendingAddressChange, which the kernel gives an owner only (withdraw's role)",
+  },
   'components/approvals/useApprovalQueue.ts': {
     names: ['approve', 'reject', 'set_auto_approved_action_kind'],
     why: 'the approvals route, which the route table gates on list_pending (the same roles)',
@@ -952,6 +960,10 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
 /** Files that read something some role may not, without a `can('<name>')` of their own: each is
  *  only reached by the roles that may read it — where is the reason. Only ever shrinks. */
 const READ_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
+  'components/systems/GateAddressChangeSheet.tsx': {
+    names: ['preview_gate_address_change'],
+    why: 'legacy 701: run from 更换地址, which SystemAccessCard opens behind canRotateSecret (canManage)',
+  },
   'components/ApprovalQueuePage.tsx': {
     names: ['list_action_requests'],
     why: 'the approvals route, gated on list_pending by the route table (list_action_requests: the same roles)',

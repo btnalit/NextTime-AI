@@ -29,12 +29,18 @@ function scriptedHttp(
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
-      const handler = handlers[name];
+      const handler = handlers[name] ?? QUIET[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
   };
 }
+
+/** Reads a tab makes beside the one a test is about, answered empty unless the test scripts
+ *  them: 自己接入的门 lists the moves waiting for approval above its table (legacy 701). */
+const QUIET: Readonly<Record<string, (params: unknown) => unknown>> = {
+  list_gate_address_changes: () => ({ items: [] }),
+};
 
 function renderPage(
   http: CapabilityCaller,
@@ -1093,6 +1099,68 @@ describe('PlatformIntegrationsPage', () => {
     expect(
       http.calls.filter((call) => call.name === 'list_self_connections').map((c) => c.params),
     ).toEqual([{}]);
+  });
+
+  it('legacy 701: a move waiting for approval shows above the self connections; approving it reads them again', async () => {
+    let moved = false;
+    const http = scriptedHttp({
+      list_self_connections: () => ({
+        items: [selfConnection(moved ? { endpoint: 'https://grafana-gate-2.example' } : {})],
+      }),
+      list_gate_address_changes: () => ({
+        items: moved
+          ? []
+          : [
+              {
+                id: 'gac-1',
+                workspaceId: 'ws-1',
+                workspaceName: 'Acme',
+                gatekeeperId: 'gk-self-1',
+                connector: 'http',
+                target: 'grafana',
+                fromEndpoint: 'https://grafana-gate.example',
+                toEndpoint: 'https://grafana-gate-2.example',
+                status: 'proposed',
+                impact: {
+                  publishedOperationCount: 1,
+                  grantCount: 0,
+                  autoApprovedOperations: [],
+                  workerDefinitionCount: 0,
+                  inFlightActionRequestCount: 0,
+                },
+                manifestDigest: 'm'.repeat(64),
+                previewDigest: 'p'.repeat(64),
+                proposedByName: 'Alice',
+                createdAt: '2026-11-13T00:00:00.000Z',
+                expiresAt: '2026-11-14T00:00:00.000Z',
+                decidedAt: null,
+                decidedByLogin: null,
+                rejectionReason: null,
+                suspended: false,
+              },
+            ],
+      }),
+      approve_gate_address_change: () => {
+        moved = true;
+        return {};
+      },
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+
+    const changes = await screen.findByTestId('gate-address-changes');
+    expect(changes.textContent).toContain('等你审批的换地址申请（1）');
+    const row = await screen.findByTestId('self-connection-row-gk-self-1');
+    expect(row.textContent).toContain('https://grafana-gate.example');
+    fireEvent.click(within(changes).getByTestId('gate-address-change-approve-gac-1'));
+    const confirm = await screen.findByRole('dialog', {
+      name: '批准换到 https://grafana-gate-2.example',
+    });
+    fireEvent.click(within(confirm).getByRole('button', { name: '批准' }));
+
+    await waitFor(() => expect(row.textContent).toContain('https://grafana-gate-2.example'));
+    expect(screen.queryByTestId('gate-address-changes')).toBeNull();
+    expect(http.calls.filter((call) => call.name === 'list_self_connections')).toHaveLength(2);
   });
 
   it('legacy 412: an address the kernel masked whole reads as hidden in the row and its confirm', async () => {
