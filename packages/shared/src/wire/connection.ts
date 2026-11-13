@@ -6,6 +6,7 @@ import {
   PublishableStatusSchema,
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
+import { GateAddressChangeWireSchema } from './gate-address-change.js';
 import {
   AbsentAnswerDraftWireSchema,
   GateOwnedParamDraftWireSchema,
@@ -174,6 +175,13 @@ export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   /** Legacy 674: present only while the platform suspends this self-connected gate. Its
    *  Operations stay listed — kept, and refused on every call until it is resumed. */
   platformSuspension: GatekeeperPlatformSuspensionWireSchema.optional(),
+  /** Legacy 701: the address the kernel calls this gate at, user info, query and fragment cut out
+   *  — for a workspace owner only (absent for anyone else, and for a platform-catalog gate, whose
+   *  address is the platform instance's). */
+  endpoint: z.string().optional(),
+  /** Legacy 701: the open proposal to move this self-connected gate to a new address, awaiting a
+   *  platform administrator — for a workspace owner only, absent when there is none. */
+  pendingAddressChange: GateAddressChangeWireSchema.optional(),
 });
 export type GatekeeperDetailWire = z.infer<typeof GatekeeperDetailWireSchema>;
 

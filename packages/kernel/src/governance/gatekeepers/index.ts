@@ -21,6 +21,7 @@ export {
   gateAddressOrigin,
   gateEndpointHost,
   normalizeGateEndpoint,
+  moveGatekeeperAddress,
   setGatekeeperConnectionSecretSalt,
   findGatekeeperIdByConnectionSecretSalt,
   existingGatekeeperIds,

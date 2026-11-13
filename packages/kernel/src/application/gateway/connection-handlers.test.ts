@@ -23,6 +23,7 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   createConnectionHandler,
@@ -704,7 +705,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ...params,
           endpoint: unusedEndpoint(),
         }),
-      ).rejects.toBeInstanceOf(ConnectionSecretConflictError);
+      ).rejects.toBeInstanceOf(ConnectionSecretInUseError);
     });
 
     it('rotate_connection_secret replaces the salt; the old secret no longer matches', async () => {

@@ -121,7 +121,7 @@ export function findConnectionParamsCredential(params: {
 export function assertConnectionParamsCarryNoCredentials(
   capability: string,
   params: {
-    readonly target: string;
+    readonly target?: string;
     readonly endpoint?: string;
     readonly manifestSource?: string | null;
   },

@@ -170,6 +170,8 @@ const PURGE_COUNT_LABELS = {
   evalSuites: { zh: '用例集', en: 'Evaluation suites' },
   evalTrialCalls: { zh: '评测试跑的夹具调用', en: 'Evaluation fixture calls' },
   evalTrials: { zh: '评测试跑', en: 'Evaluation trials' },
+  // Legacy 701 (migrations/core/0057): the names the capability labels use.
+  gateAddressChanges: { zh: '门地址申请', en: 'Gate address changes' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
   ontologyFamilies: { zh: '本体的名字', en: 'Ontology family names' },

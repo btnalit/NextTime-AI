@@ -12,6 +12,7 @@ export * from './graph.js';
 export * from './ontology.js';
 export * from './governance.js';
 export * from './connection.js';
+export * from './gate-address-change.js';
 export * from './task.js';
 export * from './goal.js';
 export * from './worker.js';

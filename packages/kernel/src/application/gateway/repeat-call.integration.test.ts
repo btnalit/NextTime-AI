@@ -669,6 +669,40 @@ async function connectionCall(ctx: RecipeContext) {
   };
 }
 
+/** Legacy 701: a gate the case's owner connected, its move to a new address previewed — the
+ *  params `propose_gate_address_change` takes. As the owner whatever the row's caller: a platform
+ *  row decides a proposal the workspace made. */
+async function addressChangeCall(ctx: RecipeContext) {
+  const owner = { ...ctx, caller: humanCaller(ctx.seed.workspaceId, ctx.seed.ownerId, 'owner') };
+  const { gatekeeperId } = await as<{ gatekeeperId: string }>(
+    owner,
+    'create_connection',
+    await connectionCall(owner),
+  );
+  const { connectionSecret } = await as<{ connectionSecret: string }>(
+    owner,
+    'mint_connection_secret',
+    {},
+  );
+  const endpoint = `http://repeat-moved-${randomUUID().slice(0, 8)}.invalid:8080`;
+  const preview = await as<{ previewDigest: string }>(owner, 'preview_gate_address_change', {
+    gatekeeperId,
+    endpoint,
+    connectionSecret,
+  });
+  return { gatekeeperId, endpoint, connectionSecret, previewDigest: preview.previewDigest };
+}
+
+/** Legacy 701: that move, proposed (by the owner). */
+async function openAddressChange(ctx: RecipeContext) {
+  const owner = { ...ctx, caller: humanCaller(ctx.seed.workspaceId, ctx.seed.ownerId, 'owner') };
+  return as<{ id: string; previewDigest: string }>(
+    owner,
+    'propose_gate_address_change',
+    await addressChangeCall(ctx),
+  );
+}
+
 /** The session a Handle was issued for. */
 const sessionOf = (result: unknown) => (result as { sessionId?: string }).sessionId;
 
@@ -1682,6 +1716,36 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ gatekeeperId: await gateWithOperation(ctx, false) }),
     },
   },
+  // Legacy 701: the same proposal again is refused — its secret already served one; the same
+  // withdrawal or decision again finds the proposal decided.
+  propose_gate_address_change: {
+    'a gate the workspace connected itself, its move previewed': { setUp: addressChangeCall },
+  },
+  withdraw_gate_address_change: {
+    'an open proposal': { setUp: async (ctx) => ({ id: (await openAddressChange(ctx)).id }) },
+  },
+  approve_gate_address_change: {
+    'an open proposal, as read': {
+      setUp: async (ctx) => {
+        const proposal = await openAddressChange(ctx);
+        return {
+          workspaceId: ctx.seed.workspaceId,
+          id: proposal.id,
+          previewDigest: proposal.previewDigest,
+        };
+      },
+      first: expect.objectContaining({ status: 'applied' }),
+    },
+  },
+  reject_gate_address_change: {
+    'an open proposal': {
+      setUp: async (ctx) => ({
+        workspaceId: ctx.seed.workspaceId,
+        id: (await openAddressChange(ctx)).id,
+      }),
+      first: expect.objectContaining({ status: 'rejected' }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -2139,6 +2203,10 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'observe_operation',
   'submit_observations',
   'rotate_connection_secret',
+  'propose_gate_address_change',
+  'withdraw_gate_address_change',
+  'approve_gate_address_change',
+  'reject_gate_address_change',
   'issue_handle',
   'issue_service_handle',
   'invoke_worker',

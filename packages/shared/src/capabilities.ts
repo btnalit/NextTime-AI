@@ -1031,6 +1031,60 @@ const connectionCapabilities = [
     description:
       'Issue a new connection secret for a self-connected gate (the previous one stops working immediately); put it in the gate’s GATE_KERNEL_TOKEN_FILE. Shown once. 409 for a platform-catalog gate.',
   },
+  // Legacy 701: a self-connected gate moves to a new address by a proposal the owner makes and a
+  // platform administrator decides — every reference to the gate is by id, so whatever the
+  // workspace trusted it with follows it to the new host. The owner mints a secret for the new
+  // host first (mint_connection_secret) and configures it there; the kernel checks it, reads the
+  // new host's manifest with it, and keeps only its salt. `connectionSecret` never reaches the
+  // audit row or any answer.
+  {
+    name: 'preview_gate_address_change',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        endpoint: z.string().min(1),
+        connectionSecret: z.string().min(1),
+      })
+      .strict(),
+    resultSchema: wire.GateAddressChangePreviewWireSchema,
+    description:
+      'Preview moving a gate this workspace connected itself to a new address: reads the new host’s manifest with the new connection secret (from mint_connection_secret, already in the new host’s GATE_KERNEL_TOKEN_FILE) and compares it with what is published here (manifest.matches only when it describes every published Operation exactly as published and nothing else), and lists what follows the gate to the new host — published Operations, Grants, auto-approved Operations, WorkerDefinitions, and requests not finished yet (each runs only at the address it was made for). No member’s account credential is sent; the new host answers without one or the change cannot be made. Writes nothing; pass previewDigest to propose_gate_address_change. The new address passes the same checks as create_connection (400 connection_target_refused, 400 endpoint_is_platform_gate, 400 credentials_in_connection_params, 409 endpoint_already_connected); 400 gate_address_unchanged for the address it already has; 409 gatekeeper_not_self_connected for a platform-catalog gate; 409 connection_secret_in_use when another gate here holds that secret.',
+    redactedParamKeys: ['connectionSecret'],
+  },
+  {
+    name: 'propose_gate_address_change',
+    group: 'connection',
+    mode: 'propose',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        endpoint: z.string().min(1),
+        connectionSecret: z.string().min(1),
+        previewDigest: z.string().min(1),
+      })
+      .strict(),
+    resultSchema: wire.GateAddressChangeWireSchema,
+    description:
+      'Propose moving a gate this workspace connected itself to a new address, as previewed (previewDigest from preview_gate_address_change; 409 gate_address_preview_changed when the addresses, the secret or the new host’s manifest no longer match it). A platform administrator approves or rejects it; until then nothing changes and the gate keeps its address and secret. It expires after 24 hours. 409 gate_address_manifest_mismatch unless the new host describes every published Operation exactly as published; 409 gate_address_change_pending when one is already open for this gate; 409 connection_secret_in_use when the secret was used by another proposal or another gate here — mint another. Same address checks as the preview.',
+    redactedParamKeys: ['connectionSecret'],
+  },
+  {
+    name: 'withdraw_gate_address_change',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ id }).strict(),
+    resultSchema: wire.GateAddressChangeWireSchema,
+    description:
+      'Withdraw this workspace’s open proposal to move a gate to a new address; the gate keeps its address and secret, and the secret minted for the new host is used up. 409 gate_address_change_decided when it is no longer open.',
+  },
   {
     name: 'publish_manifest',
     group: 'connection',
@@ -4036,6 +4090,53 @@ const platformCapabilities = [
     description:
       'Lift the platform’s suspension of a self-connected gate: its published Operations run again from the next call, and the workspace’s entry-agent Handles are re-issued. Resuming one that is not suspended changes nothing.',
   },
+  // Legacy 701: the platform's decision on a workspace's proposal to move a self-connected gate.
+  {
+    name: 'list_gate_address_changes',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        status: wire.GateAddressChangeStatusWireSchema.optional(),
+        workspaceId: z.guid().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.PlatformGateAddressChangeWireSchema),
+    description:
+      'Proposals to move a gate a workspace connected itself to a new address, newest first (status proposed: those awaiting a decision; one past expiresAt can no longer be approved): workspace, connector, target and both addresses (scheme, host and port only), what follows the gate to the new host as its owner previewed it, who proposed it and when.',
+  },
+  {
+    name: 'approve_gate_address_change',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ workspaceId: z.guid(), id: z.guid(), previewDigest: z.string().min(1) })
+      .strict(),
+    resultSchema: wire.PlatformGateAddressChangeWireSchema,
+    description:
+      'Approve a proposal to move a self-connected gate to a new address (previewDigest as listed). The kernel reads the new host’s manifest again first, with the new secret and no account credential; then, at once, the gate’s address and secret change, the old secret stops working, and requests made for the old address that have not run are refused when they would (gate_address_changed). 409 gate_address_change_decided or gate_address_change_expired when it is no longer open; 409 gate_address_preview_changed when it is not the proposal as read, or the gate’s address changed since; 409 gate_address_manifest_mismatch when the new host now describes another manifest; 409 gate_address_change_blocked while the gate has requests in flight from before the upgrade that bound requests to an address; the address checks of create_connection again.',
+  },
+  {
+    name: 'reject_gate_address_change',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.guid(),
+        id: z.guid(),
+        reason: z.string().trim().min(1).max(500).optional(),
+      })
+      .strict(),
+    resultSchema: wire.PlatformGateAddressChangeWireSchema,
+    description:
+      'Reject a proposal to move a self-connected gate to a new address; the gate keeps its address and secret, and the workspace sees the reason. 409 gate_address_change_decided when it is no longer open.',
+  },
   // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
   // console's only kernel-side piece of provider management. The provider records live in
   // llm-proxy (web → caddy `/api/llm-admin/*` → llm-proxy admin endpoints); the kernel signs a
@@ -5903,6 +6004,13 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'list_self_connections',
     'suspend_self_connection',
     'resume_self_connection',
+    // Legacy 701: a workspace's proposal to move a self-connected gate, and the platform's decision.
+    'preview_gate_address_change',
+    'propose_gate_address_change',
+    'withdraw_gate_address_change',
+    'list_gate_address_changes',
+    'approve_gate_address_change',
+    'reject_gate_address_change',
     'list_available_gate_instances',
     'enable_gate_instance',
     'preview_gate_instance_enable',

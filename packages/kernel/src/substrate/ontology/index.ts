@@ -55,6 +55,7 @@ export {
   registerGatekeeperObject,
   registerOperationDraftObject,
   setGatekeeperConnectionSecretSaltObject,
+  setGatekeeperAddressObject,
   setOperationDescriptionObject,
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,

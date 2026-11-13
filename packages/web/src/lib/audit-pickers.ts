@@ -505,6 +505,9 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   // Legacy 245 a (same sweep): written with `workspaceId: null` too — a self connection's
   // suspension revoking entry Handles, and the host CLI's own actions.
   'self_connection.entry_handles_revoked',
+  // Legacy 701: `approve_gate_address_change` records the move it applies under its own action,
+  // with `workspaceId: null` — the platform's decision about a workspace's gate.
+  'gatekeeper.address_changed',
   'cli.workspace_created',
   'cli.principal_added',
   'cli.service_handle_issued',

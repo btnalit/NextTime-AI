@@ -32,7 +32,7 @@ import {
 import { quotedName } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { operationPlatformStatus, readGatekeeperPlatformPolicy } from '../gates/index.js';
-import { resolveGateTarget } from './gate-target.js';
+import { type ResolvedGateTarget, resolveGateTarget } from './gate-target.js';
 import { writeObservedFacts } from './observed-facts.js';
 
 /**
@@ -397,6 +397,19 @@ export function createGatekeeperActionExecutor(
     };
   }
 
+  /** Legacy 701, I-A3: why `actionRequest` may not be sent to `gate` — the address it dials is not
+   *  the one the request was made for — or `null`. A request with no address on file (made before
+   *  governance 0044 on a gate whose address was not known, or by the previous release) has
+   *  nothing to compare and runs where the gate is now, as before. */
+  function gateAddressChangedReason(
+    actionRequest: ActionRequestRow,
+    gate: ResolvedGateTarget,
+  ): string | null {
+    if (actionRequest.gateEndpointKey === null) return null;
+    if (actionRequest.gateEndpointKey === gate.endpointKey) return null;
+    return `gate_address_changed: gatekeeper "${actionRequest.gatekeeperId}" moved to another address after this request was made — it runs only where it was approved to; make the request again`;
+  }
+
   /** The fields the gate keys an `apply` on — the reaper's lookup asks about the same ones. */
   function applyKey(actionRequest: ActionRequestRow) {
     return {
@@ -447,6 +460,11 @@ export function createGatekeeperActionExecutor(
           reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered`,
         };
       }
+      // Legacy 701, I-A3: a request runs only at the gate address it was made for — the gate moved
+      // since (`approve_gate_address_change`), and what was approved for one host is not sent to
+      // another. Nothing was sent; asking again unchanged gets the same answer.
+      const moved = gateAddressChangedReason(actionRequest, gate);
+      if (moved !== null) return { ok: false, failureKind: 'refused', reason: moved };
       if (disabled) {
         return {
           ok: false,
@@ -531,6 +549,14 @@ export function createGatekeeperActionExecutor(
           indeterminate: true,
           reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered — no gate to ask`,
         };
+      }
+      // Legacy 701, I-A3: the gate moved after this request was sent to it. Only the host it was
+      // sent to can say what became of it, and the kernel no longer calls that host — asking the
+      // new one would hand it this request's key and could answer "never received" for a call the
+      // old host ran. A person reconciles it.
+      const moved = gateAddressChangedReason(actionRequest, gate);
+      if (moved !== null) {
+        return { ok: false, failureKind: 'outcome_unknown', reason: outcomeUnknownReason(moved) };
       }
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['lookupApply']>>;

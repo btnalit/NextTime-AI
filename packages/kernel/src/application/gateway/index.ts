@@ -232,6 +232,7 @@ export {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   connectGatekeeperHandler,
@@ -243,6 +244,12 @@ export {
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 export { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
+export type { ResolvedGateTarget } from './gate-target.js';
+export {
+  forgetGatekeeperPresence,
+  registerGatekeeperAddressChangedConsumer,
+} from './credential-presence.js';
+export { GateAddressChangeError } from './gate-address-change-handlers.js';
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
 // P0b: the one landing path's own refusals (application/gates/landing.ts) — a second
 // self-connection to an address, or relinking a Gatekeeper whose self connection the platform

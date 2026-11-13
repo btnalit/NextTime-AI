@@ -184,6 +184,20 @@ function selfConnectionSuspended(gatekeeperId: string): GatekeeperLandingRefused
   );
 }
 
+/** Serializes everything that puts a self connection at one address of a workspace — the
+ *  landing, and (legacy 701) an approved address change moving one there — so the
+ *  `assertEndpointFreeForSelfConnection` each makes under it is exact. Held to the end of the
+ *  caller's transaction. */
+export async function lockSelfConnectionEndpoint(
+  client: PoolClient,
+  workspaceId: string,
+  endpoint: string,
+): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `land_self:${workspaceId}:${normalizeGateEndpoint(endpoint)}`,
+  ]);
+}
+
 export async function landGatekeeper(
   client: PoolClient,
   workspaceId: string,
@@ -192,9 +206,7 @@ export async function landGatekeeper(
 ): Promise<LandingResult> {
   if (source.kind === 'self') {
     // Serializes self connections to one address in this workspace, so the check below is exact.
-    await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-      `land_self:${workspaceId}:${normalizeGateEndpoint(source.endpoint)}`,
-    ]);
+    await lockSelfConnectionEndpoint(client, workspaceId, source.endpoint);
     await assertEndpointFreeForSelfConnection(client, workspaceId, source.endpoint);
   }
   const connectionRequest =

@@ -74,6 +74,7 @@ import {
   EvaluationChangedError,
   EvaluationReviewRequiredError,
 } from '../../application/eval/index.js';
+import { GateAddressChangeError } from '../../application/gateway/gate-address-change-handlers.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
@@ -92,6 +93,7 @@ import {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   CsrfHeaderRequiredError,
@@ -288,7 +290,7 @@ interface ErrorMapping {
  * echoed back to the caller; it is still available server-side via the `outcome`/error passed to
  * the structured log below (never persisted with credentials, see log() call).
  */
-export function mapCapabilityError(err: unknown): ErrorMapping {
+export function mapCapabilityError(err: unknown, capability = 'create_connection'): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
   }
@@ -967,7 +969,7 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return {
       status: 400,
       code: err.code,
-      message: `create_connection: ${err.message}`,
+      message: `${capability}: ${err.message}`,
       details: {
         reason: err.reason,
         ...(err.subject === 'endpoint' || err.subject === 'manifestSource'
@@ -983,6 +985,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ConnectionSecretConflictError) {
     return { status: 409, code: 'conflict', message: err.message };
+  }
+  // R-01 / legacy 701: the secret already belongs to a Gatekeeper, or already served a proposal to
+  // move a gate — "get a new one" in both cases.
+  if (err instanceof ConnectionSecretInUseError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // Legacy 701 (gate-address-change-handlers.ts): each refusal carries its own status and code.
+  if (err instanceof GateAddressChangeError) {
+    return { status: err.status, code: err.code, message: err.message };
   }
   if (err instanceof GateConnectionSecretsUnavailableError) {
     return { status: 503, code: 'service_unavailable', message: err.message };
@@ -1377,7 +1388,7 @@ export async function handleCapabilityRoute(
     return { ok: true, result };
   } catch (err) {
     outcome = 'error';
-    const mapped = mapCapabilityError(err);
+    const mapped = mapCapabilityError(err, capability);
     reply.code(mapped.status);
     // Lane-4 P2 fix (docs/development-tasks.md "errors never logged on either transport (500s
     // invisible server-side)"): one structured line per failed call, `{capability, errorName,

@@ -64,6 +64,7 @@ export {
 export {
   type ActionRequestListPage,
   approverHasScope,
+  countInFlightActionRequestsForGatekeeper,
   DEFAULT_ACTION_REQUEST_LIST_LIMIT,
   decodeActionRequestCursor,
   encodeActionRequestCursor,

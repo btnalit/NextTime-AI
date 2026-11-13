@@ -255,6 +255,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '为门签发新的连接密钥，旧密钥立即失效。',
     enHint: 'Issues a new connection secret; the old one stops working at once.',
   },
+  // Legacy 701: moving a self-connected gate to a new address.
+  preview_gate_address_change: {
+    zh: '预览更换门地址',
+    en: 'Preview gate address change',
+    zhHint: '用新地址和新连接密钥读新主机的接口清单，列出会跟着门走的授权；不写任何东西。',
+    enHint:
+      'Reads the new host’s manifest with the new connection secret and lists what follows the gate there; writes nothing.',
+  },
+  propose_gate_address_change: {
+    zh: '申请更换门地址',
+    en: 'Propose gate address change',
+    zhHint: '申请把自己接入的门换到新地址，交平台管理员批准，24 小时内有效。',
+    enHint:
+      'Asks the platform administrator to move a self-connected gate to a new address; open for 24 hours.',
+  },
+  withdraw_gate_address_change: {
+    zh: '撤回门地址申请',
+    en: 'Withdraw gate address change',
+    zhHint: '撤回还没被决定的更换门地址申请。',
+    enHint: 'Withdraws a proposal to move a gate that is not decided yet.',
+  },
   publish_manifest: {
     zh: '发布接口清单',
     en: 'Publish manifest',
@@ -1474,6 +1495,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "Lifts the platform's suspension of a self-connected gate; its published Operations run again.",
   },
+  list_gate_address_changes: {
+    zh: '查看门地址申请',
+    en: 'List gate address changes',
+    zhHint: '列出各工作区更换自己接入的门地址的申请，以及会跟着门走的授权。',
+    enHint:
+      'Lists workspaces’ proposals to move their self-connected gates, with what follows each gate.',
+  },
+  approve_gate_address_change: {
+    zh: '批准更换门地址',
+    en: 'Approve gate address change',
+    zhHint: '再读一次新主机的接口清单，和申请时一致才把门和它的连接换到新地址。',
+    enHint:
+      'Reads the new host’s manifest again and, if it is the one proposed, moves the gate and its connection there.',
+  },
+  reject_gate_address_change: {
+    zh: '驳回更换门地址',
+    en: 'Reject gate address change',
+    zhHint: '驳回申请，门留在原地址；申请用过的连接密钥作废。',
+    enHint:
+      'Rejects the proposal; the gate stays where it is and the proposal’s secret is used up.',
+  },
   issue_llm_admin_token: {
     zh: '签发模型管理令牌',
     en: 'Issue LLM admin token',
@@ -2459,6 +2501,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Operation governance synced',
     zhHint: '操作的模式与影响面已按门的公告更新。',
     enHint: "An operation's mode and blast radius were aligned to the gate.",
+  },
+  'gatekeeper.address_changed': {
+    zh: '门已换到新地址',
+    en: 'Gate moved to a new address',
+    zhHint: '平台管理员批准后，门和它的连接换到了新地址；旧主机上的账号凭证由所有者自己清除。',
+    enHint:
+      'Approved by a platform administrator: the gate and its connection moved; account credentials on the old host are the owner’s to clear.',
   },
   'gatekeeper.self_connection_linked': {
     zh: '门已改由平台实例接入',

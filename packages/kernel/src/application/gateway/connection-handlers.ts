@@ -172,6 +172,23 @@ function requireDeps(): ConnectionHandlerDeps {
   return deps;
 }
 
+/** Legacy 701: what an address change of a self-connected gate checks and calls with — the same
+ *  secrets, gate client and owner-supplied-URL predicate `create_connection` uses, so the new
+ *  address passes exactly the checks a new connection would
+ *  (application/gateway/gate-address-change-handlers.ts). */
+export function connectionAddressDeps(): {
+  readonly gatekeeperClient: GatekeeperClient;
+  readonly connectionSecrets: GateConnectionSecrets;
+  readonly outboundTargetGuard: OutboundTargetGuard;
+} {
+  const current = requireDeps();
+  return {
+    gatekeeperClient: current.gatekeeperClient,
+    connectionSecrets: current.connectionSecrets,
+    outboundTargetGuard: outboundTargetGuard(current),
+  };
+}
+
 /** Legacy 214: the same gate client `create_connection` describes a self-connected gate with —
  *  `preview_gatekeeper_resync` / `refresh_operation_governance` (gate-instance-handlers.ts) read
  *  that gate's `describe_operations` again through it. */
@@ -239,12 +256,12 @@ export class ConnectionCredentialRequiredError extends Error {
 export class ConnectionEndpointIsPlatformGateError extends Error {
   readonly code = 'endpoint_is_platform_gate' as const;
   readonly gateId: string;
-  constructor(endpoint: string, gateId: string) {
+  constructor(endpoint: string, gateId: string, capability = 'create_connection') {
     const remedy =
       'a workspace cannot connect a platform-catalog gate itself; enable it from the catalog ' +
       '(enable_gate_instance) or ask the administrator';
     super(
-      `create_connection: endpoint "${endpoint}" is the address of platform gate instance "${gateId}" — ${remedy}`,
+      `${capability}: endpoint "${endpoint}" is the address of platform gate instance "${gateId}" — ${remedy}`,
     );
     this.name = 'ConnectionEndpointIsPlatformGateError';
     this.gateId = gateId;
@@ -254,19 +271,32 @@ export class ConnectionEndpointIsPlatformGateError extends Error {
 /** `create_connection` without a usable `connectionSecret` (R-01): missing, or not minted by this
  *  kernel for this workspace. Mapped to 400 `invalid_params`. */
 export class ConnectionSecretInvalidError extends Error {
-  constructor(missing: boolean) {
+  constructor(missing: boolean, capability = 'create_connection') {
     super(
       missing
-        ? 'create_connection: connectionSecret is required — get one with mint_connection_secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE (restart the gate), then connect it'
-        : 'create_connection: connectionSecret was not issued for this workspace — get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE',
+        ? `${capability}: connectionSecret is required — get one with mint_connection_secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE (restart the gate), then connect it`
+        : `${capability}: connectionSecret was not issued for this workspace — get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE`,
     );
     this.name = 'ConnectionSecretInvalidError';
   }
 }
 
-/** A connection secret that cannot apply here (R-01): already used by another Gatekeeper in this
- *  workspace, or `rotate_connection_secret` on a platform-catalog gate (the kernel authenticates to
- *  those with the platform credential). Mapped to 409 `conflict`. */
+/** A connection secret that is already spoken for (R-01): another Gatekeeper in this workspace
+ *  holds it (one secret per connection, so rotating one gate never breaks another), or (legacy 701)
+ *  it already served a proposal to move a gate. Mapped to 409 `connection_secret_in_use` — one code
+ *  for the one condition, `create_connection` and the address change alike, so the console can say
+ *  "generate a new secret". */
+export class ConnectionSecretInUseError extends Error {
+  readonly code = 'connection_secret_in_use' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConnectionSecretInUseError';
+  }
+}
+
+/** A connection secret that cannot apply here (R-01): `rotate_connection_secret` on a
+ *  platform-catalog gate (the kernel authenticates to those with the platform credential). Mapped
+ *  to 409 `conflict`. */
 export class ConnectionSecretConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -364,12 +394,15 @@ async function auditTrialSelfConnect(
  * reaches the same container by another name (an IP, a network alias) is not detected here; the
  * outbound-target predicate below refuses every address inside the platform's subnets.
  */
-async function assertEndpointIsNotAPlatformGate(
+export async function assertEndpointIsNotAPlatformGate(
   client: PoolClient,
   endpoint: string,
+  capability = 'create_connection',
 ): Promise<void> {
   const gateId = await platformGateIdForEndpoint(client, endpoint);
-  if (gateId !== null) throw new ConnectionEndpointIsPlatformGateError(endpoint, gateId);
+  if (gateId !== null) {
+    throw new ConnectionEndpointIsPlatformGateError(endpoint, gateId, capability);
+  }
 }
 
 /** `request_connection(kind, target)` — Handle channel, any member (design doc §7.5). */
@@ -509,17 +542,19 @@ async function resolveManifestOperations(
   return described.operations;
 }
 
-/** Throws `ConnectionSecretConflictError` when another Gatekeeper in this workspace already holds
- *  `salt` — one secret per connection, so rotating one gate never breaks another. */
-async function assertConnectionSecretUnused(
+/** Throws `ConnectionSecretInUseError` when a Gatekeeper in this workspace already holds `salt` —
+ *  one secret per connection, so rotating one gate never breaks another (legacy 701 review: and an
+ *  address change never sends one gate's secret to another gate's new host). */
+export async function assertConnectionSecretUnused(
   client: PoolClient,
   workspaceId: string,
   salt: string,
+  capability = 'create_connection',
 ): Promise<void> {
   const holder = await findGatekeeperIdByConnectionSecretSalt(client, workspaceId, salt);
   if (holder !== null) {
-    throw new ConnectionSecretConflictError(
-      `create_connection: this connectionSecret already belongs to Gatekeeper "${holder}" — every connection gets its own; get a new one with mint_connection_secret`,
+    throw new ConnectionSecretInUseError(
+      `${capability}: this connectionSecret already belongs to Gatekeeper "${holder}" — every connection gets its own; get a new one with mint_connection_secret`,
     );
   }
 }

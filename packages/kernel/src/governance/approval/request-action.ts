@@ -20,6 +20,7 @@ import {
   ActionInDoubtError,
   type ActionRequestDbRow,
   type ActionRequestRow,
+  IN_FLIGHT_ACTION_REQUEST_STATUSES,
   mapActionRequestRow,
 } from './types.js';
 
@@ -155,17 +156,8 @@ export function stepIdempotencyKey(input: {
   return `${STEP_IDEMPOTENCY_KEY_PREFIX}${input.stepRunId}:${input.gatekeeperId}:${input.actionKind}:${digest}`;
 }
 
-/** D-12: the statuses a derived key still dedupes against — the non-terminal states of
- *  `ACTION_REQUEST_TRANSITIONS` (`executed` counts as terminal: the operation has run, even though
- *  `verify` can follow). Must match governance 0014's in-flight index predicate. */
-export const IN_FLIGHT_ACTION_REQUEST_STATUSES: readonly ActionRequestStatus[] = [
-  'proposed',
-  'policy_evaluated',
-  'auto_approved',
-  'pending_approval',
-  'approved',
-  'executing',
-];
+// D-12: the statuses a derived key still dedupes against (`types.ts` has the list and why).
+export { IN_FLIGHT_ACTION_REQUEST_STATUSES };
 
 const IDEMPOTENCY_KEY_CONSTRAINTS: ReadonlySet<string> = new Set([
   'action_requests_idempotency_key_uidx',
@@ -278,8 +270,14 @@ async function insertActionRequestRow(
     `insert into action_requests (
        workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
        policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key, params, requester_can_approve, operation_digest, step_run_id, target
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17::jsonb)
+       idempotency_key, params, requester_can_approve, operation_digest, step_run_id, target,
+       gate_endpoint_key
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17::jsonb,
+       -- Legacy 701, I-A3: the address of the gate this request is for, as the self connection keys
+       -- it (I-A1: the Gatekeeper's own endpoint, normalized) — the one address it may run at. A
+       -- catalog gate's address is the platform instance's and never moves here: NULL.
+       (select s.endpoint_key from workspace_self_connections s
+         where s.workspace_id = $1 and s.gatekeeper_object_id = $3))
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
