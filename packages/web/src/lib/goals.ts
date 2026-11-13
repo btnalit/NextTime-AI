@@ -2488,7 +2488,12 @@ const ACTION_FAILURE_CODE: Readonly<Record<ActionFailureCode, readonly [string, 
   apply_not_received: ['门上没有它执行过的记录', 'The gate has no record of running it'],
   operation_disabled: ['这个动作在平台上被停用了', 'The Operation is disabled on the platform'],
   operation_definition_unavailable: ['没有批准过的定义', 'No approved definition'],
-  target_refused: ['门的地址不是允许的目标', 'The gate’s address is not an allowed target'],
+  // Legacy 700: the usual case since legacy 413 is a gate connected at http:// to the public
+  // internet — the step has only the code, so the remedy for that case is said here.
+  target_refused: [
+    '门的地址不是平台允许调用的目标，调用没有发出。最常见的是门的地址用 http:// 连公网：工作区所有者要在「系统与授权」用门的 https:// 地址重新接入它',
+    'The gate’s address is not a target the platform calls, so nothing was sent. Most often it uses http:// to the public internet: a workspace owner connects the gate again at its https:// address under Systems & access',
+  ],
   redirect_refused: [
     '门要求跳转到别处，平台不跟随',
     'The gate answered with a redirect the platform does not follow',

@@ -4,6 +4,7 @@ import {
   EVAL_SEAL_HOLD_WINDOW_HOURS,
   PRINCIPAL_REFUSAL_REASON_VALUES,
   type PrincipalRefusalReason,
+  describeOutboundTargetRefusal,
 } from '@nexttime/shared';
 import { adminAgentRefusalMessage } from './admin-agent.js';
 import { definitionReferenceRefusalOf, definitionReferenceText } from './definition-reference.js';
@@ -149,8 +150,9 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
   // `UPSTREAM_ERROR` stands for HTTP's `gatekeeper_error` / `gatekeeper_timeout` /
-  // `manifest_fetch_failed` together; `upstreamCodeName` tells them apart by the kernel's message,
-  // and this is its fallback (the one whose copy fits all three).
+  // `manifest_fetch_failed` (and, legacy 700, 424 `target_refused`) together; `upstreamCodeName`
+  // tells them apart by the kernel's message, and this is its fallback (the one whose copy fits
+  // all of them).
   [-32014]: 'gatekeeper_error',
   [-32015]: 'service_unavailable',
   [-32016]: 'worker_definition_not_enabled',
@@ -178,6 +180,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   idempotency_key_reused: 'Not the message first sent',
   gatekeeper_timeout: 'Gate timed out',
   gatekeeper_error: 'Gate returned an error',
+  target_refused: 'Gate address not allowed',
   manifest_fetch_failed: 'Manifest fetch failed',
   meta_ontology_write_forbidden: 'Not permitted',
   attenuation_denied: 'Not permitted',
@@ -303,6 +306,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   idempotency_key_reused: '和第一次发出的消息不一样',
   gatekeeper_timeout: '门响应超时',
   gatekeeper_error: '门返回了错误',
+  target_refused: '门的地址不允许调用',
   manifest_fetch_failed: '拉取清单失败',
   meta_ontology_write_forbidden: '没有权限',
   attenuation_denied: '没有权限',
@@ -590,6 +594,13 @@ export const ERROR_NEXT_STEPS: Readonly<
   gatekeeper_error: {
     zh: '目标系统返回了错误。展开「技术细节」查看原因；反复出现时，请检查这个门实例的状态。',
     en: 'The target system returned an error. See the technical details; if it keeps happening, check this gate instance.',
+  },
+  // Legacy 700: a call not sent because the gate's own endpoint is not an allowed target. The usual
+  // case since legacy 413 — `http://` to the public internet — has its own copy
+  // (`targetRefusedMessage`); this is every other rule's.
+  target_refused: {
+    zh: '这个门的地址不是平台允许调用的目标（指向平台自己的网络或本机，或者无法解析），调用没有发出。工作区所有者要在「系统与授权」用门可达的地址重新接入它；门在内网时，可以请平台运维把它的地址加入允许列表。',
+    en: 'This gate’s address is not a target the platform calls (it points into the platform’s own networks or the local host, or does not resolve), so nothing was sent. A workspace owner connects the gate again at a reachable address under Systems & access; for a gate inside your network, the platform operator can add its address to the allow list.',
   },
   manifest_fetch_failed: {
     zh: '拿不到接口清单。确认清单地址能访问，再重新导入。',
@@ -882,6 +893,7 @@ export function presentError(
     transportErrorMessage(err, t) ??
     stepReferenceMessage(err, t) ??
     definitionReferenceMessage(err, t) ??
+    targetRefusedMessage(err, described, t) ??
     (described.code === 'unstorable_text'
       ? unstorableTextNextStep(described.message, t)
       : step
@@ -916,6 +928,41 @@ function definitionReferenceMessage(err: unknown, t: Translate): string | null {
   return refusal === null ? null : definitionReferenceText(refusal, t);
 }
 
+/** Legacy 700: the gate's endpoint uses `http://` to the public internet — refused since legacy
+ *  413, so a gate connected before it is refused on every call until it is connected again. */
+const PLAINTEXT_PUBLIC_TARGET = describeOutboundTargetRefusal('plaintext-public');
+
+/** Legacy 700: whether a gate refusal's text (an error's message, a tool call's failure reason)
+ *  is the plain-`http://` rule — the kernel's message carries the rule's sentence. */
+function isPlaintextPublicRefusal(text: string): boolean {
+  return text.includes(PLAINTEXT_PUBLIC_TARGET);
+}
+
+/** Legacy 700: what to do when the gate's endpoint is `http://` to the public internet. */
+function plaintextPublicTargetStep(t: Translate): string {
+  return t(
+    '这个门的地址用 http:// 连公网，调用没有发出：连接密钥和凭证会明文经过互联网，平台不再这样调用。工作区所有者要在「系统与授权」用门的 https:// 地址重新接入它；门在内网时，用它的内网地址接入，可以继续用 http://。',
+    'This gate’s address uses http:// to the public internet, so nothing was sent: the connection secret and credentials would cross the internet unencrypted, and the platform no longer calls it that way. A workspace owner connects the gate again at its https:// address under Systems & access — or, for a gate inside your network, at its in-network address, where http:// is still fine.',
+  );
+}
+
+/** Legacy 700: a `target_refused` said for its rule — `details.reason` over HTTP; over WS, which
+ *  has no details, the rule's sentence in the message. `null` for any other rule (the general
+ *  copy in `ERROR_NEXT_STEPS`) or code. */
+function targetRefusedMessage(
+  err: unknown,
+  described: ErrorDescription,
+  t: Translate,
+): string | null {
+  if (described.code !== 'target_refused') return null;
+  const reason = err instanceof HttpError ? err.details?.reason : undefined;
+  const plaintext =
+    reason === undefined
+      ? isPlaintextPublicRefusal(described.message)
+      : reason === 'plaintext-public';
+  return plaintext ? plaintextPublicTargetStep(t) : null;
+}
+
 /** One line for a toast, which has no room for the 「技术细节」 disclosure: the readable body,
  *  else the kernel's own text, with the code in brackets so a report still names it. */
 export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOverrides): string {
@@ -939,6 +986,8 @@ const GATE_REASON_CODES = [
   'gate_unreachable',
   'apply_not_received',
   'outcome_unknown',
+  // Legacy 700: not sent — the gate's own endpoint is not an allowed target.
+  'target_refused',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 /** One of those codes as the value of a `reason` or `code` field — `{"status":"failed","reason":
@@ -1012,7 +1061,9 @@ export function gateReasonNextStep(
       ? outcomeUnknownStep(t, target, system)
       : code === 'unstorable_text'
         ? unstorableTextNextStep(text, t)
-        : t(step.zh, step.en);
+        : code === 'target_refused' && isPlaintextPublicRefusal(text)
+          ? plaintextPublicTargetStep(t)
+          : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
@@ -1083,17 +1134,24 @@ export function transportErrorMessage(err: unknown, t: Translate): string | null
   return null;
 }
 
-/** Legacy 336 (review #493, recorded in #605): which of HTTP's three codes a WS `UPSTREAM_ERROR`
+/** Legacy 336 (review #493, recorded in #605): which of HTTP's codes a WS `UPSTREAM_ERROR`
  *  (-32014) stands for, read off the kernel's message (`interfaces/ws/rpc.ts`): a manifest fetch
  *  says `<capability>: failed to fetch manifestSource …` (`ConnectionManifestFetchError`), a gate
  *  timeout `gatekeeper client: <path> timed out after <n>ms` (`GatekeeperTimeoutError`), and a gate
- *  error starts with the gate's own code instead. Anything else keeps the copy that fits all three. */
+ *  error starts with the gate's own code instead. Legacy 700: the client's own 424
+ *  `target_refused` starts with that code and the client's `not sent` prefix. Over HTTP a gate's
+ *  answer coded `target_refused` stays a 502 `gatekeeper_error` (`gateRefusalOf`); over WS both are
+ *  -32014, so a gate whose message copies the client's wording reads as the client's refusal —
+ *  only this copy changes (the raw text stays in the technical details, nothing acts on it).
+ *  Anything else keeps the copy that fits all. */
 const MANIFEST_FETCH_FAILED_MESSAGE = /^[^\s:]+: failed to fetch manifestSource\b/;
 const GATEKEEPER_TIMEOUT_MESSAGE = /^gatekeeper client: \S+ timed out after \d+ ?ms\b/;
+const TARGET_REFUSED_MESSAGE = /^target_refused: gatekeeper client: \S+ not sent — /;
 
 function upstreamCodeName(message: string): string {
   if (MANIFEST_FETCH_FAILED_MESSAGE.test(message)) return 'manifest_fetch_failed';
   if (GATEKEEPER_TIMEOUT_MESSAGE.test(message)) return 'gatekeeper_timeout';
+  if (TARGET_REFUSED_MESSAGE.test(message)) return 'target_refused';
   return 'gatekeeper_error';
 }
 

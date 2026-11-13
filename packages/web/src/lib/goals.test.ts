@@ -704,6 +704,9 @@ describe('lib/goals', () => {
       'credential_unavailable',
     );
     expect(actionFailureCodeText('gate_unreachable', zh)).toBe('连不上门');
+    // Legacy 700: the step has only the code, so the usual case's remedy is in its sentence.
+    expect(actionFailureCodeText('target_refused', zh)).toContain('用门的 https:// 地址重新接入');
+    expect(actionFailureCodeText('target_refused', en)).toContain('at its https:// address');
   });
 
   it('reads a predicate as a sentence: leaves, all / any / not', () => {

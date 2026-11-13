@@ -454,6 +454,8 @@ async function auditGateRefusal(
             refusal: {
               code: refusal.code,
               status: refusal.status,
+              // Legacy 700: the outbound-target rule, a closed name — never the endpoint.
+              ...(refusal.details !== undefined ? { reason: refusal.details.reason } : {}),
               ...(gateCall !== undefined
                 ? {
                     operation: gateCall.operation,
