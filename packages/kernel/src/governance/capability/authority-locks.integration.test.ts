@@ -668,15 +668,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         (['lower', 'higher'] as const).map((held) => ({ ...b, held })),
       );
 
-      it.each(cases)(
-        '$writer and a gate Grant change on the same sessions both complete, the $held id held first — no deadlock (40P01)',
-        async ({ fragment, write, held }) => {
+      /** A member and an owner of a fresh workspace, the member holding two entry sessions stored
+       *  higher id first. One INSERT puts both rows on the same page in that order (two
+       *  transactions may land on different pages through the free-space map, and a revoker that
+       *  scans would meet them in id order after all — the deadlock this guards against then never
+       *  forms). Even one statement can put the second row on an earlier page once the first fills
+       *  its block, which a fragmented shared database does now and then (#1158): the stored order
+       *  is then not the one this case needs, so it starts over with a fresh workspace. */
+      async function sessionsStoredHighFirst() {
+        for (let attempt = 1; attempt <= 5; attempt += 1) {
           const at = await member();
           const owner = await member({ workspaceId: at.workspaceId, role: 'owner' });
           const [low, high] = [randomUUID(), randomUUID()].sort() as [string, string];
-          // One statement, so both rows go to the same page in that order (two transactions may
-          // land on different pages through the free-space map, and a revoker that scans would
-          // meet them in id order after all — the deadlock this guards against then never forms).
           await asApp(at, (client) =>
             client.query(
               `insert into sessions (id, workspace_id, principal_id, kind, on_behalf_of, status)
@@ -690,7 +693,17 @@ describe.runIf(DATABASE_URL !== undefined)(
               [[low, high]],
             ),
           );
-          expect(stored.rows.map((row) => row.id)).toEqual([high, low]);
+          if (stored.rows.map((row) => row.id).join() === [high, low].join()) {
+            return { at, owner, low, high };
+          }
+        }
+        throw new Error('five fresh session pairs never stored higher id first');
+      }
+
+      it.each(cases)(
+        '$writer and a gate Grant change on the same sessions both complete, the $held id held first — no deadlock (40P01)',
+        async ({ fragment, write, held }) => {
+          const { at, owner, low, high } = await sessionsStoredHighFirst();
           const handles = [
             await asApp(at, (client) => issue(client, at, low)),
             await asApp(at, (client) => issue(client, at, high)),
