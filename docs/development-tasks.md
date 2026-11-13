@@ -4185,6 +4185,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **同类全找**：`markReconcileDue` 条件 (g)（目标 `running`，步骤在两种验收等待里却没有开始等待以来的 pending 行）；`compact-observations.ts` 条件 (a) 与已知外键加 `step_acceptance_checks`；删除工作区顺序；清空工作区预览标签「步骤验收检查」；`reversibility-deltas.json` 为 goal 0006 单独声明（与 goal 0005 同类）；I-G5 定时检查扩到步骤验收（两个守卫存在且启用、声明了验收的 `succeeded` 步骤没有轮次或最新一轮未为当前尝试全过、`passed` 缺证据）。
   - **有意不做**：`endGoalRun` 照旧拒绝有步骤在等待的目标，`waiting(acceptance_unavailable)` 时的入口是继续、修订、取消；请求人认定目标达成时 `overriddenChecks` 只列目标级检查，步骤验收失败在读模型 `steps` 里看。
 - GO4c 实现说明（#674，2026-10-22 合入，d22c19a；core 0046 + goal 0007；GO4 完成）：
+  - **草稿可见性**（#1146，遗留 704，8ebb882）：事实检查的 Object 读取（提议时按 id、按身份、类型取样；判定时解析两端）按发起人过滤 Operation 草稿，和图上其它读取一致；`factCheckViewer` 复用 `planViewer`。
   - **计划**（`plan.ts`、shared `FactCheckSchema`）：目标和步骤都接受 `fact_predicate`：链接类型，加两端对象（id 或 ObjectType + identity），可选一个针对这条事实自身属性的判定式（没有时存在即通过）。同一套 lint 与凭据审查，identity 值也过审查；用 id 指定的对象必须存在，用 identity 指定的不查（可能由目标自己创建）；有事实检查的计划不带 `requester_confirm_only` 提示。链接类型不按本体校验，不存在时检查一直看不到事实、最后 `unavailable`。
   - **可作证据**（goal 0007 `goal_fact_admissible`，以本轮开始时间为界）：有效（未取代、未作废、在有效期内）；状态 `observed`；最近一次确认在本轮开始之后，且确认它的 Observation 来自不归请求人所有的 Source（Worker 代表请求人，能提交的一律排除），挂在三种 Activity 之一：门观察且触发 Task 为空或不属本目标（没有触发记录的历史数据一律不作证据，不回退成可信）、门执行且请求不由本目标的步骤或其 Task 的 WorkerRun 发起、非门 Source 的采集器提交；请求人看不到的行同样不作证据。以最近一次确认为准：之后被请求人自己的 Source 再确认就不再可作证据。
   - **触发记录**（core 0046）：Activity 的 `kind` 与 `metadata.triggeredByTaskId` / `actionRequestId` 写入后不可改（否则事后补一条就能让旧观察看起来与本目标无关）；`runObserve` 记录 `triggeredByTaskId`（WorkerRun 调用时为它的 Task，否则 `null`）。记录挂在 Activity 上而不是 Observation 上。
@@ -4194,7 +4195,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **看不到与判为假**：判为假 → `failed`、`fact_id` 指向看到的事实、`last_error = predicate_unsatisfied`，步骤 `failed(verification_failed)`；看不到 → `unavailable`、`fact_id` 为空、`last_error = fact_not_observed`，步骤 `waiting(acceptance_unavailable)`；暂停说明与审计（`code`、`factId`，判为假时带 `evaluation`）都分开。读模型每项检查带 `fact` 和 `factId`，被覆盖的检查也带 `factId`。
   - **同类全找**：所有只认 `observe_predicate` 的地方改为「平台做的检查」（到期列表、领取、提示、请求人确认、读模型、`listDue`、目标与步骤推进、达成守卫）；删除工作区顺序加新外键；观察清理不受影响（新外键指向 `links`）；I-G5 定时检查扩到事实检查（只复核通过之后不会再变的部分：所依据的事实是所指的链接），并加 `achieved-not-as-declared` / `step-succeeded-not-as-declared`，纯 SQL、不调守卫函数。
   - **范围外**：「门确认不存在」移到 GO7 之前单独做（事实检查判的是「存在」，不能用来证明删除）；控制台属 GO6。不需要 `reversibility-deltas.json` 条目。
-  - **身份校验**（#1139，遗留 466，d083290）：`acceptanceReferenceProblems` 多传 `requester`，对按身份指定的一端调用 `factIdentityProblems`：先精确匹配（jsonb 等值）放行；否则字段必须正好是本体的 `identityKey`（`getType`），图里已有同样字段组合的对象，且每个字段的 JSON 类型与已存对象一致（采样有上限）。提出、确认、修订时查；Procedure 发布时不查，展开成计划后在提出时查。读对象不经草稿可见性过滤（遗留 704）。
+  - **身份校验**（#1139，遗留 466，d083290）：`acceptanceReferenceProblems` 多传 `requester`，对按身份指定的一端调用 `factIdentityProblems`：先精确匹配（jsonb 等值）放行；否则字段必须正好是本体的 `identityKey`（`getType`），图里已有同样字段组合的对象，且每个字段的 JSON 类型与已存对象一致（采样有上限）。提出、确认、修订时查；Procedure 发布时不查，展开成计划后在提出时查。读对象起初不经草稿可见性过滤，#1146（遗留 704，8ebb882）起按发起人过滤 Operation 草稿。
 - 来自 GO3d（#649）的输入：验收检查复用 `substrate/epistemic/predicate.ts` 的求值与 lint（`observe_predicate` / `fact_predicate`）。要自动验收删除类动作时，先定义"门确认不存在"这种观察类型（门给出有类型的不存在证据，例如明确的 `not_found`，而不是空结果），不放开缺席判定式（#649 拍板点 13，协调线程定）。GO4 引入验收不过的暂停时，再看是否与 `awaiting_reconcile` 统一命名（拍板点 2）。
 
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
