@@ -709,9 +709,21 @@ async function loadMembership(
 export const setMembershipRoleHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
   const membership = await loadMembership(client, input.userId, input.workspaceId);
+  // Legacy 696: the role is already the one asked for, so the person's authority does not change
+  // and nothing else does either — no write, no session ends, no Handle is revoked. Ending the
+  // sessions here used to leave the Handles they had issued valid until ttl (`verifyHandle` reads
+  // only a Handle's own `revoked_at`): a session revoked while its Handles still worked. The audit
+  // row says the call changed nothing.
+  if (input.role === membership.role) {
+    return {
+      result: membership,
+      resourceType: 'principal',
+      resourceId: membership.principalId,
+      auditPayload: { unchanged: true },
+    };
+  }
   if (
     membership.role === 'owner' &&
-    input.role !== 'owner' &&
     !membership.disabled &&
     (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
@@ -733,11 +745,9 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
       where workspace_id = $1 and principal_id = $2 and status <> 'revoked'`,
     [input.workspaceId, membership.principalId],
   );
-  if (input.role !== membership.role) {
-    // Same as the workspace-side `set_principal_role` (W5.5, leftover 18): Handles minted under
-    // the old role carry its capability set until ttl unless revoked here.
-    await revokeRoleScopedSessionHandles(client, input.workspaceId, membership.principalId);
-  }
+  // Same as the workspace-side `set_principal_role` (W5.5, leftover 18): Handles minted under the
+  // old role carry its capability set until ttl unless revoked here.
+  await revokeRoleScopedSessionHandles(client, input.workspaceId, membership.principalId);
   const after = await loadMembership(client, input.userId, input.workspaceId);
   return { result: after, resourceType: 'principal', resourceId: membership.principalId };
 };

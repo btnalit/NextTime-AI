@@ -968,7 +968,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: idempotent # the role is already the one asked for; its sessions are already ended
+    repeat: idempotent # the role is already the one asked for: nothing is written, no session ends (legacy 696)
   set_platform_default_model:
     console: required
     agents: []

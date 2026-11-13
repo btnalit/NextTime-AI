@@ -1912,7 +1912,8 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     },
   },
   set_membership_role: {
-    // The role is already the one asked for: nothing changes, the sessions are already ended.
+    // The role is already the one asked for: nothing changes, no session ends and no Handle is
+    // revoked (legacy 696).
     "a second owner of the case's workspace with a live session, to builder": {
       first: expect.objectContaining({ role: 'builder' }),
       setUp: async (ctx) => ({
