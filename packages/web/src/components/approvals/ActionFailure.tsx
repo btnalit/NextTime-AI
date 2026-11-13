@@ -128,6 +128,9 @@ export function ActionFailureLine({
   );
 }
 
+/** The code a recorded failure reason starts with (`gate_unreachable: …`). */
+const LEADING_REASON_CODE = /^([a-z_]+):/;
+
 /** The whole reading, for a detail pane. `check` names the system and the action, so "outcome
  *  unknown" says what to check where.
  *
@@ -155,7 +158,15 @@ export function ActionFailureNotice({
   const named = reason
     ? gateReasonNextStep(reason, t, check?.action ?? undefined, check?.system ?? undefined)
     : null;
-  const step = named !== null && named.code !== 'outcome_unknown' ? named : null;
+  // Only the code the reason starts with: the kernel writes `<code>: …` first, and a code further
+  // in is text the target system answered with, which must not choose what the page says happened
+  // (review #501 of #1131, P2-1 — `transport_error: … gate_unreachable` read as "not sent").
+  const step =
+    named !== null &&
+    named.code !== 'outcome_unknown' &&
+    LEADING_REASON_CODE.exec(reason ?? '')?.[1] === named.code
+      ? named
+      : null;
   const reasonText = reason ? (
     <FailureReasonText
       reason={reason}

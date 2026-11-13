@@ -196,6 +196,18 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     );
     second.unmount();
 
+    // Review #501 of #1131 (P2-1): only the code the reason starts with counts. A code further in
+    // is the target system's own text, and must not make an apply that reached it read as not sent.
+    const answered =
+      'transport_error: the target answered 500: upstream pool reports gate_unreachable';
+    const fourth = renderDetail({ ...failed, failureKind: 'refused', failureReason: answered });
+    expect(screen.queryByTestId('approval-failure-next-step')).toBeNull();
+    expect(screen.getByTestId('approval-failure').textContent).not.toContain('这次调用没有发出');
+    const shown = screen.getByTestId('approval-failure-reason-text');
+    expect(shown.textContent).toBe(`原因：${answered}`);
+    expect(shown.closest('details')).toBeNull();
+    fourth.unmount();
+
     // Outcome unknown keeps its own reading (it names what to check where), reason in plain view;
     // so does a reason the console has no copy for.
     const third = renderDetail({
