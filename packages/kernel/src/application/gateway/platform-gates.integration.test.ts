@@ -99,7 +99,6 @@ import {
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { listGraphNodesForExplorer, searchGraphForExplorer } from './explorer-read-service.js';
-import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
@@ -255,6 +254,23 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
       ) as Promise<T>;
     }
+    /** Legacy 311: enable a gate instance the way the console does — preview it, then enable
+     *  with the digest of the manifest that preview showed. */
+    async function previewThenEnable(
+      gateId: string,
+      caller: ResolvedCaller = humanCaller(ownerPrincipalId, 'owner'),
+    ): Promise<EnableGateInstanceResultWire> {
+      const preview = (await dispatchCapability({ pool }, caller, 'preview_gate_instance_enable', {
+        gateId,
+      })) as PreviewGateInstanceEnableResultWire;
+      return (await dispatchCapability({ pool }, caller, 'enable_gate_instance', {
+        gateId,
+        manifestDigest: preview.manifestDigest,
+      })) as EnableGateInstanceResultWire;
+    }
+    /** Legacy 311: for a refusal the enable makes before it reads the manifest (`requireAvailable`,
+     *  the credential check, `resolveGateLinkTarget`) — the digest is required but never compared. */
+    const UNREAD_DIGEST = 'sha256:refused-before-the-manifest-is-read';
 
     async function expectPlatformError(call: () => Promise<unknown>, code: PlatformErrorCode) {
       const thrown = await call().then(
@@ -562,17 +578,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(available.items).toHaveLength(1);
         expect(available.items[0]).toMatchObject({ gateId: GATE_ID, gatekeeperId: null });
 
-        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID,
-        });
+        const enabled = await previewThenEnable(GATE_ID);
         gatekeeperId = enabled.gatekeeperId;
         expect(enabled.publishedOperationNames.sort()).toEqual(['list_things', 'restart_thing']);
 
-        const again = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID,
-        });
+        const again = await previewThenEnable(GATE_ID);
         expect(again.gatekeeperId).toBe(gatekeeperId);
         expect(again.publishedOperationNames).toEqual([]);
+        // Already enabled: the existing link whatever digest is sent (legacy 311) — the manifest
+        // is not read, so a digest no preview ever returned changes nothing.
+        const unread = await callAsOwner<typeof again>('enable_gate_instance', {
+          gateId: GATE_ID,
+          manifestDigest: UNREAD_DIGEST,
+        });
+        expect(unread.gatekeeperId).toBe(gatekeeperId);
+        expect(unread.publishedOperationNames).toEqual([]);
 
         const afterList = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
           'list_available_gate_instances',
@@ -624,13 +644,19 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         };
         await expect(
-          dispatchCapability({ pool }, owner2, 'enable_gate_instance', { gateId: GATE_ID }),
-        ).rejects.toBeInstanceOf(GateInstanceNotAvailableError);
+          dispatchCapability({ pool }, owner2, 'enable_gate_instance', {
+            gateId: GATE_ID,
+            manifestDigest: UNREAD_DIGEST,
+          }),
+        ).rejects.toMatchObject({ code: 'gate_not_enabled' });
         await callAsAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
 
         await callAsAdmin('set_connector_mode', { name: 'fixture-mcp', mode: 'self_serve' });
         await expect(
-          dispatchCapability({ pool }, owner2, 'enable_gate_instance', { gateId: GATE_ID }),
+          dispatchCapability({ pool }, owner2, 'enable_gate_instance', {
+            gateId: GATE_ID,
+            manifestDigest: UNREAD_DIGEST,
+          }),
         ).rejects.toMatchObject({ code: 'connector_not_preset' });
         // Mode changes never tear down the first workspace's link (design §8).
         const still = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
@@ -959,9 +985,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await countObjectsByType('ConnectedSystem')).toBe(connectedSystemObjectsBefore);
 
         // --- enable: matches the preview exactly ---
-        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID_LINK,
-        });
+        const enabled = await previewThenEnable(GATE_ID_LINK);
         expect(enabled.gatekeeperId).toBe(legacyGatekeeperId);
         expect(enabled.linkedExisting).toBe(true);
         expect(enabled.drift).toEqual(preview.wouldLink?.drift);
@@ -994,9 +1018,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await countGateLinkRows(GATE_ID_LINK)).toBe(1);
 
         // --- idempotent: a second enable call returns the same link, nothing new ---
-        const again = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID_LINK,
-        });
+        const again = await previewThenEnable(GATE_ID_LINK);
         expect(again).toMatchObject({
           gatekeeperId: legacyGatekeeperId,
           linkedExisting: false, // short-circuited on the existing link row, no new decision made
@@ -1119,7 +1141,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(preview.ambiguousCandidates.sort()).toEqual([first, second].sort());
 
         await expect(
-          callAsOwner('enable_gate_instance', { gateId: GATE_ID_AMBIGUOUS }),
+          callAsOwner('enable_gate_instance', {
+            gateId: GATE_ID_AMBIGUOUS,
+            manifestDigest: preview.manifestDigest,
+          }),
         ).rejects.toMatchObject({ code: 'ambiguous_existing_gatekeeper' });
 
         expect(await countGateLinkRows(GATE_ID_AMBIGUOUS)).toBe(0);
@@ -1148,9 +1173,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           await callAsAdmin('update_gate_instance', { gateId, status: 'enabled' });
         }
 
-        const first = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID_FIRST,
-        });
+        const first = await previewThenEnable(GATE_ID_FIRST);
         expect(await countGateLinkRows(GATE_ID_FIRST)).toBe(1);
         const gatekeeperObjectsBefore = await countObjectsByType('Gatekeeper');
 
@@ -1158,7 +1181,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           callAsOwner('preview_gate_instance_enable', { gateId: GATE_ID_SECOND }),
         ).rejects.toMatchObject({ code: 'gatekeeper_already_linked' });
         await expect(
-          callAsOwner('enable_gate_instance', { gateId: GATE_ID_SECOND }),
+          callAsOwner('enable_gate_instance', {
+            gateId: GATE_ID_SECOND,
+            manifestDigest: UNREAD_DIGEST,
+          }),
         ).rejects.toMatchObject({ code: 'gatekeeper_already_linked' });
 
         expect(await countGateLinkRows(GATE_ID_SECOND)).toBe(0);
@@ -1166,9 +1192,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
 
         // Re-enabling the instance that already holds the link stays idempotent.
-        const again = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID_FIRST,
-        });
+        const again = await previewThenEnable(GATE_ID_FIRST);
         expect(again.gatekeeperId).toBe(first.gatekeeperId);
       });
 
@@ -1220,9 +1244,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(announced.statusCode).toBe(200);
         await callAsAdmin('update_gate_instance', { gateId: GATE_ID_REVISION, status: 'enabled' });
 
-        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: GATE_ID_REVISION,
-        });
+        const enabled = await previewThenEnable(GATE_ID_REVISION);
         expect(enabled.linkedExisting).toBe(true);
         expect(enabled.gatekeeperId).toBe(legacyGatekeeperId);
         expect(enabled.publishedOperationNames).toEqual([EXECUTE_OP.name]);
@@ -1829,12 +1851,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           { skipRoleSwitch: true },
         );
 
-        const enabled = (await dispatchCapability(
-          { pool },
+        const enabled = await previewThenEnable(
+          CONSISTENCY_GATE_ID,
           humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
-          'enable_gate_instance',
-          { gateId: CONSISTENCY_GATE_ID },
-        )) as EnableGateInstanceResultWire;
+        );
         cGatekeeperId = enabled.gatekeeperId;
 
         const grant = await withWorkspace(
@@ -2721,6 +2741,13 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           ]);
 
+          // Legacy 311: the digest the enables below name, previewed while nothing is suspended.
+          const { manifestDigest } = (await dispatchCapability(
+            { pool },
+            ownerCaller,
+            'preview_gate_instance_enable',
+            { gateId: CONSISTENCY_GATE_ID },
+          )) as PreviewGateInstanceEnableResultWire;
           await callAsAdmin('suspend_self_connection', {
             workspaceId: other.workspaceId,
             gatekeeperId: legacyId,
@@ -2728,6 +2755,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           for (const capability of ['preview_gate_instance_enable', 'enable_gate_instance']) {
             const refused = await dispatchCapability({ pool }, ownerCaller, capability, {
               gateId: CONSISTENCY_GATE_ID,
+              ...(capability === 'enable_gate_instance' ? { manifestDigest } : {}),
             }).catch((err: unknown) => err);
             expect(refused).toBeInstanceOf(GatekeeperLandingRefusedError);
             expect(refused).toMatchObject({
@@ -2742,6 +2770,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           const enabled = (await dispatchCapability({ pool }, ownerCaller, 'enable_gate_instance', {
             gateId: CONSISTENCY_GATE_ID,
+            manifestDigest,
           })) as EnableGateInstanceResultWire;
           expect(enabled).toMatchObject({ gatekeeperId: legacyId, linkedExisting: true });
           const afterEnable = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
@@ -2781,6 +2810,13 @@ describe.runIf(DATABASE_URL !== undefined)(
             selfSecrets.mint(other.workspaceId).salt,
           );
 
+          // Legacy 311: the digest the enable names, previewed before the suspension starts.
+          const { manifestDigest } = (await dispatchCapability(
+            { pool },
+            ownerCaller,
+            'preview_gate_instance_enable',
+            { gateId: CONSISTENCY_GATE_ID },
+          )) as PreviewGateInstanceEnableResultWire;
           // The administrator's suspension, held open: its row lock makes the enable's delete wait
           // until it commits — after the enable's own "not suspended" check has already passed.
           const suspender = await pool.connect();
@@ -2794,6 +2830,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             );
             enable = dispatchCapability({ pool }, ownerCaller, 'enable_gate_instance', {
               gateId: CONSISTENCY_GATE_ID,
+              manifestDigest,
             }).catch((err: unknown) => err);
             const deadline = Date.now() + 15_000;
             for (;;) {
@@ -3444,6 +3481,23 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(preview.operationsToImport.map((o) => o.name).sort()).toEqual(
           [OBSERVE_OP.name, EXECUTE_OP.name].sort(),
         );
+        // Legacy 311: an enable names the manifest it previewed — without a digest it is refused
+        // before anything runs, and a digest of any other manifest refuses manifest_changed.
+        // Neither writes anything: the instance is still not enabled here.
+        await expect(
+          callAsOwner('enable_gate_instance', { gateId: PENDING_GATE }),
+        ).rejects.toMatchObject({ name: 'InvalidCapabilityParamsError' });
+        await expect(
+          callAsOwner('enable_gate_instance', {
+            gateId: PENDING_GATE,
+            manifestDigest: 'f'.repeat(64),
+          }),
+        ).rejects.toMatchObject({ code: 'manifest_changed' });
+        const notYet = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
+          'list_available_gate_instances',
+        );
+        expect(notYet.items.find((item) => item.gateId === PENDING_GATE)?.gatekeeperId).toBeNull();
+
         const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
           gateId: PENDING_GATE,
           manifestDigest: preview.manifestDigest,

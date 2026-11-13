@@ -2,6 +2,7 @@ import type {
   EnableGateInstanceResultWire,
   ListDraftRejectionsResultWire,
   OperationSummaryWire,
+  PreviewGateInstanceEnableResultWire,
   PrincipalWire,
   ProcedureSummaryWire,
   SkillSummaryWire,
@@ -163,10 +164,16 @@ test.describe('Journey ⑮: 能力目录里一件内容的一生', () => {
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     await selectOwnedWorkspace(page);
 
+    // Legacy 311: an enable names the manifest digest its preview showed.
+    const { manifestDigest } = await callCap<PreviewGateInstanceEnableResultWire>(
+      page,
+      'preview_gate_instance_enable',
+      { gateId: GATE_ID },
+    );
     const { gatekeeperId } = await callCap<EnableGateInstanceResultWire>(
       page,
       'enable_gate_instance',
-      { gateId: GATE_ID },
+      { gateId: GATE_ID, manifestDigest },
     );
 
     const builder = await callCap<{ principal: PrincipalWire; apiKey: string }>(

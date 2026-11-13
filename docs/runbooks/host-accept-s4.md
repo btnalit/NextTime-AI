@@ -156,7 +156,8 @@ S4 FAIL (<n> pass, <m> skip, <f> fail; ungranted-member probe <p> pass, <q> fail
 | 阶段 | capability | 通道 | 说明 |
 |---|---|---|---|
 | 列出候选 | `list_available_gate_instances` | human（owner） | 平台已启用且 `platform_preset` 的门实例，含本工作区是否已链接 |
-| 启用 | `enable_gate_instance` | human（owner） | 注册/复用 Gatekeeper，导入并**自动发布**其宣告的 Operation |
+| 预览 | `preview_gate_instance_enable` | human（owner） | 取实例当前清单的 `manifestDigest`；失败记 FAIL，不启用 |
+| 启用 | `enable_gate_instance` | human（owner） | 带预览的 `manifestDigest`（遗留 311：必填；清单在预览后变了是 409 `manifest_changed`）；注册/复用 Gatekeeper，导入并**自动发布**其宣告的 Operation |
 | 保险检查 | `list_operations` + `publish_operation` | human（owner） | 极少数情况下补发布——正常情况下 `enable_gate_instance` 已经发布完了，不会有活干 |
 | 授权 | `grant_capability` | human（owner） | 给 owner 自己发一个 `gatekeeper` Grant——让 owner 这一轮与已授权成员的入口 agent 同形（门进入入口 Handle 的执行范围）；只读调用本身自 2026-09-27 起不再需要它，未授权的情形由下面的成员探针覆盖 |
 | 铸造 Handle | `issue_handle` | human（owner） | 铸一个 `interactive` 会话的根 Handle——所有授权到位**之后**才铸，`find_operations` 的可达性标注只在"根 Handle（无 `par`）"这个形状下才会附带 |

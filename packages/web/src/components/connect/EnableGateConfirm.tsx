@@ -92,12 +92,14 @@ export function EnableGateConfirm({
 
   async function confirmEnable(): Promise<void> {
     // R-18 (D-18): bind the enable to the manifest this preview showed — the kernel refuses
-    // `manifest_changed` if an administrator confirmed a newer one in between. A refusal
-    // propagates as-is: `kit/confirm` renders it through `presentError` (a known platform code
-    // such as connector_not_preset or gate_not_enabled reads as its own copy).
+    // `manifest_changed` if an administrator confirmed a newer one in between, and (legacy 311)
+    // requires the digest. The confirm only opens after a preview loaded, so there always is one.
+    // A refusal propagates as-is: `kit/confirm` renders it through `presentError` (a known
+    // platform code such as connector_not_preset or gate_not_enabled reads as its own copy).
+    if (!preview) throw new Error('enable_gate_instance: no preview to confirm');
     const result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
       gateId,
-      ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
+      manifestDigest: preview.manifestDigest,
     });
     announceReadinessChange(http);
     onEnabled(result);

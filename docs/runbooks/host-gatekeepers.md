@@ -179,12 +179,17 @@ OWNER_KEY=<owner-api-key>
    API key 做这一步）。
 2. **owner** 在工作区「系统与授权 → 接入一个系统」里选中它点「启用」（控制台会先给出
    `preview_gate_instance_enable` 的预览再确认），或者直接调 capability。`enable_gate_instance` 注册 Gatekeeper、导入**并发布**它公布
-   的 Operation，不需要再 `publish_manifest`：
+   的 Operation，不需要再 `publish_manifest`。直接调时也要先预览：`enable_gate_instance` 必须带预览返回的
+   `manifestDigest`（遗留 311），实例公布的清单在预览之后变了会 409 `manifest_changed`，重新预览再启用：
 
 ```bash
-curl -s http://kernel:8080/api/cap/enable_gate_instance \
+curl -s http://kernel:8080/api/cap/preview_gate_instance_enable \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
   -d '{"gateId":"gatekeeper-docker"}'
+# {"ok":true,"result":{...,"manifestDigest":"<digest>",...}}
+curl -s http://kernel:8080/api/cap/enable_gate_instance \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"gateId":"gatekeeper-docker","manifestDigest":"<digest>"}'
 # {"ok":true,"result":{"gatekeeperId":"<gatekeeper-uuid>",...}}
 ```
 
