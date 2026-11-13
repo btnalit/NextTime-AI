@@ -32,6 +32,7 @@ import {
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { runInvariantChecks } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { REDACTED } from '../../substrate/redaction/index.js';
 import { type UserRow, createPlatformAdmin } from '../identity/index.js';
 import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
@@ -62,6 +63,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const GATE_TOKEN = 'gate-address-change-test-gate-token-0123456789';
+/** A secret-looking value an administrator might paste into a reason. Synthetic: `.gitleaks.toml`
+ *  allows the `abcdefghijklmnopqrstuvwxyz` run. */
+const FAKE_SECRET = 'abcdefghijklmnopqrstuvwxyz0123';
 
 const OP: Operation = {
   name: 'stock.get',
@@ -776,6 +780,108 @@ describe.runIf(DATABASE_URL !== undefined)(
         id: next.proposal.id,
       });
       expect(withdrawn.status).toBe('expired');
+    });
+
+    it('legacy 715: the owner reads how the gate’s latest proposal ended — expired, withdrawn, rejected with the reason, applied with credentials left at the old address — and a member none of it', async () => {
+      const { gatekeeperId, endpoint: oldEndpoint } = await connectedGate();
+      const detail = () => asOwner<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
+      expect((await detail()).lastAddressChangeOutcome).toBeUndefined();
+
+      // Past its expiry and recorded by nothing yet: expired, ended at its expiry.
+      const first = await previewAndPropose(gatekeeperId);
+      await lapse(first.proposal.id);
+      const lapsed = await listed(first.proposal.id);
+      expect((await detail()).lastAddressChangeOutcome).toEqual({
+        id: first.proposal.id,
+        gatekeeperId,
+        fromEndpoint: oldEndpoint,
+        toEndpoint: first.endpoint,
+        status: 'expired',
+        createdAt: lapsed.createdAt,
+        endedAt: lapsed.expiresAt,
+        rejectionReason: null,
+        accountCredentialsLeftOnOldHost: false,
+      });
+
+      // The next proposal records it expired (stamping decided_at now): it still ended at its
+      // expiry, and it is the outcome beside the new open proposal.
+      const second = await previewAndPropose(gatekeeperId);
+      const recorded = await listed(first.proposal.id);
+      expect(recorded.status).toBe('expired');
+      expect(recorded.decidedAt).not.toBe(lapsed.expiresAt);
+      const beside = await detail();
+      expect(beside.pendingAddressChange?.id).toBe(second.proposal.id);
+      expect(beside.lastAddressChangeOutcome).toMatchObject({
+        id: first.proposal.id,
+        status: 'expired',
+        endedAt: lapsed.expiresAt,
+      });
+
+      // Withdrawn by the owner.
+      const withdrawn = await asOwner<GateAddressChangeWire>('withdraw_gate_address_change', {
+        id: second.proposal.id,
+      });
+      expect((await detail()).lastAddressChangeOutcome).toEqual({
+        id: second.proposal.id,
+        gatekeeperId,
+        fromEndpoint: oldEndpoint,
+        toEndpoint: second.endpoint,
+        status: 'withdrawn',
+        createdAt: second.proposal.createdAt,
+        endedAt: withdrawn.decidedAt,
+        rejectionReason: null,
+        accountCredentialsLeftOnOldHost: false,
+      });
+
+      // Rejected: the reason as the administrator wrote it, a secret-looking value in it masked as
+      // all free text is; who rejected it is not shown.
+      const third = await previewAndPropose(gatekeeperId);
+      const rejected = await asAdmin<PlatformGateAddressChangeWire>('reject_gate_address_change', {
+        workspaceId,
+        id: third.proposal.id,
+        reason: `Use the TLS host. PGPASSWORD=${FAKE_SECRET} was in the note.`,
+      });
+      const afterRejection = await detail();
+      expect(afterRejection.pendingAddressChange).toBeUndefined();
+      expect(afterRejection.lastAddressChangeOutcome).toEqual({
+        id: third.proposal.id,
+        gatekeeperId,
+        fromEndpoint: oldEndpoint,
+        toEndpoint: third.endpoint,
+        status: 'rejected',
+        createdAt: third.proposal.createdAt,
+        endedAt: rejected.decidedAt,
+        rejectionReason: `Use the TLS host. PGPASSWORD=${REDACTED} was in the note.`,
+        accountCredentialsLeftOnOldHost: false,
+      });
+      expect(JSON.stringify(afterRejection)).not.toContain(admin.login);
+
+      // Applied: the gate is at the new address, and account credentials stay at the old one for
+      // the owner to clear.
+      const fourth = await previewAndPropose(gatekeeperId);
+      const applied = await asAdmin<PlatformGateAddressChangeWire>('approve_gate_address_change', {
+        workspaceId,
+        id: fourth.proposal.id,
+        previewDigest: (await listed(fourth.proposal.id)).previewDigest,
+      });
+      const afterApproval = await detail();
+      expect(afterApproval.endpoint).toBe(fourth.endpoint);
+      expect(afterApproval.pendingAddressChange).toBeUndefined();
+      expect(afterApproval.lastAddressChangeOutcome).toEqual({
+        id: fourth.proposal.id,
+        gatekeeperId,
+        fromEndpoint: oldEndpoint,
+        toEndpoint: fourth.endpoint,
+        status: 'applied',
+        createdAt: fourth.proposal.createdAt,
+        endedAt: applied.decidedAt,
+        rejectionReason: null,
+        accountCredentialsLeftOnOldHost: true,
+      });
+
+      // A member reads none of it.
+      const forMember = await asMember<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
+      expect(forMember.lastAddressChangeOutcome).toBeUndefined();
     });
 
     it('I-A3: a request made at the old address is refused at the new one, and the reaper asks no host about it', async () => {

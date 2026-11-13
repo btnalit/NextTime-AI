@@ -94,6 +94,34 @@ export const GateAddressChangeWireSchema = z
   .strict();
 export type GateAddressChangeWire = z.infer<typeof GateAddressChangeWireSchema>;
 
+/** Legacy 715: how the gate's latest proposal that is no longer open ended, as its owner reads it
+ *  (`get_gatekeeper`'s `lastAddressChangeOutcome`). Proposals of one gate follow one another (one
+ *  open at a time, I-A2), so the latest created is the latest ended. */
+export const GateAddressChangeOutcomeWireSchema = z
+  .object({
+    id: z.string(),
+    gatekeeperId: z.string(),
+    /** As the workspace's own views show addresses. */
+    fromEndpoint: z.string(),
+    toEndpoint: z.string(),
+    /** `expired` also for a proposal past its expiry that nothing has recorded so yet. */
+    status: z.enum(['applied', 'rejected', 'withdrawn', 'expired']),
+    createdAt: z.string(),
+    /** When it ended: decided by a platform administrator (`applied` / `rejected`), withdrawn by an
+     *  owner, or — `expired` — its expiry, whenever that was recorded. */
+    endedAt: z.string(),
+    /** `rejected` only: the reason the platform administrator gave, as written (credential-shaped
+     *  text masked as all free text is); `null` when none was given, and for every other status.
+     *  Who decided stays on the platform side. */
+    rejectionReason: z.string().nullable(),
+    /** `applied` only: no account credential moves with a gate, so any connected at the old
+     *  address (`fromEndpoint`) are still there, to be cleared by the owner — the term the applied
+     *  change's audit row uses. */
+    accountCredentialsLeftOnOldHost: z.boolean(),
+  })
+  .strict();
+export type GateAddressChangeOutcomeWire = z.infer<typeof GateAddressChangeOutcomeWireSchema>;
+
 /** A proposal, as the platform sees it (`list_`, `approve_`, `reject_gate_address_change`). */
 export const PlatformGateAddressChangeWireSchema = z
   .object({
