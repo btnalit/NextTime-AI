@@ -160,7 +160,9 @@ describe('GatekeeperBase', () => {
       // instances of one gate at once.
       const web = gate.apply('stock.adjust', { sku: 'web' }, 'req-web');
       const db = gate.apply('stock.adjust', { sku: 'db' }, 'req-db');
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      // Each apply reserves its key in the file store first (an fsynced atomic write, one at a
+      // time), which on a loaded runner outlasts waitFor's default 1 s (#1158).
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2), { timeout: 10_000 });
       for (const [index, resolve] of pending.entries()) resolve({ data: { n: index } });
       await expect(Promise.all([web, db])).resolves.toEqual([
         expect.objectContaining({ replayed: false }),
@@ -185,7 +187,7 @@ describe('GatekeeperBase', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it('apply returns IdempotencyConflictError for the same key with a different params tuple', async () => {
     const gate = new GatekeeperBase({
