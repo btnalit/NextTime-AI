@@ -464,6 +464,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const spawned = supervisor.spawnCalls.find((input) => input.taskId === task.id);
       expect(spawned?.egressDenyAll).toBe(true);
+      // Legacy 697: and pi's built-in tools only read files, as a reviewer's do; the failed
+      // step's Worker kept every one.
+      expect(spawned?.builtinTools).toBe('read_only');
+      const others = supervisor.spawnCalls.filter((input) => input.taskId !== task.id);
+      expect(others.length).toBeGreaterThan(0);
+      expect(others.map((input) => input.builtinTools)).toEqual(others.map(() => undefined));
 
       const planner = await workerOf(task.id);
       if (planner.channel !== 'handle') throw new Error('not a Handle');

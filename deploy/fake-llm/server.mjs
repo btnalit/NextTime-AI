@@ -1037,19 +1037,20 @@ function reviewerTaskInput(messages) {
   return undefined;
 }
 
-/** S11 GO18a (runtime contract 3): pi built-ins a goal reviewer is never offered. The kernel
- *  spawns every review Task with `builtinTools: read_only`, and the image's entrypoint then gives
- *  pi only read, grep, find and ls (deploy/worker-runtime/pi-settings-read-only.json). */
-const REVIEWER_FORBIDDEN_TOOLS = ['bash', 'edit', 'write'];
+/** S11 GO18a (runtime contract 3): pi built-ins a goal reviewer — and, legacy 697, a goal
+ *  planner — is never offered. The kernel spawns every review and planning Task with
+ *  `builtinTools: read_only`, and the image's entrypoint then gives pi only read, grep, find and ls
+ *  (deploy/worker-runtime/pi-settings-read-only.json). */
+const READ_ONLY_FORBIDDEN_TOOLS = ['bash', 'edit', 'write'];
 
-/** Why `tools` (a request's tool definitions) is not the reviewer's read-only set — it must offer
- *  `read` and none of {@link REVIEWER_FORBIDDEN_TOOLS}; `undefined` when it is. A request with no
- *  tools at all does not pass: pi always sends them. */
-function reviewerToolsProblem(tools) {
+/** Why `tools` (a request's tool definitions) is not the read-only set — it must offer `read` and
+ *  none of {@link READ_ONLY_FORBIDDEN_TOOLS}; `undefined` when it is. A request with no tools at
+ *  all does not pass: pi always sends them. */
+function readOnlyToolsProblem(tools) {
   const names = (Array.isArray(tools) ? tools : []).map(
     (tool) => tool?.function?.name ?? tool?.name,
   );
-  const offered = names.filter((name) => REVIEWER_FORBIDDEN_TOOLS.includes(name));
+  const offered = names.filter((name) => READ_ONLY_FORBIDDEN_TOOLS.includes(name));
   if (offered.length > 0) return `was offered ${offered.join(', ')}`;
   if (!names.includes('read')) return 'was not offered read';
   return undefined;
@@ -1064,11 +1065,11 @@ function reviewerToolsProblem(tools) {
  *  nothing but its output: a reviewer writes no findings, Facts, evidence or artifacts
  *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`).
  *
- *  A request whose tools are not the read-only set ({@link reviewerToolsProblem}) gets a text
+ *  A request whose tools are not the read-only set ({@link readOnlyToolsProblem}) gets a text
  *  answer saying why instead of the report: the reviewer did not run read-only, so it ends without
  *  reporting, its review settles `unavailable` and S15's goals miss the outcomes S15 asserts. */
 function goalReviewerScenario(messages, tools) {
-  const problem = reviewerToolsProblem(tools);
+  const problem = readOnlyToolsProblem(tools);
   if (problem !== undefined) {
     return [
       {
@@ -1119,8 +1120,21 @@ function goalReviewerScenario(messages, tools) {
  *    - anything else: `no_revision`, so a goal no scenario here plans for pauses for a person —
  *      among them S6's (legacy 560): a round for the goal's own acceptance (S11 GO10b, the input
  *      carries `failedAcceptance` instead of `failedStep`), whose reason names the verification
- *      round it was told about, so the script can tell the planner read what failed. */
-function goalPlannerScenario(messages) {
+ *      round it was told about, so the script can tell the planner read what failed.
+ *
+ *  Legacy 697: a request whose tools are not the read-only set ({@link readOnlyToolsProblem}) gets
+ *  a text answer saying why instead of the report, as the reviewer's does: the planner did not run
+ *  read-only, so it ends without reporting, its round settles without a proposal and S13's and
+ *  S6's goals miss the outcomes they assert. */
+function goalPlannerScenario(messages, tools) {
+  const problem = readOnlyToolsProblem(tools);
+  if (problem !== undefined) {
+    return [
+      {
+        text: `accept_s2: the goal planner ${problem}; a planner's pi tools must be read-only (legacy 697).`,
+      },
+    ];
+  }
   const input = plannerTaskInput(messages);
   const plan = input?.plan;
   const failedKey = input?.failedStep?.key;

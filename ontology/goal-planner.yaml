@@ -9,7 +9,10 @@
 #
 # What the planner may do is fixed by the kernel, not by this file: its Handle holds exactly its
 # own Task, its (empty) tool list and its report (`PLANNER_HANDLE_CAPABILITIES`), it observes
-# nothing (`observe_scope = '{}'`), its container has no egress, and its report is held to
+# nothing (`observe_scope = '{}'`), its container has no egress, pi's built-in tools in its
+# container are only read, grep, find and ls (no bash, edit or write: the kernel spawns every
+# planning Task with `builtinTools: read_only`, as it does a reviewer's — legacy 697,
+# docs/runbooks/pi-upgrade.md §2.2), and its report is held to
 # `@nexttime/shared` `PLANNER_OUTPUT_SCHEMA` and then to the same plan checks as a person's
 # revision. What it reports is a proposal: the goal's requester accepts or rejects it, or (S11 GO9b,
 # `apply_minor`) the platform adopts it for them when its own rules find it minor.
