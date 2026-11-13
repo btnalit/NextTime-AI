@@ -33,6 +33,7 @@ import { Tabs } from '../ui/Tabs.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
+import { GateAddressChanges } from './integrations/GateAddressChanges.js';
 import {
   hiddenFromWorkspaces,
   hiddenInstanceBadge,
@@ -961,7 +962,9 @@ const ALL_SELF_CONNECTIONS: Readonly<Record<string, unknown>> = {};
  *  cut-off for one of them: 暂停 refuses every Operation of it from the next call until 恢复. The
  *  connector's mode only gates new connections and its deny list only reaches gates enabled from
  *  the catalog, so before this an administrator had no way to stop one that was already running.
- *  The connector filter is chosen, never typed: its options are the connectors in the list. */
+ *  The connector filter is chosen, never typed: its options are the connectors in the list.
+ *  Legacy 701: the moves to a new address waiting for approval sit above it
+ *  (`integrations/GateAddressChanges`). */
 function SelfConnectionsTab({
   http,
   connector,
@@ -1013,6 +1016,7 @@ function SelfConnectionsTab({
           'A suspension covers this one connection: while it lasts the workspace cannot lift it, delete it or connect the same address again, but the gate under another host name or IP is a new connection; to stop workspaces connecting this kind of gate themselves, change its mode under Connectors. Targets and gate addresses show their scheme, host and port only; the path and parameters are visible to the workspace alone.',
         )}
       </p>
+      <GateAddressChanges http={http} onApplied={() => void connections.reload()} />
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <Select
           aria-label={t('按接入包筛选', 'Filter by connector')}

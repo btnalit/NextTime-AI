@@ -76,8 +76,9 @@ capabilities:
     e2e: observed
     repeat: "conflict: illegal_transition"
   approve_gate_address_change:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
+    e2e: observed
     repeat: "conflict: gate_address_change_decided" # the first call applied it; the same call again finds it decided, nothing moves
   approve_step_trial:
     console: required
@@ -485,7 +486,7 @@ capabilities:
     console: required
     agents: [entry, admin]
   list_gate_address_changes:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
   list_gate_instances:
     console: required
@@ -637,7 +638,7 @@ capabilities:
     console: required
     agents: []
   preview_gate_address_change:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
   preview_gate_instance_enable:
     console: required
@@ -672,8 +673,9 @@ capabilities:
     e2e: observed
     repeat: idempotent # returns the caller's identical draft (created: false); with no published entry a second call is another entry family (legacy 691)
   propose_gate_address_change:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
+    e2e: observed
     repeat: "conflict: connection_secret_in_use" # a secret serves one proposal: the same call again is refused before anything is asked or written
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
@@ -791,8 +793,9 @@ capabilities:
     e2e: observed
     repeat: "conflict: not_found"
   reject_gate_address_change:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
+    e2e: observed
     repeat: "conflict: gate_address_change_decided"
   reject_goal:
     console: required
@@ -1126,6 +1129,7 @@ capabilities:
     e2e: "waived: 657"
     repeat: "unclear: 664"
   withdraw_gate_address_change:
-    console: "none: 控制台入口随 legacy 701 的第二个 PR 加（网关详情页的「更换地址」与平台自连接页的审批）；本 PR 只有内核与契约"
+    console: required
     agents: []
+    e2e: observed
     repeat: "conflict: gate_address_change_decided"
