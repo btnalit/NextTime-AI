@@ -103,6 +103,7 @@ import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
   OntologyViolationError,
   PrincipalNotFoundError,
@@ -566,7 +567,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Legacy 303: mirrors HTTP 409 `ontology_link_endpoint_undeclared` (capability-route.ts).
-  if (err instanceof OntologyLinkEndpointError) {
+  // Legacy 705: mirrors HTTP 409 `ontology_link_endpoint_outside_requires`.
+  if (
+    err instanceof OntologyLinkEndpointError ||
+    err instanceof OntologyLinkEndpointOutsideRequiresError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Legacy 145: mirrors HTTP 409 `entry_template_current` / `entry_template_changed`.

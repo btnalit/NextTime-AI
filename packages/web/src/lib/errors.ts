@@ -12,7 +12,10 @@ import { HttpError } from './http-client.js';
 import { type Translate, sentenceGap } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
 import { LocalizedError } from './localized-error.js';
-import { ontologyLinkEndpointMessage } from './ontology-link-ends.js';
+import {
+  ontologyLinkEndpointMessage,
+  ontologyLinkEndpointOutsideRequiresMessage,
+} from './ontology-link-ends.js';
 import { ownEntry } from './own.js';
 import { platformErrorMessage } from './platform-errors.js';
 import { stepReferenceRefusalOf, stepReferenceText } from './step-reference.js';
@@ -890,6 +893,7 @@ export function presentError(
     (overrides ? ownEntry(overrides, described.code) : undefined) ??
     (err instanceof LocalizedError ? err.message : null) ??
     ontologyLinkEndpointMessage(err, t) ??
+    ontologyLinkEndpointOutsideRequiresMessage(err, t) ??
     platformErrorMessage(err, t) ??
     adminAgentRefusalMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??

@@ -243,6 +243,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有关系类型的 domain 或 range 写的对象类型，工作区里没有任何已发布的本体声明它，或者这个版本去掉了别的本体的关系类型还在用的对象类型；本次没有发布任何内容。「技术细节」里写着是哪个关系类型和对象类型：改正关系类型或补上对象类型；是别的本体在用的，先改那个本体',
     en: 'A link type’s domain or range in this version names an object type no published ontology in this workspace declares, or this version drops an object type another ontology’s link type still uses — nothing was published. The technical details name the link type and object type: correct the link type or declare the object type; if another ontology uses it, change that ontology first',
   },
+  // Legacy 705: installing a pack (or a module) whose link type ends on an object type of an
+  // ontology family outside what the pack builds on — the platform's own ontology, its own
+  // families, the packs it requires. Nothing was installed; the pack itself needs the requirement.
+  ontology_link_endpoint_outside_requires: {
+    zh: '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型；能力包只能连到平台自带的本体、它自己的本体和它依赖的能力包的本体，所以本次没有安装任何内容。「技术细节」里写着是哪个关系类型、哪个本体：这要改能力包本身（在 requires.packs 里加上那个能力包），请平台管理员处理',
+    en: 'A link type of this pack ends on an object type of an ontology it does not declare it builds on; a pack may only link to the platform’s own ontology, its own ontologies and those of the packs it requires, so nothing was installed. The technical details name the link type and the ontology: the pack itself needs changing (add that pack to its requires.packs); ask a platform administrator',
+  },
   // Legacy 145: `propose_entry_template_upgrade`. Nothing was proposed in either.
   entry_template_current: {
     zh: '当前生效的入口定义已经和平台模板一致，没有可生成的草稿',

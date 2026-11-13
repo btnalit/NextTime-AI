@@ -352,6 +352,10 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-s);
   padding: 1px 6px;
+  /* A long code (`ontology_link_endpoint_outside_requires`) breaks rather than widening its
+   * dialog at phone width; the 「技术细节」 summary it sits in is `nowrap` (#1154 UX P2). */
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .error-banner-message {

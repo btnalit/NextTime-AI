@@ -7,7 +7,7 @@ import {
   AdminProposalWithdrawnOriginSchema,
   DraftOriginSchema,
 } from '../enums.js';
-import { OntologyDefinitionSchema } from '../ontology-definition.js';
+import { OntologyDefinitionSchema, PLATFORM_META_ONTOLOGY_FAMILY } from '../ontology-definition.js';
 import {
   PublishedSkillDescriptionSchema,
   PublishedSkillNameSchema,
@@ -55,7 +55,8 @@ export const ADMIN_PROPOSAL_LIST_LIMIT = 100;
  *  workspace (AA3b-2, `derivePackComponentId(sourceName, kind, name)`) — a pack's name rule, so the
  *  proposal exported as a pack keeps their ids. migrations/governance/0032's check is the same. */
 export const ADMIN_PROPOSAL_SOURCE_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-/** An ontology family's name in an `ontology_version` intent: the same rule. */
+/** An ontology family's name in an `ontology_version` intent: the same rule (`ONTOLOGY_FAMILY_NAME_PATTERN`),
+ *  never `PLATFORM_META_ONTOLOGY_FAMILY` (legacy 706, F3). */
 export const ADMIN_PROPOSAL_ONTOLOGY_FAMILY_PATTERN = ADMIN_PROPOSAL_SOURCE_NAME_PATTERN;
 /** A gate instance's id in an `operation_version` intent (`gate_instances.gate_id`, core 0023's
  *  check; `PLATFORM_STATE_GATE_ID_PATTERN` is the same, and the test says so). */
@@ -141,7 +142,14 @@ export const AdminProposalItemIntentWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('ontology_version'),
-      family: z.string().max(64).regex(ADMIN_PROPOSAL_ONTOLOGY_FAMILY_PATTERN),
+      family: z
+        .string()
+        .max(64)
+        .regex(ADMIN_PROPOSAL_ONTOLOGY_FAMILY_PATTERN)
+        // Legacy 706 (F3): the platform-meta ontology's name, never a proposal's family.
+        .refine((family) => family !== PLATFORM_META_ONTOLOGY_FAMILY, {
+          message: `"${PLATFORM_META_ONTOLOGY_FAMILY}" is the platform's own ontology; name the family otherwise`,
+        }),
       definition: OntologyDefinitionSchema,
     })
     .strict(),

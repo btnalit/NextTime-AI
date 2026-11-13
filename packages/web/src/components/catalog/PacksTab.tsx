@@ -28,8 +28,11 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { principalShownName } from '../../lib/labels.js';
 import { LocalizedError } from '../../lib/localized-error.js';
 import {
+  ontologyLinkEndOutsideRequiresText,
+  ontologyLinkEndpointOutsideRequiresOf,
   ontologyLinkEndpointRefusalOf,
   ontologyLinkEndsText,
+  packsOutsideRequires,
 } from '../../lib/ontology-link-ends.js';
 import { hrefs } from '../../lib/router.js';
 import { PACK_REQUIREMENT_TONES, labelText } from '../../lib/status-tone.js';
@@ -1011,6 +1014,26 @@ function packLinkEndpointText(error: unknown, t: Translate): string {
   return t(zh.join(''), en.join(' '));
 }
 
+/** Legacy 705: the install review's refusal of a pack whose link type ends on an object type of an
+ *  ontology outside what it builds on. Nothing in the workspace changes that — the pack itself
+ *  has to require the pack declaring the type — so it names the ends and sends the owner to a
+ *  platform administrator; the general sentence when the ends cannot be read. */
+function packLinkEndpointOutsideRequiresText(error: unknown, t: Translate): string {
+  const ends = ontologyLinkEndpointOutsideRequiresOf(error);
+  if (!ends) {
+    return t(
+      '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型。能力包只能连到平台自带的本体、它自己的本体和它依赖的能力包的本体，所以现在装不上，什么也没有改。这要改能力包本身，在工作区里改不了；「技术细节」里写着是哪个关系类型，请平台管理员处理。',
+      'A link type of this pack ends on an object type of an ontology it does not declare it builds on. A pack may only link to the platform’s own ontology, its own ontologies and those of the packs it requires, so it cannot be installed and nothing changed. The pack itself needs changing, which cannot be done from the workspace; the technical details name the link type. Ask a platform administrator.',
+    );
+  }
+  const shown = ends.map((end) => ontologyLinkEndOutsideRequiresText(end, t)).join(t('；', '; '));
+  const packs = packsOutsideRequires(ends);
+  return t(
+    `这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型：${shown}。能力包只能连到平台自带的本体、它自己的本体和它依赖的能力包的本体，所以现在装不上，什么也没有改。这要改能力包本身，在工作区里改不了${packs.length > 0 ? `（要让它依赖 ${packs.join('、')}）` : ''}；请平台管理员处理。`,
+    `A link type of this pack ends on an object type of an ontology it does not declare it builds on: ${shown}. A pack may only link to the platform’s own ontology, its own ontologies and those of the packs it requires, so it cannot be installed and nothing changed. The pack itself needs changing, which cannot be done from the workspace${packs.length > 0 ? ` (it needs to require ${packs.join(', ')})` : ''}; ask a platform administrator.`,
+  );
+}
+
 /** S11 AA5g-3: refusals of an install that answers an admin proposal which mean the proposal is
  *  not open to it any more (decided meanwhile, a newer version, no longer among the targets). */
 const PROPOSAL_STALE_CODES = new Set([
@@ -1250,6 +1273,10 @@ export function InstallPack({
                 'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
               ),
               ontology_link_endpoint_undeclared: packLinkEndpointText(preview.error, t),
+              ontology_link_endpoint_outside_requires: packLinkEndpointOutsideRequiresText(
+                preview.error,
+                t,
+              ),
               draft_pending: packDraftPendingText(t),
               skill_name_conflict: t(
                 '这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名；Worker 按名字挂载 Skill，同名会让它挂错，所以现在装不上，什么也没有改。「技术细节」里写着是哪个名字；可以在「Skill」页停用那个 Skill 后再来安装。',

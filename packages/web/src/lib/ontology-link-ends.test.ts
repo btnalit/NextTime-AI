@@ -3,8 +3,11 @@ import { presentError } from './errors.js';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import {
+  ontologyLinkEndOutsideRequiresText,
   ontologyLinkEndText,
   ontologyLinkEndpointMessage,
+  ontologyLinkEndpointOutsideRequiresMessage,
+  ontologyLinkEndpointOutsideRequiresOf,
   ontologyLinkEndpointRefusalOf,
 } from './ontology-link-ends.js';
 
@@ -107,5 +110,69 @@ describe('ontologyLinkEndpointMessage', () => {
     expect(presentError(refusal(), zh).message).toContain(
       '「技术细节」里写着是哪个关系类型和对象类型',
     );
+  });
+});
+
+/** Legacy 705: a pack's link type ending on an object type of an ontology the pack does not build
+ *  on — each end says which ontology declares the type, and which pack that ontology comes from. */
+describe('ontology_link_endpoint_outside_requires', () => {
+  const outside = (details?: Record<string, unknown>) =>
+    new HttpError(
+      'capability_error',
+      "a pack's LinkType ends name ObjectTypes of the platform-meta ontology, of its own families or of the packs it requires",
+      'ontology_link_endpoint_outside_requires',
+      details,
+    );
+  const end = {
+    linkType: 'ticket_on_host',
+    end: 'range' as const,
+    objectType: 'Host',
+    family: 'ops-hosts',
+    pack: 'ops-hosts-pack',
+  };
+
+  it('says where the type is declared: a pack’s ontology, an ontology from no pack, or one with no name', () => {
+    expect(ontologyLinkEndOutsideRequiresText(end, zh)).toBe(
+      '关系类型 ticket_on_host 的 range 是 Host，由能力包 ops-hosts-pack 的本体 ops-hosts 声明',
+    );
+    expect(ontologyLinkEndOutsideRequiresText({ ...end, pack: null }, zh)).toBe(
+      '关系类型 ticket_on_host 的 range 是 Host，由本体 ops-hosts 声明（它不是从能力包装上的）',
+    );
+    expect(ontologyLinkEndOutsideRequiresText({ ...end, family: null, pack: null }, zh)).toBe(
+      '关系类型 ticket_on_host 的 range 是 Host，由另一个本体声明',
+    );
+    expect(ontologyLinkEndOutsideRequiresText(end, en)).toBe(
+      'link type ticket_on_host: range is Host, declared by ontology ops-hosts of pack ops-hosts-pack',
+    );
+  });
+
+  it('reads the ends from the details, skipping malformed ones; null for another refusal or none', () => {
+    const err = outside({ ends: [end, { linkType: 'x', end: 'middle', objectType: 'Y' }] });
+    expect(ontologyLinkEndpointOutsideRequiresOf(err)).toEqual([end]);
+    expect(ontologyLinkEndpointOutsideRequiresOf(outside())).toBeNull();
+    expect(ontologyLinkEndpointOutsideRequiresOf(outside({ ends: [] }))).toBeNull();
+    expect(ontologyLinkEndpointOutsideRequiresOf(refusal({ undeclared: [] }))).toBeNull();
+  });
+
+  it('names each end and the pack to require, and presentError reads it ahead of the general sentence', () => {
+    const err = outside({
+      ends: [end, { ...end, linkType: 'ticket_from_host', end: 'domain' }],
+    });
+    const message = ontologyLinkEndpointOutsideRequiresMessage(err, zh);
+    expect(message).toBe(
+      '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型：关系类型 ticket_on_host 的 range 是 Host，由能力包 ops-hosts-pack 的本体 ops-hosts 声明；关系类型 ticket_from_host 的 domain 是 Host，由能力包 ops-hosts-pack 的本体 ops-hosts 声明。能力包只能连到平台自带的本体、它自己的本体和它依赖的能力包的本体，所以本次没有安装任何内容。这要改能力包本身（要在这个能力包的 requires.packs 里加上 ops-hosts-pack），请平台管理员处理。',
+    );
+    expect(presentError(err, zh).message).toContain(
+      'requires.packs 里加上 ops-hosts-pack），请平台管理员处理',
+    );
+    // No pack has the family: no pack to name.
+    expect(
+      ontologyLinkEndpointOutsideRequiresMessage(outside({ ends: [{ ...end, pack: null }] }), zh),
+    ).toContain('要让这个能力包依赖声明这些类型的能力包，或改掉这些关系类型');
+  });
+
+  it('leaves a refusal without readable details to the general sentence', () => {
+    expect(ontologyLinkEndpointOutsideRequiresMessage(outside(), zh)).toBeNull();
+    expect(presentError(outside(), zh).message).toContain('在 requires.packs 里加上那个能力包');
   });
 });

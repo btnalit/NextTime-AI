@@ -1,5 +1,6 @@
 import { quotedName } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { loadOntologyFamilyNames } from './families.js';
 import type { OntologyDefinition } from './schema.js';
 
 /**
@@ -30,8 +31,19 @@ import type { OntologyDefinition } from './schema.js';
  *    the candidate's to answer for — it is that other family's own `undeclared` at its next publish.
  * Without this, a published LinkType could name a type no Object can have, and the write guard
  * (`substrate/graph/ontology-guard.ts`, I2) would be checking Links against a signature that says
- * nothing. Whether the type belongs to a family the referring pack `requires` is not checked: a
- * draft published from the console belongs to no pack.
+ * nothing. Whether the type belongs to a family the referring pack `requires` is checked only for
+ * a pack's install (legacy 705, below): a draft published from the console belongs to no pack.
+ *
+ * Legacy 705 (L1), a pack's install or upgrade only (`application/packs/install.ts`, a module's
+ * too): its LinkType ends name ObjectTypes of the platform-meta ontology, of its own families, or of
+ * the packs its version requires directly (`requires.packs`) — `OntologyLinkEndpointScope`, the ids
+ * of those families; their heads as this segment will have left them (`pending`), so a family the
+ * same segment installs counts as it will be. Not transitive: a type of a pack reached only through
+ * another required pack is refused, as most package managers want direct dependencies declared.
+ * Refused with `OntologyLinkEndpointOutsideRequiresError`, after legacy 303 (a type nobody declares
+ * is that refusal, not this one). It is a gate at install, not a standing invariant: a required
+ * pack upgraded later may move a type elsewhere without the referring pack being checked again —
+ * 303 and I-P1 still keep every end declared, by one family.
  *
  * Scope, deliberately the plan's and no wider:
  *  - LinkTypes may share a name across families; their signatures accumulate (unchanged).
@@ -39,8 +51,8 @@ import type { OntologyDefinition } from './schema.js';
  *    draft that collides is refused when it is published, not when it is proposed.
  *  - Names are unique per kind, not across kinds (an ObjectType and an ActionType may share a
  *    name, as `get_type`'s kind order already resolves).
- *  - A LinkType end is checked against the published namespace too (legacy 303, above); whether
- *    the type it names belongs to a family the referring pack `requires` is not.
+ *  - A LinkType end is checked against the published namespace too (legacy 303, above), and at a
+ *    pack's install against the families it may name (legacy 705, above).
  */
 
 export type OntologyNamespaceKind = 'object' | 'action';
@@ -85,10 +97,9 @@ export interface OntologyLinkEndpointProblem {
 /** A problem as `OntologyLinkEndpointError` reports it: with what to call the family whose
  *  LinkType it is (UX acceptance of #1141 — "another ontology" alone does not say which). */
 export interface NamedOntologyLinkEndpointProblem extends OntologyLinkEndpointProblem {
-  /** The family's stable name as the ChangePlan item that last installed it recorded it
-   *  (`change_items.target.family`: a pack's or module's family) — null when no item has: the
-   *  platform-meta ontology, a family published from a draft or seeded from the command line, a
-   *  family this very publish creates. `ontology_versions` has no name column (`loader.ts`). */
+  /** The family's name (`ontology_families`, legacy 706: `platform-meta`, a pack's or module's
+   *  family, an admin proposal's, a command-line seed's) — null when it has none: a family
+   *  published from a console draft, or one this very publish creates. */
   readonly family: string | null;
 }
 
@@ -131,6 +142,59 @@ export class OntologyLinkEndpointError extends Error {
     );
     this.name = 'OntologyLinkEndpointError';
     this.problems = problems;
+  }
+}
+
+/** Legacy 705 (L1): the families a pack's install may name in its LinkType ends besides the
+ *  candidate's own — the platform-meta ontology's, the version's other families and those of the
+ *  packs it requires directly — by id. */
+export interface OntologyLinkEndpointScope {
+  readonly familyIds: ReadonlySet<string>;
+}
+
+/** One of the candidate's LinkType ends naming an ObjectType declared outside its scope. */
+export interface OntologyLinkEndpointOutsideScope {
+  readonly linkType: string;
+  readonly end: OntologyLinkEnd;
+  readonly objectType: string;
+  /** The family that declares `objectType`. */
+  readonly declaredBy: string;
+}
+
+/** As `OntologyLinkEndpointOutsideRequiresError` reports it. */
+export interface NamedOntologyLinkEndpointOutsideScope extends OntologyLinkEndpointOutsideScope {
+  /** `declaredBy`'s name (`ontology_families`), null when it has none. */
+  readonly family: string | null;
+  /** The pack that has that family, when the install knows one: the pack to require. */
+  readonly pack: string | null;
+}
+
+/** Legacy 705: a pack's LinkType end names an ObjectType of a family it does not require (see this
+ *  module's comment). Mapped to 409 `ontology_link_endpoint_outside_requires` (`details.ends`);
+ *  nothing was published. */
+export class OntologyLinkEndpointOutsideRequiresError extends Error {
+  readonly code = 'ontology_link_endpoint_outside_requires' as const;
+  readonly ends: readonly NamedOntologyLinkEndpointOutsideScope[];
+  constructor(ends: readonly NamedOntologyLinkEndpointOutsideScope[]) {
+    super(
+      `a pack's LinkType ends name ObjectTypes of the platform-meta ontology, of its own families or of the packs it requires: ${ends
+        .map(
+          (e) =>
+            `${describeEnd({ ...e, ontologyId: null })} is declared by ontology family ${e.family === null ? e.declaredBy : quotedName(e.family)}${e.pack === null ? '' : ` (pack ${quotedName(e.pack)})`}`,
+        )
+        .join(', ')} — add the pack that has it to requires.packs`,
+    );
+    this.name = 'OntologyLinkEndpointOutsideRequiresError';
+    this.ends = ends;
+  }
+
+  /** The same refusal, each end saying which pack has the family that declares its type. */
+  withPacks(
+    packOf: (family: string) => string | undefined,
+  ): OntologyLinkEndpointOutsideRequiresError {
+    return new OntologyLinkEndpointOutsideRequiresError(
+      this.ends.map((e) => ({ ...e, pack: e.family === null ? null : (packOf(e.family) ?? null) })),
+    );
   }
 }
 
@@ -225,6 +289,41 @@ export function findOntologyLinkEndpointProblems(
   };
 }
 
+/** Pure half of legacy 705: the candidate's own LinkType ends naming an ObjectType that a family
+ *  outside `scope` declares (the candidate's own family is always inside). An end naming `"*"`, a
+ *  type the candidate declares, or a type nobody declares (legacy 303's) is not listed. Each end
+ *  once. */
+export function findOntologyLinkEndpointsOutsideScope(
+  candidateId: string | null,
+  candidate: OntologyDefinition,
+  others: readonly { readonly id: string; readonly definition: OntologyDefinition }[],
+  scope: OntologyLinkEndpointScope,
+): OntologyLinkEndpointOutsideScope[] {
+  const declaredByCandidate = new Set(candidate.objectTypes.map((t) => t.name));
+  const declarer = new Map<string, string>();
+  for (const family of others) {
+    if (family.id === candidateId) continue;
+    for (const t of family.definition.objectTypes) {
+      if (!declarer.has(t.name)) declarer.set(t.name, family.id);
+    }
+  }
+  const seen = new Set<string>();
+  const outside: OntologyLinkEndpointOutsideScope[] = [];
+  for (const linkType of candidate.linkTypes) {
+    for (const end of ['domain', 'range'] as const) {
+      const objectType = linkType[end];
+      if (objectType === '*' || declaredByCandidate.has(objectType)) continue;
+      const declaredBy = declarer.get(objectType);
+      if (declaredBy === undefined || scope.familyIds.has(declaredBy)) continue;
+      const key = JSON.stringify([linkType.name, end, objectType]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      outside.push({ linkType: linkType.name, end, objectType, declaredBy });
+    }
+  }
+  return outside;
+}
+
 /** Every family's latest published version in `workspaceId` — the same "latest published per
  *  family" rule `loadPublishedLinkTypes` reads writes against. */
 async function loadPublishedHeads(
@@ -249,29 +348,6 @@ async function loadPublishedHeads(
   return result.rows;
 }
 
-/** The stable name of each family in `ontologyIds` that a ChangePlan item installed — the last
- *  such item's `target.family` (`application/change-plan/ontology-item.ts`); a family no item
- *  installed is absent. Read only to name the families in an `OntologyLinkEndpointError`, on the
- *  refusing path: the ChangePlan record is the only place a family's name is kept. */
-async function loadOntologyFamilyNames(
-  client: PoolClient,
-  workspaceId: string,
-  ontologyIds: readonly string[],
-): Promise<ReadonlyMap<string, string>> {
-  if (ontologyIds.length === 0) return new Map();
-  const result = await client.query<{ id: string; family: string }>(
-    `select distinct on (target->>'ontologyId') target->>'ontologyId' as id, target->>'family' as family
-       from change_items
-      where workspace_id = $1
-        and kind = 'ontology_version'
-        and target->>'ontologyId' = any($2::text[])
-        and target->>'family' is not null
-      order by target->>'ontologyId', created_at desc`,
-    [workspaceId, [...ontologyIds]],
-  );
-  return new Map(result.rows.map((row) => [row.id, row.family] as const));
-}
-
 /** What a retired family declares once its last version is gone: nothing. Only ever compared,
  *  never stored (a stored definition has at least one ObjectType and LinkType). */
 const EMPTY_DEFINITION: OntologyDefinition = { objectTypes: [], linkTypes: [] };
@@ -289,19 +365,23 @@ export interface PendingOntologyHead {
  *  - `OntologyNamespaceConflictError` — an ObjectType or ActionType name would get a second owner
  *    (I-P1);
  *  - `OntologyLinkEndpointError` — a LinkType end would name an ObjectType no published family
- *    declares (legacy 303).
+ *    declares (legacy 303);
+ *  - `OntologyLinkEndpointOutsideRequiresError` — with `scope` (a pack's install, legacy 705): one
+ *    of the candidate's LinkType ends names an ObjectType of a family outside it.
  *  Compared against every family's latest published version. `pending`: what a dry run's earlier
  *  steps will have done by the time this one runs (a ChangePlan segment's earlier items, a
  *  rollback's items undone before this one). The LinkType-end check counts it, so a segment whose
  *  second family names a type its first one adds is not refused at review, nor a rollback that
  *  retires the referring family before the one it names; I-P1 keeps comparing with what is
- *  published now, as before. Caller holds `lockOntologyNamespace`. */
+ *  published now, as before. Legacy 705's check counts it too. Caller holds
+ *  `lockOntologyNamespace`. */
 export async function assertOntologyPublishable(
   client: PoolClient,
   workspaceId: string,
   candidateId: string | null,
   candidate: OntologyDefinition | null,
   pending: readonly PendingOntologyHead[] = [],
+  scope?: OntologyLinkEndpointScope,
 ): Promise<void> {
   const heads = await loadPublishedHeads(client, workspaceId);
   const next = candidate ?? EMPTY_DEFINITION;
@@ -336,5 +416,16 @@ export async function assertOntologyPublishable(
       undeclared: problems.undeclared.map(named),
       orphaned: problems.orphaned.map(named),
     });
+  }
+
+  if (scope === undefined || candidate === null) return;
+  const outside = findOntologyLinkEndpointsOutsideScope(candidateId, next, others, scope);
+  if (outside.length > 0) {
+    const names = await loadOntologyFamilyNames(client, workspaceId, [
+      ...new Set(outside.map((e) => e.declaredBy)),
+    ]);
+    throw new OntologyLinkEndpointOutsideRequiresError(
+      outside.map((e) => ({ ...e, family: names.get(e.declaredBy) ?? null, pack: null })),
+    );
   }
 }

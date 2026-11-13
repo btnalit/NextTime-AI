@@ -72,18 +72,31 @@ export type {
 } from './meta-objects.js';
 
 export {
+  OntologyFamilyNameError,
+  assertOntologyFamilyName,
+  loadOntologyFamilyId,
+  loadOntologyFamilyNames,
+  nameOntologyFamily,
+} from './families.js';
+
+export {
   OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
   assertOntologyPublishable,
   findOntologyLinkEndpointProblems,
+  findOntologyLinkEndpointsOutsideScope,
   findOntologyNamespaceConflicts,
   lockOntologyNamespace,
 } from './namespace.js';
 export type {
+  NamedOntologyLinkEndpointOutsideScope,
   NamedOntologyLinkEndpointProblem,
   OntologyLinkEnd,
+  OntologyLinkEndpointOutsideScope,
   OntologyLinkEndpointProblem,
   OntologyLinkEndpointProblems,
+  OntologyLinkEndpointScope,
   OntologyNamespaceConflict,
   OntologyNamespaceKind,
   PendingOntologyHead,

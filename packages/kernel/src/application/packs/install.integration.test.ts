@@ -126,7 +126,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const entry = requirePack(registry, name);
       const target = entry.versions.find((v) => v.version === version);
       if (!target) throw new Error(`fixture: ${name} has no version ${version}`);
-      const segment = packSegment(entry, target);
+      const segment = packSegment(registry, entry, target);
       await inWorkspace(ws, async (client) => {
         const plan = await planWorkspaceSegment(client, ws.workspaceId, segment);
         await applyWorkspaceSegment(client, ws.workspaceId, {

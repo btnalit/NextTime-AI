@@ -70,7 +70,13 @@ import {
  *     behind that no version of its pack describes any more);
  *   - every domain pack a component names exists in the ontology library and parses;
  *   - a pack a version requires (`requires.packs`, S11 P1-F) is in this deployment with the version
- *     it names, and no pack requires its way back to itself, through any of its versions.
+ *     it names, and no pack requires its way back to itself, through any of its versions;
+ *   - legacy 705 (L1): each LinkType end of a version's ontology components is `"*"` or an
+ *     ObjectType of the platform-meta ontology (the library's `platform-meta.yaml`), of the
+ *     version's own components, or of a pack it requires directly — declared by that pack's
+ *     `minVersion` and by every later version of it (a later version that drops the type would
+ *     leave the end naming nothing once installed). Checked again, authoritatively, when the pack
+ *     is installed (`install.ts`, the families as the workspace has them).
  *
  * A Skill's or Worker's family id is derived from the pack and the name (`derivePackComponentId`),
  * the same in every workspace — as an ontology family's is from its name (`deriveOntologyPackId`).
@@ -88,9 +94,12 @@ import {
  * its own (a manifest, a component file, versions, a file that is a symbolic link or sits under one
  * — `confinedDiskPackFiles`), or one across packs (a name or a component
  * the image's packs have, a component another extra pack publishes too, a pack it requires that
- * is not here, a cycle) — is left out with the reason (`readPackRegistry`'s `skipped`, logged and
- * shown to platform administrators by `extra_packs_status`), and so is every extra pack requiring
- * one left out. Never the whole registry: one mistyped file would otherwise take listing,
+ * is not here, a cycle, a LinkType end its required packs' `minVersion` does not declare) — is
+ * left out with the reason (`readPackRegistry`'s `skipped`, logged and shown to platform
+ * administrators by `extra_packs_status`), and so is every extra pack requiring one left out. A
+ * LinkType end only a later version of a required pack no longer declares does not leave it out —
+ * that is the other pack's change, not this one's mistake — but is a warning beside it
+ * (`warnings`): installing that combination is refused by the install's own check. Never the whole registry: one mistyped file would otherwise take listing,
  * installing, verifying, proposing and creating workspaces down with it. Two extra packs that
  * clash are both left out — neither is the one meant. The image's packs never require an extra
  * one (they are checked without them).
@@ -695,8 +704,18 @@ export interface PackRegistryRead {
   readonly extraPacksDir: string | null;
   /** Extra packs left out, in name order. */
   readonly skipped: readonly SkippedExtraPack[];
+  /** Legacy 705: extra packs read, with what may not install beside a later version of a pack
+   *  they require — in name order, each pack once with its reasons. */
+  readonly warnings: readonly ExtraPackWarning[];
   /** The extra packs directory is there but cannot be read (no extra pack is); `null` otherwise. */
   readonly extraPacksUnreadable: string | null;
+}
+
+/** Legacy 705: an extra pack read, and why it may not install beside a later version of a pack it
+ *  requires (see this module's comment). */
+export interface ExtraPackWarning {
+  readonly name: string;
+  readonly reasons: readonly string[];
 }
 
 /** Reads every pack: the image's, which must keep every rule (see this module's comment), and the
@@ -729,16 +748,25 @@ export async function readPackRegistry(
     builtin.set(name, entry);
   }
   assertPackRequirements(builtin);
+  const metaTypes = await loadPlatformMetaObjectTypes(ontologyDir);
+  assertPackLinkEndpoints(builtin, metaTypes);
   if (extraPacksDir === null) {
-    return { registry: builtin, extraPacksDir, skipped: [], extraPacksUnreadable: null };
+    return {
+      registry: builtin,
+      extraPacksDir,
+      skipped: [],
+      warnings: [],
+      extraPacksUnreadable: null,
+    };
   }
-  const extra = await readExtraPacks(extraPacksDir, builtin, componentOwner);
+  const extra = await readExtraPacks(extraPacksDir, builtin, componentOwner, metaTypes);
   const registry = new Map<string, PackEntry>(builtin);
   for (const entry of extra.admitted) registry.set(entry.name, entry);
   return {
     registry,
     extraPacksDir,
     skipped: extra.skipped,
+    warnings: extra.warnings,
     extraPacksUnreadable: extra.unreadable,
   };
 }
@@ -750,6 +778,7 @@ const SKIPPED_REASON_MAX = 2_000;
 interface ExtraPacks {
   readonly admitted: readonly PackEntry[];
   readonly skipped: readonly SkippedExtraPack[];
+  readonly warnings: readonly ExtraPackWarning[];
   readonly unreadable: string | null;
 }
 
@@ -759,6 +788,7 @@ async function readExtraPacks(
   dir: string,
   builtin: PackRegistry,
   builtinOwner: ReadonlyMap<string, string>,
+  metaTypes: ReadonlySet<string>,
 ): Promise<ExtraPacks> {
   // A file is named by its path under `dir`, as the maintainer who put it there sees it; a parser's
   // message may quote the file, so a value that looks like a credential is masked (`shownFreeText`)
@@ -773,9 +803,9 @@ async function readExtraPacks(
   } catch (err) {
     // No directory: the deployment has no extra packs (one set up before AA5d).
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { admitted: [], skipped: [], unreadable: null };
+      return { admitted: [], skipped: [], warnings: [], unreadable: null };
     }
-    return { admitted: [], skipped: [], unreadable: local(String(err)) };
+    return { admitted: [], skipped: [], warnings: [], unreadable: local(String(err)) };
   }
   const skipped = new Map<string, string>();
   const loaded = new Map<string, PackEntry>();
@@ -816,15 +846,20 @@ async function readExtraPacks(
       );
     }
   }
-  // Packs required: here (the image's or a kept extra one) with the version named, no cycle — until
-  // nothing more is left out, so whatever requires a pack left out is left out too.
+  // Packs required: here (the image's or a kept extra one) with the version named, no cycle, and
+  // (legacy 705) every LinkType end declared where it may be — until nothing more is left out, so
+  // whatever requires a pack left out is left out too.
+  const find = (name: string): PackEntry | undefined => {
+    const target = builtin.get(name) ?? loaded.get(name);
+    return target === undefined || skipped.has(name) ? undefined : target;
+  };
   for (;;) {
     const kept = [...loaded.values()].filter((entry) => !skipped.has(entry.name));
     const unmet = kept.flatMap((entry) => {
-      const reason = unmetRequirement(entry, (name) => {
-        const target = builtin.get(name) ?? loaded.get(name);
-        return target === undefined || skipped.has(name) ? undefined : target;
-      });
+      const reason =
+        unmetRequirement(entry, find) ??
+        linkEndpointProblems(entry, find, metaTypes).atMinimum[0] ??
+        null;
       return reason === null ? [] : [[entry.name, reason] as const];
     });
     for (const [name, reason] of unmet) skipped.set(name, reason);
@@ -835,9 +870,17 @@ async function readExtraPacks(
       skipped.set(name, `requires its way back to itself: ${cycle.join(' → ')}`);
     }
   }
+  const admitted = [...loaded.values()].filter((entry) => !skipped.has(entry.name));
   return {
-    admitted: [...loaded.values()].filter((entry) => !skipped.has(entry.name)),
+    admitted,
     skipped: [...skipped].map(([name, reason]) => ({ name, reason })).sort(byName),
+    warnings: admitted
+      .map((entry) => ({
+        name: entry.name,
+        reasons: linkEndpointProblems(entry, find, metaTypes).later,
+      }))
+      .filter((warning) => warning.reasons.length > 0)
+      .sort(byName),
     unreadable: null,
   };
 }
@@ -902,6 +945,104 @@ function requirementCycle(entries: readonly PackEntry[]): readonly string[] | nu
   return null;
 }
 
+/** Legacy 705: the ObjectType names of the platform-meta ontology — the library's
+ *  `platform-meta.yaml`, which every workspace has — that any pack's LinkType end may name. None
+ *  when the library has no such file (a test's own library). */
+async function loadPlatformMetaObjectTypes(ontologyDir: string): Promise<ReadonlySet<string>> {
+  const file = path.join(ontologyDir, 'platform-meta.yaml');
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+    throw err;
+  }
+  return new Set(parseOntologyDefinition(text, file).objectTypes.map((type) => type.name));
+}
+
+/** The ObjectType names a version's ontology components declare. */
+function declaredObjectTypes(version: PackVersion): ReadonlySet<string> {
+  return new Set(
+    version.components.flatMap((component) =>
+      component.kind === 'ontology'
+        ? component.definition.objectTypes.map((type) => type.name)
+        : [],
+    ),
+  );
+}
+
+/**
+ * Legacy 705 (L1) for `entry`, against the packs `find` gives (see this module's comment): each
+ * LinkType end of each version's ontology components that is not `"*"`, a platform-meta ObjectType
+ * (`metaTypes`) or one of the version's own. `atMinimum`: an end no required pack declares at the
+ * version it names. `later`: an end a required pack declares there but a later version of it no
+ * longer does (and no other required pack declares at every version it allows). Each end once.
+ */
+function linkEndpointProblems(
+  entry: PackEntry,
+  find: (name: string) => PackEntry | undefined,
+  metaTypes: ReadonlySet<string>,
+): { readonly atMinimum: readonly string[]; readonly later: readonly string[] } {
+  const atMinimum: string[] = [];
+  const later: string[] = [];
+  for (const version of entry.versions) {
+    const own = declaredObjectTypes(version);
+    const required = version.requiredPacks.flatMap((requirement) => {
+      const target = find(requirement.name);
+      return target === undefined
+        ? []
+        : [{ name: requirement.name, allowed: target.versions.slice(requirement.minVersion - 1) }];
+    });
+    const seen = new Set<string>();
+    for (const component of version.components) {
+      if (component.kind !== 'ontology') continue;
+      for (const linkType of component.definition.linkTypes) {
+        for (const end of ['domain', 'range'] as const) {
+          const objectType = linkType[end];
+          if (objectType === '*' || own.has(objectType) || metaTypes.has(objectType)) continue;
+          const key = JSON.stringify([linkType.name, end, objectType]);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const where = `version ${version.version}: LinkType "${linkType.name}" ${end} "${objectType}"`;
+          const covering = required.filter((pack) => {
+            const minimum = pack.allowed[0];
+            return minimum !== undefined && declaredObjectTypes(minimum).has(objectType);
+          });
+          if (covering.length === 0) {
+            atMinimum.push(
+              `${where} names an ObjectType neither the platform-meta ontology, this version nor a pack it requires (at the version it names) declares; require the pack that declares it in requires.packs`,
+            );
+            continue;
+          }
+          const always = covering.some((pack) =>
+            pack.allowed.every((allowed) => declaredObjectTypes(allowed).has(objectType)),
+          );
+          if (always) continue;
+          const [first] = covering;
+          if (!first) continue;
+          const dropping = first.allowed
+            .filter((allowed) => !declaredObjectTypes(allowed).has(objectType))
+            .map((allowed) => `v${allowed.version}`);
+          later.push(
+            `${where} names an ObjectType pack "${first.name}" declares at the version it requires but not at ${dropping.join(', ')}; it cannot be installed beside ${dropping.length === 1 ? 'that version' : 'those versions'}`,
+          );
+        }
+      }
+    }
+  }
+  return { atMinimum, later };
+}
+
+/** Legacy 705 (L1) for the image's packs: every LinkType end declared where it may be, at every
+ *  version of a required pack it allows (see this module's comment) — a deployment bug otherwise. */
+function assertPackLinkEndpoints(registry: PackRegistry, metaTypes: ReadonlySet<string>): void {
+  for (const entry of registry.values()) {
+    const problems = linkEndpointProblems(entry, (name) => registry.get(name), metaTypes);
+    const [first] = [...problems.atMinimum, ...problems.later];
+    if (first !== undefined) throw new PackRegistryError(`packs/${entry.name}: ${first}`);
+  }
+}
+
 /** Each extra pack left out, logged once per reason by this process (the registry is read on
  *  every call). */
 const reportedSkips = new Set<string>();
@@ -923,6 +1064,15 @@ function reportSkipped(read: PackRegistryRead): void {
     if (reportedSkips.has(key)) continue;
     reportedSkips.add(key);
     console.warn(JSON.stringify({ event: 'extra_pack_skipped', ...line }));
+  }
+  // Legacy 705: read, but not installable beside a later version of a pack it requires.
+  for (const warning of read.warnings) {
+    for (const reason of warning.reasons) {
+      const key = `warning\u0000${warning.name}\u0000${reason}`;
+      if (reportedSkips.has(key)) continue;
+      reportedSkips.add(key);
+      console.warn(JSON.stringify({ event: 'extra_pack_warning', pack: warning.name, reason }));
+    }
   }
 }
 
