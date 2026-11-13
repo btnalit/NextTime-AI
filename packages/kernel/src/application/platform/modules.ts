@@ -325,7 +325,14 @@ export async function installOrUpgradeModule(
   input: InstallOrUpgradeModuleInput,
 ): Promise<WorkspaceModuleState> {
   const entry = requireModule(registry, input.name);
-  const install = await planPackInstall(client, workspaceId, entry.pack);
+  // A module requires no other pack (`moduleRegistryOf`): its own entry is all legacy 705's scope
+  // needs.
+  const install = await planPackInstall(
+    client,
+    workspaceId,
+    new Map([[entry.pack.name, entry.pack]]),
+    entry.pack,
+  );
   const { current, plan, target } = install;
   assertReviewedVersion(
     current.status === 'not_installed' ? 'install_module' : 'upgrade_module',

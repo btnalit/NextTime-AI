@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DraftOrigin } from '@nexttime/shared';
+import { type DraftOrigin, PLATFORM_META_ONTOLOGY_FAMILY } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { assertOntologyFamilyName, nameOntologyFamily } from './families.js';
 import { assertOntologyPublishable, lockOntologyNamespace } from './namespace.js';
 import { OntologyDefinitionParseError, parseOntologyDefinition } from './schema.js';
 import type { OntologyDefinition } from './schema.js';
@@ -149,6 +150,10 @@ export interface PublishOntologyVersionInput {
   readonly principalId: string;
   /** S11 AA3a (legacy 293): who wrote the definition (`DRAFT_ORIGIN_VALUES`). */
   readonly origin: DraftOrigin;
+  /** Legacy 706: the family's name, recorded with this publish (`families.ts`,
+   *  `ontology_families`) when the family has none yet — never renamed (F1). Omit for a family
+   *  that has no name (a console draft's). */
+  readonly family?: string;
 }
 
 /** R-60: serializes every publish into one ontology family (`registry.ts`'s `publishOntologyDraft`
@@ -201,6 +206,9 @@ export async function publishOntologyVersion(
   );
   const row = result.rows[0];
   if (!row) throw new Error('publishOntologyVersion: INSERT ... RETURNING produced no row');
+  if (input.family !== undefined) {
+    await nameOntologyFamily(client, workspaceId, row.id, input.family);
+  }
   return mapOntologyVersionRow(row);
 }
 
@@ -291,11 +299,13 @@ export async function seedPlatformMetaOntology(
 ): Promise<OntologyVersionRow> {
   const filePath = path.join(dir, 'platform-meta.yaml');
   const definition = await loadOntologyDefinitionFile(filePath);
-  // S11 AA3a: the platform's own file, written with no caller.
+  // S11 AA3a: the platform's own file, written with no caller. Legacy 706: named `platform-meta`
+  // (its id stays a fresh one per workspace; the name is reserved, F3).
   return publishOntologyVersion(client, workspaceId, {
     definition,
     principalId,
     origin: 'platform',
+    family: PLATFORM_META_ONTOLOGY_FAMILY,
   });
 }
 
@@ -364,6 +374,9 @@ export async function publishOntologyDomainPack(
   workspaceId: string,
   input: PublishOntologyDomainPackInput,
 ): Promise<OntologyVersionRow> {
+  // Legacy 706: the pack name is the family's name (F2), so it takes a family name's rules and is
+  // never the platform-meta ontology's (F3).
+  assertOntologyFamilyName(input.packName);
   const dir = input.dir ?? resolveOntologyDir();
   const fileName = input.fileName ?? `${input.packName}.yaml`;
   const definition = await loadOntologyDefinitionFile(path.join(dir, fileName));
@@ -374,5 +387,6 @@ export async function publishOntologyDomainPack(
     principalId: input.principalId,
     // S11 AA3a: an operator publishing a reviewed file from the CLI.
     origin: 'human',
+    family: input.packName,
   });
 }

@@ -317,11 +317,17 @@ export const listPacksHandler: CapabilityHandler = async (client, workspaceId) =
  *  now (`readPackRegistry`). Reads no table. */
 export const extraPacksStatusHandler: CapabilityHandler = async () => {
   const read = await readPackRegistry();
+  const warnings = new Map(read.warnings.map((warning) => [warning.name, warning.reasons]));
   const packs = [...read.registry.values()]
     .filter((entry) => entry.source === 'extra')
     .map((entry) => {
       const latest = latestPackVersion(entry);
-      return { name: entry.name, summary: latest.summary, latestVersion: latest.version };
+      return {
+        name: entry.name,
+        summary: latest.summary,
+        latestVersion: latest.version,
+        warnings: [...(warnings.get(entry.name) ?? [])],
+      };
     })
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const result: ExtraPacksWire = {

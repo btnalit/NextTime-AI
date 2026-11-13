@@ -114,6 +114,7 @@ import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
   OntologyViolationError,
   PasswordChangeRequiredError,
@@ -794,6 +795,26 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       details: {
         undeclared: err.problems.undeclared.map((p) => ({ ...p })),
         orphaned: err.problems.orphaned.map((p) => ({ ...p })),
+      },
+    };
+  }
+  // Legacy 705: a pack's LinkType end names an ObjectType of a family the pack does not require —
+  // `preview_pack_install`, `install_pack`, `install_module`, `upgrade_module`. Each end says the
+  // family that declares the type and, when the deployment ships it, the pack to require.
+  // Nothing was published.
+  if (err instanceof OntologyLinkEndpointOutsideRequiresError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        ends: err.ends.map((e) => ({
+          linkType: e.linkType,
+          end: e.end,
+          objectType: e.objectType,
+          family: e.family,
+          pack: e.pack,
+        })),
       },
     };
   }

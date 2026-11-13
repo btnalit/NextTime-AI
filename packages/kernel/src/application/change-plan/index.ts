@@ -110,6 +110,7 @@ export {
   inspectChangeSegment,
 } from './inspect.js';
 export {
+  type OntologyItemLinkEndpointScope,
   type OntologyTypeChanges,
   type OntologyTypeNames,
   type OntologyVersionIntent,

@@ -45,7 +45,7 @@ describe('ExtraPacksSection', () => {
   it('lists the packs read and every one left out with its rule; Read again reads anew', async () => {
     const http = httpReturning(
       status({
-        packs: [{ name: 'ticket-desk', summary: 'Ticket triage.', latestVersion: 1 }],
+        packs: [{ name: 'ticket-desk', summary: 'Ticket triage.', latestVersion: 1, warnings: [] }],
         skipped: [
           {
             name: 'org-broken',
@@ -55,8 +55,8 @@ describe('ExtraPacksSection', () => {
       }),
       status({
         packs: [
-          { name: 'org-broken', summary: 'Fixed.', latestVersion: 1 },
-          { name: 'ticket-desk', summary: 'Ticket triage.', latestVersion: 1 },
+          { name: 'org-broken', summary: 'Fixed.', latestVersion: 1, warnings: [] },
+          { name: 'ticket-desk', summary: 'Ticket triage.', latestVersion: 1, warnings: [] },
         ],
       }),
     );
@@ -73,6 +73,35 @@ describe('ExtraPacksSection', () => {
     await waitFor(() => expect(screen.queryByTestId('extra-packs-skipped')).toBeNull());
     expect(screen.getByTestId('extra-pack-org-broken')).toBeTruthy();
     expect(http.call).toHaveBeenCalledTimes(2);
+  });
+
+  it('legacy 705: a pack read with a warning says which later versions it cannot sit beside', async () => {
+    const reason =
+      'version 1: LinkType "ticket_on_host" range "Host" names an ObjectType pack "ops-hosts" declares at the version it requires but not at v3; it cannot be installed beside that version';
+    render(
+      <ExtraPacksSection
+        http={httpReturning(
+          status({
+            packs: [
+              { name: 'clean-pack', summary: 'Fine.', latestVersion: 1, warnings: [] },
+              {
+                name: 'ticket-desk',
+                summary: 'Ticket triage.',
+                latestVersion: 1,
+                warnings: [reason],
+              },
+            ],
+          }),
+        )}
+      />,
+    );
+    const warning = await screen.findByTestId('extra-pack-warnings-ticket-desk');
+    expect(warning.textContent).toContain('不能和它依赖的包的某些更高版本一起装');
+    expect(warning.textContent).toContain(reason);
+    // The pack is still listed as read, and a clean pack carries no warning.
+    expect(screen.getByTestId('extra-pack-ticket-desk').textContent).toContain('Ticket triage.');
+    expect(screen.queryByTestId('extra-pack-warnings-clean-pack')).toBeNull();
+    expect(screen.queryByTestId('extra-packs-skipped')).toBeNull();
   });
 
   it('an empty directory, and one that cannot be read', async () => {

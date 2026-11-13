@@ -172,6 +172,7 @@ const PURGE_COUNT_LABELS = {
   evalTrials: { zh: '评测试跑', en: 'Evaluation trials' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
+  ontologyFamilies: { zh: '本体的名字', en: 'Ontology family names' },
   ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },
   outbox: { zh: '待投递事件', en: 'Outbox events' },
   pendingContextItems: { zh: '待告知智能体的事项', en: 'Pending context items' },

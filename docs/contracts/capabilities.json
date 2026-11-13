@@ -15576,12 +15576,19 @@
               },
               "summary": {
                 "type": "string"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "required": [
               "name",
               "summary",
-              "latestVersion"
+              "latestVersion",
+              "warnings"
             ],
             "type": "object"
           },

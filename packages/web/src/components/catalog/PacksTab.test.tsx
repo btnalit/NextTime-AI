@@ -535,6 +535,55 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('legacy 705: a link type ending in an ontology the pack does not build on names the end and sends the owner to an administrator', async () => {
+    const refuse = (details?: Record<string, unknown>) =>
+      scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+        preview_pack_install: () =>
+          Promise.reject(
+            new HttpError(
+              'capability_error',
+              "a pack's LinkType ends name ObjectTypes of the platform-meta ontology, of its own families or of the packs it requires",
+              'ontology_link_endpoint_outside_requires',
+              details,
+            ),
+          ),
+      });
+    renderTab(
+      refuse({
+        ends: [
+          {
+            linkType: 'ticket_on_host',
+            end: 'range',
+            objectType: 'Host',
+            family: 'ops-hosts',
+            pack: 'ops-hosts-pack',
+          },
+        ],
+      }),
+      'ops-assets',
+    );
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toContain(
+      '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型：关系类型 ticket_on_host 的 range 是 Host，由能力包 ops-hosts-pack 的本体 ops-hosts 声明。',
+    );
+    expect(banner.textContent).toContain(
+      '在工作区里改不了（要让它依赖 ops-hosts-pack）；请平台管理员处理',
+    );
+    expect(banner.textContent).toContain('ontology_link_endpoint_outside_requires');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+
+    // Without details it says it in general.
+    cleanup();
+    renderTab(refuse(), 'ops-assets');
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    expect((await screen.findByTestId('catalog-pack-preview-error')).textContent).toMatch(
+      /这要改能力包本身，在工作区里改不了/,
+    );
+  });
+
   it('someone’s pending draft of a Skill the pack upgrades reads as its own sentence in the review (S11 W1a E2-0)', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
