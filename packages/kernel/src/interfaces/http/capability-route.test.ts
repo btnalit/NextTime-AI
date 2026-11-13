@@ -576,6 +576,31 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(mapped.message).toContain('bad key [redacted]');
   });
 
+  // Legacy 700: the gate's endpoint is not an allowed target (since legacy 413, a plain http://
+  // URL to the public internet) — nothing was sent, and only the gate's set-up can change that.
+  it('passes the client’s target_refused through as 424 with the rule in details.reason', () => {
+    const message =
+      'gatekeeper client: gate/observe not sent — gate endpoint "gate.owner.example" is refused: it is a plain http:// URL to an address on the public internet';
+    expect(
+      mapCapabilityError(
+        new GatekeeperClientError(message, {
+          code: 'target_refused',
+          status: 0,
+          targetRefusal: 'plaintext-public',
+        }),
+      ),
+    ).toEqual({
+      status: 424,
+      code: 'target_refused',
+      message,
+      details: { reason: 'plaintext-public' },
+    });
+    // A gate answering with that code is still the gate's error.
+    expect(
+      mapCapabilityError(new GatekeeperClientError('m', { code: 'target_refused', status: 424 })),
+    ).toMatchObject({ status: 502, code: 'gatekeeper_error' });
+  });
+
   it.each([
     // Between the kernel and the gate, not the caller's to fix.
     ['unauthorized', 401],

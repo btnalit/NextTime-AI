@@ -959,9 +959,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof GatekeeperClientError) {
     // A refusal the caller can act on keeps the gate's own status and code (`gateRefusalOf`) —
-    // 403 `operation_refused` used to arrive as 502 and read as an outage worth retrying.
+    // 403 `operation_refused` used to arrive as 502 and read as an outage worth retrying; legacy
+    // 700: so did 424 `target_refused` (the gate's endpoint is not an allowed target), with the
+    // rule in `details.reason`.
     const refusal = gateRefusalOf(err);
-    if (refusal) return { status: refusal.status, code: refusal.code, message: err.message };
+    if (refusal) {
+      return {
+        status: refusal.status,
+        code: refusal.code,
+        message: err.message,
+        ...(refusal.details !== undefined ? { details: refusal.details } : {}),
+      };
+    }
     return { status: 502, code: 'gatekeeper_error', message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {

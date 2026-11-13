@@ -20,6 +20,7 @@ import {
   type GateAbsence,
   GateAbsenceSchema,
   type Operation,
+  type OutboundTargetRefusalReason,
   correlationHeaders,
   isDeclaredAbsence,
   storableText,
@@ -119,13 +120,25 @@ export class GatekeeperClientError extends Error {
   readonly code: string;
   readonly status: number;
   readonly call?: GateCallRefusal;
+  /** Legacy 700: which outbound-target rule refused the gate's endpoint — on `target_refused`
+   *  only, which the client raises itself before anything is sent. */
+  readonly targetRefusal?: OutboundTargetRefusalReason;
 
-  constructor(message: string, options: { code: string; status: number; call?: GateCallRefusal }) {
+  constructor(
+    message: string,
+    options: {
+      code: string;
+      status: number;
+      call?: GateCallRefusal;
+      targetRefusal?: OutboundTargetRefusalReason;
+    },
+  ) {
     super(message);
     this.name = 'GatekeeperClientError';
     this.code = options.code;
     this.status = options.status;
     if (options.call !== undefined) this.call = options.call;
+    if (options.targetRefusal !== undefined) this.targetRefusal = options.targetRefusal;
   }
 }
 
@@ -151,10 +164,39 @@ const GATE_REFUSAL_STATUS: Readonly<Record<string, number>> = {
   credential_unavailable: 424,
 };
 
-/** `err` as a gate refusal to pass through (`GATE_REFUSAL_STATUS`), or `undefined`. */
-export function gateRefusalOf(
-  err: GatekeeperClientError,
-): { readonly status: number; readonly code: string } | undefined {
+/**
+ * Legacy 700: the client's own refusal a caller can act on, passed through like the gate's above.
+ * `target_refused` — the gate's endpoint is not a target the platform calls (`adapters/
+ * outbound-target`: since legacy 413, a plain `http://` URL to the public internet too), so nothing
+ * was sent. 424, as `credential_unavailable`: the call itself is fine, the gate's set-up is what
+ * stops it, and only the workspace (connect the gate again at an allowed address) or the operator
+ * (`NEXTTIME_CONNECTION_ALLOW_HOSTS`) can change that — retrying cannot. Only the client raises it,
+ * with status 0 (it never got an answer): a gate's answer carries the HTTP status it came with, so
+ * an owner-supplied gate cannot pass its own answer off as this.
+ */
+const CLIENT_REFUSAL_STATUS: Readonly<Record<string, number>> = {
+  target_refused: 424,
+};
+
+/** A refusal to pass through ({@link gateRefusalOf}): the status and code the caller gets, and —
+ *  for `target_refused` — the outbound-target rule (`details.reason` on the wire). */
+export interface GateRefusal {
+  readonly status: number;
+  readonly code: string;
+  readonly details?: { readonly reason: OutboundTargetRefusalReason };
+}
+
+/** `err` as a refusal to pass through (`GATE_REFUSAL_STATUS`, `CLIENT_REFUSAL_STATUS`), or
+ *  `undefined`. */
+export function gateRefusalOf(err: GatekeeperClientError): GateRefusal | undefined {
+  if (Object.hasOwn(CLIENT_REFUSAL_STATUS, err.code) && err.status === 0) {
+    const status = CLIENT_REFUSAL_STATUS[err.code] as number;
+    return {
+      status,
+      code: err.code,
+      ...(err.targetRefusal !== undefined ? { details: { reason: err.targetRefusal } } : {}),
+    };
+  }
   const status = Object.hasOwn(GATE_REFUSAL_STATUS, err.code)
     ? GATE_REFUSAL_STATUS[err.code]
     : undefined;
@@ -568,6 +610,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
         throw new GatekeeperClientError(`gatekeeper client: ${path} not sent — ${err.message}`, {
           code: 'target_refused',
           status: 0,
+          targetRefusal: err.reason,
         });
       }
     }

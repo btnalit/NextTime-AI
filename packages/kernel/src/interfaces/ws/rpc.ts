@@ -337,7 +337,8 @@ export const WS_ERROR_CODES = {
 } as const;
 
 /** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
- *  and 409 have one; 424 (no credential for this account) stays `UPSTREAM_ERROR`. */
+ *  and 409 have one; 424 (no credential for this account; legacy 700, the gate's endpoint not an
+ *  allowed target) stays `UPSTREAM_ERROR`, its message starting with the code. */
 const WS_CODE_FOR_GATE_REFUSAL_STATUS: Readonly<Record<number, number>> = {
   400: WS_ERROR_CODES.INVALID_PARAMS,
   403: WS_ERROR_CODES.FORBIDDEN,

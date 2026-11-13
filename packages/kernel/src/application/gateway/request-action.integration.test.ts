@@ -2772,6 +2772,70 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(JSON.stringify(row?.payload)).not.toContain('refused, nothing ran');
       });
 
+      it('legacy 700: refuses a call to a gate connected at http:// on the public internet — 424 target_refused with the rule, audited without the address, nothing sent', async () => {
+        // A gate connected before legacy 413 refused such an address at connect time. The address
+        // is in a documentation range (TEST-NET-3): a public address nothing answers at.
+        const plainHost = '203.0.113.10';
+        const plainGatekeeperId = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.connection',
+              principalId: ownerId,
+            });
+            const registered = await registerGatekeeper(client, workspaceId, {
+              name: 'k-plain-gate',
+              transportKind: 'http',
+              target: 'k-plain-system',
+              endpoint: `http://${plainHost}:8080`,
+              connectionSecretSalt: K_SALT,
+              activityId: activity.id,
+              registeredBy: { id: ownerId, kind: 'human' },
+            });
+            await importManifest(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              operations: [APPROVED_READ],
+              proposedBy: { id: ownerId, kind: 'human' },
+              activityId: activity.id,
+            });
+            await publishOperation(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              name: APPROVED_READ.name,
+            });
+            return registered.gatekeeperId;
+          },
+        );
+
+        await expect(
+          dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), 'observe_operation', {
+            gatekeeperId: plainGatekeeperId,
+            operation: APPROVED_READ.name,
+            params: {},
+          }),
+        ).rejects.toMatchObject({
+          code: 'target_refused',
+          status: 0,
+          targetRefusal: 'plaintext-public',
+        });
+
+        const audited = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            action: 'observe_operation',
+            resourceType: 'gatekeeper',
+            resourceId: plainGatekeeperId,
+          }),
+        );
+        const row = audited.find(
+          (entry) => (entry.payload as { outcome?: string }).outcome === 'refused',
+        );
+        expect(row?.payload).toMatchObject({
+          outcome: 'refused',
+          refusal: { code: 'target_refused', status: 424, reason: 'plaintext-public' },
+        });
+        expect(JSON.stringify(row?.payload)).not.toContain(plainHost);
+      });
+
       it('runs the definition a request was made against, not a revision published before it was approved', async () => {
         const requested = (await dispatchCapability(
           { pool },

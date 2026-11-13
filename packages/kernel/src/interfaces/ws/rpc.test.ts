@@ -78,6 +78,8 @@ describe('mapDispatchError — gate refusals (review of #532)', () => {
     ['operation_not_found', 404, WS_ERROR_CODES.NOT_FOUND],
     ['operation_definition_mismatch', 409, WS_ERROR_CODES.ILLEGAL_TRANSITION],
     ['credential_unavailable', 424, WS_ERROR_CODES.UPSTREAM_ERROR],
+    // Legacy 700: the client's own refusal (status 0) — WS has no 424, the code leads the message.
+    ['target_refused', 0, WS_ERROR_CODES.UPSTREAM_ERROR],
     ['transport_error', 502, WS_ERROR_CODES.UPSTREAM_ERROR],
     ['operation_refused', 401, WS_ERROR_CODES.UPSTREAM_ERROR],
   ])(
