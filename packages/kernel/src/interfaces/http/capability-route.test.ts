@@ -108,7 +108,7 @@ import {
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
-import { mapCapabilityError } from './capability-route.js';
+import { AUTHORITY_CHANGED_MESSAGE, mapCapabilityError } from './capability-route.js';
 
 /**
  * interfaces/http/capability-route.test: HTTP-level tests through Fastify `inject` (no real
@@ -758,13 +758,28 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.code).toBe('invalid_params');
   });
 
-  it('legacy 699: HandleIssuanceError with a code (session or parent revoked) → 401 unauthorized, message withheld', () => {
-    for (const code of ['session_revoked', 'parent_revoked'] as const) {
+  it('legacy 699 / 702: HandleIssuanceError with a code (session or parent revoked, Principal disabled) → 401 unauthorized, message withheld', () => {
+    for (const code of [
+      'session_revoked',
+      'parent_revoked',
+      'acting_principal_disabled',
+    ] as const) {
       const mapped = mapCapabilityError(
         new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
       );
       expect(mapped).toEqual({ status: 401, code: 'unauthorized', message: 'unauthorized' });
     }
+  });
+
+  it('legacy 714: authority_changed (role or user changed while the call ran) → 409 conflict to call again, naming nobody', () => {
+    const mapped = mapCapabilityError(
+      new HandleIssuanceError(
+        'the Principal "p-1" is "member" now, not "owner" as this Handle was computed for',
+        'authority_changed',
+      ),
+    );
+    expect(mapped).toEqual({ status: 409, code: 'conflict', message: AUTHORITY_CHANGED_MESSAGE });
+    expect(mapped.message).not.toContain('p-1');
   });
 
   it('review fix F10: TaskRuntimeNotConfiguredError (invoke_worker) → 503 service_unavailable, not 500', () => {

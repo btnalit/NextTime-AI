@@ -290,6 +290,17 @@ interface ErrorMapping {
  * echoed back to the caller; it is still available server-side via the `outcome`/error passed to
  * the structured log below (never persisted with credentials, see log() call).
  */
+/** Legacy 714: `issueHandle` refused because the caller's role or user changed while the call
+ *  ran (`HandleIssuanceError` code `authority_changed`) — a conflict to retry, not a lost
+ *  credential. Shared with the WS mapping's message (`interfaces/ws/rpc.ts`). */
+export const AUTHORITY_CHANGED_MESSAGE =
+  'authority_changed: the role or user this call was authorized under changed while it ran; call again';
+const AUTHORITY_CHANGED_CONFLICT: ErrorMapping = {
+  status: 409,
+  code: 'conflict',
+  message: AUTHORITY_CHANGED_MESSAGE,
+};
+
 export function mapCapabilityError(err: unknown, capability = 'create_connection'): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
@@ -1037,9 +1048,14 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // request, same 400 bucket every other Handle-mint failure mode above already uses.
   if (err instanceof HandleIssuanceError) {
     // Legacy 699: the caller's session or the Handle it attenuates from was revoked while the call
-    // ran — its credential is gone, the same generic 401 as a revoked Handle. Legacy 702's codes
-    // (`acting_principal_disabled`, `authority_changed`) take the same 401: the Principal, their
-    // user or workspace was disabled, or their role or user changed, while the call ran.
+    // ran — its credential is gone, the same generic 401 as a revoked Handle. Legacy 702's
+    // `acting_principal_disabled` takes the same 401: the Principal, their user or workspace was
+    // disabled while the call ran.
+    // Legacy 714: `authority_changed` is not a lost credential — the Principal's role or user
+    // changed while the call ran, and their credential is still good (a 401 would send the console
+    // back to sign-in). A 409: calling again computes the Handle from what holds now, or meets a
+    // 401 if that change also ended the credential. The message names nobody.
+    if (err.code === 'authority_changed') return AUTHORITY_CHANGED_CONFLICT;
     if (err.code !== undefined)
       return { status: 401, code: 'unauthorized', message: 'unauthorized' };
     return { status: 400, code: 'invalid_params', message: err.message };

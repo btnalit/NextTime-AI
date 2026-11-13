@@ -211,7 +211,10 @@ import {
   RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
-import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
+import {
+  AUTHORITY_CHANGED_MESSAGE,
+  isPgInvalidTextRepresentation,
+} from '../http/capability-route.js';
 
 /**
  * interfaces/ws/rpc: JSON-RPC 2.0 message shapes and error-code mapping for `/ws` (design doc
@@ -449,8 +452,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // Review fix 2026-09 (code-review finding F10) — WS equivalents of capability-route.ts's own
   // new mappings (see that file's comment on these same two classes).
   if (err instanceof HandleIssuanceError) {
-    // Legacy 699 / 702: mirrors HTTP — a revoked session or parent, a disabled authority or a
-    // changed role or user is a 401, not a bad request.
+    // Legacy 699 / 702: mirrors HTTP — a revoked session or parent or a disabled authority is a
+    // 401, not a bad request. Legacy 714: a changed role or user is HTTP's 409, the state-conflict
+    // bucket here: call again.
+    if (err.code === 'authority_changed')
+      return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: AUTHORITY_CHANGED_MESSAGE };
     if (err.code !== undefined)
       return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
