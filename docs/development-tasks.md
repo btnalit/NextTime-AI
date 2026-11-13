@@ -3841,6 +3841,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   3. 撤回已过期的提议，落 expired，不落 withdrawn。
   4. 撤回先不加锁读一次，已决定的提议答 409 `gate_address_change_decided`，不再是 404。
   5. `list_gate_address_changes` 只在平台面；owner 用 `get_gatekeeper` 的 `pendingAddressChange` 看自己门上的提议。
+- 自接门换地址的控制台入口（#1158，遗留 701 关闭，e73487b）：owner 在系统与授权 → ⋯ →「更换地址」三步（签出新密钥、预览、提交），待审批时签发暂缓、可撤回，撤回立即生效；拒绝文案按 owner 口吻，同一扇门可从失败处恢复。平台管理员在集成 →「自己接入的门」批准或驳回。web-e2e 旅程 ⑬ 第 7–11 步覆盖这条路径，CI 栈的自接门多了别名 `ci-self-gate-moved`。UX 验收余项登记为遗留 715（P2）、716、717（P3）。
 - `EgressDenyListSchema`（`shared/src/worker-definition.ts`，两种 kind 共用）在列表层 transform 与校验：输出规范形式，拒绝通配符、`..`、URL、端口、路径、CIDR、空白、非 ASCII、IP 与空串，issue path 是 `egressDeny` 字段本身。内核刻意不在下发时归一化，`EGRESS_DENY_LABEL` 与下发列表保持一致，不触发容器重建。
 - 相邻发现列入遗留 148（ssh 非锚定正则）、149（子网与 IPv6 规则不一致）。
 
