@@ -2687,6 +2687,26 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：目标计划里可以加一条「独立评审」：写几条标准和通过线，平台在其他验收检查都过了以后起一个评审 Worker 打分，过不过由平台按分数算。只靠评审达成的目标记为「评审评估」，确认卡事先提示这一点。评审没过或判断不了，目标停下等请求人决定。控制台的计划编辑与逐条分数在 GO18b。
 - **回滚**：先让正在验收的目标的评审跑完（`select count(*) from tasks where purpose = 'review' and status in ('created', 'queued', 'running');` 为 0），再数一下已按评审达成的目标（`select count(*) from goal_runs where outcome_basis = 'reviewer_assessed';`）。之后只回退代码即可：上一版不认带评审的计划，遇到会把目标停下等人（`needs_decision`），已经达成的目标保留原样。要连 schema 一起撤，在内核停着时按两个迁移文件头的说明恢复 goal/0011 的两个函数，表与列可以留着。
 
+### 3.156 评审员只读、受目标预算约束；运行时契约升到 3（#1123，S11 GO18a 两条 P3，0.68.0 之后的下一版）
+
+无迁移，线上契约不变。worker-runtime 镜像与 worker-supervisor 随本版一起换，**运行时契约 2 → 3**。和 §3.48（遗留 422）是同一类边界：主机从 v0.63.0 升上来会跨过它。
+
+- **应用**：`apply-release.sh` 本身会构建或拉取 worker-runtime 并重打 tag，supervisor 和内核在同一次 `docker compose up -d` 里换，不要另跑 `build-images.sh`。worker-runtime 必须和 worker-supervisor 同版。
+- **窗口前只读核对**（结果记 `docs/private/`，写进给主机的升级提示词）：活动运行时镜像（`activeRuntimeImage`）是跟着 tag 走，还是被手动固定成了某个旧 tag。被固定的话，升级后**所有**入口和 Worker 都会被 409 `runtime_image_incompatible` 拒绝，不只是评审员；这时要先重建契约 3 的镜像，再在运行层页设为活动。
+- **应用过程中**：拉完镜像、服务还没全部重建的这段时间，旧 supervisor（契约 2）拒绝新镜像，入口容器回 409；内核先换、supervisor 后换时，评审 spawn 回 400（旧 supervisor 的 schema 不认 `builtinTools`）。维护窗口内可以接受。评审 spawn 被拒时，评审 Task 以 `spawn_failed` 失败、不重试，评审检查结算为 `unavailable`（`reviewer_failed`），目标暂停；升级完成后请求人 `resume_goal`，新的一轮会重新开评审。窗口内最好避开正在 verifying 的目标。
+- **应用后核对**：
+  - 镜像 label 应为 `3`：
+
+    ```bash
+    docker image inspect nexttime-ai-worker-runtime --format '{{index .Config.Labels "ai.nexttime.runtime-contract"}}'
+    ```
+
+  - 应用之后新开的评审员容器：日志里有 `nexttime-selfcheck check=builtin_tools result=ok set=read_only`，容器带 label `nexttime.builtin-tools=read_only`；入口容器不应带这个 label。
+  - 入口容器收敛同 §3.48：下一轮对话自动重建，或在运行层页点「现在重建」。
+- **行为变化**：评审员只有 read、grep、find、ls 和平台的三个能力。评审受目标预算约束：过了墙钟不再开评审员，目标暂停 `budget_exhausted`；请求人的 agent 被评测封存时不开，目标暂停 `needs_decision` 并写 `evaluation.seal_hold_refused` 审计；token 不够立即 `no_budget`；开出的评审员时长上限取 600 秒、工作区默认值、墙钟剩余秒数三者最小。
+- **回滚**：只能整版做，代码、worker-runtime 镜像、worker-supervisor 一起回。只回滚运行时镜像不可行：新 supervisor 拒绝契约 2 及更早的镜像，控制台也不让设为活动；只回滚 supervisor，它会拒绝契约 3 的镜像，并对评审 spawn 回 400。内核部分本身没有迁移。`pi-upgrade.md` 的回滚一节已写明。
+- **演练**：下一次主机大版本升级的 staging 演练（起点等于主机当前版本）把「label 3、selfcheck 日志行、入口容器收敛」列进验收项。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
