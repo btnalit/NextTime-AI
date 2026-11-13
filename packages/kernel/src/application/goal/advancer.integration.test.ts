@@ -7463,6 +7463,72 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      // Legacy 704: the graph is read for the requester as every graph read is
+      // (`operation-draft-visibility.ts`) — an Operation draft they may not see is no end of a Fact.
+      it('an Operation draft the requester may not see is no end: a Fact on it is no evidence for them; a reviewer, who sees every draft, has the check judged on it', async () => {
+        const EXPOSES = 'test.l704.exposes';
+        const name = `l704-${randomUUID().slice(0, 8)}`;
+        const proposer = await newPrincipal();
+        const draft = await admin(
+          async (client) =>
+            (
+              await client.query<{ id: string }>(
+                `insert into objects (workspace_id, object_type, identity_key, properties)
+                 values ($1, 'Operation', $2::jsonb, $3::jsonb) returning id`,
+                [
+                  workspaceId,
+                  JSON.stringify({ name }),
+                  JSON.stringify({
+                    status: 'draft',
+                    proposedBy: proposer,
+                    proposedByKind: 'human',
+                  }),
+                ],
+              )
+            ).rows[0]?.id as string,
+        );
+        const check = {
+          kind: 'fact_predicate' as const,
+          key: 'exposed',
+          fact: {
+            linkType: EXPOSES,
+            source: { objectId: webId },
+            target: { objectType: 'Operation', identity: { name } },
+          },
+        };
+        /** The collector sees web → the draft. */
+        const seeExposed = () =>
+          admin(async (client) => {
+            const [activityId, observationId] = await observation(client, collectorSeen());
+            return (
+              await client.query<{ id: string }>(
+                `insert into links (workspace_id, link_type, source_object_id, target_object_id,
+                   properties, epistemic_status, activity_id, asserted_by, observation_id)
+                 values ($1, $2, $3, $4, '{}'::jsonb, 'observed', $5, $6, $7) returning id`,
+                [workspaceId, EXPOSES, webId, draft, activityId, collector, observationId],
+              )
+            ).rows[0]?.id as string;
+          });
+
+        // A member who did not propose it: the Fact the collector saw is not one they can see.
+        const member = await newPrincipal();
+        const forMember = await verifyingGoal(member, [check]);
+        const fact = await seeExposed();
+        expect(await judgeNow(forMember.goalRunId, 'exposed')).toBe('retry');
+        expect((await acceptanceOf(forMember.goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'exposed', status: 'pending', lastError: 'fact_not_observed', factId: null },
+        ]);
+
+        // A builder sees every draft: the same Fact, confirmed since their round opened, is evidence.
+        const builder = await newPrincipal('builder');
+        const forBuilder = await verifyingGoal(builder, [check]);
+        await reconfirm(fact, collectorSeen());
+        expect(await judgeNow(forBuilder.goalRunId, 'exposed')).toBe('passed');
+        expect((await acceptanceOf(forBuilder.goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'exposed', status: 'passed', factId: fact },
+        ]);
+      });
+
       it('seen and false is not unseen: a Fact that does not satisfy the predicate fails its check on it; one recorded through the requester’s own Source is never seen — unavailable, and the pause tells the two apart', async () => {
         const requester = await newPrincipal();
         const ownSource = (

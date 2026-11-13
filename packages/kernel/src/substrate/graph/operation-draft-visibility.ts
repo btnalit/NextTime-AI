@@ -30,9 +30,10 @@
  * Callers: `operationVisibleTo` / `countOperationsByGatekeeper` (governance/gatekeepers/
  * manifest.ts — the Operation directory) and the generic graph reads (`SqlGraphStore.getObject` /
  * `getObjectsByIds` / `search` / `searchPage` / `traverse` / `stateAt` / `listRecentFacts`, and
- * `explainByNodeId` in substrate/epistemic) when given a viewer. A hidden draft reads exactly like
- * an id that does not exist: no row, and no Fact touching it — so `traverse` neither returns it
- * as a neighbour nor walks through it.
+ * `explainByNodeId` in substrate/epistemic) when given a viewer, and a goal's fact checks, read for
+ * their requester (application/goal `plan.ts` / `fact-check.ts`, legacy 704). A hidden draft reads
+ * exactly like an id that does not exist: no row, and no Fact touching it — so `traverse` neither
+ * returns it as a neighbour nor walks through it.
  *
  * No imports: substrate/epistemic uses this file directly, and substrate/graph already depends on
  * substrate/epistemic.

@@ -614,6 +614,7 @@ async function judgeFactCheck(
   }
   const evidence = await readFactEvidence(client, ws, {
     goalRunId: due.goalRunId,
+    requesterId: due.requesterId,
     fact,
     since: check.createdAt,
   });

@@ -236,6 +236,78 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await problemsOf(planNaming(many, { n: '1' }))).toHaveLength(1);
     });
 
+    // Legacy 704: the Objects a fact check names are read for its requester, as every graph read
+    // is (`operation-draft-visibility.ts`) — an Operation draft they may not see is not there:
+    // neither "does not exist" nor an identity's stored types may tell it apart.
+    it('an Operation draft the requester may not see is not there: by id it does not exist, and its identity shapes nothing; its proposer and a reviewer see it', async () => {
+      const name = `l704-${tag}`;
+      const draft = await admin(
+        async (client) =>
+          (
+            await client.query<{ id: string }>(
+              `insert into objects (workspace_id, object_type, identity_key, properties)
+               values ($1, 'Operation', $2::jsonb, $3::jsonb) returning id`,
+              [
+                workspaceId,
+                JSON.stringify({ name }),
+                JSON.stringify({ status: 'draft', proposedBy: ownerId, proposedByKind: 'human' }),
+              ],
+            )
+          ).rows[0]?.id as string,
+      );
+      const planNamingId = (objectId: string) => ({
+        steps: [
+          {
+            key: 'a',
+            worker,
+            input: { step: 'a' },
+            acceptance: [
+              {
+                kind: 'fact_predicate',
+                key: 'holds',
+                fact: { linkType: LINK, source: { objectId: shelfId }, target: { objectId } },
+              },
+            ],
+          },
+        ],
+      });
+      const problemsFor = async (principal: string, plan: unknown) => {
+        try {
+          await withWorkspace(pool, { workspaceId, principalId: principal }, (client) =>
+            validatePlan(client, workspaceId, plan, principal),
+          );
+          return [];
+        } catch (err) {
+          if (!(err instanceof GoalPlanValidationError)) throw err;
+          return err.problems;
+        }
+      };
+
+      // The requester (a member, not its proposer): no such Object.
+      expect(await problemsOf(planNamingId(draft))).toEqual([
+        `step "a": acceptance[0] "holds": fact: the target Object ${draft} does not exist in this workspace`,
+      ]);
+      // And no Operation in the workspace stores `name` at all, for them.
+      expect(await problemsOf(planNaming('Operation', { name: 7 }))).toEqual([]);
+
+      // Its proposer, an owner (who sees every draft): it is there, and it stores `name` as a string.
+      expect(await problemsFor(ownerId, planNamingId(draft))).toEqual([]);
+      expect(await problemsFor(ownerId, planNaming('Operation', { name: 7 }))).toEqual([
+        `${WHERE} identity field "name" is a number (7), but the "Operation" Objects in this workspace store it as a string — an identity is matched as written`,
+      ]);
+
+      // Published, it is everyone's.
+      await admin((client) =>
+        client.query(
+          `update objects set properties = properties || '{"status": "published"}'::jsonb
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, draft],
+        ),
+      );
+      expect(await problemsOf(planNamingId(draft))).toEqual([]);
+      expect(await problemsOf(planNaming('Operation', { name: 7 }))).toHaveLength(1);
+    });
+
     it('proposing a goal refuses it, for a step’s check and the goal’s own alike', async () => {
       const plan = planNaming(BOX, { boxId: '7', zone: 'a' });
       const step = plan.steps[0];
