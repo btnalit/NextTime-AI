@@ -2916,6 +2916,28 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，`ontology_families` 留着不影响旧代码。回滚期间新建的工作区，回到本版后要重跑 `0056` 第 2 步（补名，幂等）。
 - 除上面的预检外，无主机动作。
 
+### 3.170 自接门经平台审批换地址；请求绑定创建时的门地址（#1156，遗留 701 内核部分，0.68.0 之后的下一版）
+
+迁移 core 0057：新表 `gate_address_changes`（含 RLS、触发器、索引），纯增量。governance 0044：`action_requests` 新列 `gate_endpoint_key`（写一次，触发器守），并给自接门上的在途请求回填当前地址键。两个迁移都可回退，语句写在各自文件头部。
+
+- **升级后马上只读核对**（**主机动作**，结果记 `docs/private/`；按 release.md 惯例用 `psql -U nexttime` 跑）：
+
+  ```sql
+  select count(*) from action_requests where gate_endpoint_key is not null;
+  select count(*) from gate_address_changes;
+  ```
+
+  第一条应等于升级时自接门上的在途请求数（一般是 0 或个位数）。要在升级后马上查：之后新建的请求都会绑定地址，这个数会涨。第二条应为 0。
+- **巡检**：多了 I-A1（换过地址的门，Object 地址和自接行地址键一致），升级后应为 0；没换过地址的门不计。
+- **行为变化**：
+  - 新能力：工作区 owner 的 `preview_gate_address_change`、`propose_gate_address_change`、`withdraw_gate_address_change`；平台的 `list_gate_address_changes`、`approve_gate_address_change`、`reject_gate_address_change`。提议 24 小时后惰性过期。只有自接门能换（平台目录门 409 `gatekeeper_not_self_connected`）。
+  - 请求在创建时绑定门地址；门换了地址后，旧请求在发送前拒绝（`gate_address_changed`）。门上有升级时就在途、没回填到地址键的老请求时，批准换地址返回 409 `gate_address_change_blocked`。
+  - `create_connection` 用别的门已持有的密钥，或用服务过换地址提议的密钥，409 由 `conflict` 改为 `connection_secret_in_use`。`rotate_connection_secret` 对平台门的拒绝仍是 `conflict`。
+  - `get_gatekeeper` 给 owner 多了 `endpoint`（脱敏）和 `pendingAddressChange`，member 看不到。`approve_gate_address_change` 的拒绝不带 `details`，地址只给 origin。
+  - 换地址全程不发送、不转发账号凭证；applied 的审计行提示所有者自行清除旧主机上的账号凭证。
+- **回滚**：回退代码即可。上一版不读写 `gate_address_changes`，插入时 `gate_endpoint_key` 留空，执行器不比较地址。回滚前已换过地址的门，上一版按新地址调用。
+- 除上面的核对外，无主机动作。控制台入口在 PR-b。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
