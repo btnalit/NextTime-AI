@@ -5,6 +5,7 @@ import type {
 } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
 import { actionKindTagText } from './format.js';
+import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -25,25 +26,32 @@ export function gateAddressChangeImpactLines(
   t: Translate,
 ): string[] {
   const autoApproved = impact.autoApprovedOperations.map((name) => actionKindTagText(name));
+  // UX acceptance of #1158 (P3): a count of none says so, without the half that follows a count.
   const lines = [
-    t(
-      `${impact.publishedOperationCount} 个已发布的 Operation：新地址上的门必须原样提供`,
-      `${impact.publishedOperationCount} published Operation(s): the gate at the new address must describe each as published`,
-    ),
-    t(
-      `${impact.grantCount} 个授权：被授权的成员在新地址照样能调用`,
-      `${impact.grantCount} grant(s): whoever is granted calls it at the new address too`,
-    ),
+    impact.publishedOperationCount > 0
+      ? t(
+          `${impact.publishedOperationCount} 个已发布的 Operation：新地址上的门必须原样提供`,
+          `${impact.publishedOperationCount} published Operation(s): the gate at the new address must describe each as published`,
+        )
+      : t('还没有已发布的 Operation', 'No Operation is published yet'),
+    impact.grantCount > 0
+      ? t(
+          `${impact.grantCount} 个授权：被授权的成员在新地址照样能调用`,
+          `${impact.grantCount} grant(s): whoever is granted calls it at the new address too`,
+        )
+      : t('没有授权', 'No grants'),
     autoApproved.length > 0
       ? t(
           `自动批准的 Operation：${autoApproved.join('、')}，在新地址同样不经审批`,
           `Approved automatically: ${autoApproved.join(', ')} — at the new address too, without review`,
         )
       : t('没有自动批准的 Operation', 'No Operation is approved automatically'),
-    t(
-      `${impact.workerDefinitionCount} 个已发布的 Worker 定义用到它`,
-      `${impact.workerDefinitionCount} published Worker definition(s) use it`,
-    ),
+    impact.workerDefinitionCount > 0
+      ? t(
+          `${impact.workerDefinitionCount} 个已发布的 Worker 定义用到它`,
+          `${impact.workerDefinitionCount} published Worker definition(s) use it`,
+        )
+      : t('没有已发布的 Worker 定义用到它', 'No published Worker definition uses it'),
   ];
   if (impact.inFlightActionRequestCount > 0) {
     lines.push(
@@ -119,9 +127,10 @@ export function gateAddressChangeStatusLabel(
  *  secret"); here nothing changed, and what the administrator can do is reject the change, so
  *  the workspace owner proposes again. Only a gate that did not answer is worth one more try. */
 export function approveGateAddressChangeErrors(t: Translate): ErrorOverrides {
+  // The English sentence that follows needs its space (UX acceptance of #1158, P3).
   const notApproved = t(
     '所以没有批准，什么也没改。',
-    'so it was not approved and nothing changed.',
+    'so it was not approved and nothing changed. ',
   );
   const rejectIt = t(
     '驳回这个申请；工作区所有者可以重新申请。',
@@ -174,4 +183,89 @@ export function approveGateAddressChangeErrors(t: Translate): ErrorOverrides {
       'This gate is no longer one the workspace connected itself (its connection was removed), ',
     )}${notApproved}${t('驳回这个申请。', 'Reject the proposal.')}`,
   };
+}
+
+/** The steps of 「更换地址」 when the new address cannot take the gate, as the owner moving it reads
+ *  them (UX acceptance of #1158, must-fix): the codes `create_connection` answers with too, whose
+ *  usual next steps are for connecting a system (「重新导入」, 「重新读取门的清单」) — here nothing
+ *  is imported, and what the owner does is about the gate at the new address and step ①'s secret.
+ *  Built per refusal: the address rule (`details.reason`) and the gate already there
+ *  (`details.gatekeeperName`) are in its details. */
+export function proposeGateAddressChangeErrors(err: unknown, t: Translate): ErrorOverrides {
+  const details = err instanceof HttpError ? err.details : undefined;
+  const reason = typeof details?.reason === 'string' ? details.reason : undefined;
+  const name = typeof details?.gatekeeperName === 'string' ? details.gatekeeperName : null;
+  return {
+    manifest_fetch_failed: t(
+      '新地址上的门没有答出它的清单，什么也没改。最常见的原因是那扇门还没换上 ① 的连接密钥，或者换上之后没有重启：把密钥写进它的 GATE_KERNEL_TOKEN_FILE，重启门，再预览。也确认门在那个地址运行、平台连得上这个地址；具体原因在「技术细节」里。',
+      'The gate at the new address did not answer for its manifest, and nothing changed. Most often it does not hold step ①’s connection secret yet, or was not restarted after getting it: put the secret in its GATE_KERNEL_TOKEN_FILE, restart the gate, and preview again. Also check the gate runs at that address and the platform can reach it; the technical details say which.',
+    ),
+    connection_target_refused: moveTargetRefusal(reason, t),
+    endpoint_already_connected:
+      name !== null
+        ? t(
+            `这个工作区已经在新地址接入了「${name}」，两扇门不能用同一个地址，什么也没改：换一个地址。`,
+            `This workspace already connected “${name}” at the new address, and two gates cannot share one, so nothing changed: use another address.`,
+          )
+        : t(
+            '这个工作区已经在新地址接入了另一扇门，两扇门不能用同一个地址，什么也没改：换一个地址。',
+            'This workspace already connected another gate at the new address, and two gates cannot share one, so nothing changed: use another address.',
+          ),
+    endpoint_is_platform_gate: t(
+      '新地址是平台提供的门实例，工作区自己接入的门不能换过去，什么也没改：换一个地址。',
+      'The new address is a gate instance the platform provides, where a gate the workspace connected itself cannot move, so nothing changed: use another address.',
+    ),
+    connection_secret_in_use: t(
+      '① 的连接密钥已经用过（属于这个工作区的另一扇门，或已经用于一次更换申请），什么也没改：关掉「更换地址」再打开，会签出一把新的；把它放进新地址上的门、重启门，再预览。',
+      'Step ①’s connection secret is spoken for (another gate of this workspace holds it, or it already served a move), so nothing changed: close “Move to a new address” and open it again for a new one, put that in the gate at the new address, restart it, and preview again.',
+    ),
+    credentials_in_connection_params: t(
+      '新地址里不能带用户名、密码、查询参数（?）或片段（#），什么也没改：只填门自己的地址。',
+      'The new address cannot carry a user name, password, query string (?) or fragment (#), so nothing changed: enter only the gate’s own address.',
+    ),
+    gate_address_manifest_mismatch: t(
+      '新地址上的门描述的 Operation 和这个工作区已发布的不完全一样，什么也没改。在新主机上运行同一个门（或先重新读取这个门的清单并发布），再预览。',
+      'The gate at the new address does not describe exactly the Operations this workspace published, so nothing changed. Run the same gate on the new host (or re-read and publish this gate’s manifest first), then preview again.',
+    ),
+  };
+}
+
+/** `connection_target_refused` for the new address, said for its rule (`details.reason`, legacy
+ *  413), the way 直接注册门 says it for an endpoint (#1129). */
+function moveTargetRefusal(reason: string | undefined, t: Translate): string {
+  switch (reason) {
+    case 'plaintext-public':
+      return t(
+        '新地址是公网地址，却用的是 http://，什么也没改：连接密钥和凭证会明文经过互联网。改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
+        'The new address is on the public internet but uses http://, so nothing changed: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
+      );
+    case 'bare-hostname':
+      return t(
+        '新地址是单段主机名（平台的服务名或 localhost），平台从这里连不到，什么也没改：填门完整的域名或 IP 地址。',
+        'The new address is a single-label host name (a platform service name or localhost) the platform cannot reach from here, so nothing changed: enter the gate’s full domain name or IP address.',
+      );
+    case 'dns-error':
+      return t(
+        '新地址的主机名解析不出来，什么也没改：检查拼写，或者填门的 IP 地址。',
+        'The new address’s host name does not resolve, so nothing changed: check the spelling, or enter the gate’s IP address.',
+      );
+    case 'invalid-url':
+      return t(
+        '新地址不是完整的 http:// 或 https:// 地址，什么也没改。',
+        'The new address is not a full http:// or https:// address, so nothing changed.',
+      );
+    case 'loopback':
+    case 'link-local':
+    case 'unspecified':
+    case 'platform-subnet':
+      return t(
+        '新地址指向平台自己的网络或本机，平台不调用这样的地址，什么也没改：填门在网络上可达的地址。',
+        'The new address points into the platform’s own networks or at the local host, which the platform does not call, so nothing changed: enter the gate’s network-reachable address.',
+      );
+    default:
+      return t(
+        '新地址不是平台允许调用的目标（指向平台自己的网络或本机，或者用 http:// 连公网地址），什么也没改：填门在网络上可达的地址，公网地址用 https://。',
+        'The new address is not a target the platform calls (it points into the platform’s own networks or at the local host, or uses http:// to the public internet), so nothing changed: enter the gate’s network-reachable address, and https:// for a public one.',
+      );
+  }
 }

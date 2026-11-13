@@ -11,6 +11,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import {
   gateAddressChangeImpactLines,
   gateAddressManifestProblems,
+  proposeGateAddressChangeErrors,
 } from '../../lib/gate-address-change.js';
 import {
   gateEndpointDefaultScheme,
@@ -175,6 +176,8 @@ function ProposeGateAddressChange({
   const [previewing, setPreviewing] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // UX acceptance of #1158: which step was refused — 预览 or 提交 — for the banner's title.
+  const [errorStep, setErrorStep] = useState<'preview' | 'propose'>('preview');
   // Legacy 500: the buttons are disabled while a call runs, so a refusal would leave focus on
   // <body> with its banner out of view — focus goes to the banner.
   const errorRef = useFocusWhenLost<HTMLDivElement>(error);
@@ -232,6 +235,7 @@ function ProposeGateAddressChange({
         }),
       );
     } catch (err) {
+      setErrorStep('preview');
       setError(err);
     } finally {
       setPreviewing(false);
@@ -252,6 +256,7 @@ function ProposeGateAddressChange({
         }),
       );
     } catch (err) {
+      setErrorStep('propose');
       setError(err);
     } finally {
       setProposing(false);
@@ -282,8 +287,8 @@ function ProposeGateAddressChange({
         </span>
         <p className="field-hint">
           {t(
-            '把它配给新地址上的门，门才答得出它的清单。批准之前，内核仍用现在的密钥调用现在的地址；如果新旧地址其实是同一扇门（比如只是从 http 换成 https），换上新密钥之后旧地址的调用会被门拒绝，直到批准——这种情况下，提交后请尽快联系平台管理员审批。',
-            'Give it to the gate at the new address so it can answer for its manifest. Until the move is approved, the kernel keeps calling the current address with the current secret; if both addresses reach the same gate (only http to https, say), calls to the current address are refused by the gate once it holds the new secret, until the move is approved — so in that case, ask a platform administrator to decide it soon after you propose it.',
+            '把它配给新地址上的门，门才答得出它的清单。批准之前，内核仍用现在的密钥调用现在的地址；如果新旧地址其实是同一扇门（比如只是从 http 换成 https），换上新密钥之后旧地址的调用会被门拒绝，直到批准——这种情况下，提交后请尽快联系平台管理员审批；撤回、被驳回或过期之后，在 ⋯ 里「重新签发连接密钥」，放进门并重启，门才恢复。',
+            'Give it to the gate at the new address so it can answer for its manifest. Until the move is approved, the kernel keeps calling the current address with the current secret; if both addresses reach the same gate (only http to https, say), calls to the current address are refused by the gate once it holds the new secret, until the move is approved — so in that case, ask a platform administrator to decide it soon after you propose it; if it is withdrawn, rejected or expires, use ⋯ → “Issue a new connection secret” and put that in the gate, restarting it, to bring it back.',
           )}
         </p>
         {secretError !== null ? (
@@ -387,7 +392,12 @@ function ProposeGateAddressChange({
         <div ref={errorRef} tabIndex={-1}>
           <ErrorBanner
             error={error}
-            title={t('没能提出更换地址', 'Could not propose the move')}
+            title={
+              errorStep === 'preview'
+                ? t('没能预览新地址', 'Could not preview the new address')
+                : t('没能提出更换地址', 'Could not propose the move')
+            }
+            overrides={proposeGateAddressChangeErrors(error, t)}
             testId="gate-address-change-error"
           />
         </div>
@@ -456,8 +466,8 @@ export function PendingGateAddressChange({
         />
         <p className="text-small">
           {t(
-            '批准之前门还在现在的地址，照常可用；过期或被驳回都不生效，要换就重新申请。',
-            'Until it is approved the gate stays where it is and works as before; expired or rejected, nothing changes, and moving it takes a new proposal.',
+            '批准之前，内核仍用现在的密钥调用现在的地址；过期或被驳回都不生效，要换就重新申请。新旧地址是同一扇门、门已经换上新密钥时，现在的地址这段时间会被门拒绝；撤回、被驳回或过期之后，在 ⋯ 里「重新签发连接密钥」，放进门并重启，门才恢复。',
+            'Until it is approved the kernel keeps calling the current address with the current secret; expired or rejected, nothing changes, and moving it takes a new proposal. If both addresses reach the same gate and it already holds the new secret, the gate refuses calls to the current address meanwhile; once the move is withdrawn, rejected or expires, use ⋯ → “Issue a new connection secret” and put that in the gate, restarting it, to bring it back.',
           )}
         </p>
         <div className="row-wrap">
@@ -481,6 +491,10 @@ export function PendingGateAddressChange({
               t(
                 '这次用的连接密钥作废：再申请要用新生成的',
                 'The connection secret it used is spent: a new proposal needs a new one',
+              ),
+              t(
+                '新旧地址是同一扇门、门已经换上新密钥的话：撤回后在 ⋯ 里「重新签发连接密钥」，放进门并重启，门才恢复',
+                'If both addresses reach the same gate and it already holds the new secret: after withdrawing, use ⋯ → “Issue a new connection secret” and put that in the gate, restarting it, to bring it back',
               ),
             ]}
             confirmLabel={t('撤回', 'Withdraw')}

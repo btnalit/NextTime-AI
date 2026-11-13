@@ -64,6 +64,8 @@ interface Script {
   /** The gate's open proposal, read by every `get_gatekeeper`. */
   pending?: GateAddressChangeWire | undefined;
   preview?: (params: unknown) => unknown;
+  /** Answers `propose_gate_address_change` instead of recording the proposal. */
+  propose?: (params: unknown) => unknown;
   /** Every `get_gatekeeper` after a withdrawal never answers (a slow read). */
   stallReadsAfterWithdraw?: boolean;
 }
@@ -93,6 +95,7 @@ function scriptedHttp(script: Script): CapabilityCaller & {
         case 'preview_gate_address_change':
           return script.preview ? script.preview(params) : preview();
         case 'propose_gate_address_change':
+          if (script.propose) return script.propose(params);
           script.pending = change;
           return change;
         case 'withdraw_gate_address_change':
@@ -238,7 +241,9 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
     await enterAddress(FROM);
     fireEvent.click(previewButton());
     const banner = await screen.findByTestId('gate-address-change-error');
-    expect(banner.textContent).toContain('没能提出更换地址');
+    // UX acceptance of #1158: the preview was refused, not a proposal.
+    expect(banner.textContent).toContain('没能预览新地址');
+    expect(banner.textContent).not.toContain('没能提出更换地址');
     expect(proposeButton().disabled).toBe(true);
     expect(screen.getByLabelText(/② 新地址/)).toBeTruthy();
   });
@@ -277,5 +282,86 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
     expect(screen.queryByTestId('gate-address-change-pending')).toBeNull();
     expect(screen.queryByTestId('gate-address-change-withdraw')).toBeNull();
     expect((await screen.findByTestId('connection-secret-value')).textContent).toBe(secretNo(1));
+  });
+
+  // UX acceptance of #1158 (must-fix): the most common refusal here — the gate at the new address
+  // does not hold step ①'s secret, or was not restarted — said for this flow, not the import
+  // flow's 「重新导入」.
+  it('a gate at the new address that does not answer says to give it ①’s secret and restart it', async () => {
+    const http = scriptedHttp({
+      preview: () => {
+        throw new HttpError(
+          'capability_error',
+          'preview_gate_address_change: the gate at "https://gate-b.example.com" did not describe its Operations: it refused the new connection secret',
+          'manifest_fetch_failed',
+        );
+      },
+    });
+    show(http);
+    await enterAddress(TO);
+    fireEvent.click(previewButton());
+    const banner = await screen.findByTestId('gate-address-change-error');
+    expect(banner.textContent).toContain('没能预览新地址');
+    expect(banner.textContent).toContain('那扇门还没换上 ① 的连接密钥，或者换上之后没有重启');
+    expect(banner.textContent).toContain('GATE_KERNEL_TOKEN_FILE');
+    expect(banner.textContent).not.toContain('重新导入');
+  });
+
+  it.each([
+    ['plaintext-public', '新地址是公网地址，却用的是 http://'],
+    ['bare-hostname', '新地址是单段主机名'],
+    ['dns-error', '新地址的主机名解析不出来'],
+    ['platform-subnet', '新地址指向平台自己的网络或本机'],
+    [undefined, '新地址不是平台允许调用的目标'],
+  ])('a new address refused for its rule (%s) says that rule', async (reason, said) => {
+    const http = scriptedHttp({
+      preview: () => {
+        throw new HttpError(
+          'capability_error',
+          'preview_gate_address_change: endpoint is refused',
+          'connection_target_refused',
+          reason === undefined ? undefined : { reason, field: 'endpoint' },
+        );
+      },
+    });
+    show(http);
+    await enterAddress(TO);
+    fireEvent.click(previewButton());
+    const banner = await screen.findByTestId('gate-address-change-error');
+    expect(banner.textContent).toContain(said);
+    expect(banner.textContent).not.toContain('外部系统的最终地址');
+  });
+
+  it('a proposal refused at 提交 says so in its title, and names the gate already at the address', async () => {
+    const http = scriptedHttp({
+      propose: () => {
+        throw new HttpError('capability_error', 'already', 'endpoint_already_connected', {
+          gatekeeperId: 'gk-9',
+          gatekeeperName: '工单',
+        });
+      },
+    });
+    show(http);
+    await enterAddress(TO);
+    fireEvent.click(previewButton());
+    await waitFor(() => expect(proposeButton().disabled).toBe(false));
+    fireEvent.click(proposeButton());
+    const banner = await screen.findByTestId('gate-address-change-error');
+    expect(banner.textContent).toContain('没能提出更换地址');
+    expect(banner.textContent).toContain('这个工作区已经在新地址接入了「工单」');
+    expect(banner.textContent).not.toContain('重新读取门的清单');
+  });
+
+  // UX acceptance of #1158 (P2): when both addresses reach the same gate it is not "as before" —
+  // the open proposal and its 撤回 say how the gate comes back.
+  it('an open proposal and its 撤回 say how a gate behind both addresses comes back', async () => {
+    const http = scriptedHttp({ pending: change });
+    show(http);
+    const pending = await screen.findByTestId('gate-address-change-pending');
+    expect(pending.textContent).not.toContain('照常可用');
+    expect(pending.textContent).toContain('现在的地址这段时间会被门拒绝');
+    fireEvent.click(within(pending).getByTestId('gate-address-change-withdraw'));
+    const confirm = await screen.findByRole('dialog', { name: '撤回换地址的申请' });
+    expect(confirm.textContent).toContain('撤回后在 ⋯ 里「重新签发连接密钥」');
   });
 });

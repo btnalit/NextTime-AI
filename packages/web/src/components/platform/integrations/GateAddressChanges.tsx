@@ -130,10 +130,16 @@ function GateAddressChangeRow({
   }
 
   return (
-    <li className="data-row" data-testid={`gate-address-change-row-${rowId}`}>
+    // UX acceptance of #1158 (P3): at phone width 批准 / 驳回 take their own line under the move.
+    <li
+      className="data-row gate-address-change-row"
+      data-testid={`gate-address-change-row-${rowId}`}
+    >
       <div className="data-row-main stack-s">
         <div className="data-row-title">
-          <strong>{change.workspaceName}</strong>
+          {/* UX acceptance of #1158 (P2): which gate — a workspace can connect several itself — as
+              the confirm names it. */}
+          <strong data-testid={`gate-address-change-title-${rowId}`}>{target}</strong>
           <span className="tag">{transportKindLabel(change.connector, t)}</span>
           {change.suspended ? (
             <span
@@ -237,7 +243,13 @@ function GateAddressChangeRow({
           title={t(`驳回换到 ${change.toEndpoint}`, `Reject the move to ${change.toEndpoint}`)}
           target={target}
           impact={[
-            t('门留在现在的地址，照常可用', 'The gate stays where it is and works as before'),
+            t('门留在现在的地址', 'The gate stays where it is'),
+            // UX acceptance of #1158 (P2): not "works as before" when both addresses reach the
+            // same gate — it holds the new secret and refuses the current address until rotated.
+            t(
+              '新旧地址是同一扇门、门已经换上新密钥的话，现在的地址要等工作区所有者重新签发连接密钥、放进门之后才恢复',
+              'If both addresses reach the same gate and it already holds the new secret, the current address works again only once the workspace owner issues a new connection secret and puts it in the gate',
+            ),
             t(
               '工作区要换就重新申请，用新生成的连接密钥',
               'Moving it takes a new proposal, with a new connection secret',

@@ -1,6 +1,7 @@
 import type { GateAddressChangeImpactWire } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  approveGateAddressChangeErrors,
   gateAddressChangeImpactLines,
   gateAddressChangeStatusLabel,
   gateAddressManifestProblems,
@@ -8,6 +9,7 @@ import {
 import type { Translate } from './i18n.js';
 
 const zh: Translate = (text) => text;
+const en: Translate = (_zh, text) => text;
 
 const impact: GateAddressChangeImpactWire = {
   publishedOperationCount: 2,
@@ -85,5 +87,24 @@ describe('gateAddressChangeStatusLabel (legacy 701)', () => {
       '已撤回',
       '过期了，没有生效',
     ]);
+  });
+});
+
+describe('legacy 701: words UX acceptance of #1158 asked for', () => {
+  it('a count of none says so, without the half that follows a count', () => {
+    const none = { ...impact, publishedOperationCount: 0, grantCount: 0, workerDefinitionCount: 0 };
+    const lines = gateAddressChangeImpactLines(none, zh);
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatch(/^还没有已发布的 Operation$/);
+    expect(lines[1]).toBe('没有授权');
+    expect(lines[3]).toMatch(/^没有已发布的 Worker 定义用到它$/);
+    expect(gateAddressChangeImpactLines(none, en)[0]).not.toMatch(/\b0\b/);
+  });
+
+  it('an approval refused in English keeps a space between its sentences', () => {
+    for (const text of Object.values(approveGateAddressChangeErrors(en))) {
+      expect(text).not.toMatch(/\.[A-Z]/);
+      expect(text).toContain('nothing changed. ');
+    }
   });
 });

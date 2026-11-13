@@ -118,7 +118,7 @@ describe('GateAddressChanges (legacy 701)', () => {
 
     fireEvent.click(within(row).getByTestId('gate-address-change-reject-gac-1'));
     const confirm = await screen.findByRole('dialog', { name: `驳回换到 ${TO}` });
-    expect(confirm.textContent).toContain('门留在现在的地址，照常可用');
+    expect(confirm.textContent).toContain('门留在现在的地址');
     const reason = within(confirm).getByLabelText(/原因（可选）/) as HTMLInputElement;
     expect(reason.maxLength).toBe(GATE_ADDRESS_REJECTION_REASON_MAX);
     fireEvent.change(reason, { target: { value: '  先确认新主机归谁管  ' } });
@@ -218,4 +218,19 @@ describe('GateAddressChanges (legacy 701)', () => {
       expect(error.textContent).not.toContain('GATE_KERNEL_TOKEN_FILE');
     },
   );
+
+  // UX acceptance of #1158 (P2): which gate the row is about, as its confirm names it; and a
+  // rejection does not promise "works as before" when both addresses reach the same gate.
+  it('names the gate in the row, and the rejection says how a gate behind both addresses comes back', async () => {
+    const http = scriptedHttp([proposal()]);
+    render(<GateAddressChanges http={http} onApplied={vi.fn()} />);
+    const row = await screen.findByTestId('gate-address-change-row-gac-1');
+    expect(within(row).getByTestId('gate-address-change-title-gac-1').textContent).toBe(
+      'Acme · https://notes.example.com',
+    );
+    fireEvent.click(within(row).getByTestId('gate-address-change-reject-gac-1'));
+    const confirm = await screen.findByRole('dialog', { name: `驳回换到 ${TO}` });
+    expect(confirm.textContent).not.toContain('照常可用');
+    expect(confirm.textContent).toContain('要等工作区所有者重新签发连接密钥');
+  });
 });
