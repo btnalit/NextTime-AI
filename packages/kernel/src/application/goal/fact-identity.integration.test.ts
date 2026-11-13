@@ -217,6 +217,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
+    // #493 P3: the exact match reads every Object of the type, not the sample. 1000 Objects store
+    // `n` as a number; the one storing it as a boolean comes after them in both the insert order
+    // and the (workspace, type, identity) index order (a jsonb boolean sorts after a number), so
+    // it is past the sample either way — naming it still passes.
+    it('an Object with exactly this identity settles it even past the sample of stored types', async () => {
+      const many = `test.l466.Many_${tag}`;
+      await admin((client) =>
+        client.query(
+          `insert into objects (workspace_id, object_type, identity_key)
+           select $1, $2, jsonb_build_object('n', i) from generate_series(1, 1000) as i`,
+          [workspaceId, many],
+        ),
+      );
+      await insertObject(many, { n: true });
+      expect(await problemsOf(planNaming(many, { n: true }))).toEqual([]);
+      expect(await problemsOf(planNaming(many, { n: 1001 }))).toEqual([]);
+      expect(await problemsOf(planNaming(many, { n: '1' }))).toHaveLength(1);
+    });
+
     it('proposing a goal refuses it, for a step’s check and the goal’s own alike', async () => {
       const plan = planNaming(BOX, { boxId: '7', zone: 'a' });
       const step = plan.steps[0];
