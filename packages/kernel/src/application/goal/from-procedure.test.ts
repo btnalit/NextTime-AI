@@ -393,6 +393,22 @@ describe('refuseProcedureParameters (S11 GO5d-2)', () => {
       paths: ['fromProcedure.parameters.hosts.1'],
     });
   });
+
+  it('refuses a credential written as a parameter name (legacy 444), never echoing it', () => {
+    let thrown: unknown;
+    try {
+      refuseProcedureParameters({ site: 'main', [`Bearer ${FAKE}`]: 'x' });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TextCarriesCredentialsError);
+    expect((thrown as TextCarriesCredentialsError).details).toMatchObject({
+      field: 'fromProcedure.parameters.Bearer [redacted]',
+      suspectedSecretValues: 1,
+    });
+    expect(JSON.stringify((thrown as TextCarriesCredentialsError).details)).not.toContain(FAKE);
+    expect((thrown as Error).message).not.toContain(FAKE);
+  });
 });
 
 describe('procedureConfirmCheck (legacy 454)', () => {

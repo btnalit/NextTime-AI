@@ -567,9 +567,11 @@ export function planContractNotes(
   return { adopted, unused, inputMismatch };
 }
 
-/** Whether a JSON value shows the `[redacted]` mark anywhere. */
+/** Whether a JSON value shows the `[redacted]` mark anywhere — in a key too: a read masks a
+ *  credential written as a field name (legacy 444), and the kernel refuses that mark sent back in a
+ *  changed call wherever it stands. */
 export function showsMask(value: unknown): boolean {
-  return someString(value, (text) => text.includes(SECRET_FIELD_MASK));
+  return someString(value, (text) => text.includes(SECRET_FIELD_MASK), { keys: true });
 }
 
 /** How a read shows a character nobody can see (`visibleLines`: a zero-width joiner, a soft hyphen,
@@ -590,11 +592,18 @@ export function shownOnly(value: unknown): 'mask' | 'escape' | null {
   return null;
 }
 
-function someString(value: unknown, test: (text: string) => boolean): boolean {
+/** Whether any string in a JSON value passes `test` — with `keys`, an object's keys too. A read
+ *  spells out unseen characters only in values, so only the mark is looked for in keys. */
+function someString(
+  value: unknown,
+  test: (text: string) => boolean,
+  options: { readonly keys?: boolean } = {},
+): boolean {
   if (typeof value === 'string') return test(value);
   if (value === null || typeof value !== 'object') return false;
-  return (Array.isArray(value) ? value : Object.values(value)).some((inner) =>
-    someString(inner, test),
+  if (Array.isArray(value)) return value.some((inner) => someString(inner, test, options));
+  return Object.entries(value).some(
+    ([key, inner]) => (options.keys === true && test(key)) || someString(inner, test, options),
   );
 }
 

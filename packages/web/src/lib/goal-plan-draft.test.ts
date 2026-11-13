@@ -22,6 +22,8 @@ import {
   requesterConfirmDraft,
   reviewChanged,
   reviewCheckDraft,
+  shownOnly,
+  showsMask,
   skillRefUse,
   specChanged,
   specDraftOf,
@@ -203,6 +205,37 @@ describe('lib/goal-plan-draft', () => {
     draft = withStep(draft, 'bad key', { key: 'apply', dependsOn: ['fetch'] });
     draft = withStep(draft, 'fetch', { dependsOn: ['apply'] });
     expect([...draftProblems(draft, detail, zh).values()].join()).toMatch(/依赖成环/);
+  });
+
+  it('legacy 444: a key the read masked is the mark too — left as read it is sent as it is, changed it is flagged', () => {
+    const detail = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { headers: { 'Bearer [redacted]': true } },
+            },
+            { key: 'apply', worker: { definitionId: WORKER_ID, version: 2 } },
+          ],
+        },
+      },
+    });
+    expect(showsMask({ headers: { 'Bearer [redacted]': true } })).toBe(true);
+    expect(shownOnly({ headers: { 'Bearer [redacted]': true } })).toBe('mask');
+    // Escapes are spelled out in values only: a key that looks like one is not taken for one.
+    expect(shownOnly({ '\\u{200D}': 'x' })).toBeNull();
+    let draft = draftFromDetail(detail);
+    const uid = (key: string) => draft.steps.find((step) => step.key === key)?.uid ?? '';
+    expect(draftProblems(draft, detail, zh).get(`step:${uid('fetch')}:input`)).toBeUndefined();
+    draft = withStep(draft, 'fetch', {
+      inputText: '{"headers": {"Bearer [redacted]": true}, "hosts": 3}',
+    });
+    expect(draftProblems(draft, detail, zh).get(`step:${uid('fetch')}:input`)).toMatch(
+      /此处原文已遮蔽，请重新填写/,
+    );
   });
 
   it('an ended step whose input reads masked is kept as it is', () => {

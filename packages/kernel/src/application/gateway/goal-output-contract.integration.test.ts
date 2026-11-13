@@ -50,6 +50,7 @@ const SCAN_SCHEMA = {
     hosts: { type: 'array', items: { type: 'string' }, minItems: 1 },
     zone: { type: 'string' },
     word: { type: 'string' },
+    meta: { type: 'object' },
   },
   required: ['hosts'],
   additionalProperties: false,
@@ -561,6 +562,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           output: { hosts: ['h1'], word: `sk-ant-${FAKE}` },
           detail:
             "step apply: bindings[0] (input.note from step scan, word): the value was redacted as a suspected credential when step scan reported it — a step's input does not carry credentials; revise the plan or cancel",
+        },
+        {
+          // Legacy 444: a credential the step reported as a key, not a value — redacted then too.
+          bindings: [{ to: 'meta', from: 'scan', path: 'meta' }],
+          output: { hosts: ['h1'], meta: { [`Bearer ${FAKE}`]: 1 } },
+          detail:
+            "step apply: bindings[0] (input.meta from step scan, meta): the value was redacted as a suspected credential when step scan reported it — a step's input does not carry credentials; revise the plan or cancel",
         },
       ];
       for (const { bindings, output, detail } of cases) {
