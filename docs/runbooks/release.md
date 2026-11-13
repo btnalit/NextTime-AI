@@ -2824,6 +2824,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：事实验收检查在提议时（按 id、按身份、按类型取样）和判定时（解析两端）读 Object，都按发起人过滤 Operation 草稿，和图上其它读取一致。发起人看不到的草稿，在检查里当作不存在：提议时引用会被拒，提议后发起人被降级的，判定报 `fact_not_observed` 并重试。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.166 目标规划器的 pi 工具改为只读（#1148，遗留 697，0.68.0 之后的下一版）
+
+无迁移，无主机动作，运行时契约不变（仍为 3）。
+
+- **行为变化**：目标规划 Task 和评审 Task 一样，以只读的 pi 内置工具启动（read、grep、find、ls）。
+- **升级后确认**：规划 Task 的容器日志里应有 `nexttime-selfcheck check=builtin_tools result=ok set=read_only`。
+- **回滚**：回代码即可，没有迁移。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
