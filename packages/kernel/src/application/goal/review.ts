@@ -15,9 +15,12 @@ import {
 import type { PoolClient } from 'pg';
 import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
 import { redactSecrets } from '../../governance/redaction/index.js';
+import { hasActiveSealHold, writeProbeHoldRefusal } from '../eval-seal/index.js';
 import {
   type PlannerTemplate,
   type PreparedStepAttempt,
+  REVIEWER_MIN_TOKEN_BUDGET,
+  STEP_ATTEMPT_PAUSED_DETAIL,
   createReviewTask,
   ensureReviewerDefinition,
   loadReviewerTemplate,
@@ -40,14 +43,26 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  * once every check of the round the platform makes has passed (F6), and how its report becomes
  * the check's verdict.
  *
- *   - {@link runReviews} (`advance.ts` phase V, in the advance's transaction): a pending review not
- *     yet tried gets its reviewer Task (`application/task/review-task.ts`), started after the
- *     commit — or is `unavailable` when it cannot run (its model not offered or not allowed, the
- *     reviewer definition deprecated, the requester unable to start Workers, too few tokens left
- *     in the goal's budget: `no_budget`); the requester's concurrency quota only delays it. A
- *     tried one whose Task ended is settled: a report the platform reads becomes an assessment
+ *   - {@link runReviews} (`advance.ts` phase V, in the advance's transaction): a tried review
+ *     whose Task ended is settled first: a report the platform reads becomes an assessment
  *     (`goal_review_assessments`, goal/0019 — the derivation, the models) and the check takes its
- *     verdict; a Task that failed or was cancelled leaves it `unavailable`. One try (F8).
+ *     verdict; a Task that failed or was cancelled leaves it `unavailable`. One try (F8). Then a
+ *     pending review not yet tried gets its reviewer Task (`application/task/review-task.ts`),
+ *     started after the commit — unless one just settled did not pass (the run pauses on it), or
+ *     the run stops here (below) — or is `unavailable` when it cannot run (its model not offered
+ *     or not allowed, the reviewer definition deprecated, the requester unable to start Workers,
+ *     too few tokens left in the goal's budget: `no_budget`).
+ *   - A reviewer is a Worker of the goal, held to the goal's budget like a step's attempt (I-G6,
+ *     `advance.ts` phase D; independent review §9, GO18a P3): none starts past the run's wall
+ *     clock — the run pauses `budget_exhausted` — and none while the evaluation seal pauses the
+ *     requester's agents — the run pauses `needs_decision`, a person decides once the workspace
+ *     owner released it (the review is not settled: a resume verifies in a new round). Too few
+ *     tokens left settles it `no_budget` before anything else could make it wait. What only
+ *     delays it — the requester's concurrency quota, a reviewed step's container not yet exited
+ *     — is tried again, no later than the wall clock's end, so a wait never outlasts the goal's
+ *     budget. A reviewer that starts runs no longer than what is left of the wall clock, its own
+ *     `REVIEWER_MAX_DURATION_SEC` at most — as phase D caps a step's attempt (review #493 on
+ *     #1123).
  *   - The verdict is `reviewDerivation`'s integer arithmetic over the reviewer's scores
  *     (`@nexttime/shared`), recomputed by the database from the reviewer Task's own report when
  *     the assessment is written. A criterion the reviewer could not judge makes it `unavailable`,
@@ -228,6 +243,8 @@ export interface ReviewPhaseContext {
   /** The run's StepRuns, locked. */
   readonly steps: readonly StepRunRow[];
   readonly now: Date;
+  /** The run's wall-clock deadline (epoch ms): `confirmed_at` + its budget's wall clock (I-G6). */
+  readonly deadline: number;
   readonly quotaRetryMs: number;
   readonly stepFilesRecheckMs: number;
   readonly reviewerTemplate?: () => Promise<PlannerTemplate>;
@@ -239,32 +256,81 @@ export interface ReviewPhaseResult {
   /** Reviewer Tasks created, to start after the commit. */
   readonly start: readonly PreparedStepAttempt[];
   /** When a review held back (the requester's quota, a reviewed step's container not yet exited)
-   *  is tried again (epoch ms), or `null`. */
+   *  is tried again (epoch ms) — never after the run's deadline — or `null`. */
   readonly retryAt: number | null;
+  /** Why the run pauses instead of starting its reviews (the wall clock, the evaluation seal), or
+   *  `null`. Nothing is started then. */
+  readonly pause: ReviewPhasePause | null;
 }
 
-/** The pending reviews of the round: started, settled, or left to wait — see the module comment.
+export interface ReviewPhasePause {
+  readonly reason: 'budget_exhausted' | 'needs_decision';
+  readonly detail: string;
+}
+
+/** The pending reviews of the round: settled, started, or left to wait — see the module comment.
  *  The caller reads the round again afterwards. */
 export async function runReviews(ctx: ReviewPhaseContext): Promise<ReviewPhaseResult> {
+  const nothing: ReviewPhaseResult = { start: [], retryAt: null, pause: null };
+  const pending = ctx.round.filter((row) => row.kind === 'review' && row.status === 'pending');
+  let unmet = false;
+  for (const row of pending) {
+    if (row.attempts === 0) continue;
+    const settled = await settleReview(ctx, row);
+    if (settled !== 'pending' && settled !== 'passed') unmet = true;
+  }
+  const due = pending.filter((row) => row.attempts === 0);
+  // A review that did not pass pauses the run: a reviewer started now would only be stopped.
+  if (unmet || due.length === 0) return nothing;
+
+  const { client, goal } = ctx;
+  const reviews = due.map((row) => row.checkKey).join(', ');
+  if (ctx.now.getTime() >= ctx.deadline) {
+    return {
+      ...nothing,
+      pause: {
+        reason: 'budget_exhausted',
+        detail: `wall clock: ${goal.budget.maxWallClockSeconds} s since confirmation; review ${reviews} not started`,
+      },
+    };
+  }
+  if (await hasActiveSealHold(client, goal.workspaceId, goal.onBehalfOf)) {
+    // The refusal's own audit row, as on every other path a pause refuses (S10 E3-2c).
+    await writeProbeHoldRefusal(client, {
+      workspaceId: goal.workspaceId,
+      principalId: goal.onBehalfOf,
+      path: 'worker_start',
+    });
+    return {
+      ...nothing,
+      pause: {
+        reason: 'needs_decision',
+        detail: `review ${reviews}: ${STEP_ATTEMPT_PAUSED_DETAIL}`,
+      },
+    };
+  }
+
   const start: PreparedStepAttempt[] = [];
   const retries: number[] = [];
-  for (const row of ctx.round) {
-    if (row.kind !== 'review' || row.status !== 'pending') continue;
-    if (row.attempts === 0) {
-      const started = await startReview(ctx, row);
-      if (started.kind === 'started') start.push(started.prepared);
-      else if (started.kind === 'retry') retries.push(started.at);
-    } else {
-      await settleReview(ctx, row);
-    }
+  for (const row of due) {
+    const started = await startReview(ctx, row);
+    if (started.kind === 'started') start.push(started.prepared);
+    else if (started.kind === 'retry') retries.push(started.at);
   }
-  return { start, retryAt: retries.length > 0 ? Math.min(...retries) : null };
+  return {
+    start,
+    retryAt: retries.length > 0 ? Math.min(ctx.deadline, ...retries) : null,
+    pause: null,
+  };
 }
 
 type StartOutcome =
   | { readonly kind: 'started'; readonly prepared: PreparedStepAttempt }
   | { readonly kind: 'retry'; readonly at: number }
   | { readonly kind: 'settled' };
+
+/** A review check's status once {@link settleReview} looked at it. */
+type SettleOutcome = 'pending' | 'passed' | 'failed' | 'unavailable';
 
 async function unavailable(
   ctx: ReviewPhaseContext,
@@ -393,6 +459,14 @@ async function startReview(
     .filter((subject) => subject.attempt === null)
     .map((subject) => subject.key);
   if (missing.length > 0) return unavailable(ctx, row, 'subject_missing', { stepKeys: missing });
+  // F8: the reviewer's tokens come out of the goal's — too few left ends it now, before the
+  // requester's quota or a container still exiting could make it wait for nothing.
+  const headroom = await readGoalRunTokenHeadroom(client, ws, goal.id);
+  if (headroom < REVIEWER_MIN_TOKEN_BUDGET) {
+    return unavailable(ctx, row, 'no_budget', {
+      detail: `${headroom} tokens left of the goal's ${goal.budget.maxTokens}; a reviewer needs at least ${REVIEWER_MIN_TOKEN_BUDGET}`,
+    });
+  }
   const withFiles = subjects.filter(
     (subject): subject is ReviewSubject & { taskId: string } => subject.taskId !== null,
   );
@@ -431,7 +505,8 @@ async function startReview(
     round: row.round,
     checkKey: row.checkKey,
     input: reviewerInput(goal, declaration, subjects, mounted),
-    tokenCap: await readGoalRunTokenHeadroom(client, ws, goal.id),
+    tokenCap: headroom,
+    durationCapSec: Math.max(1, Math.floor((ctx.deadline - ctx.now.getTime()) / 1000)),
     ...(declaration.model !== undefined ? { model: declaration.model } : {}),
     upstream,
   });
@@ -440,7 +515,8 @@ async function startReview(
     if (refusal.kind === 'quota' && refusal.code === 'goal_budget_exhausted') {
       return unavailable(ctx, row, 'no_budget', { detail: refusal.detail });
     }
-    // The requester's concurrency quota, or the evaluation seal's pause: only later (F8).
+    // The requester's concurrency quota: only later (F8), within the wall clock (runReviews). An
+    // evaluation seal's pause that came after runReviews looked: the next try pauses the run.
     if (
       (refusal.kind === 'quota' && refusal.code === 'concurrency_exceeded') ||
       refusal.kind === 'paused'
@@ -513,7 +589,10 @@ async function readModels(
   };
 }
 
-async function settleReview(ctx: ReviewPhaseContext, row: AcceptanceCheckRow): Promise<void> {
+async function settleReview(
+  ctx: ReviewPhaseContext,
+  row: AcceptanceCheckRow,
+): Promise<SettleOutcome> {
   const { client, goal } = ctx;
   const ws = goal.workspaceId;
   const task = await client.query<{
@@ -530,14 +609,14 @@ async function settleReview(ctx: ReviewPhaseContext, row: AcceptanceCheckRow): P
   const reviewTask = task.rows[0];
   if (!reviewTask) {
     await unavailable(ctx, row, 'reviewer_task_missing');
-    return;
+    return 'unavailable';
   }
   if (
     reviewTask.status !== 'completed' &&
     reviewTask.status !== 'failed' &&
     reviewTask.status !== 'cancelled'
   ) {
-    return;
+    return 'pending';
   }
   if (reviewTask.status !== 'completed') {
     await unavailable(ctx, row, 'reviewer_failed', {
@@ -545,7 +624,7 @@ async function settleReview(ctx: ReviewPhaseContext, row: AcceptanceCheckRow): P
       taskStatus: reviewTask.status,
       ...(reviewTask.failure_reason ? { failureReason: reviewTask.failure_reason } : {}),
     });
-    return;
+    return 'unavailable';
   }
   const declaration = reviewDeclarationOf(row);
   const output = ReviewerOutputSchema.safeParse(reviewTask.result?.output);
@@ -555,7 +634,7 @@ async function settleReview(ctx: ReviewPhaseContext, row: AcceptanceCheckRow): P
     reviewReportProblems(declaration.criteria, output.data).length > 0
   ) {
     await unavailable(ctx, row, 'report_unreadable', { reviewTaskId: reviewTask.id });
-    return;
+    return 'unavailable';
   }
   const derivation = reviewDerivation(declaration.criteria, declaration.passAt, output.data.scores);
   const models = await readModels(client, ws, goal.id, reviewTask.id, declaration.subjects);
@@ -601,6 +680,7 @@ async function settleReview(ctx: ReviewPhaseContext, row: AcceptanceCheckRow): P
     },
     goal.onBehalfOf,
   );
+  return derivation.verdict;
 }
 
 // ----- reading reviews ------------------------------------------------------------------------

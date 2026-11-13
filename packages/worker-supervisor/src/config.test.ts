@@ -370,6 +370,18 @@ describe('TaskSpawnRequestSchema', () => {
     }
   });
 
+  it('takes builtinTools only as read_only (S11 GO18a P3)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, builtinTools: 'read_only' })
+        .success,
+    ).toBe(true);
+    for (const builtinTools of ['all', 'READ_ONLY', '', true, null, ['read']]) {
+      expect(
+        TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, builtinTools }).success,
+      ).toBe(false);
+    }
+  });
+
   it('rejects the removed skills[] host-path field (lane-6 review P1-3 — unknown field, strict schema)', () => {
     expect(
       TaskSpawnRequestSchema.safeParse({

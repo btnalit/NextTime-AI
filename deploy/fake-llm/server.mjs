@@ -1037,6 +1037,24 @@ function reviewerTaskInput(messages) {
   return undefined;
 }
 
+/** S11 GO18a (runtime contract 3): pi built-ins a goal reviewer is never offered. The kernel
+ *  spawns every review Task with `builtinTools: read_only`, and the image's entrypoint then gives
+ *  pi only read, grep, find and ls (deploy/worker-runtime/pi-settings-read-only.json). */
+const REVIEWER_FORBIDDEN_TOOLS = ['bash', 'edit', 'write'];
+
+/** Why `tools` (a request's tool definitions) is not the reviewer's read-only set — it must offer
+ *  `read` and none of {@link REVIEWER_FORBIDDEN_TOOLS}; `undefined` when it is. A request with no
+ *  tools at all does not pass: pi always sends them. */
+function reviewerToolsProblem(tools) {
+  const names = (Array.isArray(tools) ? tools : []).map(
+    (tool) => tool?.function?.name ?? tool?.name,
+  );
+  const offered = names.filter((name) => REVIEWER_FORBIDDEN_TOOLS.includes(name));
+  if (offered.length > 0) return `was offered ${offered.join(', ')}`;
+  if (!names.includes('read')) return 'was not offered read';
+  return undefined;
+}
+
 /** S11 GO18 (accept_s2's review step, GO18b): the goal reviewer — the Worker the platform starts
  *  for a goal's `review` check once every check it makes passed (ontology/goal-reviewer.yaml).
  *  Selected by `goal_review`, which only the reviewer's Task input carries; listed before the step
@@ -1044,8 +1062,20 @@ function reviewerTaskInput(messages) {
  *  a score for every criterion of the input, each once — `ACCEPT_S2_SCORE=<n>` in a criterion's
  *  description scores it n (a script can make a review fail), any other the highest score — and
  *  nothing but its output: a reviewer writes no findings, Facts, evidence or artifacts
- *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`). */
-function goalReviewerScenario(messages) {
+ *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`).
+ *
+ *  A request whose tools are not the read-only set ({@link reviewerToolsProblem}) gets a text
+ *  answer saying why instead of the report: the reviewer did not run read-only, so it ends without
+ *  reporting, its review settles `unavailable` and S15's goals miss the outcomes S15 asserts. */
+function goalReviewerScenario(messages, tools) {
+  const problem = reviewerToolsProblem(tools);
+  if (problem !== undefined) {
+    return [
+      {
+        text: `accept_s2: the goal reviewer ${problem}; a reviewer's pi tools must be read-only (S11 GO18a).`,
+      },
+    ];
+  }
   const input = reviewerTaskInput(messages);
   const criteria = Array.isArray(input?.criteria) ? input.criteria : [];
   const max = typeof input?.scoreRange?.max === 'number' ? input.scoreRange.max : 4;

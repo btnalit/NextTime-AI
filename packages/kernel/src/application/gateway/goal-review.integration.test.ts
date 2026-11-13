@@ -25,9 +25,9 @@ import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { checkIG5 } from '../../substrate/audit/goal-invariant-checks.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { advanceGoalRun } from '../goal/advance.js';
-import { createGoalRun } from '../goal/index.js';
+import { createGoalRun, listDueAcceptanceChecks, runAcceptanceCheck } from '../goal/index.js';
 import { REVIEW_SEALED, sameModelOf } from '../goal/review.js';
-import { REVIEWER_HANDLE_CAPABILITIES } from '../task/index.js';
+import { REVIEWER_HANDLE_CAPABILITIES, STEP_ATTEMPT_PAUSED_DETAIL } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -418,6 +418,43 @@ describe.runIf(DATABASE_URL !== undefined)(
     const getGoal = async (goalRunId: string, by: string): Promise<GoalDetailWire> =>
       GoalDetailWireSchema.parse(await call(human(by), 'get_goal', { goalRunId }));
 
+    /** The workspace's cap on a requester's concurrent WorkerRuns; `null` puts the default back. */
+    const setConcurrency = (value: number | null) =>
+      value === null
+        ? raw(
+            `delete from quotas where workspace_id = $1
+               and key = 'task.max_concurrent_worker_runs_per_user'`,
+            [workspaceId],
+          )
+        : raw(
+            `insert into quotas (workspace_id, key, value)
+             values ($1, 'task.max_concurrent_worker_runs_per_user', $2)
+             on conflict (workspace_id, key) do update set value = excluded.value`,
+            [workspaceId, value],
+          );
+
+    /** Moves the run's confirmation back so its wall clock ends `secondsLeft` from now (negative:
+     *  ended that long ago); returns the deadline. */
+    const wallClockLeft = async (goalRunId: string, secondsLeft: number) => {
+      const [row] = await raw<{ deadline: Date }>(
+        `update goal_runs
+            set confirmed_at = now() - make_interval(secs => $3::double precision - $4::double precision)
+          where workspace_id = $1 and id = $2
+          returning confirmed_at + make_interval(secs => $3::double precision) as deadline`,
+        [workspaceId, goalRunId, BUDGET.maxWallClockSeconds, secondsLeft],
+      );
+      if (!row) throw new Error(`goal run ${goalRunId} is gone`);
+      return row.deadline;
+    };
+
+    const reviewTasks = (goalRunId: string) =>
+      raw<{ id: string; review_round: number; review_check_key: string }>(
+        `select id, review_round, review_check_key from tasks
+          where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'
+          order by created_at`,
+        [workspaceId, goalRunId],
+      );
+
     const loseTask = (taskId: string, requesterId: string) =>
       failTaskAndReapWorkerRuns(
         { pool, privateKey, supervisorClient: supervisor },
@@ -536,7 +573,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       await call(human(requester), 'confirm_goal', { goalRunId, revision: 1 });
       await advanceOnce(goalRunId, requester);
-      await succeed(goalRunId, requester);
+      const stepTask = await succeed(goalRunId, requester);
       expect((await goalRow(goalRunId)).status).toBe('verifying');
 
       const task = await reviewTask(goalRunId);
@@ -558,8 +595,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       // F5: the line it is held to is not the reviewer's to read.
       expect(JSON.stringify(task.input)).not.toContain('passAt');
-      expect(supervisor.spawnCalls.find((input) => input.taskId === task.id)?.egressDenyAll).toBe(
-        true,
+      const spawned = supervisor.spawnCalls.find((input) => input.taskId === task.id);
+      expect(spawned?.egressDenyAll).toBe(true);
+      // N6: and pi's built-in tools only read files.
+      expect(spawned?.builtinTools).toBe('read_only');
+      // A step's Worker keeps every built-in tool.
+      expect(supervisor.spawnCalls.find((input) => input.taskId === stepTask)?.builtinTools).toBe(
+        undefined,
       );
 
       const reviewer = await workerOf(task.id);
@@ -945,6 +987,234 @@ describe.runIf(DATABASE_URL !== undefined)(
         pause_reason: 'needs_decision',
       });
       await notFlaggedByIG5([unjudged, lost, empty, spent]);
+    });
+
+    it('a review waits for every check the platform makes: none starts while one is pending, nor once one did not pass (F6)', async () => {
+      const requester = await newPrincipal('member');
+      // A Fact of types no one declared: the platform's check of it cannot pass.
+      const RUNS = {
+        kind: 'fact_predicate',
+        key: 'runs',
+        fact: {
+          linkType: 'runs_on',
+          source: { objectType: 'Service', identity: { name: 'report-site' } },
+          target: { objectType: 'Host', identity: { name: 'host-1' } },
+        },
+      };
+      const goalRunId = await startGoal(requester, planOf([REVIEW, RUNS]));
+      await succeed(goalRunId, requester);
+      // The platform's check is pending: the round is verifying, the review not started.
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'verifying' });
+      expect(await checkRow(goalRunId, 'runs')).toMatchObject({ status: 'pending' });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'pending', attempts: 0 });
+      const spawned = supervisor.spawnCalls.length;
+      expect((await advanceOnce(goalRunId, requester)).status).toBe('verifying');
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+
+      // The platform's check settles without passing: the run pauses on it, and the review
+      // never starts.
+      await raw(
+        `update goal_acceptance_checks set next_attempt_at = now()
+          where workspace_id = $1 and goal_run_id = $2 and check_key = 'runs'`,
+        [workspaceId, goalRunId],
+      );
+      const due = (await listDueAcceptanceChecks(pool, 1000)).find(
+        (candidate) => candidate.goalRunId === goalRunId && candidate.checkKey === 'runs',
+      );
+      if (!due) throw new Error('the fact check is not due');
+      await runAcceptanceCheck(
+        {
+          pool,
+          // A fact check reads the graph, never a gate.
+          gatekeeperClient: {} as Parameters<typeof runAcceptanceCheck>[0]['gatekeeperClient'],
+          // Its one attempt: no retry for the Fact to appear.
+          options: { maxAttempts: 1 },
+        },
+        due,
+      );
+      expect(await checkRow(goalRunId, 'runs')).toMatchObject({ status: 'unavailable' });
+      expect(await advanceOnce(goalRunId, requester)).toMatchObject({ status: 'paused' });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'paused' });
+      expect(await checkRow(goalRunId)).toMatchObject({
+        round: 1,
+        status: 'superseded',
+        attempts: 0,
+      });
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+      expect(supervisor.spawnCalls).toHaveLength(spawned);
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('a reviewer is held to the goal’s budget: a wait for the requester’s quota ends with the wall clock, which pauses the goal budget_exhausted before any reviewer starts; too few tokens end it at once (GO18a P3)', async () => {
+      const requester = await newPrincipal('member');
+      try {
+        // The requester's concurrency quota holds the reviewer back: it is tried again, never
+        // later than the wall clock's end.
+        const waits = await startGoal(requester, planOf([REVIEW]));
+        let deadline = new Date(0);
+        await succeed(waits, requester, async () => {
+          await setConcurrency(0);
+          deadline = await wallClockLeft(waits, 10);
+        });
+        expect(await goalRow(waits)).toMatchObject({ status: 'verifying' });
+        expect(await checkRow(waits)).toMatchObject({ status: 'pending', attempts: 0 });
+        expect(await reviewTasks(waits)).toEqual([]);
+        const again = await advanceOnce(waits, requester);
+        expect(again.status).toBe('verifying');
+        expect(again.nextTickAt?.getTime()).toBe(deadline.getTime());
+
+        // The wall clock ended: no reviewer starts, even one the quota would let start now.
+        await setConcurrency(null);
+        await wallClockLeft(waits, -1);
+        const spawned = supervisor.spawnCalls.length;
+        const ended = await advanceOnce(waits, requester);
+        expect(ended).toMatchObject({ status: 'paused', nextTickAt: null });
+        expect(await goalRow(waits)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'budget_exhausted',
+        });
+        expect(await pauseDetail(waits)).toBe(
+          `wall clock: ${BUDGET.maxWallClockSeconds} s since confirmation; review quality not started`,
+        );
+        expect(await checkRow(waits)).toMatchObject({
+          round: 1,
+          status: 'superseded',
+          attempts: 0,
+        });
+        expect(await reviewTasks(waits)).toEqual([]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+
+        // So is a review whose goal enters `verifying` past its wall clock.
+        const late = await startGoal(requester, planOf([REVIEW]));
+        await succeed(late, requester, () => wallClockLeft(late, -60));
+        expect(await goalRow(late)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'budget_exhausted',
+        });
+        expect(await reviewTasks(late)).toEqual([]);
+
+        // Review #493 on #1123: a reviewer started with little of the wall clock left runs no
+        // longer than what is left, as a step's attempt does — not its own 600 s.
+        const close = await startGoal(requester, planOf([REVIEW]));
+        await succeed(close, requester, () => wallClockLeft(close, 90));
+        const durations = await raw<{ duration_limit_sec: number }>(
+          `select duration_limit_sec from tasks
+            where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'`,
+          [workspaceId, close],
+        );
+        expect(durations).toHaveLength(1);
+        expect(durations[0]?.duration_limit_sec).toBeGreaterThan(0);
+        expect(durations[0]?.duration_limit_sec).toBeLessThanOrEqual(90);
+
+        // F8: too few tokens left end the review at once — not after the quota let it try.
+        const spent = await startGoal(requester, planOf([REVIEW]));
+        await succeed(spent, requester, async (taskId) => {
+          await setConcurrency(0);
+          await raw(
+            `update tasks set tokens_used = $2, token_budget = greatest(token_budget, $2)
+              where workspace_id = $1 and id = $3`,
+            [workspaceId, BUDGET.maxTokens - 5_000, taskId],
+          );
+        });
+        expect(await checkRow(spent)).toMatchObject({
+          status: 'unavailable',
+          attempts: 0,
+          last_error: 'no_budget',
+        });
+        expect(await goalRow(spent)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect(await pauseDetail(spent)).toContain(
+          'acceptance check quality: the review did not run to a verdict (no_budget)',
+        );
+        expect(await reviewTasks(spent)).toEqual([]);
+        await notFlaggedByIG5([waits, late, close, spent]);
+      } finally {
+        await setConcurrency(null);
+      }
+    });
+
+    it('the evaluation seal’s pause of the requester’s agents pauses the goal for a person instead of starting its reviewer; a resume once released reviews in a new round', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, planOf([REVIEW]));
+      let holdId = '';
+      await succeed(goalRunId, requester, async () => {
+        const [hold] = await raw<{ id: string }>(
+          `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+           values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')
+           returning id`,
+          [workspaceId, requester],
+        );
+        holdId = hold?.id as string;
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await pauseDetail(goalRunId)).toBe(`review quality: ${STEP_ATTEMPT_PAUSED_DETAIL}`);
+      expect(await checkRow(goalRunId)).toMatchObject({ round: 1, status: 'superseded' });
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+      expect(
+        await raw(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'evaluation.seal_hold_refused'
+              and actor_principal_id = $2`,
+          [workspaceId, requester],
+        ),
+      ).toEqual([{ payload: { onBehalfOf: requester, path: 'worker_start', outcome: 'refused' } }]);
+
+      await raw(
+        `update eval_seal_holds
+            set status = 'released', released_at = now(), released_by = $3,
+                release_reason = 'cleared in a test'
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, holdId, ownerId],
+      );
+      // Released, the run still waits for its requester: nothing resumes by itself.
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('paused');
+      await call(human(requester), 'resume_goal', { goalRunId });
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'verifying' });
+      expect(await reviewTasks(goalRunId)).toEqual([
+        expect.objectContaining({ review_round: 2, review_check_key: 'quality' }),
+      ]);
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('a review that did not pass starts no other reviewer: one held back by the quota is not started beside a run that pauses', async () => {
+      const requester = await newPrincipal('member');
+      const second = { ...REVIEW, key: 'tone' };
+      try {
+        await setConcurrency(1);
+        const goalRunId = await startGoal(requester, planOf([REVIEW, second]));
+        await succeed(goalRunId, requester);
+        const [first, ...others] = await reviewTasks(goalRunId);
+        expect(first).toMatchObject({ review_check_key: 'quality' });
+        expect(others).toEqual([]);
+        expect(await checkRow(goalRunId, 'tone')).toMatchObject({ status: 'pending', attempts: 0 });
+
+        await reviewerReports(first?.id as string, scores(1, 1));
+        const spawned = supervisor.spawnCalls.length;
+        await advanceOnce(goalRunId, requester);
+        expect(await checkRow(goalRunId)).toMatchObject({ status: 'failed' });
+        expect(await goalRow(goalRunId)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect(await checkRow(goalRunId, 'tone')).toMatchObject({
+          status: 'superseded',
+          attempts: 0,
+        });
+        expect((await reviewTasks(goalRunId)).map((task) => task.review_check_key)).toEqual([
+          'quality',
+        ]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+        await notFlaggedByIG5([goalRunId]);
+      } finally {
+        await setConcurrency(null);
+      }
     });
 
     it('a reviewer report that writes anything but its scores, or misses a criterion, is refused and the review keeps waiting', async () => {

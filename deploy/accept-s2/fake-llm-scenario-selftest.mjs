@@ -1924,9 +1924,16 @@ async function main() {
     // 6r. S11 GO18 goalReviewerScenario: the reviewer's Task input as the kernel writes it
     //     (`kind: goal_review`). A score for every criterion, each once — the scripted one where a
     //     description asks — and nothing but its output; the report passes the Worker result
-    //     contract and its `output` the reviewer's own schema.
+    //     contract and its `output` the reviewer's own schema. S11 GO18a: only when pi offered it
+    //     the read-only set (read, and none of bash, edit, write); otherwise a text answer and no
+    //     report.
     {
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const fn = (name) => ({
+        type: 'function',
+        function: { name, parameters: { type: 'object' } },
+      });
+      const readOnly = ['read', 'grep', 'find', 'ls', 'report_result'].map(fn);
       const reviewerInput = {
         kind: 'goal_review',
         goal: { statement: 'write the quarterly report' },
@@ -1945,17 +1952,14 @@ async function main() {
         ],
         scoreRange: { min: 0, max: 4 },
       };
-      const review = toolCallOf(
-        (
-          await post([
-            {
-              role: 'custom',
-              content: `## NextTime worker context\n\n### Task input\n${JSON.stringify(reviewerInput)}\n\n### Rules\nreport_result once.`,
-            },
-            begin,
-          ])
-        ).json,
-      );
+      const reviewerMessages = [
+        {
+          role: 'custom',
+          content: `## NextTime worker context\n\n### Task input\n${JSON.stringify(reviewerInput)}\n\n### Rules\nreport_result once.`,
+        },
+        begin,
+      ];
+      const review = toolCallOf((await post(reviewerMessages, false, { tools: readOnly })).json);
       const scored = (review?.args?.output?.scores ?? []).map((line) => [
         line.criterion,
         line.score,
@@ -1979,6 +1983,23 @@ async function main() {
         reviewOutput.success,
         reviewOutput.success ? '' : JSON.stringify(reviewOutput.error.issues),
       );
+      // Not read-only: pi's full set, or no tools at all — no report, a sentence saying why.
+      for (const [label, tools, why] of [
+        [
+          'goal-reviewer-write-tools',
+          [...readOnly, fn('bash'), fn('edit'), fn('write')],
+          'was offered bash, edit, write',
+        ],
+        ['goal-reviewer-no-tools', undefined, 'was not offered read'],
+      ]) {
+        const { json } = await post(reviewerMessages, false, tools ? { tools } : {});
+        const message = json.choices?.[0]?.message;
+        check(
+          label,
+          message?.tool_calls === undefined && String(message?.content ?? '').includes(why),
+          JSON.stringify(message),
+        );
+      }
     }
 
     // 6t. S11 AA5c: the admin agent's ticket journey — three chat Turns, then the Worker it tries.

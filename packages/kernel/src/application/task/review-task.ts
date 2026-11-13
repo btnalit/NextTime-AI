@@ -70,7 +70,8 @@ export const REVIEWER_HANDLE_CAPABILITIES: readonly string[] = PLANNER_HANDLE_CA
 export const REVIEWER_MAX_TOKEN_BUDGET = 100_000;
 /** Below this many tokens a reviewer is not started: too little to read what it reviews. */
 export const REVIEWER_MIN_TOKEN_BUDGET = 10_000;
-/** How long a reviewer Task may run, at most. */
+/** How long a reviewer Task may run, at most — less when the workspace default or what is left of
+ *  the goal's wall clock is less. */
 export const REVIEWER_MAX_DURATION_SEC = 600;
 
 /** `ontology/goal-reviewer.yaml` under `ontologyDir` (default `resolveOntologyDir()`). */
@@ -126,6 +127,9 @@ export interface CreateReviewTaskInput {
   readonly input: unknown;
   /** What is left of the goal's tokens for it. */
   readonly tokenCap: number;
+  /** What is left of the goal's wall clock, in seconds — the reviewer runs no longer than that,
+   *  as a step's attempt does (`createStepAttemptTask`'s `durationCapSec`; review #493 on #1123). */
+  readonly durationCapSec: number;
   /** The model the check asks for (`undefined`: the definition's, else the requester's). */
   readonly model?: string;
   /** The reviewed steps' handoff directories it mounts read-only. */
@@ -192,7 +196,11 @@ export async function createReviewTask(
   }
   const durationLimitSec = Math.max(
     1,
-    Math.min(REVIEWER_MAX_DURATION_SEC, quotas.defaultDurationLimitSec),
+    Math.min(
+      REVIEWER_MAX_DURATION_SEC,
+      quotas.defaultDurationLimitSec,
+      Math.floor(input.durationCapSec),
+    ),
   );
 
   const inserted = await client.query(

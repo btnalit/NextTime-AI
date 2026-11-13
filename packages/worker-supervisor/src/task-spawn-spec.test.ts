@@ -219,6 +219,25 @@ describe('buildTaskSpawnSpec', () => {
     expect(buildTaskSpawnSpec(base).labels).not.toHaveProperty('nexttime.egress-deny-all');
   });
 
+  it('limits pi to the built-in tools that read files only when asked, in its env and label (S11 GO18a P3)', () => {
+    const base = {
+      config,
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'workers',
+    };
+    const limited = buildTaskSpawnSpec({ ...base, builtinTools: 'read_only' });
+    expect(limited.env.filter((entry) => entry.startsWith('NEXTTIME_BUILTIN_TOOLS='))).toEqual([
+      'NEXTTIME_BUILTIN_TOOLS=read_only',
+    ]);
+    expect(limited.labels).toMatchObject({ 'nexttime.builtin-tools': 'read_only' });
+    const full = buildTaskSpawnSpec(base);
+    expect(full.env.some((entry) => entry.startsWith('NEXTTIME_BUILTIN_TOOLS='))).toBe(false);
+    expect(full.labels).not.toHaveProperty('nexttime.builtin-tools');
+  });
+
   it('places the given image (allowlist-checked by the caller, not here) verbatim', () => {
     const custom = buildTaskSpawnSpec({
       config,

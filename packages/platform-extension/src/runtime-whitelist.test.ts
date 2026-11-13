@@ -85,6 +85,8 @@ const KNOWN_PI_PATHS: readonly RegExp[] = [
 ];
 
 const EXPECTED_TOOLS = ['bash', 'edit', 'find', 'grep', 'ls', 'platform_tool', 'read', 'write'];
+/** S11 GO18a P3: a Worker limited to reading files (`NEXTTIME_BUILTIN_TOOLS=read_only`). */
+const READ_ONLY_TOOLS = ['find', 'grep', 'ls', 'platform_tool', 'read'];
 const PLATFORM_PROMPT = 'PLATFORM_PROMPT_MARKER';
 const FOREIGN = /PLANT|MIDLIFE|planted|midlife/;
 
@@ -156,6 +158,10 @@ function layOutImage(
   const opt = join(root, 'opt', 'nexttime');
   mkdirSync(opt, { recursive: true });
   copyFileSync(join(RUNTIME_DIR, 'pi-settings.json'), join(opt, 'pi-settings.json'));
+  copyFileSync(
+    join(RUNTIME_DIR, 'pi-settings-read-only.json'),
+    join(opt, 'pi-settings-read-only.json'),
+  );
   copyFileSync(
     join(RUNTIME_DIR, 'default-system-prompt.md'),
     join(opt, 'default-system-prompt.md'),
@@ -370,11 +376,15 @@ function startEntrypoint(extraEnv: Record<string, string> = {}): Runtime {
   };
 }
 
-function expectOnlyPlatformResources(request: CapturedRequest | undefined, prompt: string): void {
+function expectOnlyPlatformResources(
+  request: CapturedRequest | undefined,
+  prompt: string,
+  tools: readonly string[] = EXPECTED_TOOLS,
+): void {
   expect(request).toBeDefined();
   expect(request?.system).toContain(prompt);
   expect(request?.system).not.toMatch(FOREIGN);
-  expect(request?.tools).toEqual(EXPECTED_TOOLS);
+  expect(request?.tools).toEqual(tools);
 }
 
 /** pi's slash commands: Skills, prompt templates and extension commands (pi's built-in
@@ -386,13 +396,13 @@ function expectOnlyPlatformCommands(answer: Record<string, unknown>, skills: str
 
 /** pi's config directory holds the platform's settings and models.json link, plus only the two
  *  files pi itself creates there at every runtime start (its credential and model stores). */
-function expectRebuiltAgentDir(): void {
+function expectRebuiltAgentDir(settings = 'pi-settings.json'): void {
   const agentDir = join(root, 'tmp', 'pi-agent');
   for (const entry of readdirSync(agentDir)) {
     expect(['auth.json', 'models-store.json', 'models.json', 'settings.json']).toContain(entry);
   }
   expect(readFileSync(join(agentDir, 'settings.json'), 'utf8')).toBe(
-    readFileSync(join(RUNTIME_DIR, 'pi-settings.json'), 'utf8'),
+    readFileSync(join(RUNTIME_DIR, settings), 'utf8'),
   );
 }
 
@@ -463,6 +473,42 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
     // The restore hook put the directory back as entrypoint.sh built it.
     expectRebuiltAgentDir();
   }, 90_000);
+
+  it('starts a Worker limited to reading files with only the built-in tools that read them — at start and in every later conversation (S11 GO18a P3)', async () => {
+    const port = await startProvider();
+    layOutImage(port, { prompt: `${PLATFORM_PROMPT}\n`, skills: ['platform-demo'] });
+    plantBeforeStart();
+    const runtime = startEntrypoint({ NEXTTIME_BUILTIN_TOOLS: 'read_only' });
+
+    await runtime.prompt('hi');
+    expect(runtime.stdoutLines).toContain(
+      'nexttime-selfcheck check=builtin_tools result=ok set=read_only',
+    );
+    expectOnlyPlatformResources(requests[0], PLATFORM_PROMPT, READ_ONLY_TOOLS);
+    expectRebuiltAgentDir('pi-settings-read-only.json');
+
+    // Settings that would give the full set back, written into pi's config directory: the restore
+    // hook puts the read-only ones back before the next conversation reads them.
+    plantMidConversation({ narrowTools: false });
+    const switched = await runtime.request({
+      type: 'switch_session',
+      sessionPath: join(root, 'workspace', '.pi', 'sessions', 'next-chat.jsonl'),
+    });
+    expect(switched.success).toBe(true);
+    await runtime.prompt('again');
+    expectOnlyPlatformResources(requests.at(-1), PLATFORM_PROMPT, READ_ONLY_TOOLS);
+    expectRebuiltAgentDir('pi-settings-read-only.json');
+  }, 90_000);
+
+  it('refuses to start on a built-in tool set it does not know, before writing anything', async () => {
+    layOutImage(1, { prompt: `${PLATFORM_PROMPT}\n` });
+    const runtime = startEntrypoint({ NEXTTIME_BUILTIN_TOOLS: 'all' });
+    expect(await exitCode(runtime.child)).toBe(1);
+    expect(runtime.stdoutLines).toContain(
+      'nexttime-selfcheck check=builtin_tools result=fail reason=unknown_value',
+    );
+    expect(existsSync(join(root, 'tmp', 'pi-agent'))).toBe(false);
+  }, 30_000);
 
   it('keeps out what the agent writes into pi’s config directory by the flags alone, without the restore hook', async () => {
     const port = await startProvider();

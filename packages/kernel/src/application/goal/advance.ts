@@ -226,9 +226,14 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      (`requester`, F7). The reviewer Task of a review that stopped waiting on it (the run left
  *      `verifying`) is terminated after the commit, whatever the run's status. Leaving
  *      `verifying` supersedes the round's pending checks (`moves.ts`), so a paused, held or
- *      cancelled run observes nothing, and a resume verifies in a new round. No budget is checked
- *      while verifying: an observation is bounded by its own attempts and duration, and waiting
- *      for the requester spends nothing.
+ *      cancelled run observes nothing, and a resume verifies in a new round. The goal's budget
+ *      binds a reviewer, a Worker of the goal (`review.ts`): none starts past the wall clock (the
+ *      run pauses `budget_exhausted`, as in phase D) or while the evaluation seal pauses the
+ *      requester's agents (`needs_decision`, as in phase D); too few tokens left settle the review
+ *      `unavailable` (`no_budget`); and one held back by the requester's concurrency quota or a
+ *      reviewed step's container still exiting is tried again no later than the wall clock's end.
+ *      Nothing else is checked against the budget while verifying: an observation is bounded by
+ *      its own attempts and duration, and waiting for the requester spends nothing.
  *
  *   P. **Planning** (running, paused or verifying; S11 GO9a, `planner.ts`). Last: a planning round
  *      the run is no longer paused for is abandoned — its Task terminated after the commit, like
@@ -1570,6 +1575,7 @@ class Advance {
         round,
         steps: await this.lockSteps(),
         now: this.now,
+        deadline: this.deadline,
         quotaRetryMs: this.quotaRetryMs,
         stepFilesRecheckMs: this.stepFilesRecheckMs,
         ...(this.reviewerTemplate ? { reviewerTemplate: this.reviewerTemplate } : {}),
@@ -1585,6 +1591,11 @@ class Advance {
         this.goal.updatedAt,
       );
       if (await this.pauseOnUnmet(round)) return;
+      // A reviewer is held to the goal's wall clock, and to the evaluation seal, like a step.
+      if (reviews.pause) {
+        await this.pause(reviews.pause.reason, reviews.pause.detail);
+        return;
+      }
     }
     // Every check the platform makes and every review passed: what is left is the requester's
     // confirmation, if the round asks.
