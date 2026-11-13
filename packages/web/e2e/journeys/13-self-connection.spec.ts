@@ -237,7 +237,8 @@ async function proposeMove(page: Page): Promise<string> {
     timeout: 20_000,
   });
   const impact = sheet.getByTestId('gate-address-change-impact');
-  await expect(impact).toContainText('0 个已发布的 Operation');
+  // Nothing published yet reads as none, not as a count of 0 (UX acceptance of #1158).
+  await expect(impact).toContainText('还没有已发布的 Operation');
   await expect(impact).toContainText('没有自动批准的 Operation');
   await sheet.getByRole('button', { name: '③ 提交给平台管理员审批', exact: true }).click();
   const pending = sheet.getByTestId('gate-address-change-pending');
