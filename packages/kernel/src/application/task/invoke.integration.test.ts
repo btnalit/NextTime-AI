@@ -20,7 +20,9 @@ import {
   type IssuedHandle,
   entryScope,
   generateEphemeralHandleKeyPair,
+  grantCapability,
   issueHandle,
+  revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { withAdminClient } from '../gateway/auth.js';
@@ -1122,6 +1124,150 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
     });
 
+    /** The scope of `workerRunId`'s own Handle. */
+    async function runHandleScope(principalId: string, workerRunId: string) {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ scope: CapabilityScope }>(
+          `select h.scope from worker_runs wr
+             join capability_handles h
+               on h.workspace_id = wr.workspace_id and h.session_id = wr.session_id
+            where wr.workspace_id = $1 and wr.id = $2`,
+          [workspaceId, workerRunId],
+        );
+        return result.rows[0]?.scope;
+      });
+    }
+
+    it.each([
+      [
+        'disabled meanwhile',
+        'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+      ],
+      [
+        'made an auditor meanwhile',
+        "update principals set role = 'auditor' where workspace_id = $1 and id = $2",
+      ],
+    ])(
+      'a crash retry for a person %s is not started: the Task fails, no Handle is minted (legacy 289)',
+      async (who, change) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l289-${who}`,
+        );
+        await withAdminClient(pool, (client) => client.query(change, [workspaceId, principalId]));
+        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+        await reactToSupervisorStatus(
+          runtimeDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+
+        // Before the fix: a second spawn, with a fresh Handle llm-proxy would accept.
+        expect(supervisorClient.spawnCalls).toHaveLength(1);
+        expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(1);
+        const task = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(task?.status).toBe('failed');
+        expect(task?.failureReason).toBe('worker_failed');
+        expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+      },
+    );
+
+    it("a crash retry holds the failed run's scope only as far as its person may hold it now: a capability the role lost and a gate whose Grant was revoked drop out (legacy 289)", async () => {
+      const principalId = await adminInsertPrincipal('builder', 'l289-narrowed');
+      const gatekeeperId = await inTx(ownerId, async (client) => {
+        const activity = await client.query<{ id: string }>(
+          `insert into activities (workspace_id, kind, status, started_by) values ($1, 'test.invoke-worker', 'running', $2) returning id`,
+          [workspaceId, ownerId],
+        );
+        const gate = await registerGatekeeper(client, workspaceId, {
+          name: 'l289-gate',
+          transportKind: 'http',
+          target: 'l289-system',
+          endpoint: 'https://l289-gate.example.invalid',
+          activityId: activity.rows[0]?.id ?? '',
+          registeredBy: { id: ownerId, kind: 'human' },
+        });
+        return gate.gatekeeperId;
+      });
+      const grant = await inTx(ownerId, (client) =>
+        grantCapability(client, workspaceId, {
+          principalId,
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
+          grantedBy: ownerId,
+        }),
+      );
+      const definition = await publishWorkerDef({
+        systemPrompt: 'You are a gate worker that may propose a Skill.',
+        capabilities: ['get_object', 'propose_skill', 'request_action'],
+        gates: [gatekeeperId],
+      });
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(
+        sessionId,
+        entryScope({ resources: { gatekeeper: [gatekeeperId] } }, { role: 'builder' }),
+      );
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+      const invoke = () =>
+        invokeWorker(
+          workspaceId,
+          { principalId, channel: 'handle', claims: claimsFromIssued(issued) },
+          {
+            definitionId: definition.id,
+            version: definition.version,
+            input: {},
+            wait: false,
+          },
+          runtimeDeps,
+        );
+      const crashAndRetry = async (workerRunId: string): Promise<string> => {
+        const before = supervisorClient.spawnCalls.length;
+        supervisorClient.setStatus(workerRunId, { status: 'failed', exitCode: 1 });
+        await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, workerRunId);
+        expect(supervisorClient.spawnCalls).toHaveLength(before + 1);
+        return supervisorClient.spawnCalls[before]?.workerRunId as string;
+      };
+
+      // Nothing changed since the run started: the retry holds exactly the failed run's scope.
+      const unchanged = await invoke();
+      const unchangedScope = await runHandleScope(principalId, unchanged.workerRunId);
+      expect(unchangedScope?.capabilities).toEqual(
+        expect.arrayContaining(['propose_skill', 'request_action']),
+      );
+      expect(unchangedScope?.resources.gatekeeper).toEqual([gatekeeperId]);
+      const unchangedRetry = await crashAndRetry(unchanged.workerRunId);
+      expect(await runHandleScope(principalId, unchangedRetry)).toEqual(unchangedScope);
+
+      // Demoted to member and the gate's Grant revoked, then the run crashes.
+      const changed = await invoke();
+      const changedScope = await runHandleScope(principalId, changed.workerRunId);
+      expect(changedScope).toEqual(unchangedScope);
+      await withAdminClient(pool, (client) =>
+        client.query("update principals set role = 'member' where workspace_id = $1 and id = $2", [
+          workspaceId,
+          principalId,
+        ]),
+      );
+      await inTx(ownerId, (client) => revokeCapabilityGrant(client, workspaceId, grant.id));
+      const changedRetry = await crashAndRetry(changed.workerRunId);
+
+      const retryScope = await runHandleScope(principalId, changedRetry);
+      // Before the fix: the failed run's scope as it was, propose_skill and the gate included.
+      expect(retryScope?.capabilities).toEqual(
+        (changedScope?.capabilities ?? []).filter((name) => name !== 'propose_skill'),
+      );
+      expect(retryScope?.resources.gatekeeper).toBeUndefined();
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, changed.taskId),
+      );
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+    });
+
     it('a crash reaction under a Task cancelled meanwhile spawns no retry', async () => {
       const { principalId, supervisorClient, runtimeDeps, spawnResult } =
         await spawnRunningTask('r58-cancelled-meanwhile');
@@ -1446,6 +1592,45 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(task?.status).toBe('failed');
     expect(task?.failureReason).toBe('worker_failed');
     expect(supervisorClient.spawnCalls).toHaveLength(1); // no requeue attempt
+  });
+
+  // Legacy 290, decided: the duration limit counts the time a Task spends waiting for approval
+  // (reaper.ts says why). Pinned so that pausing it is a deliberate change.
+  it('a Task waiting_approval past its duration limit is timed out like a running one (legacy 290)', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+    await inTx(ownerId, async (client) => {
+      await client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      );
+      await client.query(
+        `update worker_runs set started_at = now() - make_interval(secs => coalesce(
+           (select duration_limit_sec from tasks where workspace_id = $1 and id = $3), 3600) + 60)
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, spawnResult.workerRunId, spawnResult.taskId],
+      );
+    });
+
+    await runTaskReaper(runtimeDeps).catch((error: unknown) => {
+      // Other files' rows may fail this shared tick; only this Task matters here.
+      if (!(error instanceof TaskReaperCandidateErrors)) throw error;
+    });
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('timeout');
+    expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
   });
 
   it('terminateTask revokes the WorkerRun Handle (capability_handles.revoked_at set)', async () => {

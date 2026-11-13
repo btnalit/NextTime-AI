@@ -84,7 +84,8 @@ export interface SpawnWorkerRunInput {
    *  from the Task's own *pinned* WorkerDefinition (P2-10 fix — see that function's own doc
    *  comment for why `getWorkerDefinition`, not `requirePublishedWorkerDefinition`); everything
    *  else about the retry (capabilities/gates/authority) still comes from the failed WorkerRun's
-   *  own already-granted Handle scope, never re-derived. */
+   *  own already-granted Handle scope, never widened — only narrowed to what its person may hold
+   *  now (legacy 289, `acting-authority.ts`'s `retryScopeNow`). */
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
   /** S10 E1: the Skill versions `skillsInline` was rendered from (`definition-content.ts`'s
    *  `resolveSkillsInline`, same caller-resolved convention). Written to `worker_run_skills` in the
