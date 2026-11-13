@@ -2749,6 +2749,21 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：Worker 崩溃后的那一次重试，Handle 只带这个人现在还能用的能力和还能执行的门；被停用、已不存在或不能再启动 Worker 的人，Task 不再重试，直接失败为 `worker_failed`。`waiting_approval` 期间 Task 计时照常走（遗留 290 决定不暂停）。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.161 worker-runtime 镜像装 fd，pi 的 `find` 离线可用（#1137，遗留 698，0.68.0 之后的下一版）
+
+无迁移，运行时契约不变（仍是 3）。
+
+- **应用**：主机照常拉取发布的镜像，不需要额外出网。只有从源码构建镜像（不带 `--pull`）时，才需要能访问 GitHub 的 release 下载 fd；构建时会离线自检 pi 的 `find` / `grep`，失败即构建失败并写明是哪个工具。
+- **窗口前只读核对**：§3.156 那条照旧：`activeRuntimeImage` 不能钉在旧 tag 上，否则 Worker 仍用没有 fd 的旧镜像。
+- **应用后核对**：
+
+  ```bash
+  docker run --rm --entrypoint fd nexttime-ai-worker-runtime --version
+  ```
+
+  应显示 10.5.2；或者入口 / Worker 用 pi 的 `find` 能返回结果。
+- **回滚**：回代码、重建镜像即可，没有迁移。旧镜像照旧能用，只是 `find` 不可用。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
