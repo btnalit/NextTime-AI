@@ -75,6 +75,7 @@ export {
   GATE_ADDRESS_CHANGE_SALT_CONSTRAINT,
   expireStaleGateAddressChange,
   findGateAddressChange,
+  findLatestEndedGateAddressChange,
   findOpenGateAddressChange,
   gateAddressChangeSaltUsed,
   insertGateAddressChange,

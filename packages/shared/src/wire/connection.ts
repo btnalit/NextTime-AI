@@ -6,7 +6,10 @@ import {
   PublishableStatusSchema,
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
-import { GateAddressChangeWireSchema } from './gate-address-change.js';
+import {
+  GateAddressChangeOutcomeWireSchema,
+  GateAddressChangeWireSchema,
+} from './gate-address-change.js';
 import {
   AbsentAnswerDraftWireSchema,
   GateOwnedParamDraftWireSchema,
@@ -182,6 +185,11 @@ export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   /** Legacy 701: the open proposal to move this self-connected gate to a new address, awaiting a
    *  platform administrator — for a workspace owner only, absent when there is none. */
   pendingAddressChange: GateAddressChangeWireSchema.optional(),
+  /** Legacy 715: how the gate's latest proposal that is no longer open ended — applied, rejected
+   *  (with the administrator's reason), withdrawn or expired — for a workspace owner only, absent
+   *  when the gate never had one. Present alongside `pendingAddressChange` when a newer proposal
+   *  is open. */
+  lastAddressChangeOutcome: GateAddressChangeOutcomeWireSchema.optional(),
 });
 export type GatekeeperDetailWire = z.infer<typeof GatekeeperDetailWireSchema>;
 

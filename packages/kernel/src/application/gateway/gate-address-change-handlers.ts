@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   GateAddressChangeImpactWire,
+  GateAddressChangeOutcomeWire,
   GateAddressChangePreviewWire,
   GateAddressChangeStatusWire,
   GateAddressChangeWire,
@@ -43,6 +44,7 @@ import {
   canonicalJson,
   expireStaleGateAddressChange,
   findGateAddressChange,
+  findLatestEndedGateAddressChange,
   findOpenGateAddressChange,
   findSelfConnection,
   gateAddressChangeExpired,
@@ -409,6 +411,42 @@ export async function pendingGateAddressChangeWire(
   const open = await findOpenGateAddressChange(client, workspaceId, gatekeeperId);
   if (!open || (await gateAddressChangeExpired(client, open))) return null;
   return toWorkspaceWire(open);
+}
+
+/** `get_gatekeeper`'s `lastAddressChangeOutcome` (legacy 715): how the gate's latest proposal
+ *  that is no longer open ended. A proposal past its expiry ended then, whether or not a later
+ *  call recorded it as `expired` (lazy expiry stamps `decided_at` with the time it recorded it). The
+ *  administrator's reason is shown as free text is (`mapRow`); who decided is not shown. */
+export async function lastGateAddressChangeOutcomeWire(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<GateAddressChangeOutcomeWire | null> {
+  const ended = await findLatestEndedGateAddressChange(client, workspaceId, gatekeeperId);
+  if (!ended) return null;
+  const { row, lapsed } = ended;
+  const status = lapsed ? 'expired' : row.status;
+  if (status === 'proposed') {
+    throw new Error(`lastGateAddressChangeOutcomeWire: proposal ${row.id} is still open`);
+  }
+  const endedAt = status === 'expired' ? row.expiresAt : row.decidedAt;
+  if (!endedAt) {
+    throw new Error(
+      `lastGateAddressChangeOutcomeWire: proposal ${row.id} is ${status} with no decided_at`,
+    );
+  }
+  return {
+    id: row.id,
+    gatekeeperId: row.gatekeeperId,
+    // Stored as shown (`propose_gate_address_change`).
+    fromEndpoint: row.fromEndpoint,
+    toEndpoint: redactConnectionAddress('endpoint', row.toEndpoint),
+    status,
+    createdAt: row.createdAt.toISOString(),
+    endedAt: endedAt.toISOString(),
+    rejectionReason: status === 'rejected' ? row.rejectionReason : null,
+    accountCredentialsLeftOnOldHost: status === 'applied',
+  };
 }
 
 // -------------------------------------------------------------------------------------------
