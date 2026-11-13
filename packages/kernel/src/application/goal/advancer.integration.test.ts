@@ -7527,6 +7527,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await acceptanceOf(forBuilder.goalRunId))?.rounds[0]?.checks).toMatchObject([
           { checkKey: 'exposed', status: 'passed', factId: fact },
         ]);
+
+        // By id, read with the requester's role when it is judged (#493's P3 on #1146): a builder
+        // names the draft by its id, then is made a member before the check is judged — the
+        // draft is no end for them any more.
+        const demoted = await newPrincipal('builder');
+        const byId = {
+          ...check,
+          fact: { ...check.fact, target: { objectId: draft } },
+        };
+        const forDemoted = await verifyingGoal(demoted, [byId]);
+        await admin((client) =>
+          client.query(
+            "update principals set role = 'member' where workspace_id = $1 and id = $2",
+            [workspaceId, demoted],
+          ),
+        );
+        await reconfirm(fact, collectorSeen());
+        expect(await judgeNow(forDemoted.goalRunId, 'exposed')).toBe('retry');
+        expect((await acceptanceOf(forDemoted.goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'exposed', status: 'pending', lastError: 'fact_not_observed', factId: null },
+        ]);
       });
 
       it('seen and false is not unseen: a Fact that does not satisfy the predicate fails its check on it; one recorded through the requester’s own Source is never seen — unavailable, and the pause tells the two apart', async () => {

@@ -1393,12 +1393,11 @@ export async function factCheckViewer(
   workspaceId: string,
   requester: string,
 ): Promise<GraphReadViewer> {
-  const result = await client.query<{ role: DraftViewer['role'] }>(
-    'select role from principals where workspace_id = $1 and id = $2',
-    [workspaceId, requester],
-  );
-  const role = result.rows[0]?.role;
-  return { principalId: requester, seesEveryDraft: role !== undefined && seesEveryDraft(role) };
+  const viewer = await planViewer(client, workspaceId, requester);
+  return {
+    principalId: requester,
+    seesEveryDraft: viewer !== null && seesEveryDraft(viewer.role),
+  };
 }
 
 /** What a reconcile declaration refers to, as of now: its action a published execute-class
