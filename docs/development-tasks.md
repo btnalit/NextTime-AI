@@ -3835,6 +3835,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - `hostPatternProblem` 说明一条模式为什么永远匹配不上；egress-proxy 的 `config.ts` / `source-map.ts` 加载时报告（不致命、不丢其余条目，源映射同一组问题只报一次），内核 `adapters/outbound-target` 对 allow-hosts 的坏条目逐条 error 日志并丢弃（审查后由"启动失败"改为不致命：这类条目修复前就从未放行，启动失败会让整栈停服）。
 - 公网地址必须 https（#1129，遗留 413，13ecde8）：`decideOutboundTarget`（`packages/shared/src/outbound-target.ts`）加理由 `plaintext-public`，owner 给的 `http://` URL 只要解析出一个公网地址就拒，内网（RFC 1918、CGNAT、ULA）照旧，地址类理由先报；`NEXTTIME_CONNECTION_ALLOW_HOSTS` 仍跳过全部检查。覆盖 `create_connection` 的 `endpoint`、`manifestSource` 与 `HttpGatekeeperClient` 的非平台凭据调用（`target_refused`，不发请求）。`400 connection_target_refused` 带 `details.reason`（所有理由）与 `details.field`（`endpoint` / `manifestSource`，无对应参数时不带），控制台按 `details.field` 定字段，旧内核回退到解析消息开头的字段名。
 - 存量门的拒绝（#1131，遗留 700，a8fe301）：#1129 之后，地址不是允许目标的门，调用在发出前以 424 `target_refused` 拒绝（此前是 502 `gatekeeper_error`）。`GatekeeperClientError` 加可选 `targetRefusal`，`gateRefusalOf` 只认 `CLIENT_REFUSAL_STATUS`（`status === 0`）并带出 `details`（`reason`），HTTP 映射与拒绝审计（不含地址）带出它；控制台 `lib/errors.ts` 按 `details.reason` 选文案，`ActionFailureNotice` 用 `gateReasonNextStep`，只在原因以这个 code 开头时用专门文案。
+- 自接门换地址（#1156，遗留 701 内核与契约部分，ddc35d5；core 0057、governance 0044）：所有者 preview / propose / withdraw，平台管理员 list / approve / reject，24 小时惰性过期，门的 id 和引用不变。不变量 I-A1（巡检）到 I-A5；I-A3 让请求在插入时于自接门的锁下绑定 `gate_endpoint_key`，执行器按本次拨号的 `endpointKey` 比较，不一致在发送前以 `gate_address_changed` 拒绝。新密钥的 salt 单次使用，服务过提议的密钥 `create_connection` 也拒绝（`connection_secret_in_use`）。和设计、裁定的出入五条：
+  1. I-A1 只查换过地址的门、只比 `endpoint_key`（没换过的门写法可能不同，自接行的 `endpoint` 是会被 scrub 截掉的显示副本）。
+  2. 新增 409 `gate_address_change_blocked`：门上有迁移前在途且没回填地址键的请求时拒绝批准，未绑定地址的请求永远碰不到换地址。
+  3. 撤回已过期的提议，落 expired，不落 withdrawn。
+  4. 撤回先不加锁读一次，已决定的提议答 409 `gate_address_change_decided`，不再是 404。
+  5. `list_gate_address_changes` 只在平台面；owner 用 `get_gatekeeper` 的 `pendingAddressChange` 看自己门上的提议。
 - `EgressDenyListSchema`（`shared/src/worker-definition.ts`，两种 kind 共用）在列表层 transform 与校验：输出规范形式，拒绝通配符、`..`、URL、端口、路径、CIDR、空白、非 ASCII、IP 与空串，issue path 是 `egressDeny` 字段本身。内核刻意不在下发时归一化，`EGRESS_DENY_LABEL` 与下发列表保持一致，不触发容器重建。
 - 相邻发现列入遗留 148（ssh 非锚定正则）、149（子网与 IPv6 规则不一致）。
 
