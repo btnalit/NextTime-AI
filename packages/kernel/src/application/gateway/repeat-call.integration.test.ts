@@ -41,7 +41,11 @@ import { issueAdminAgentHandle } from '../admin-agent/identity.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
-import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
+import {
+  configureTaskRuntime,
+  getConfiguredTaskRuntime,
+  resetTaskRuntimeForTests,
+} from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
@@ -1013,6 +1017,85 @@ async function gateInstanceUpdatedAt(
     [gateId],
   );
   return result.rows[0]?.at;
+}
+
+/** With the admin agent switched on (`ADMIN_AGENT_ENABLED`): what issuing and using its Handle
+ *  needs. */
+async function withAdminAgentOn<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.ADMIN_AGENT_ENABLED;
+  process.env.ADMIN_AGENT_ENABLED = '1';
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(process.env, 'ADMIN_AGENT_ENABLED');
+    else process.env.ADMIN_AGENT_ENABLED = previous;
+  }
+}
+
+/** An admin proposal with one segment for the case's workspace: an administrator (the case's own
+ *  on a platform row, else one made for it) chooses that workspace as their agent's target, and
+ *  the agent, on a Handle the task runtime signs, proposes one new Skill there. */
+async function adminProposal(
+  ctx: RecipeContext,
+): Promise<{ proposalId: string; segmentId: string }> {
+  const admin =
+    ctx.admin ??
+    (await createUser(ctx.pool, {
+      login: `repeat-proposer-${randomUUID().slice(0, 8)}`,
+      displayName: 'Repeat Proposer',
+      platformRole: 'admin',
+    }));
+  const trial = await createWorkspaceWithOwner(ctx.pool, {
+    name: `repeat-trial-${randomUUID().slice(0, 8)}`,
+    owner: { userId: admin.id, displayName: admin.displayName },
+    purpose: 'admin_trial',
+  });
+  await dispatchCapability({ pool: ctx.pool }, platformCaller(admin), 'set_admin_agent_targets', {
+    trialWorkspaceId: trial.workspaceId,
+    targetWorkspaceIds: [ctx.seed.workspaceId],
+  });
+  return withAdminAgentOn(async () => {
+    const issued = await withWorkspace(
+      ctx.pool,
+      { workspaceId: trial.workspaceId, principalId: trial.ownerPrincipalId },
+      (client) =>
+        issueAdminAgentHandle(client, {
+          workspaceId: trial.workspaceId,
+          principalId: trial.ownerPrincipalId,
+          ttlSeconds: 600,
+          privateKey: getConfiguredTaskRuntime().privateKey,
+        }),
+    );
+    const agent = await callerFor(ctx.pool, { handle: issued.token, presented: 'source' });
+    const proposal = (await dispatchCapability(
+      { pool: ctx.pool },
+      agent,
+      'propose_admin_proposal',
+      {
+        title: 'Disk triage',
+        description: 'What the trial workspace settled on.',
+        sourceName: `repeat-${randomUUID().slice(0, 8)}`,
+        segments: [
+          {
+            targetWorkspaceId: ctx.seed.workspaceId,
+            items: [
+              {
+                kind: 'skill_version',
+                skill: {
+                  name: `repeat-triage-${randomUUID().slice(0, 8)}`,
+                  description: 'Triage a full disk.',
+                  markdown: '# Steps\n\n1. Look at the disk.',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    )) as { id: string; segments: { id: string }[] };
+    const segmentId = proposal.segments[0]?.id;
+    if (segmentId === undefined) throw new Error('adminProposal: no segment');
+    return { proposalId: proposal.id, segmentId };
+  });
 }
 
 /** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
@@ -2318,6 +2401,48 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ segmentId: await installedPackSegment(ctx) }),
     },
   },
+  reject_admin_proposal_segment: {
+    // Rejected by the first call, so the same call again finds it decided (409
+    // admin_proposal_segment_not_open), nothing written.
+    "an admin proposal's segment for the case's workspace": {
+      first: expect.objectContaining({ status: 'rejected' }),
+      setUp: async (ctx) => ({
+        segmentId: (await adminProposal(ctx)).segmentId,
+        reason: 'Not here.',
+      }),
+    },
+  },
+  apply_admin_proposal_segment: {
+    // Applied by the first call (a new Skill here), so the same call again finds it decided (409
+    // admin_proposal_segment_not_open), nothing written.
+    "an admin proposal's segment for the case's workspace, as its preview showed it, confirmed": {
+      first: expect.objectContaining({ segment: expect.objectContaining({ status: 'applied' }) }),
+      setUp: async (ctx) => {
+        const { segmentId } = await adminProposal(ctx);
+        const preview = await as<{
+          digest: string;
+          items: { ordinal: number; classification: string }[];
+        }>(ctx, 'preview_admin_proposal_segment', { segmentId });
+        return {
+          segmentId,
+          reviewedDigest: preview.digest,
+          confirmedOrdinals: preview.items
+            .filter((item) => item.classification === 'authority_widening')
+            .map((item) => item.ordinal),
+        };
+      },
+    },
+  },
+  withdraw_admin_proposal: {
+    // Withdrawn by the first call, so the same call again finds nothing still proposed (409
+    // admin_proposal_not_open), nothing written.
+    "the administrator's own agent's proposal": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ status: 'withdrawn' })],
+      }),
+      setUp: async (ctx) => ({ proposalId: (await adminProposal(ctx)).proposalId }),
+    },
+  },
   create_gate_instance: {
     // The gate id is taken by the first call, so the same call again is refused (409
     // gate_id_taken), nothing written.
@@ -2520,6 +2645,9 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'reject_admin_proposal_segment',
+  'apply_admin_proposal_segment',
+  'withdraw_admin_proposal',
   'create_gate_instance',
   'update_gate_instance',
   'delete_gate_instance',
