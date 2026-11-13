@@ -9,7 +9,9 @@
 // off, so a binary missing from the image fails the tool on every call. `fd` was missing until
 // leftover 698: every Worker's `find` failed with "fd is not available and could not be
 // downloaded" while `grep` (ripgrep was installed) worked. Checking the binaries with `--version`
-// would not catch pi changing the names it looks for; running the tools does.
+// would not catch pi changing the names it looks for, nor a binary too old for the arguments pi
+// passes; running the tools does. The scratch directory is outside any git repository, where pi
+// adds `--no-require-git` to `find` — the case Debian's fd 8.6 failed (the Dockerfile's fd layer).
 //
 // The agent directory is a fresh one under the scratch directory, as at a real start (entrypoint.sh
 // rebuilds /tmp/pi-agent), so a binary cached there cannot hide one missing from PATH, and nothing

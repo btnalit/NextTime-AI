@@ -109,18 +109,39 @@ FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.
-#
-# Two of these ARE what pi's own built-in tools run: `ripgrep` (`rg`, the `grep` tool) and
-# `fd-find` (the `find` tool, STATUS leftover 698). pi looks for a copy under its agent directory,
-# then on PATH, and otherwise downloads one from GitHub — which PI_OFFLINE=1 (below) switches off,
-# so without the package every `find` call failed. Debian names the binary `fdfind`; pi looks for
-# that name too, and the `fd` link is for the agent's own shell, where `fd` is the usual name. The
-# self-check after `ENV PI_OFFLINE=1` runs both tools, so a missing binary fails the build.
+# `ripgrep` is also what pi's own `grep` tool runs (`rg`); `fd`, which its `find` tool runs, comes
+# from the next layer.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git curl ca-certificates python3 python3-pip python3-venv build-essential ripgrep fd-find \
- && rm -rf /var/lib/apt/lists/* \
- && ln -s "$(command -v fdfind)" /usr/local/bin/fd
+      git curl ca-certificates python3 python3-pip python3-venv build-essential ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+
+# fd for pi's `find` tool (STATUS leftover 698). pi looks for a copy under its agent directory,
+# then for `fd` / `fdfind` on PATH, and otherwise downloads one from GitHub — which PI_OFFLINE=1
+# (below) switches off, so with no fd every `find` call failed. Not Debian's `fd-find`: bookworm
+# ships fd 8.6.0, and outside a git repository pi passes `--no-require-git`, which fd added in
+# 8.7.0 — 8.6 rejects it, so `find` would still fail in every Worker directory that is not a
+# clone. Instead fd's own static (musl) release build at a pinned version, checked against the
+# SHA-256 recorded here; amd64 and arm64 only, any other architecture stops the build. Bumping fd
+# means changing the version and both digests together (docs/runbooks/pi-upgrade.md 2.2). The
+# self-check after `ENV PI_OFFLINE=1` runs pi's `find` and `grep`, so a binary pi cannot use fails
+# the build.
+RUN set -eu; \
+    fd_version=10.5.2; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) fd_target=x86_64-unknown-linux-musl; \
+             fd_sha256=7e2d07fa2b8807642aaec67b7e2972a9fbe4db26fcb340a7372392db42b26694 ;; \
+      arm64) fd_target=aarch64-unknown-linux-musl; \
+             fd_sha256=63ea52cb31586e6d98efa2f06d73d542f16c7d0c4af0f07b579aaf9714cf907a ;; \
+      *) echo "no pinned fd build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    fd_name="fd-v${fd_version}-${fd_target}"; \
+    curl -fsSL --retry 3 -o /tmp/fd.tar.gz \
+      "https://github.com/sharkdp/fd/releases/download/v${fd_version}/${fd_name}.tar.gz"; \
+    echo "${fd_sha256}  /tmp/fd.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/fd.tar.gz -C /tmp "${fd_name}/fd"; \
+    install -m 0755 "/tmp/${fd_name}/fd" /usr/local/bin/fd; \
+    rm -rf /tmp/fd.tar.gz "/tmp/${fd_name}"
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
 # agent@<pi.version>", currently 1.1.0). --ignore-scripts matches pi's own containerization.md
