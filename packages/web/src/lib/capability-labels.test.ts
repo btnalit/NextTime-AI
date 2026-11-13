@@ -32,6 +32,7 @@ const OTHER_AUDIT_ACTIONS = [
   'connector.created',
   'self_connection.entry_handles_revoked',
   'gatekeeper.self_connection_linked',
+  'gatekeeper.address_changed',
   'gate_instance.manifest_confirmed',
   'gate_instance.created',
   'gate_instance.disabled',

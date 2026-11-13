@@ -287,6 +287,14 @@ import { executionReadinessHandler } from './execution-readiness-handler.js';
 import { exportProvHandler } from './export-prov-handler.js';
 import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
+  approveGateAddressChangeHandler,
+  listGateAddressChangesHandler,
+  previewGateAddressChangeHandler,
+  proposeGateAddressChangeHandler,
+  rejectGateAddressChangeHandler,
+  withdrawGateAddressChangeHandler,
+} from './gate-address-change-handlers.js';
+import {
   enableGateInstanceHandler,
   issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
@@ -2718,6 +2726,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_self_connections', listSelfConnectionsHandler],
   ['suspend_self_connection', suspendSelfConnectionHandler],
   ['resume_self_connection', resumeSelfConnectionHandler],
+  // Legacy 701: the administrator decides a workspace's proposal to move a self-connected gate.
+  ['list_gate_address_changes', listGateAddressChangesHandler],
+  ['approve_gate_address_change', approveGateAddressChangeHandler],
+  ['reject_gate_address_change', rejectGateAddressChangeHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
@@ -2914,6 +2926,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // R-01 (maintainer decision D-01) — a self-connected gate's own secret, connection-handlers.ts.
   ['mint_connection_secret', mintConnectionSecretHandler],
   ['rotate_connection_secret', rotateConnectionSecretHandler],
+  // Legacy 701: an owner proposes moving a self-connected gate to a new address.
+  ['preview_gate_address_change', previewGateAddressChangeHandler],
+  ['propose_gate_address_change', proposeGateAddressChangeHandler],
+  ['withdraw_gate_address_change', withdrawGateAddressChangeHandler],
   ['publish_manifest', publishManifestHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
   ['list_gatekeepers', listGatekeepersHandler],

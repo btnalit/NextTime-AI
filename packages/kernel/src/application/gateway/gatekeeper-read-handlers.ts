@@ -7,6 +7,7 @@ import {
 import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { getOperationStats } from '../../governance/approval/index.js';
 import type { OperationStatsRow } from '../../governance/approval/index.js';
+import { redactConnectionAddress } from '../../governance/connections/index.js';
 import {
   type GatekeeperListEntry,
   GatekeeperNotFoundError,
@@ -32,6 +33,7 @@ import {
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { pendingGateAddressChangeWire } from './gate-address-change-handlers.js';
 import { resolveGateTarget } from './gate-target.js';
 
 /**
@@ -326,6 +328,12 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
     platformPolicy?.origin === 'self' && platformPolicy.suspended
       ? await findSelfConnection(client, workspaceId, gatekeeperId)
       : null;
+  // Legacy 701: a self-connected gate's address, and its open proposal to move, for an owner — the
+  // one who may propose a change (`propose_gate_address_change`).
+  const ownerOfSelfConnection = platformPolicy?.origin === 'self' && viewer.role === 'owner';
+  const pendingAddressChange = ownerOfSelfConnection
+    ? await pendingGateAddressChangeWire(client, workspaceId, gatekeeperId)
+    : null;
   const health = await healthProbe;
   const operations = allOperations.filter((op) => {
     if (!operationVisibleTo(viewer, op)) return false;
@@ -349,6 +357,10 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
       ...summary,
       operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
       health,
+      ...(ownerOfSelfConnection
+        ? { endpoint: redactConnectionAddress('endpoint', record.endpoint) }
+        : {}),
+      ...(pendingAddressChange ? { pendingAddressChange } : {}),
       ...(suspension?.suspendedAt
         ? {
             platformSuspension: {

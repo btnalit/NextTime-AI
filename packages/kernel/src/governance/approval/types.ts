@@ -84,7 +84,28 @@ export interface ActionRequestRow {
    *  and is ordered against every request of it (I-Q1, `queue.ts`) — every request made before
    *  that migration, and every one whose Operation declares no target or was not published (I17). */
   readonly target: ActionTarget | null;
+  /** Legacy 701, I-A3 (migrations/governance/0044_action_request_gate_endpoint_key.sql): the
+   *  Gatekeeper's address when this request was made, in the kernel's one gate-address spelling
+   *  (`normalizeGateEndpoint`) — written once, never changed. The executor runs it only at that
+   *  address (`gate_address_changed` otherwise). `null`: a request made before that migration on a
+   *  gate whose address was not on file, or by the previous release — run at the current address,
+   *  as before. */
+  readonly gateEndpointKey: string | null;
 }
+
+/** D-12: the statuses a derived key still dedupes against — the non-terminal states of
+ *  `ACTION_REQUEST_TRANSITIONS` (`executed` counts as terminal: the operation has run, even though
+ *  `verify` can follow). Must match governance 0014's in-flight index predicate. Also the requests
+ *  of a gate an address change counts (legacy 701, `countInFlightActionRequestsForGatekeeper`) and
+ *  governance 0044's backfill names. */
+export const IN_FLIGHT_ACTION_REQUEST_STATUSES: readonly ActionRequestStatus[] = [
+  'proposed',
+  'policy_evaluated',
+  'auto_approved',
+  'pending_approval',
+  'approved',
+  'executing',
+];
 
 /** Legacy K: `ActionRequestRow.operationDigest` of a request made against no definition at all —
  *  an unpublished Operation (I17) with no draft. Not a digest (those are `sha256:…`), and never sent
@@ -120,6 +141,7 @@ export interface ActionRequestDbRow {
   reconciliation_decision_id: string | null;
   reexecute_decision_id: string | null;
   target: ActionTarget | null;
+  gate_endpoint_key: string | null;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -151,6 +173,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     reconciliationDecisionId: row.reconciliation_decision_id,
     reexecuteDecisionId: row.reexecute_decision_id,
     target: row.target,
+    gateEndpointKey: row.gate_endpoint_key,
   };
 }
 
@@ -159,7 +182,7 @@ export const ACTION_REQUEST_ROW_COLUMNS =
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
   'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, ' +
   'failure_kind, params, requester_can_approve, operation_digest, step_run_id, reconciliation, ' +
-  'reconciliation_decision_id, reexecute_decision_id, target';
+  'reconciliation_decision_id, reexecute_decision_id, target, gate_endpoint_key';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

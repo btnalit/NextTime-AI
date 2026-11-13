@@ -35,6 +35,7 @@ import {
   createGatekeeperActionExecutor,
   reapStaleExecutingActionRequests,
   registerActionRequestDrainConsumer,
+  registerGatekeeperAddressChangedConsumer,
   renderCallRefusalMetrics,
   runWithCorrelationId,
   setConnectionHandlerDeps,
@@ -888,6 +889,8 @@ export function createBackgroundServices(
     adminWithTransaction,
     options.onGatekeeperDrainError ?? (() => {}),
   );
+  // Legacy 701: a gate that moved to a new address — its old host's answers are forgotten.
+  const unsubscribeGatekeeperAddressChanged = registerGatekeeperAddressChangedConsumer(dispatcher);
 
   const onApprovalReaperError = options.onApprovalReaperError ?? (() => {});
   let approvalReaperTimer: NodeJS.Timeout | undefined;
@@ -1271,6 +1274,7 @@ export function createBackgroundServices(
       unsubscribeTurnStarted();
       unsubscribeLinkage();
       unsubscribeActionRequestDrain();
+      unsubscribeGatekeeperAddressChanged();
       unsubscribeActionRequestRouting?.();
       unsubscribeGoalWake?.();
       if (gateLivenessTimer) {

@@ -90,6 +90,11 @@ import {
  *   active Handle is also excluded — an old/retired/superseded Source can never observe again
  *   regardless of how long it stays silent (see `checkCollectorSilent`'s own doc comment).
  *
+ * ## Legacy 701 — I-A1
+ *
+ * A self-connected gate moved by an approved address change is at the address that change moved
+ * it to — the Gatekeeper Object's address and its self connection's key alike (`checkIA1`).
+ *
  * ## S11 goal execution — I-G1, I-G2, I-G5, I-G6, I-G9
  *
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.3, in `goal-invariant-checks.ts`
@@ -677,6 +682,56 @@ async function checkIP1Link(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-A1 — a self-connected gate that moved is at the address its last applied change moved it to.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Legacy 701 (`approve_gate_address_change`, application/gateway/gate-address-change-handlers.ts):
+ * the approval moves the Gatekeeper Object's `endpoint` and its self connection's `endpoint` /
+ * `endpoint_key` in one transaction, so the gate is called where the workspace's other references
+ * say it is. For every self connection whose gate had an address change applied, the latest one's
+ * `to_endpoint` is the Object's `endpoint` (where the gate is called) and its `to_endpoint_key` the
+ * row's `endpoint_key` (what a request is bound to, I-A3). The row's `endpoint` is not compared:
+ * it is the copy the platform plane shows, which the raw-secret scrub may cut
+ * (`application/platform/scrub-raw-secrets.ts`, `selfConnectionAddresses`). A gate never moved is
+ * not counted (its key is the landing's, core 0045); a row whose landing left no key is not
+ * either. One violation per self connection.
+ */
+async function checkIA1(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    gatekeeper_object_id: string;
+    change_id: string;
+  }>(
+    `with last_applied as (
+       select distinct on (c.workspace_id, c.gatekeeper_object_id)
+              c.workspace_id, c.gatekeeper_object_id, c.id, c.to_endpoint, c.to_endpoint_key
+         from gate_address_changes c
+        where c.status = 'applied'
+        order by c.workspace_id, c.gatekeeper_object_id, c.decided_at desc, c.id
+     )
+     select s.workspace_id, s.gatekeeper_object_id, a.id as change_id
+       from workspace_self_connections s
+       join last_applied a
+         on a.workspace_id = s.workspace_id and a.gatekeeper_object_id = s.gatekeeper_object_id
+       left join objects o
+         on o.workspace_id = s.workspace_id and o.id = s.gatekeeper_object_id
+        and o.object_type = 'Gatekeeper'
+      where s.endpoint_key is not null
+        and (s.endpoint_key is distinct from a.to_endpoint_key
+             or o.properties ->> 'endpoint' is distinct from a.to_endpoint)
+      order by s.workspace_id, s.gatekeeper_object_id`,
+  );
+  return {
+    invariant: 'I-A1',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.gatekeeper_object_id} (change ${row.change_id})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // I-H1 — a revoked session has no valid Handle (legacy 699 / 707, see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -855,6 +910,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-3',
   'I-P1',
   'I-P1-LINK',
+  'I-A1',
   'I-G1',
   'I-G2',
   'I-G5',
@@ -898,6 +954,7 @@ export async function runInvariantChecks(
       await checkIS53(client),
       await checkIP1(client),
       await checkIP1Link(client),
+      await checkIA1(client),
       await checkIG1(client, SAMPLE_LIMIT),
       await checkIG2(client, SAMPLE_LIMIT),
       await checkIG5(client, SAMPLE_LIMIT),

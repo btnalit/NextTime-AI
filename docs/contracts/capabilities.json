@@ -6334,6 +6334,173 @@
     "sideEffects": true
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "approve_gate_address_change",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "previewDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "id",
+        "previewDigest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedByLogin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "fromEndpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApprovedOperations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "grantCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inFlightActionRequestCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "publishedOperationCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerDefinitionCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "publishedOperationCount",
+            "grantCount",
+            "autoApprovedOperations",
+            "workerDefinitionCount",
+            "inFlightActionRequestCount"
+          ],
+          "type": "object"
+        },
+        "manifestDigest": {
+          "type": "string"
+        },
+        "previewDigest": {
+          "type": "string"
+        },
+        "proposedByName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "suspended": {
+          "type": "boolean"
+        },
+        "target": {
+          "type": "string"
+        },
+        "toEndpoint": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "workspaceName",
+        "gatekeeperId",
+        "connector",
+        "target",
+        "fromEndpoint",
+        "toEndpoint",
+        "status",
+        "impact",
+        "manifestDigest",
+        "previewDigest",
+        "proposedByName",
+        "createdAt",
+        "expiresAt",
+        "decidedAt",
+        "decidedByLogin",
+        "rejectionReason",
+        "suspended"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "actsForPerson": true,
     "channel": "human",
     "group": "goal",
@@ -24853,6 +25020,9 @@
         "createdAt": {
           "type": "string"
         },
+        "endpoint": {
+          "type": "string"
+        },
         "health": {
           "enum": [
             "ok",
@@ -25332,6 +25502,107 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "pendingAddressChange": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "type": "string"
+            },
+            "decidedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "fromEndpoint": {
+              "type": "string"
+            },
+            "gatekeeperId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "impact": {
+              "additionalProperties": false,
+              "properties": {
+                "autoApprovedOperations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "grantCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "inFlightActionRequestCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "publishedOperationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "workerDefinitionCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "publishedOperationCount",
+                "grantCount",
+                "autoApprovedOperations",
+                "workerDefinitionCount",
+                "inFlightActionRequestCount"
+              ],
+              "type": "object"
+            },
+            "previewDigest": {
+              "type": "string"
+            },
+            "proposedBy": {
+              "type": "string"
+            },
+            "rejectionReason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "expired"
+              ],
+              "type": "string"
+            },
+            "toEndpoint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "gatekeeperId",
+            "fromEndpoint",
+            "toEndpoint",
+            "status",
+            "impact",
+            "previewDigest",
+            "proposedBy",
+            "createdAt",
+            "expiresAt",
+            "decidedAt",
+            "rejectionReason"
+          ],
+          "type": "object"
         },
         "platformSuspension": {
           "additionalProperties": false,
@@ -42432,6 +42703,189 @@
     "channel": "human",
     "group": "platform",
     "mode": "observe",
+    "name": "list_gate_address_changes",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "connector": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedByLogin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "fromEndpoint": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "impact": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "grantCount": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "inFlightActionRequestCount": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "publishedOperationCount": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionCount": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "publishedOperationCount",
+                  "grantCount",
+                  "autoApprovedOperations",
+                  "workerDefinitionCount",
+                  "inFlightActionRequestCount"
+                ],
+                "type": "object"
+              },
+              "manifestDigest": {
+                "type": "string"
+              },
+              "previewDigest": {
+                "type": "string"
+              },
+              "proposedByName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rejectionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "expired"
+                ],
+                "type": "string"
+              },
+              "suspended": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "string"
+              },
+              "toEndpoint": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "workspaceId",
+              "workspaceName",
+              "gatekeeperId",
+              "connector",
+              "target",
+              "fromEndpoint",
+              "toEndpoint",
+              "status",
+              "impact",
+              "manifestDigest",
+              "previewDigest",
+              "proposedByName",
+              "createdAt",
+              "expiresAt",
+              "decidedAt",
+              "decidedByLogin",
+              "rejectionReason",
+              "suspended"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
     "name": "list_gate_instances",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -54761,6 +55215,130 @@
     "group": "connection",
     "minRole": "owner",
     "mode": "observe",
+    "name": "preview_gate_address_change",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionSecret": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "endpoint": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "endpoint",
+        "connectionSecret"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "fromEndpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApprovedOperations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "grantCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inFlightActionRequestCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "publishedOperationCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerDefinitionCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "publishedOperationCount",
+            "grantCount",
+            "autoApprovedOperations",
+            "workerDefinitionCount",
+            "inFlightActionRequestCount"
+          ],
+          "type": "object"
+        },
+        "manifest": {
+          "additionalProperties": false,
+          "properties": {
+            "differing": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "manifestDigest": {
+              "type": "string"
+            },
+            "matches": {
+              "type": "boolean"
+            },
+            "notDescribed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "matches",
+            "manifestDigest",
+            "differing",
+            "notDescribed"
+          ],
+          "type": "object"
+        },
+        "previewDigest": {
+          "type": "string"
+        },
+        "toEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "fromEndpoint",
+        "toEndpoint",
+        "manifest",
+        "impact",
+        "previewDigest"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "observe",
     "name": "preview_gate_instance_enable",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -60829,6 +61407,145 @@
         "basedOn",
         "differs",
         "created"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "propose",
+    "name": "propose_gate_address_change",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionSecret": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "endpoint": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "previewDigest": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "endpoint",
+        "connectionSecret",
+        "previewDigest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "fromEndpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApprovedOperations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "grantCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inFlightActionRequestCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "publishedOperationCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerDefinitionCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "publishedOperationCount",
+            "grantCount",
+            "autoApprovedOperations",
+            "workerDefinitionCount",
+            "inFlightActionRequestCount"
+          ],
+          "type": "object"
+        },
+        "previewDigest": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "type": "string"
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "toEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "gatekeeperId",
+        "fromEndpoint",
+        "toEndpoint",
+        "status",
+        "impact",
+        "previewDigest",
+        "proposedBy",
+        "createdAt",
+        "expiresAt",
+        "decidedAt",
+        "rejectionReason"
       ],
       "type": "object"
     },
@@ -67116,6 +67833,173 @@
         "kind",
         "id",
         "version"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "reject_gate_address_change",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedByLogin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "fromEndpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApprovedOperations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "grantCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inFlightActionRequestCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "publishedOperationCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerDefinitionCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "publishedOperationCount",
+            "grantCount",
+            "autoApprovedOperations",
+            "workerDefinitionCount",
+            "inFlightActionRequestCount"
+          ],
+          "type": "object"
+        },
+        "manifestDigest": {
+          "type": "string"
+        },
+        "previewDigest": {
+          "type": "string"
+        },
+        "proposedByName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "suspended": {
+          "type": "boolean"
+        },
+        "target": {
+          "type": "string"
+        },
+        "toEndpoint": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "workspaceName",
+        "gatekeeperId",
+        "connector",
+        "target",
+        "fromEndpoint",
+        "toEndpoint",
+        "status",
+        "impact",
+        "manifestDigest",
+        "previewDigest",
+        "proposedByName",
+        "createdAt",
+        "expiresAt",
+        "decidedAt",
+        "decidedByLogin",
+        "rejectionReason",
+        "suspended"
       ],
       "type": "object"
     },
@@ -83141,6 +84025,130 @@
         "description",
         "contentDigest",
         "segments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "withdraw_gate_address_change",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "fromEndpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApprovedOperations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "grantCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inFlightActionRequestCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "publishedOperationCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerDefinitionCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "publishedOperationCount",
+            "grantCount",
+            "autoApprovedOperations",
+            "workerDefinitionCount",
+            "inFlightActionRequestCount"
+          ],
+          "type": "object"
+        },
+        "previewDigest": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "type": "string"
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "toEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "gatekeeperId",
+        "fromEndpoint",
+        "toEndpoint",
+        "status",
+        "impact",
+        "previewDigest",
+        "proposedBy",
+        "createdAt",
+        "expiresAt",
+        "decidedAt",
+        "rejectionReason"
       ],
       "type": "object"
     },

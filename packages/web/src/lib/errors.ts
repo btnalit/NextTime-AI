@@ -248,6 +248,18 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   connection_target_refused: 'Address not allowed',
   endpoint_already_connected: 'Already connected',
   self_connection_suspended: 'Suspended by the platform',
+  // Legacy 701: moving a self-connected gate to a new address.
+  connection_secret_in_use: 'Connection secret already used',
+  gate_address_unchanged: 'Same address',
+  gatekeeper_not_self_connected: 'Not a self-connected gate',
+  gate_address_preview_changed: 'Preview out of date',
+  gate_address_manifest_mismatch: 'New host runs something else',
+  gate_address_change_pending: 'A change is already proposed',
+  gate_address_change_decided: 'Already decided',
+  gate_address_change_expired: 'Proposal expired',
+  gate_address_change_blocked: 'Requests still in flight',
+  gate_address_change_not_found: 'Proposal not found',
+  gate_address_changed: 'The gate moved',
   credentials_in_observe_params: 'Credentials in the parameters',
   credentials_in_text: 'Credentials in the text',
   redacted_text_submitted: 'Masked text sent back',
@@ -366,6 +378,18 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   connection_target_refused: '这个地址不允许接入',
   endpoint_already_connected: '这个地址已经接入',
   self_connection_suspended: '已被平台暂停',
+  // Legacy 701: moving a self-connected gate to a new address.
+  connection_secret_in_use: '连接密钥已经用过',
+  gate_address_unchanged: '地址没有变',
+  gatekeeper_not_self_connected: '不是工作区自己接入的门',
+  gate_address_preview_changed: '预览已经过时',
+  gate_address_manifest_mismatch: '新主机的接口清单不一致',
+  gate_address_change_pending: '已有待批准的更换申请',
+  gate_address_change_decided: '申请已经有结果',
+  gate_address_change_expired: '申请已过期',
+  gate_address_change_blocked: '还有请求没有结束',
+  gate_address_change_not_found: '找不到这个申请',
+  gate_address_changed: '门已经换了地址',
   credentials_in_observe_params: '参数里带了凭据',
   credentials_in_text: '文字里带了凭据',
   redacted_text_submitted: '文字里还留着遮蔽标记',
@@ -618,6 +642,52 @@ export const ERROR_NEXT_STEPS: Readonly<
   connection_target_refused: {
     zh: '这个地址不能接入：它指向平台内部网络，或是用 http:// 连公网地址。换成外部系统的最终地址（不经过跳转），公网地址用 https://。',
     en: 'This address cannot be connected: it points into the platform network, or uses http:// to a public internet address. Use the external system’s final address (no redirect), and https:// for a public one.',
+  },
+  // Legacy 701: moving a self-connected gate to a new address (`*_gate_address_change`), and a
+  // request refused because its gate moved since it was made (`gate_address_changed`, I-A3).
+  connection_secret_in_use: {
+    zh: '这个连接密钥已经属于另一个门，或已经用于一次更换地址的申请。每个连接、每次更换都用自己的密钥：重新生成一个连接密钥，放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
+    en: 'This connection secret already belongs to another gate, or already served a proposal to move a gate. Every connection and every move gets its own: mint a new connection secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
+  },
+  gate_address_unchanged: {
+    zh: '门已经在这个地址上了。要换地址，填一个新的地址。',
+    en: 'The gate is already at this address. Enter a new address to move it.',
+  },
+  gatekeeper_not_self_connected: {
+    zh: '这个门是平台提供的，地址由平台管理员在「集成」里维护，工作区不能自己更换。',
+    en: 'This gate is provided by the platform; a platform admin maintains its address under Integrations, not the workspace.',
+  },
+  gate_address_preview_changed: {
+    zh: '门的地址、新主机的接口清单或这个申请在你看过之后变了。重新预览（或重新打开申请）再决定。',
+    en: 'The gate’s address, the new host’s manifest or the proposal changed since you looked. Preview again (or reopen the proposal), then decide.',
+  },
+  gate_address_manifest_mismatch: {
+    zh: '新地址上的门描述的 Operation 和这个工作区已发布的不完全一样。在新主机上运行同一个门（或先重新读取这个门的清单并发布），再预览。审批时遇到：驳回申请，由工作区所有者重新申请。',
+    en: 'The gate at the new address does not describe exactly the Operations this workspace published. Run the same gate on the new host (or re-read and publish this gate’s manifest first), then preview again. When approving: reject it, and the workspace owner proposes again.',
+  },
+  gate_address_change_pending: {
+    zh: '这个门已经有一个等平台管理员批准的更换申请。先撤回它，再提新的。',
+    en: 'This gate already has a proposal awaiting the platform administrator. Withdraw it to propose another.',
+  },
+  gate_address_change_decided: {
+    zh: '这个申请已经被批准、驳回、撤回或已过期，不能再操作。刷新看看它现在的状态。',
+    en: 'This proposal has already been approved, rejected, withdrawn or has expired. Refresh to see where it stands.',
+  },
+  gate_address_change_expired: {
+    zh: '申请超过 24 小时没有被决定，已经过期。工作区所有者可以用新的连接密钥重新申请。',
+    en: 'The proposal was not decided within 24 hours and has expired. The workspace owner can propose again with a new connection secret.',
+  },
+  gate_address_change_blocked: {
+    zh: '这个门还有升级前发起、没有结束的请求，它们没有记录发起时的地址。等它们结束（或处理掉）后再批准。',
+    en: 'The gate still has requests made before the upgrade that have not finished, and they do not record the address they were made for. Approve once they have finished or been dealt with.',
+  },
+  gate_address_change_not_found: {
+    zh: '找不到这个申请。刷新列表再试。',
+    en: 'This proposal was not found. Refresh the list and try again.',
+  },
+  gate_address_changed: {
+    zh: '这个请求发起之后，门换到了新地址；请求只在发起时的地址执行，所以没有发出。还需要的话重新发起。',
+    en: 'The gate moved to a new address after this request was made; a request runs only at the address it was made for, so nothing was sent. Request it again if it is still needed.',
   },
   credentials_in_observe_params: {
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
@@ -995,6 +1065,8 @@ const GATE_REASON_CODES = [
   'outcome_unknown',
   // Legacy 700: not sent — the gate's own endpoint is not an allowed target.
   'target_refused',
+  // Legacy 701 (I-A3): not sent — the gate moved to a new address after the request was made.
+  'gate_address_changed',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 /** One of those codes as the value of a `reason` or `code` field — `{"status":"failed","reason":

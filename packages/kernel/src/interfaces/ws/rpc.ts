@@ -85,6 +85,7 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
@@ -93,6 +94,7 @@ import {
   FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
+  GateAddressChangeError,
   GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -746,8 +748,21 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
+  // Legacy 701 — same additions as capability-route.ts's mapCapabilityError.
+  if (err instanceof GateAddressChangeError) {
+    const code =
+      err.status === 404
+        ? WS_ERROR_CODES.NOT_FOUND
+        : err.status === 400
+          ? WS_ERROR_CODES.INVALID_PARAMS
+          : err.status === 502
+            ? WS_ERROR_CODES.UPSTREAM_ERROR
+            : WS_ERROR_CODES.ILLEGAL_TRANSITION;
+    return { code, message: err.message };
+  }
   if (
     err instanceof ConnectionSecretConflictError ||
+    err instanceof ConnectionSecretInUseError ||
     err instanceof ConnectorNotSelfServeError ||
     err instanceof GatekeeperLandingRefusedError
   ) {

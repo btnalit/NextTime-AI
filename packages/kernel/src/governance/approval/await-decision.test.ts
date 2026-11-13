@@ -38,6 +38,7 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     reconciliationDecisionId: null,
     reexecuteDecisionId: null,
     target: null,
+    gateEndpointKey: null,
     ...overrides,
   };
 }

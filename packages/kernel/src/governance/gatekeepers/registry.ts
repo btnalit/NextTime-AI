@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
   registerGatekeeperObject,
+  setGatekeeperAddressObject,
   setGatekeeperConnectionSecretSaltObject,
 } from '../../substrate/ontology/index.js';
 // The rule module itself, not `../connections/index.js`: `connections/service.ts` calls this module.
@@ -120,6 +121,20 @@ export async function setGatekeeperConnectionSecretSalt(
     salt,
   );
   if (!updated) throw new GatekeeperNotFoundError(gatekeeperId);
+}
+
+/** Legacy 701: moves a self-connected Gatekeeper to the address an approved change names, with the
+ *  salt of the secret its new host holds — the old secret stops working, and the new host gets the
+ *  new one from the next call, the moment this commits. `false` when the Gatekeeper is gone or its
+ *  address is not `fromEndpoint` any more (a lost update the caller refuses). Which Gatekeepers may
+ *  move, and when, is the caller's rule (application/gateway/gate-address-change-handlers.ts). */
+export async function moveGatekeeperAddress(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  move: { readonly fromEndpoint: string; readonly endpoint: string; readonly salt: string },
+): Promise<boolean> {
+  return setGatekeeperAddressObject(client, workspaceId, gatekeeperId, move);
 }
 
 /** The id of the Gatekeeper in `workspaceId` whose connection-secret salt is `salt`, or `null` —

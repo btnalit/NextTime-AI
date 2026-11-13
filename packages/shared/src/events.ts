@@ -43,6 +43,7 @@ export const PLATFORM_EVENT_NAMES = [
   'ActionRequestUpdated',
   'ConnectionRequested',
   'ConnectionCreated',
+  'GatekeeperAddressChanged',
   'FactAsserted',
   'EgressObserved',
   'BudgetWarning',
@@ -156,6 +157,17 @@ const ConnectionCreatedEvent = z.object({
   gatekeeperId: z.string(),
   kind: z.enum(['http', 'mcp', 'cli', 'ssh']),
   target: z.string(),
+});
+
+/** Legacy 701: a gate a workspace connected itself moved to a new address
+ *  (`approve_gate_address_change`). Its id — and every Operation, Grant, auto-approval, Procedure
+ *  and WorkerDefinition naming it — is unchanged; whatever the kernel remembers about its old host
+ *  is not (the member-account presence answers, `credential-presence.ts`). */
+const GatekeeperAddressChangedEvent = z.object({
+  type: z.literal('GatekeeperAddressChanged'),
+  workspaceId: z.string(),
+  gatekeeperId: z.string(),
+  gateAddressChangeId: z.string(),
 });
 
 const FactAssertedEvent = z.object({
@@ -342,6 +354,7 @@ export const PlatformEventSchema = z.discriminatedUnion('type', [
   ActionRequestUpdatedEvent,
   ConnectionRequestedEvent,
   ConnectionCreatedEvent,
+  GatekeeperAddressChangedEvent,
   FactAssertedEvent,
   EgressObservedEvent,
   BudgetWarningEvent,

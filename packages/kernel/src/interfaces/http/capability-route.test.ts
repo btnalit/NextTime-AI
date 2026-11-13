@@ -45,12 +45,14 @@ import {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
+  GateAddressChangeError,
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
@@ -517,6 +519,30 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
       status: 409,
       code: 'conflict',
     });
+    // Legacy 701: a secret another Gatekeeper holds, or that already served an address change —
+    // one code, "get a new one".
+    expect(mapCapabilityError(new ConnectionSecretInUseError('in use'))).toEqual({
+      status: 409,
+      code: 'connection_secret_in_use',
+      message: 'in use',
+    });
+    // Legacy 701: each address-change refusal keeps its own status and code; a refused URL names
+    // the capability it came in.
+    expect(
+      mapCapabilityError(new GateAddressChangeError('gate_address_change_not_found', 'gone')),
+    ).toEqual({ status: 404, code: 'gate_address_change_not_found', message: 'gone' });
+    expect(
+      mapCapabilityError(new GateAddressChangeError('gate_address_manifest_mismatch', 'differs')),
+    ).toMatchObject({ status: 409, code: 'gate_address_manifest_mismatch' });
+    expect(
+      mapCapabilityError(new GateAddressChangeError('manifest_fetch_failed', 'down')),
+    ).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError('http://127.0.0.1', 'loopback', '127.0.0.1', 'endpoint'),
+        'preview_gate_address_change',
+      ).message,
+    ).toMatch(/^preview_gate_address_change: endpoint /);
     expect(mapCapabilityError(new GateConnectionSecretsUnavailableError())).toMatchObject({
       status: 503,
       code: 'service_unavailable',
