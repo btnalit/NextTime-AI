@@ -973,7 +973,8 @@ const connectionCapabilities = [
     //   `endpoint` and `manifestSource` are owner-supplied URLs the kernel fetches from inside the
     //   platform's networks: both must pass the outbound-target predicate (R-27,
     //   `outbound-target.ts`) — 400 `connection_target_refused` otherwise, `details.reason` naming
-    //   the rule. Legacy 413: that includes a plain `http://` URL to the public internet.
+    //   the rule and `details.field` the param. Legacy 413: that includes a plain `http://` URL to
+    //   the public internet.
     name: 'create_connection',
     group: 'connection',
     mode: 'execute',
@@ -994,7 +995,7 @@ const connectionCapabilities = [
       .strict(),
     resultSchema: wire.CreateConnectionResultWireSchema,
     description:
-      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks, and must use https:// when they reach a public internet address (400 connection_target_refused, details.reason). Refused (409 connector_not_self_serve) unless the platform keeps this kind’s connector in self-serve mode — except, while that connector is platform-preset (never while it is disabled), an http or mcp connection in an admin trial workspace made by a platform administrator. P0b: refused 409 endpoint_already_connected (details.gatekeeperId and details.gatekeeperName, the Gatekeeper already there) when this workspace already has a Gatekeeper at that endpoint, under any spelling of it (scheme and host case, a trailing dot, the default port, user info, query and fragment, trailing slashes, an IDN host and its punycode, percent-encoding) — re-sync or rotate that one instead; the new Gatekeeper is recorded as a self connection, which the platform can suspend (suspend_self_connection).',
+      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks, and must use https:// when they reach a public internet address (400 connection_target_refused, details.reason the rule and details.field the param). Refused (409 connector_not_self_serve) unless the platform keeps this kind’s connector in self-serve mode — except, while that connector is platform-preset (never while it is disabled), an http or mcp connection in an admin trial workspace made by a platform administrator. P0b: refused 409 endpoint_already_connected (details.gatekeeperId and details.gatekeeperName, the Gatekeeper already there) when this workspace already has a Gatekeeper at that endpoint, under any spelling of it (scheme and host case, a trailing dot, the default port, user info, query and fragment, trailing slashes, an IDN host and its punycode, percent-encoding) — re-sync or rotate that one instead; the new Gatekeeper is recorded as a self connection, which the platform can suspend (suspend_self_connection).',
     redactedParamKeys: ['credentials', 'connectionSecret'],
   },
   {

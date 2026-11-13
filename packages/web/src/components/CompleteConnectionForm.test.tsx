@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { describeOutboundTargetRefusal } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -463,10 +464,30 @@ describe('CompleteConnectionForm', () => {
   });
 
   // Legacy 413: http:// to a public internet address is refused (`details.reason`
-  // 'plaintext-public'); the field says to use https://, not that it points at the platform.
+  // 'plaintext-public'); the field says to use https://, not that it points at the platform. The
+  // kernel's own text (its message mentions credentials — UX acceptance of #1129) and the field it
+  // names (`details.field`), in both credential modes: the 凭证 box is never blamed.
+  /** What the kernel answers when `field`'s URL is plain http:// to the public internet
+   *  (`capability-route.ts`, `OutboundTargetRefusedError`), with or without `details.field`. */
+  const plaintextRefusal = (field: string, withField = true) =>
+    new HttpError(
+      'capability_error',
+      `create_connection: ${field} "x.example.com" is refused: ${describeOutboundTargetRefusal('plaintext-public')}`,
+      'connection_target_refused',
+      { reason: 'plaintext-public', ...(withField ? { field } : {}) },
+    );
   it.each([
     [
       'endpoint',
+      'shared',
+      /门端点/,
+      'http://gate.example.com:8090',
+      'cc-endpoint-error',
+      '门端点是公网地址，却用的是 http://',
+    ],
+    [
+      'endpoint',
+      'connected_account',
       /门端点/,
       'http://gate.example.com:8090',
       'cc-endpoint-error',
@@ -474,19 +495,25 @@ describe('CompleteConnectionForm', () => {
     ],
     [
       'manifestSource',
+      'shared',
       /清单来源/,
       'http://grafana.example.com/openapi.json',
       'cc-manifest-error',
       '清单来源是公网地址，却用的是 http://',
     ],
-  ])(
-    'shows a plaintext-public connection_target_refused on the %s field',
-    async (field, label, value, errorId, explanation) => {
-      const kernelText = `create_connection: ${field} "x.example.com" is refused: it is a plain http:// URL to an address on the public internet`;
+    [
+      'manifestSource',
+      'connected_account',
+      /清单来源/,
+      'http://grafana.example.com/openapi.json',
+      'cc-manifest-error',
+      '清单来源是公网地址，却用的是 http://',
+    ],
+  ] as const)(
+    'shows a plaintext-public connection_target_refused on the %s field (%s credentials)',
+    async (field, mode, label, value, errorId, explanation) => {
       const http = httpWith(async () => {
-        throw new HttpError('capability_error', kernelText, 'connection_target_refused', {
-          reason: 'plaintext-public',
-        });
+        throw plaintextRefusal(field);
       });
       render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
       await secretShown();
@@ -495,6 +522,10 @@ describe('CompleteConnectionForm', () => {
         target: { value: 'https://gate.example.com' },
       });
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      if (mode === 'connected_account') {
+        fireEvent.click(screen.getByLabelText(/已连接账户/));
+        fireEvent.change(screen.getByLabelText(/^凭证(?!类型)/), { target: { value: 'tok' } });
+      }
       fireEvent.click(screen.getByRole('button', { name: '注册门' }));
       const raw = await screen.findByTestId(`${errorId}-detail`);
       expect(raw.textContent).toContain('plain http://');
@@ -502,8 +533,60 @@ describe('CompleteConnectionForm', () => {
       expect(fieldError?.textContent).toContain(explanation);
       expect(fieldError?.textContent).toContain('https://');
       expect(fieldError?.textContent).not.toContain('指向平台自身的服务');
+      expect(document.getElementById('cc-credentials-error')).toBeNull();
+      // On the field, not (also) above the buttons.
+      expect(document.querySelector('.error-banner')).toBeNull();
     },
   );
+
+  // From a kernel that sends no `details.field`: the field the message opens with, not a word
+  // further in it.
+  it.each([
+    ['endpoint', 'cc-endpoint-error'],
+    ['manifestSource', 'cc-manifest-error'],
+  ] as const)(
+    'reads the field of a connection_target_refused without details.field from its opening (%s)',
+    async (field, errorId) => {
+      const http = httpWith(async () => {
+        throw plaintextRefusal(field, false);
+      });
+      render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText(/门端点/), {
+        target: { value: 'http://gate.example.com' },
+      });
+      fireEvent.change(screen.getByLabelText(/清单来源/), {
+        target: { value: 'http://grafana.example.com/openapi.json' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      await screen.findByTestId(`${errorId}-detail`);
+      expect(document.getElementById('cc-credentials-error')).toBeNull();
+    },
+  );
+
+  // A 400 about a field this form is not showing goes above the buttons, never nowhere: the 凭证
+  // box is there only for a per-member credential.
+  it('shows a 400 about a field the form does not show above the buttons', async () => {
+    const http = httpWith(async () => {
+      throw new HttpError(
+        'capability_error',
+        "create_connection: credentialKind is (or defaults to) 'connected_account' but no `credentials` was given",
+        'invalid_params',
+      );
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
+      target: { value: 'http://gate:8080' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    const banner = await screen.findByRole('alert');
+    expect(banner.getAttribute('data-error-code')).toBe('invalid_params');
+    expect(banner.textContent).toContain('no `credentials` was given');
+    expect(document.getElementById('cc-credentials-error')).toBeNull();
+  });
 
   // P0b (one landing path): an address this workspace already connected is refused, not connected a
   // second time — said on the endpoint field, with where that connection is and what to do instead.

@@ -476,7 +476,7 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(refused).toMatchObject({
       status: 400,
       code: 'connection_target_refused',
-      details: { reason: 'bare-hostname' },
+      details: { reason: 'bare-hostname', field: 'manifestSource' },
     });
     expect(refused.message).toContain('manifestSource "worker-supervisor"');
     // Legacy 413: the console tells "use https://" apart from "points at the platform" by the reason.
@@ -489,11 +489,23 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
           'endpoint',
         ),
       ),
-    ).toMatchObject({
+    ).toEqual({
       status: 400,
       code: 'connection_target_refused',
-      details: { reason: 'plaintext-public' },
+      message:
+        'create_connection: endpoint "gate.owner.example" is refused: it is a plain http:// URL to an address on the public internet — the connection secret and any credentials would cross the internet unencrypted; use https://',
+      details: { reason: 'plaintext-public', field: 'endpoint' },
     });
+    // A URL that came in no named field carries no `details.field`.
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError(
+          'http://gate.owner.example',
+          'plaintext-public',
+          'gate.owner.example',
+        ),
+      ).details,
+    ).toEqual({ reason: 'plaintext-public' });
     // R-01 (D-01) connection secrets.
     expect(mapCapabilityError(new ConnectionSecretInvalidError(true))).toMatchObject({
       status: 400,

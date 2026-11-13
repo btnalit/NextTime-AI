@@ -43,12 +43,14 @@ import {
  */
 
 /** Refusal of an owner-supplied URL. `url` is the full URL the caller supplied; the message names
- *  only its host. Mapped to 400 `connection_target_refused` by the interfaces when it reaches them
- *  directly (`create_connection`). */
+ *  only its host. `subject` is the field the URL came in ("endpoint", "manifestSource"; "URL" when
+ *  no field is named). Mapped to 400 `connection_target_refused` by the interfaces when it reaches
+ *  them directly (`create_connection`). */
 export class OutboundTargetRefusedError extends Error {
   readonly code = 'connection_target_refused' as const;
   readonly reason: OutboundTargetRefusalReason;
   readonly url: string;
+  readonly subject: string;
   constructor(url: string, reason: OutboundTargetRefusalReason, host: string, subject = 'URL') {
     super(
       `${subject} ${host ? `"${host}"` : `"${url}"`} is refused: ${describeOutboundTargetRefusal(reason)}`,
@@ -56,6 +58,7 @@ export class OutboundTargetRefusedError extends Error {
     this.name = 'OutboundTargetRefusedError';
     this.reason = reason;
     this.url = url;
+    this.subject = subject;
   }
 }
 
