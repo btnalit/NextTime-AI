@@ -4192,6 +4192,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **看不到与判为假**：判为假 → `failed`、`fact_id` 指向看到的事实、`last_error = predicate_unsatisfied`，步骤 `failed(verification_failed)`；看不到 → `unavailable`、`fact_id` 为空、`last_error = fact_not_observed`，步骤 `waiting(acceptance_unavailable)`；暂停说明与审计（`code`、`factId`，判为假时带 `evaluation`）都分开。读模型每项检查带 `fact` 和 `factId`，被覆盖的检查也带 `factId`。
   - **同类全找**：所有只认 `observe_predicate` 的地方改为「平台做的检查」（到期列表、领取、提示、请求人确认、读模型、`listDue`、目标与步骤推进、达成守卫）；删除工作区顺序加新外键；观察清理不受影响（新外键指向 `links`）；I-G5 定时检查扩到事实检查（只复核通过之后不会再变的部分：所依据的事实是所指的链接），并加 `achieved-not-as-declared` / `step-succeeded-not-as-declared`，纯 SQL、不调守卫函数。
   - **范围外**：「门确认不存在」移到 GO7 之前单独做（事实检查判的是「存在」，不能用来证明删除）；控制台属 GO6。不需要 `reversibility-deltas.json` 条目。
+  - **身份校验**（#1139，遗留 466，d083290）：`acceptanceReferenceProblems` 多传 `requester`，对按身份指定的一端调用 `factIdentityProblems`：先精确匹配（jsonb 等值）放行；否则字段必须正好是本体的 `identityKey`（`getType`），图里已有同样字段组合的对象，且每个字段的 JSON 类型与已存对象一致（采样有上限）。提出、确认、修订时查；Procedure 发布时不查，展开成计划后在提出时查。读对象不经草稿可见性过滤（遗留 704）。
 - 来自 GO3d（#649）的输入：验收检查复用 `substrate/epistemic/predicate.ts` 的求值与 lint（`observe_predicate` / `fact_predicate`）。要自动验收删除类动作时，先定义"门确认不存在"这种观察类型（门给出有类型的不存在证据，例如明确的 `not_found`，而不是空结果），不放开缺席判定式（#649 拍板点 13，协调线程定）。GO4 引入验收不过的暂停时，再看是否与 `awaiting_reconcile` 统一命名（拍板点 2）。
 
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
