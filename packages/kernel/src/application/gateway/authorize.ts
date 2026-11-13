@@ -119,9 +119,11 @@ export { roleSatisfiesMinRole };
  * Principal's own role filters the requested capability list; the operator CLI's
  * `issue-service-handle` is the one issuer that does not, though it refuses an `actsForPerson`
  * capability, S11 GO5c). `computeChildHandleScope` (application/task/handle-mint.ts) intersects a
- * Worker's scope with its parent's, so a `member`'s Workers inherit the same narrowing. A
- * `set_principal_role` change revokes the principal's entry-session Handles so the narrowing (or
- * widening) takes effect on the next Turn rather than at ttl. `authorize.test.ts`'s "does not
+ * Worker's scope with its parent's, so a `member`'s Workers inherit the same narrowing. A role
+ * change (`applyRoleChange`, application/task/role-change.ts, legacy 699) ends the sessions whose
+ * Handles the old role narrowed, so the narrowing (or widening) takes effect on the next Turn
+ * rather than at ttl, and ends the Workers and service keys that hold more than the new role
+ * allows. `authorize.test.ts`'s "does not
  * apply minRole to handle callers — scope alone governs" case therefore still holds: scope is the
  * whole contract here, and the scope is what became role-aware.
  */

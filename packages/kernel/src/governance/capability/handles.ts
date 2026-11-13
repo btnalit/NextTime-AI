@@ -1302,31 +1302,6 @@ export async function revokeWorkspaceEntrySessionHandles(
 }
 
 /**
- * W5.5 (STATUS leftover 18): every Handle whose ceiling was narrowed by `principalId`'s role at
- * issuance — the resident entry agent's `kind='entry'` session(s), every `kind='mcp_session'`
- * session `issue_handle` (application/gateway/issue-handle-handler.ts) opened on their behalf and
- * (S11 AA1) their `admin_agent` session (`adminAgentScope` narrows by role too). A role change must
- * reach them all: an `mcp_session` Handle can carry a caller-chosen ttl of up to 30 days, so
- * leaving it alone would keep owner/builder-gated capability names on a demoted principal for
- * exactly that long. `revokeEntrySessionHandles` above stays entry-only for its existing
- * Grant/Profile-change callers, whose ceilings do not depend on session kind the same way.
- */
-export async function revokeRoleScopedSessionHandles(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-): Promise<void> {
-  const result = await client.query<{ id: string }>(
-    `select id from sessions
-     where workspace_id = $1 and on_behalf_of = $2 and kind in ('entry', 'mcp_session', 'admin_agent')`,
-    [workspaceId, principalId],
-  );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
-}
-
-/**
  * R-05 (review 2026-10-02): every Handle issued under any session acting on `principalId`'s
  * behalf — the entry agent's `entry` session(s), `issue_handle`'s `mcp_session`s and every
  * running Worker's `worker_run` session (`application/task/handle-mint.ts` copies the human's

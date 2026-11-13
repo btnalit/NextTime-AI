@@ -1,4 +1,9 @@
-import type { CapabilityScope } from '@nexttime/shared';
+import {
+  type CapabilityScope,
+  type Role,
+  getCapability,
+  roleMayUseCapability,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type ExecuteAccess, readExecuteAccess } from '../gates/execute-access.js';
 import { RetryAuthorityLostError, retryScopeNow } from './acting-authority.js';
@@ -24,7 +29,15 @@ import { RetryAuthorityLostError, retryScopeNow } from './acting-authority.js';
  *      started is ended too — the conservative direction. An ended Worker's next kernel call is a
  *      401, llm-proxy refuses it at its next revocation sync, and its Task goes down the crash
  *      path, whose retry is held to the new role.
- *   3. **web** sessions are left alone: they carry no scope, and every request reads the person's
+ *   3. **service** (a service Principal's keys, `issue_service_handle` or the operator CLI's
+ *      `issue-service-handle`): a key is revoked when any valid Handle under its session carries a
+ *      capability the new role may not use — the filter `issue_service_handle` narrows by
+ *      (`roleMayUseCapability`). A promotion or a sideways change keeps every key; a demotion ends
+ *      the keys that hold more than the new role, and the owner issues a new one. A key's gates are
+ *      not compared: they are the service Principal's gate Grants, which a role change does not
+ *      move. The CLI issues without narrowing by role, so a CLI key is revoked at the first role
+ *      change it exceeds — the conservative direction (#1150 review).
+ *   4. **web** sessions are left alone: they carry no scope, and every request reads the person's
  *      current role (a `/ws` socket too, `session-revocation.ts`). A role change does not sign the
  *      person out.
  *
@@ -44,11 +57,15 @@ export async function applyRoleChange(
     [workspaceId, principalId],
   );
 
-  const handles = await client.query<{ session_id: string; scope: CapabilityScope }>(
-    `select h.session_id, h.scope
+  const handles = await client.query<{
+    session_id: string;
+    kind: 'worker_run' | 'service';
+    scope: CapabilityScope;
+  }>(
+    `select h.session_id, s.kind, h.scope
        from capability_handles h
        join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
-      where s.workspace_id = $1 and s.on_behalf_of = $2 and s.kind = 'worker_run'
+      where s.workspace_id = $1 and s.on_behalf_of = $2 and s.kind in ('worker_run', 'service')
         and s.status <> 'revoked'
         and h.revoked_at is null and h.expires_at > now()
       order by h.session_id`,
@@ -59,7 +76,10 @@ export async function applyRoleChange(
   const access = await readExecuteAccess(client, workspaceId, principalId);
   const outside = new Set<string>();
   for (const row of handles.rows) {
-    if (!outside.has(row.session_id) && !heldNow(row.scope, access)) outside.add(row.session_id);
+    if (outside.has(row.session_id)) continue;
+    const held =
+      row.kind === 'service' ? roleMayUseAll(row.scope, access.role) : heldNow(row.scope, access);
+    if (!held) outside.add(row.session_id);
   }
   if (outside.size === 0) return;
   await client.query(
@@ -67,6 +87,12 @@ export async function applyRoleChange(
       where workspace_id = $1 and id = any($2::uuid[]) and status <> 'revoked'`,
     [workspaceId, [...outside]],
   );
+}
+
+/** Whether `role` may use every capability `scope` names (see {@link applyRoleChange} item 3). */
+function roleMayUseAll(scope: CapabilityScope, role: Role | undefined): boolean {
+  if (role === undefined) return false;
+  return scope.capabilities.every((name) => roleMayUseCapability(role, getCapability(name)));
 }
 
 /** Whether the person may still hold all of `scope` (see {@link applyRoleChange} item 2). */
