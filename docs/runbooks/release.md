@@ -2882,6 +2882,40 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 改权限和签发并发时，后到的一方会短暂等待；签发只在 READ COMMITTED 下进行。
 - **回滚**：回退代码即可；迁移已撤销的会话与 Handle 不会恢复。
 
+### 3.169 包的 LinkType 端点只能指向它依赖的族；本体族有权威名字（#1154，遗留 705、706，0.68.0 之后的下一版）
+
+迁移 core 0056：新表 `ontology_families`（族名的唯一来源）并一次性补名（元本体、ChangePlan 装过的族、`ops-assets`），纯增量。线上契约：新拒绝码 409 `ontology_link_endpoint_outside_requires`。
+
+- **升级前只读预检**（**主机动作**，结果记 `docs/private/`）：每个工作区里，最新发布版本声明了 `WorkerDefinition` 的族应恰好一个；不是一个的工作区，迁移不会给元本体命名，并发 NOTICE。按 release.md 惯例用 `psql -U nexttime` 跑，结果应为空：
+
+  ```sql
+  select w.id, count(h.id)
+  from workspaces w
+  left join (
+    select t.workspace_id, t.id
+    from ontology_versions t
+    where t.status = 'published'
+      and t.version = (
+        select max(t2.version) from ontology_versions t2
+        where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+      )
+      and exists (
+        select 1 from jsonb_array_elements(t.definition -> 'objectTypes') o
+        where o ->> 'name' = 'WorkerDefinition'
+      )
+  ) h on h.workspace_id = w.id
+  group by w.id
+  having count(h.id) <> 1;
+  ```
+
+- **行为变化**：
+  - 包和模块安装时，LinkType 两端只能指向元本体、自身各族、直接依赖包的族里声明的类型，违反返回 409 `ontology_link_endpoint_outside_requires`。只在安装时检查，不传递。
+  - **额外能力包**：有跨族引用但没写 `requires.packs` 的额外包，升级后会被跳过（在被依赖包的 minVersion 就违反）或带警告读入（只在更高版本违反）。看 `extra_packs_status` 的 `skipped` 和 `warnings`，给它补上 requires。镜像自带包违反时注册表加载直接报错。
+  - 元本体在 §3.163 的拒绝原因和回滚预览里，`family` 从 null 变成 `platform-meta`。
+  - **命令行**：`seed-domain-pack --pack-name` 要求名字合形状、不超过 64 个字符、不能是 `platform-meta`。以前用不合形状的名字种下的族，不能再用同一个名字重新种入。
+- **回滚**：回退代码即可，`ontology_families` 留着不影响旧代码。回滚期间新建的工作区，回到本版后要重跑 `0056` 第 2 步（补名，幂等）。
+- 除上面的预检外，无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
