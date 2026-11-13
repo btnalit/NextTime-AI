@@ -2771,6 +2771,44 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：目标计划里事实检查按身份指定的对象，身份写错（字段多了或少了、类型不对，如 `"3"` 写成 `3`）时，提出就被拒绝。已提出、还没确认的目标，确认时会复核，写错的确认不了，需要重新提出。已经在跑的目标不受影响，要改只能修订。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.163 LinkType 端点必须指向已声明的 ObjectType（#1141，遗留 303，0.68.0 之后的下一版）
+
+无迁移，不改已有数据。线上契约：撤销预览的 `blocker` 枚举加 `link_endpoint_undeclared`，本体撤销项加 `linkEnds`（控制台同版更新）。
+
+- **行为变化**：发布、装包、管理员提案、撤销一个本体时，LinkType 的 `domain` / `range` 指向没有任何已发布本体声明的类型，会被 409 `ontology_link_endpoint_undeclared` 拒绝；巡检多一项 I-P1-LINK。
+- **升级前只读预检**（**主机动作**，结果记 `docs/private/`，写进给主机的升级提示词）：查现有的悬空端点，用和 I-P1-LINK（`invariant-checks.ts` 的 `checkIP1Link`）相同的 SQL，按 release.md 惯例用 `psql -U nexttime` 跑：
+
+  ```sql
+  with heads as (
+    select t.workspace_id, t.id, t.definition
+    from ontology_versions t
+    where t.status = 'published'
+      and t.version = (
+        select max(t2.version) from ontology_versions t2
+        where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+      )
+  ),
+  declared as (
+    select distinct workspace_id, e ->> 'name' as name
+    from heads, jsonb_array_elements(coalesce(definition -> 'objectTypes', '[]'::jsonb)) e
+  ),
+  ends as (
+    select workspace_id, id, l ->> 'name' as link_type, 'domain' as side, l ->> 'domain' as object_type
+    from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+    union
+    select workspace_id, id, l ->> 'name', 'range', l ->> 'range'
+    from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+  )
+  select e.workspace_id, e.id, e.link_type, e.side, e.object_type
+  from ends e
+  where e.object_type <> '*'
+    and not exists (select 1 from declared d where d.workspace_id = e.workspace_id and d.name = e.object_type)
+  order by 1, 2, 3, 4, 5;
+  ```
+
+  预期为空：本仓库自带的本体和验收脚本发布的本体都能解析；手工发布过的本体以查询结果为准。不为空时，那些版本照常可用，也不挡别的本体发布，但它们所在的族下一次发布必须先改正；升级后巡检会把它们报为 I-P1-LINK。
+- **回滚**：回代码即可，没有迁移。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
