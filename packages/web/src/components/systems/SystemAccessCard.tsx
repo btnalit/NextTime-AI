@@ -7,12 +7,13 @@ import type {
   RotateConnectionSecretResultWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
+import { useCapability } from '../../hooks/useCapability.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { DraftAsRead } from '../../lib/connections.js';
 import { isDraftChangedError } from '../../lib/errors.js';
 import { actionKindTagText, shortId } from '../../lib/format.js';
-import { gateGrantMakesApprover } from '../../lib/governance.js';
+import { type GatekeeperDetail, gateGrantMakesApprover } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
@@ -46,6 +47,7 @@ import {
   refusalKind,
 } from '../readiness/readiness-copy.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
+import { GateAddressChangeSheet } from './GateAddressChangeSheet.js';
 import { GovernanceDriftNotice } from './GovernanceDriftNotice.js';
 
 /** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
@@ -344,6 +346,57 @@ export function SystemAccessCard({
   const [menuConfirm, setMenuConfirm] = useState<'rotate' | 'publish' | null>(null);
   const confirmsPublish = firstPublishes.length > 0;
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  // Legacy 701: moving the same gate to a new address — the same owner, the same gates as a
+  // secret rotation (a catalog gate's address is the platform instance's).
+  const [addressChangeOpen, setAddressChangeOpen] = useState(false);
+  // Review #501 of #1156: a secret issued while a move waits for approval is replaced by the one
+  // made for the move once it is approved — the confirm says so. Read when it opens (owners only,
+  // as `get_gatekeeper` gives the open proposal to them; so is the rotation).
+  const rotateRead = useCapability<GatekeeperDetail>(
+    http,
+    'get_gatekeeper',
+    { gatekeeperId: gate.gateId },
+    { enabled: menuConfirm === 'rotate' },
+  );
+  // Review #501 of #1158 (P3): a read cached from an earlier look at this gate (its drawer, the
+  // move sheet, an earlier confirm) comes back as ready + refreshing — still checking, not
+  // checked; a refresh that fails keeps the old data but is no answer either.
+  const rotateState = rotateRead.state;
+  const rotateChecking =
+    rotateState.status === 'loading' || (rotateState.status === 'ready' && rotateState.refreshing);
+  const rotateCheckFailed =
+    rotateState.status === 'error' ||
+    (rotateState.status === 'ready' && rotateState.refreshError !== null);
+  const pendingMove =
+    menuConfirm === 'rotate' &&
+    rotateState.status === 'ready' &&
+    !rotateChecking &&
+    !rotateCheckFailed
+      ? (rotateState.data.pendingAddressChange ?? null)
+      : null;
+  // Review #501 of #1158: 签发 waits for that read (it is quick), so the line is there before the
+  // secret is issued; a read that fails does not hold a rotation up — the confirm says it could
+  // not tell, and what a waiting move would mean.
+  const pendingMoveLine = (): string | null => {
+    if (menuConfirm !== 'rotate') return null;
+    if (rotateChecking) {
+      return t(
+        '正在确认这个门有没有等平台管理员批准的更换地址申请…',
+        'Checking whether a move of this gate is waiting for a platform administrator…',
+      );
+    }
+    if (rotateCheckFailed) {
+      return t(
+        '没能确认这个门有没有等批准的更换地址申请；有的话，批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废',
+        'Could not check whether a move of this gate is waiting for approval; if one is, approving it gives the gate the secret made for the move, and the one issued now stops working',
+      );
+    }
+    if (pendingMove === null) return null;
+    return t(
+      `这个门有一个等平台管理员批准的更换地址申请（换到 ${pendingMove.toEndpoint}）：批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废`,
+      `This gate has a proposal to move to ${pendingMove.toEndpoint} awaiting a platform administrator: once it is approved the gate uses the secret made for the move, and the one issued now stops working`,
+    );
+  };
 
   async function publish(): Promise<void> {
     setPublishing(true);
@@ -415,6 +468,14 @@ export function SystemAccessCard({
               data-testid="gatekeeper-rotate-secret"
             >
               {t('重新签发连接密钥', 'Issue a new connection secret')}
+            </DropdownMenuItem>
+          ) : null}
+          {canRotateSecret ? (
+            <DropdownMenuItem
+              onSelect={() => setAddressChangeOpen(true)}
+              data-testid="gatekeeper-change-address"
+            >
+              {t('更换地址', 'Move to a new address')}
             </DropdownMenuItem>
           ) : null}
         </DropdownMenuContent>
@@ -527,8 +588,10 @@ export function SystemAccessCard({
                 'The old secret stops working now — the kernel cannot reach this gate until it holds the new one and restarts',
               ),
               t('新密钥只显示一次', 'The new secret is shown once'),
+              ...(pendingMoveLine() !== null ? [pendingMoveLine() as string] : []),
             ]}
             confirmLabel={t('签发', 'Issue')}
+            confirmDisabled={menuConfirm === 'rotate' && rotateChecking}
             onConfirm={async () => {
               const result = await http.call<RotateConnectionSecretResultWire>(
                 'rotate_connection_secret',
@@ -590,6 +653,16 @@ export function SystemAccessCard({
           </div>
         </SheetContent>
       </Sheet>
+
+      {canRotateSecret ? (
+        <GateAddressChangeSheet
+          http={http}
+          open={addressChangeOpen}
+          onOpenChange={setAddressChangeOpen}
+          gatekeeperId={gate.gateId}
+          gateName={gate.name}
+        />
+      ) : null}
 
       <GrantGateDrawer
         http={http}
