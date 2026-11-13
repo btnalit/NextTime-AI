@@ -295,6 +295,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(await handleState(at, retry.jti)).toBe('valid');
       });
+
+      it('refuses to issue in a transaction above READ COMMITTED — a snapshot taken before the lock would hide a disable committed while it waited (#1152 review P3-1)', async () => {
+        const at = await member();
+        const sessionId = await openSession(at, 'worker_run');
+
+        const client = await pool.connect();
+        let thrown: unknown;
+        try {
+          await client.query('begin isolation level repeatable read');
+          await client.query("select set_config('app.workspace_id', $1, true)", [at.workspaceId]);
+          await client.query("select set_config('app.principal_id', $1, true)", [at.principalId]);
+          await client.query('set local role nexttime_app');
+          thrown = await refusal(() => issue(client, at, sessionId));
+        } finally {
+          await client.query('rollback');
+          client.release();
+        }
+        expect(String((thrown as Error).message)).toMatch(/READ COMMITTED/);
+
+        const { rows } = await asOwner(at.workspaceId, (owner) =>
+          owner.query<{ n: number }>(
+            'select count(*)::int as n from capability_handles where session_id = $1',
+            [sessionId],
+          ),
+        );
+        expect(rows[0]?.n).toBe(0);
+      });
     });
 
     describe('a disable revokes the sessions acting for what it disabled, whoever writes it (0043 triggers)', () => {
