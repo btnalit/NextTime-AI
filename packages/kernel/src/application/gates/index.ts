@@ -66,6 +66,17 @@ export {
   setSelfConnectionSuspension,
 } from './self-connections.js';
 export type {
+  ConnectionSecretConsumer,
+  ConnectionSecretIssuanceState,
+  ConnectionSecretIssuer,
+} from './connection-secret-issuances.js';
+export {
+  connectionSecretIssuanceState,
+  consumeConnectionSecret,
+  recordMintedConnectionSecret,
+  recordRotatedConnectionSecret,
+} from './connection-secret-issuances.js';
+export type {
   GateAddressChangeRow,
   InsertGateAddressChangeInput,
   PlatformGateAddressChangeRow,

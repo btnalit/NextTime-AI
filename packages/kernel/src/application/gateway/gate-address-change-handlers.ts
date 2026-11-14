@@ -61,11 +61,13 @@ import { compareAnnouncedOperations } from './announced-operations.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import {
   ConnectionSecretInvalidError,
+  assertConnectionSecretIssuable,
   assertConnectionSecretNeverProposed,
   assertConnectionSecretUnused,
   assertEndpointIsNotAPlatformGate,
   connectionAddressDeps,
   connectionSecretServedAProposal,
+  consumeIssuedConnectionSecret,
 } from './connection-handlers.js';
 import { forgetGatekeeperPresence } from './credential-presence.js';
 import { platformGateIdForEndpoint } from './gate-target.js';
@@ -505,6 +507,8 @@ async function previewChange(
   if (newSalt === null) throw new ConnectionSecretInvalidError(false, capability);
   await assertConnectionSecretUnused(client, workspaceId, newSalt, capability);
   await assertConnectionSecretNeverProposed(client, workspaceId, newSalt, capability);
+  // Legacy 711: and fresh (issued, unused, within 24 hours) before the new host is sent it.
+  await assertConnectionSecretIssuable(client, workspaceId, newSalt, capability);
 
   await outboundTargetGuard(params.endpoint, 'endpoint');
   const operations = await describeNewHost(
@@ -585,6 +589,9 @@ export const proposeGateAddressChangeHandler: CapabilityHandler = async (
       `${capability}: the gate at the new address does not describe exactly the Operations this workspace published for it — run the same gate there (or re-sync this one first), then preview again`,
     );
   }
+  // Legacy 711: the proposal uses the secret up, whatever becomes of it (the unique `new_salt`
+  // index says the same); of two proposals presenting it at once, one gets past this.
+  await consumeIssuedConnectionSecret(client, workspaceId, preview.newSalt, capability);
   const proposedBy = ctx?.principalId || (await currentPrincipalId(client));
   await expireStaleGateAddressChange(client, workspaceId, input.gatekeeperId);
   if (await findOpenGateAddressChange(client, workspaceId, input.gatekeeperId)) {

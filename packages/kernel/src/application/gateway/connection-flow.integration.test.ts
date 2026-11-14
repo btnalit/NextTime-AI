@@ -27,6 +27,7 @@ import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.
 import { listActiveGrantResourceScopes } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
+import { recordMintedConnectionSecret } from '../gates/index.js';
 import { findOperations } from '../task/index.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
@@ -204,7 +205,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
       // The owner's one copy (D-01): the gate holds its own connection secret, not GATE_TEST_TOKEN.
-      connectionSecret = CONNECTION_SECRETS.mint(workspaceId).secret;
+      const minted = CONNECTION_SECRETS.mint(workspaceId);
+      connectionSecret = minted.secret;
+      // Issued as mint_connection_secret issues it: its salt recorded (legacy 711).
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        recordMintedConnectionSecret(client, workspaceId, minted.salt, ownerId),
+      );
       gateApp = createGatekeeperServer({ gate, connectedAccountStore, token: connectionSecret });
       gateEndpoint = await listen(gateApp);
 

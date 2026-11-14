@@ -85,6 +85,7 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
   ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
@@ -769,6 +770,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (
     err instanceof ConnectionSecretConflictError ||
     err instanceof ConnectionSecretInUseError ||
+    err instanceof ConnectionSecretExpiredError ||
     err instanceof ConnectorNotSelfServeError ||
     err instanceof GatekeeperLandingRefusedError
   ) {

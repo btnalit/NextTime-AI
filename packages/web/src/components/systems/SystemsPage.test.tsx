@@ -1013,6 +1013,8 @@ describe('SystemsPage', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: '签发' }));
     const sheet = await screen.findByTestId('gatekeeper-rotated-secret');
     expect(within(sheet).getByTestId('connection-secret-value').textContent).toBe(secret);
+    // Legacy 711: a rotation's secret is bound to its gate at once — no 24-hour window to say.
+    expect(within(sheet).queryByTestId('connection-secret-expiry')).toBeNull();
     fireEvent.click(within(sheet).getByRole('button', { name: '我已复制' }));
     await waitFor(() => expect(screen.queryByTestId('connection-secret-value')).toBeNull());
   });

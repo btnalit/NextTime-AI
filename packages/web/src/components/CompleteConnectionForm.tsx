@@ -1,5 +1,5 @@
 import type { MintConnectionSecretResultWire } from '@nexttime/shared';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -12,7 +12,7 @@ import {
   addressMasked,
   supportsManifestSource,
 } from '../lib/connections.js';
-import { describeError, presentError } from '../lib/errors.js';
+import { type ErrorOverrides, describeError, presentError } from '../lib/errors.js';
 import {
   gateEndpointDefaultScheme,
   isAbsoluteUrl,
@@ -251,9 +251,11 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  *
  * R-01 (maintainer decision D-01): the gate being registered is one the workspace runs itself, so
  * the kernel calls it with that gate's own connection secret, never the platform gate token. The
- * form mints one when it opens (`mint_connection_secret` — nothing is stored until
- * `create_connection`), shows it once with a copy control, and sends it as `connectionSecret`; the
- * owner puts it in the gate's config before registering. Closing the form discards it.
+ * form mints one when it opens (`mint_connection_secret` — the kernel keeps its salt, never the
+ * secret), shows it once with a copy control, and sends it as `connectionSecret`; the
+ * owner puts it in the gate's config before registering. Closing the form discards it. Legacy 711:
+ * it serves one connection, within 24 hours — refused as expired or already used, the banner's
+ * 「生成新的连接密钥」 mints another in place, keeping what the owner typed (UX acceptance of #1176).
  */
 export function CompleteConnectionForm({
   http,
@@ -303,7 +305,11 @@ export function CompleteConnectionForm({
   const [submitting, setSubmitting] = useState(false);
   const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
   const [secretError, setSecretError] = useState<unknown | null>(null);
+  /** Bumped to mint another secret in place (`regenerateSecret`). */
+  const [mintRound, setMintRound] = useState(0);
+  const secretFieldRef = useRef<HTMLDivElement>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `mintRound` is the re-mint trigger.
   useEffect(() => {
     let current = true;
     http.call<MintConnectionSecretResultWire>('mint_connection_secret', {}).then(
@@ -317,7 +323,17 @@ export function CompleteConnectionForm({
     return () => {
       current = false;
     };
-  }, [http]);
+  }, [http, mintRound]);
+
+  /** A new secret in place of the one shown (refused, or never minted): the old one is dropped, the
+   *  banner with it, and focus goes to the secret field, where the new one appears. */
+  function regenerateSecret(): void {
+    setSubmitError(null);
+    setSecretError(null);
+    setConnectionSecret(null);
+    setMintRound((round) => round + 1);
+    secretFieldRef.current?.focus();
+  }
 
   /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
    *  deployment network — the field's own placeholder); a public domain or IP gets `https://`, so the
@@ -617,14 +633,20 @@ export function CompleteConnectionForm({
         />
       </Field>
 
-      <div className="field" data-testid="cc-connection-secret">
+      <div className="field" data-testid="cc-connection-secret" ref={secretFieldRef} tabIndex={-1}>
         <span className="field-label">{t('门的连接密钥', 'Gate connection secret')}</span>
         {connectionSecret !== null ? (
-          <ConnectionSecretReveal secret={connectionSecret} testId="cc-connection-secret-reveal" />
+          <ConnectionSecretReveal
+            secret={connectionSecret}
+            mintedFor="connect"
+            testId="cc-connection-secret-reveal"
+          />
         ) : secretError !== null ? (
           <ErrorBanner
             error={secretError}
             title={t('无法生成连接密钥', 'Could not generate a connection secret')}
+            onRetry={regenerateSecret}
+            retryLabel={t('重新生成', 'Try again')}
           />
         ) : (
           <span className="text-3 text-small">{t('正在生成…', 'Generating…')}</span>
@@ -758,15 +780,30 @@ export function CompleteConnectionForm({
           <ErrorBanner
             error={submitError}
             title={
-              // UX P3-3 on #961: a connector mode is the platform's rule, not the gate's answer.
-              describeError(submitError).code === 'connector_not_self_serve'
+              // UX P3-3 on #961: a connector mode is the platform's rule, not the gate's answer —
+              // and so is a refused connection secret (legacy 711, UX acceptance of #1176).
+              describeError(submitError).code === 'connector_not_self_serve' ||
+              secretRefused(submitError)
                 ? t('平台没有接受这次连接', 'The platform did not accept this connection')
                 : t('门未接受这次连接', 'The gate did not accept this connection')
             }
-            overrides={
-              trialSelfConnectApplies(trialWorkspace, kind)
+            overrides={{
+              ...connectionSecretRefusals(t),
+              ...(trialSelfConnectApplies(trialWorkspace, kind)
                 ? { connector_not_self_serve: trialConnectorRefusal(platformAdmin, t) }
-                : undefined
+                : {}),
+            }}
+            action={
+              secretRefused(submitError) ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={regenerateSecret}
+                  data-testid="cc-regenerate-secret"
+                >
+                  {t('生成新的连接密钥', 'Generate a new connection secret')}
+                </Button>
+              ) : undefined
             }
           />
         </div>
@@ -788,6 +825,35 @@ export function CompleteConnectionForm({
       </div>
     </form>
   );
+}
+
+/** Codes for a connection secret the platform refused before calling the gate (legacy 711). */
+const SECRET_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'connection_secret_expired',
+  'connection_secret_in_use',
+]);
+
+function secretRefused(err: unknown): boolean {
+  return SECRET_REFUSAL_CODES.has(describeError(err).code);
+}
+
+/** What this form's refused secret means (UX acceptance of #1176): the gate was not called, and the
+ *  way out is the banner's own button — the shared copy's 「重新生成」 names no place to do it. */
+function connectionSecretRefusals(t: Translate): ErrorOverrides {
+  const next = t(
+    '点「生成新的连接密钥」换一把新的（填好的其他内容不用重填），把它写进门的 GATE_KERNEL_TOKEN_FILE 指向的文件、重启门，再点「注册门」。',
+    'Select “Generate a new connection secret” for a new one (what you filled in stays), put it in the file the gate’s GATE_KERNEL_TOKEN_FILE points at, restart the gate, and select “Register Gatekeeper” again.',
+  );
+  return {
+    connection_secret_expired: `${t(
+      '这把连接密钥已经过期（生成后 24 小时内要用它注册），平台没有调用门。',
+      'This connection secret has expired (a gate must be registered with it within 24 hours of generating it), so the platform did not call the gate. ',
+    )}${next}`,
+    connection_secret_in_use: `${t(
+      '这把连接密钥已经用过（接入过一个门，或已经用于一次更换地址的申请），平台没有调用门。',
+      'This connection secret was already used (it connected a gate, or served a proposal to move one), so the platform did not call the gate. ',
+    )}${next}`,
+  };
 }
 
 /**

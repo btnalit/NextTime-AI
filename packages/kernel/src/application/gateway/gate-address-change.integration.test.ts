@@ -159,7 +159,10 @@ describe.runIf(DATABASE_URL !== undefined)(
     let memberId: string;
     let gates: ReturnType<typeof createFakeGates>;
     const secrets = createGateConnectionSecrets(GATE_TOKEN);
-    const newSecret = () => secrets.mint(workspaceId).secret;
+    /** A secret as the owner gets one (`mint_connection_secret`: its salt recorded as issued,
+     *  legacy 711). */
+    const newSecret = async () =>
+      (await asOwner<{ connectionSecret: string }>('mint_connection_secret', {})).connectionSecret;
     const saltOf = (secret: string) => secrets.saltOf(workspaceId, secret);
     const address = (label: string) =>
       `http://gac-${label}-${randomUUID().slice(0, 8)}.invalid:8080/gate`;
@@ -211,7 +214,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'http',
         target: 'gac-system',
         endpoint,
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
       });
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         publishOperation(client, workspaceId, { gatekeeperId, name: OP.name }),
@@ -220,7 +223,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     }
 
     async function previewAndPropose(gatekeeperId: string, endpoint = address('new')) {
-      const connectionSecret = newSecret();
+      const connectionSecret = await newSecret();
       const preview = await asOwner<GateAddressChangePreviewWire>('preview_gate_address_change', {
         gatekeeperId,
         endpoint,
@@ -410,7 +413,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await askPresence()).get(gatekeeperId)).toBe('connected');
 
       const newEndpoint = address('new');
-      const connectionSecret = newSecret();
+      const connectionSecret = await newSecret();
       const newSalt = saltOf(connectionSecret);
       gates.describeCalls.length = 0;
       const preview = await asOwner<GateAddressChangePreviewWire>('preview_gate_address_change', {
@@ -595,12 +598,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const foreignSecret = secrets.mint(otherWorkspace.workspaceId).secret;
 
       gates.describeCalls.length = 0;
-      const preview = (params: Record<string, unknown>) =>
+      const preview = async (params: Record<string, unknown>) =>
         refusedWith(
           asOwner('preview_gate_address_change', {
             gatekeeperId,
             endpoint: address('new'),
-            connectionSecret: newSecret(),
+            connectionSecret: await newSecret(),
             ...params,
           }),
         );
@@ -634,7 +637,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The new host runs something else: shown in the preview, refused as a proposal.
       const elsewhere = address('different');
       gates.described.set(elsewhere, [{ ...OP, blast_radius: 'high' }]);
-      const differentSecret = newSecret();
+      const differentSecret = await newSecret();
       const different = await asOwner<GateAddressChangePreviewWire>('preview_gate_address_change', {
         gatekeeperId,
         endpoint: elsewhere,
@@ -653,7 +656,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toEqual({ status: 409, code: 'gate_address_manifest_mismatch' });
       const empty = address('empty');
       gates.described.set(empty, []);
-      const emptySecret = newSecret();
+      const emptySecret = await newSecret();
       const notDescribed = await asOwner<GateAddressChangePreviewWire>(
         'preview_gate_address_change',
         { gatekeeperId, endpoint: empty, connectionSecret: emptySecret },
@@ -662,7 +665,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // A preview digest that is not this one.
       const endpoint = address('new');
-      const connectionSecret = newSecret();
+      const connectionSecret = await newSecret();
       expect(
         await refusedWith(
           asOwner('propose_gate_address_change', {
@@ -677,7 +680,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // One open proposal per gate (I-A2).
       const first = await previewAndPropose(gatekeeperId);
       const second = address('second');
-      const secondSecret = newSecret();
+      const secondSecret = await newSecret();
       const secondPreview = await asOwner<GateAddressChangePreviewWire>(
         'preview_gate_address_change',
         { gatekeeperId, endpoint: second, connectionSecret: secondSecret },
@@ -1152,7 +1155,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           asOwner('preview_gate_address_change', {
             gatekeeperId,
             endpoint: refusedEndpoint,
-            connectionSecret: newSecret(),
+            connectionSecret: await newSecret(),
           }),
         ),
       ).toEqual({ status: 400, code: 'connection_target_refused' });
@@ -1208,7 +1211,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'http',
           target: 'gac-system',
           endpoint: taken.endpoint,
-          connectionSecret: newSecret(),
+          connectionSecret: await newSecret(),
         },
       );
       const addressTaken = await refusal(approve(taken.proposal.id));
@@ -1332,6 +1335,70 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(after.find((check) => check.invariant === 'I-A1')?.sample ?? []).not.toContain(
         sampleOf,
       );
+    });
+
+    it('legacy 711: a move takes a fresh secret — not one rotated away from a gate, not one past its 24 hours — refused before the new host is asked; a proposal uses its secret up', async () => {
+      const { gatekeeperId } = await connectedGate();
+      const other = await connectedGate();
+      // A secret rotated away from `other`: no Gatekeeper holds it and no proposal named it, so
+      // before the ledger it could move a gate.
+      const rotatedAway = (
+        await asOwner<{ connectionSecret: string }>('rotate_connection_secret', {
+          gatekeeperId: other.gatekeeperId,
+        })
+      ).connectionSecret;
+      await asOwner('rotate_connection_secret', { gatekeeperId: other.gatekeeperId });
+      const fresh = await newSecret();
+
+      gates.describeCalls.length = 0;
+      const preview = (connectionSecret: string) =>
+        refusedWith(
+          asOwner('preview_gate_address_change', {
+            gatekeeperId,
+            endpoint: address('new'),
+            connectionSecret,
+          }),
+        );
+      expect(await preview(rotatedAway)).toEqual({
+        status: 409,
+        code: 'connection_secret_in_use',
+      });
+      // Minted (the HMAC checks out) but never issued through the ledger: one from before it.
+      expect(await preview(secrets.mint(workspaceId).secret)).toEqual({
+        status: 409,
+        code: 'connection_secret_expired',
+      });
+      expect(gates.describeCalls).toEqual([]);
+
+      // A fresh one moves it, and the proposal consumes it whatever becomes of the proposal.
+      const endpoint = address('new');
+      const preview2 = await asOwner<GateAddressChangePreviewWire>('preview_gate_address_change', {
+        gatekeeperId,
+        endpoint,
+        connectionSecret: fresh,
+      });
+      const proposal = await asOwner<GateAddressChangeWire>('propose_gate_address_change', {
+        gatekeeperId,
+        endpoint,
+        connectionSecret: fresh,
+        previewDigest: preview2.previewDigest,
+      });
+      const consumed = await pool.query<{ consumed_by: string | null }>(
+        'select consumed_by from connection_secret_issuances where workspace_id = $1 and salt = $2',
+        [workspaceId, saltOf(fresh)],
+      );
+      expect(consumed.rows).toEqual([{ consumed_by: 'propose_gate_address_change' }]);
+      await asOwner('withdraw_gate_address_change', { id: proposal.id });
+      expect(
+        await refusedWith(
+          asOwner('create_connection', {
+            kind: 'http',
+            target: 'gac-system',
+            endpoint: address('after-withdraw'),
+            connectionSecret: fresh,
+          }),
+        ),
+      ).toEqual({ status: 409, code: 'connection_secret_in_use' });
     });
   },
 );

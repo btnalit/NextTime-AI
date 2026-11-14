@@ -23,6 +23,7 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
   ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
@@ -142,6 +143,9 @@ function stubClient(connectorMode: string | null): PoolClient & { readonly sql: 
       if (/from connectors where name/.test(text) && connectorMode !== null) {
         return { rows: [{ mode: connectorMode }], rowCount: 1 };
       }
+      // Legacy 711: every secret these cases present is fresh (the ledger's own cases are below,
+      // on a real database).
+      if (/update connection_secret_issuances/.test(text)) return { rows: [], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     },
   } as unknown as PoolClient & { readonly sql: string[] };
@@ -464,7 +468,17 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     let fake: ReturnType<typeof createFakeGatekeeperClient>;
     const secrets = createGateConnectionSecrets(GATE_TOKEN);
-    const newSecret = () => secrets.mint(workspaceId).secret;
+    /** A secret as the owner gets one: `mint_connection_secret`, which records its salt as issued
+     *  (legacy 711). */
+    const newSecret = async () =>
+      (
+        (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId, 'owner'),
+          'mint_connection_secret',
+          {},
+        )) as { connectionSecret: string }
+      ).connectionSecret;
     // P0b: one Gatekeeper per address in a workspace — every case below connects its own (the fake
     // client never dials it).
     const unusedEndpoint = () => `http://127.0.0.1:1/unused-${randomUUID()}`;
@@ -499,7 +513,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             kind: 'ssh',
             target: 'example-ssh-system',
             endpoint: unusedEndpoint(),
-            connectionSecret: newSecret(),
+            connectionSecret: await newSecret(),
             credentialKind: 'shared',
           }),
         ).rejects.toBeInstanceOf(ConnectorNotSelfServeError);
@@ -515,7 +529,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'cli',
         target: 'example-cli-system',
         endpoint: unusedEndpoint(),
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentialKind: 'shared',
       })) as { gatekeeperId: string; importedOperationNames: readonly string[] };
 
@@ -530,7 +544,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'cli',
         target: 'origin-system',
         endpoint,
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentialKind: 'shared',
       })) as { gatekeeperId: string };
 
@@ -553,7 +567,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'cli',
         target: 'twice-system',
         endpoint,
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentialKind: 'shared',
       })) as { gatekeeperId: string };
       fake.targets.length = 0;
@@ -563,7 +577,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         target: 'twice-system-again',
         // Same address, trailing slash or not.
         endpoint: `${endpoint}/`,
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentialKind: 'shared',
       }).catch((err: unknown) => err);
       expect(thrown).toBeInstanceOf(GatekeeperLandingRefusedError);
@@ -582,7 +596,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'http',
         target: 'example-system',
         endpoint: unusedEndpoint(),
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentialKind: 'shared',
       });
       expect(fake.storeConnectedAccountCalls).toEqual([]);
@@ -596,7 +610,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'http',
         target: 'example-system',
         endpoint: unusedEndpoint(),
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentials: { token: 'the-credential-value' },
         onBehalfOf: memberId,
       });
@@ -615,7 +629,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'http',
           target: 'example-system',
           endpoint: unusedEndpoint(),
-          connectionSecret: newSecret(),
+          connectionSecret: await newSecret(),
           credentialKind: 'connected_account',
         }),
       ).rejects.toBeInstanceOf(ConnectionCredentialRequiredError);
@@ -628,7 +642,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'http',
         target: 'example-system',
         endpoint: unusedEndpoint(),
-        connectionSecret: newSecret(),
+        connectionSecret: await newSecret(),
         credentials: { token: 'must-never-appear-in-audit' },
       })) as { gatekeeperId: string };
 
@@ -691,7 +705,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('refuses a connection secret another Gatekeeper already holds (409)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
-      const secret = newSecret();
+      const secret = await newSecret();
       const params = {
         kind: 'cli',
         target: 'reuse-system',
@@ -710,7 +724,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('rotate_connection_secret replaces the salt; the old secret no longer matches', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
-      const first = newSecret();
+      const first = await newSecret();
       const created = (await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'cli',
         target: 'rotate-system',
@@ -732,6 +746,253 @@ describe.runIf(DATABASE_URL !== undefined)(
         secrets.saltOf(workspaceId, rotated.connectionSecret),
       );
       expect(record?.connectionSecretSalt).not.toBe(secrets.saltOf(workspaceId, first));
+    });
+
+    // Legacy 711: the ledger of issued salts (core 0058).
+
+    /** The rows `salt` has in the ledger, read past RLS. */
+    async function issuance(salt: string) {
+      const result = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ issued_via: string; consumed_by: string | null }>(
+            'select issued_via, consumed_by from connection_secret_issuances where workspace_id = $1 and salt = $2',
+            [workspaceId, salt],
+          ),
+        { skipRoleSwitch: true },
+      );
+      return result.rows;
+    }
+
+    async function waitUntilBlocked(fragment: string): Promise<void> {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position($1 in query) > 0`,
+          [fragment],
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`no statement containing "${fragment}" ever waited on a lock`);
+    }
+
+    const cliConnection = (target: string, connectionSecret: string) => ({
+      kind: 'cli',
+      target,
+      endpoint: unusedEndpoint(),
+      credentialKind: 'shared',
+      connectionSecret,
+    });
+
+    it('legacy 711: a secret binds one connection — the one rotated away from a gate connects nothing again', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const first = await newSecret();
+      const firstSalt = secrets.saltOf(workspaceId, first) as string;
+      expect(await issuance(firstSalt)).toEqual([
+        { issued_via: 'mint_connection_secret', consumed_by: null },
+      ]);
+      const created = (await dispatchCapability(
+        { pool },
+        owner,
+        'create_connection',
+        cliConnection('ledger-rotated', first),
+      )) as { gatekeeperId: string };
+      expect(await issuance(firstSalt)).toEqual([
+        { issued_via: 'mint_connection_secret', consumed_by: 'create_connection' },
+      ]);
+      const rotated = (await dispatchCapability({ pool }, owner, 'rotate_connection_secret', {
+        gatekeeperId: created.gatekeeperId,
+      })) as { connectionSecret: string };
+      expect(
+        await issuance(secrets.saltOf(workspaceId, rotated.connectionSecret) as string),
+      ).toEqual([
+        { issued_via: 'rotate_connection_secret', consumed_by: 'rotate_connection_secret' },
+      ]);
+
+      // No Gatekeeper holds `first` any more and no proposal named it: before the ledger, it
+      // connected a new gate (the review's case — a secret rotated away because it leaked).
+      fake.targets.length = 0;
+      const again = await dispatchCapability(
+        { pool },
+        owner,
+        'create_connection',
+        cliConnection('ledger-rotated-again', first),
+      ).catch((err: unknown) => err);
+      expect(again).toBeInstanceOf(ConnectionSecretInUseError);
+      expect((again as Error).message).toContain('already used (create_connection)');
+      // A rotation's own secret, once rotated away too, is spoken for the same way.
+      await dispatchCapability({ pool }, owner, 'rotate_connection_secret', {
+        gatekeeperId: created.gatekeeperId,
+      });
+      await expect(
+        dispatchCapability(
+          { pool },
+          owner,
+          'create_connection',
+          cliConnection('ledger-rotated-twice', rotated.connectionSecret),
+        ),
+      ).rejects.toBeInstanceOf(ConnectionSecretInUseError);
+      expect(fake.targets).toEqual([]);
+    });
+
+    it('legacy 711: a secret with no issued row, or past its 24 hours, is refused 409 connection_secret_expired before the gate is called; the next mint clears the expired row', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      // Minted (the HMAC checks out) but never recorded — one minted before the ledger.
+      const unrecorded = secrets.mint(workspaceId);
+      const before = await dispatchCapability(
+        { pool },
+        owner,
+        'create_connection',
+        cliConnection('ledger-unrecorded', unrecorded.secret),
+      ).catch((err: unknown) => err);
+      expect(before).toBeInstanceOf(ConnectionSecretExpiredError);
+      expect(before).toMatchObject({ code: 'connection_secret_expired' });
+
+      // Issued 25 hours ago, never used.
+      const stale = secrets.mint(workspaceId);
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query(
+            `insert into connection_secret_issuances
+               (workspace_id, salt, issued_via, issued_by, issued_at, expires_at)
+             values ($1, $2, 'mint_connection_secret', $3,
+                     now() - interval '25 hours', now() - interval '1 hour')`,
+            [workspaceId, stale.salt, ownerId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      await expect(
+        dispatchCapability(
+          { pool },
+          owner,
+          'create_connection',
+          cliConnection('ledger-stale', stale.secret),
+        ),
+      ).rejects.toBeInstanceOf(ConnectionSecretExpiredError);
+      expect(fake.targets).toEqual([]);
+      expect(await issuance(stale.salt)).toHaveLength(1);
+
+      // The next mint deletes it (and only rows like it): the refusal stays the same.
+      const consumedBefore = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ n: number }>(
+            'select count(*)::int as n from connection_secret_issuances where workspace_id = $1 and consumed_at is not null',
+            [workspaceId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      await newSecret();
+      expect(await issuance(stale.salt)).toEqual([]);
+      const consumedAfter = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ n: number }>(
+            'select count(*)::int as n from connection_secret_issuances where workspace_id = $1 and consumed_at is not null',
+            [workspaceId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      expect(consumedAfter.rows[0]?.n).toBe(consumedBefore.rows[0]?.n);
+      await expect(
+        dispatchCapability(
+          { pool },
+          owner,
+          'create_connection',
+          cliConnection('ledger-stale-again', stale.secret),
+        ),
+      ).rejects.toBeInstanceOf(ConnectionSecretExpiredError);
+    });
+
+    it('legacy 711: two create_connection calls presenting one secret at once — exactly one connects, the other waits and is refused', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const secret = await newSecret();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const inDescribe = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let describes = 0;
+      setConnectionHandlerDeps({
+        gatekeeperClient: {
+          ...fake.client,
+          // The first call stops while it describes the gate: it has consumed the secret and holds
+          // its row until it commits.
+          describeOperations: async (target) => {
+            describes += 1;
+            if (describes === 1) {
+              entered();
+              await held;
+            }
+            return fake.client.describeOperations(target);
+          },
+        },
+        connectionSecrets: secrets,
+        outboundTargetGuard: createOutboundTargetGuard({
+          policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+        }),
+      });
+
+      const first = dispatchCapability(
+        { pool },
+        owner,
+        'create_connection',
+        cliConnection('ledger-race-a', secret),
+      );
+      await inDescribe;
+      // No Gatekeeper holds the salt yet (the first has not committed): before the ledger the
+      // second passed every check and connected a second gate with the same secret.
+      const second = dispatchCapability(
+        { pool },
+        owner,
+        'create_connection',
+        cliConnection('ledger-race-b', secret),
+      ).catch((err: unknown) => err);
+      try {
+        await waitUntilBlocked('update connection_secret_issuances');
+      } finally {
+        release();
+      }
+      expect(await first).toMatchObject({ gatekeeperId: expect.any(String) });
+      expect(await second).toBeInstanceOf(ConnectionSecretInUseError);
+      expect(describes).toBe(1);
+    });
+
+    it('legacy 711: a create_connection refused after it consumed the secret gives it back — the same secret then connects', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const secret = await newSecret();
+      const salt = secrets.saltOf(workspaceId, secret) as string;
+      // Consumed first, then refused by the outbound guard (accept_s2's R-27 step, which retries
+      // with the same secret): the refusal rolls the consumption back with the rest.
+      const refused = await dispatchCapability({ pool }, owner, 'create_connection', {
+        ...cliConnection('ledger-refused', secret),
+        endpoint: 'http://some-gate:8090',
+      }).catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(OutboundTargetRefusedError);
+      expect(await issuance(salt)).toEqual([
+        { issued_via: 'mint_connection_secret', consumed_by: null },
+      ]);
+      await expect(
+        dispatchCapability(
+          { pool },
+          owner,
+          'create_connection',
+          cliConnection('ledger-refused-then-ok', secret),
+        ),
+      ).resolves.toMatchObject({ gatekeeperId: expect.any(String) });
+      expect(await issuance(salt)).toEqual([
+        { issued_via: 'mint_connection_secret', consumed_by: 'create_connection' },
+      ]);
     });
   },
 );

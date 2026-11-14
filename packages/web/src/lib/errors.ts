@@ -250,6 +250,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   self_connection_suspended: 'Suspended by the platform',
   // Legacy 701: moving a self-connected gate to a new address.
   connection_secret_in_use: 'Connection secret already used',
+  // Legacy 711: a secret serves one connection or one move, within 24 hours of minting it.
+  connection_secret_expired: 'Connection secret expired',
   gate_address_unchanged: 'Same address',
   gatekeeper_not_self_connected: 'Not a self-connected gate',
   gate_address_preview_changed: 'Preview out of date',
@@ -380,6 +382,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   self_connection_suspended: '已被平台暂停',
   // Legacy 701: moving a self-connected gate to a new address.
   connection_secret_in_use: '连接密钥已经用过',
+  // Legacy 711: a secret serves one connection or one move, within 24 hours of minting it.
+  connection_secret_expired: '连接密钥已经过期',
   gate_address_unchanged: '地址没有变',
   gatekeeper_not_self_connected: '不是工作区自己接入的门',
   gate_address_preview_changed: '预览已经过时',
@@ -646,8 +650,13 @@ export const ERROR_NEXT_STEPS: Readonly<
   // Legacy 701: moving a self-connected gate to a new address (`*_gate_address_change`), and a
   // request refused because its gate moved since it was made (`gate_address_changed`, I-A3).
   connection_secret_in_use: {
-    zh: '这个连接密钥已经属于另一个门，或已经用于一次更换地址的申请。每个连接、每次更换都用自己的密钥：重新生成一个连接密钥，放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
-    en: 'This connection secret already belongs to another gate, or already served a proposal to move a gate. Every connection and every move gets its own: mint a new connection secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
+    zh: '这个连接密钥已经用过：接入过一个门（哪怕那个门后来换了密钥），或已经用于一次更换地址的申请。每个连接、每次更换都用自己的密钥：「直接注册门」里点「生成新的连接密钥」，换地址时关掉「更换地址」再打开，就有一把新的；把它放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
+    en: 'This connection secret was already used: it connected a gate (even one that has had its secret replaced since), or served a proposal to move a gate. Every connection and every move gets its own: in “Register a gate directly” select “Generate a new connection secret”, or close “Move to a new address” and open it again, for a new one; put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
+  },
+  // Legacy 711.
+  connection_secret_expired: {
+    zh: '这个连接密钥已经过期：生成后 24 小时内没有用来接入（或是在平台升级之前生成的）。「直接注册门」里点「生成新的连接密钥」，换地址时关掉「更换地址」再打开，就有一把新的；把它放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
+    en: 'This connection secret has expired: it was not used within 24 hours of minting it (or was minted before the platform’s upgrade). In “Register a gate directly” select “Generate a new connection secret”, or close “Move to a new address” and open it again, for a new one; put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
   },
   gate_address_unchanged: {
     zh: '门已经在这个地址上了。要换地址，填一个新的地址。',
