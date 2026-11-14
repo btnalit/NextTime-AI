@@ -430,9 +430,20 @@ export const addMemberHandler: CapabilityHandler = async (client, workspaceId, p
     resourceType: 'principal',
     resourceId: row.id,
     // Legacy 725: the removed membership this one replaces, as `merge_user` lists the ones it
-    // lets go.
+    // lets go — named by the login the owner typed, never by the platform user id: this row is
+    // the workspace's, and the workspace plane does not carry platform user ids.
     ...(slot.released !== null
-      ? { auditPayload: { detachedPrincipals: [{ ...slot.released, login: normalized }] } }
+      ? {
+          auditPayload: {
+            detachedPrincipals: [
+              {
+                workspaceId: slot.released.workspaceId,
+                principalId: slot.released.principalId,
+                login: normalized,
+              },
+            ],
+          },
+        }
       : {}),
   };
 };
