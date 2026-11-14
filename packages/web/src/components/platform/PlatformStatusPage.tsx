@@ -9,6 +9,7 @@ import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
+import { AuditUnchangedChip } from '../audit/AuditUnchangedChip.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -220,6 +221,7 @@ function StatusBody({
                   <>
                     {actionLabel(row.action, t)}
                     <AuditRefusedChip payload={row.payload} detailsBelow={false} />
+                    <AuditUnchangedChip payload={row.payload} />
                   </>
                 }
                 meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}

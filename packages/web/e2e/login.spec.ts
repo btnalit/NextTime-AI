@@ -122,8 +122,14 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     });
     await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
 
+    // R-15: the console shows the login form at once and revokes the cookie in the background, so
+    // the check below waits for that revoke to answer; asking /me before it lands races it.
+    const loggedOut = page.waitForResponse(
+      (r) => r.url().endsWith('/api/auth/logout') && r.request().method() === 'POST',
+    );
     await page.getByTestId('sign-out').click();
     await expect(page.getByTestId('login-submit')).toBeVisible();
+    expect((await loggedOut).status()).toBe(200);
 
     const res = await page.request.get('/api/auth/me');
     expect(res.status()).toBe(401);
