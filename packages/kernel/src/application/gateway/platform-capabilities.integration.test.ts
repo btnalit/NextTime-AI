@@ -1204,8 +1204,9 @@ describe.runIf(DATABASE_URL !== undefined)(
             `merge-removed-${removedWorkspaceId.slice(0, 8)}`,
           ]),
         );
+        const sourceLogin = `merge-dis-${randomUUID().slice(0, 8)}`;
         const source = await createUser(pool, {
-          login: `merge-dis-${randomUUID().slice(0, 8)}`,
+          login: sourceLogin,
           displayName: 'Disabled Source',
         });
         const restored = await callAsAdmin<UserMembershipWire>('add_membership', {
@@ -1223,8 +1224,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId: removedWorkspaceId,
         });
         await callAsAdmin<UserWire>('set_user_status', { userId: source.id, status: 'disabled' });
+        const targetLogin = `merge-on-${randomUUID().slice(0, 8)}`;
         const target = await createUser(pool, {
-          login: `merge-on-${randomUUID().slice(0, 8)}`,
+          login: targetLogin,
           displayName: 'Active Target',
           password: PASSWORD,
         });
@@ -1268,6 +1270,9 @@ describe.runIf(DATABASE_URL !== undefined)(
             channel: 'platform',
             actorLogin: admin.login,
             params: { workspaceId, sourceUserId: source.id, targetUserId: target.id },
+            // The source row is gone: its login still says who it was.
+            sourceLogin,
+            targetLogin,
             reason: 'merged_from_disabled_user',
             role: 'member',
             workspaceStatus: 'active',
@@ -1288,18 +1293,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
-      it('an active source writes no platform.membership_restored row', async () => {
-        const source = await createUser(pool, {
-          login: `merge-act-${randomUUID().slice(0, 8)}`,
-          displayName: 'Active Source',
-        });
+      it('an active source writes no platform.membership_restored row; the merge_user row keeps both logins', async () => {
+        const sourceLogin = `merge-act-${randomUUID().slice(0, 8)}`;
+        const source = await createUser(pool, { login: sourceLogin, displayName: 'Active Source' });
         await callAsAdmin<UserMembershipWire>('add_membership', {
           userId: source.id,
           workspaceId,
           role: 'member',
         });
+        const targetLogin = `merge-act-dst-${randomUUID().slice(0, 8)}`;
         const target = await createUser(pool, {
-          login: `merge-act-dst-${randomUUID().slice(0, 8)}`,
+          login: targetLogin,
           displayName: 'Active Target Two',
           password: PASSWORD,
         });
@@ -1317,6 +1321,23 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
         expect(rows.rowCount).toBe(0);
+        // Every merge deletes its source: the merge_user row says who it was by login.
+        const mergeRow = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'merge_user'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(mergeRow.rows).toHaveLength(1);
+        expect(mergeRow.rows[0]?.payload).toMatchObject({
+          channel: 'platform',
+          actorLogin: admin.login,
+          params: { sourceUserId: source.id, targetUserId: target.id },
+          sourceLogin,
+          targetLogin,
+        });
       });
     });
 

@@ -877,6 +877,10 @@ export const mergeUserHandler: CapabilityHandler = async (
             sourceUserId: source.id,
             targetUserId: target.id,
           },
+          // The source row is deleted above: its login is what still says who it was (as
+          // `platform.user_purged` keeps the purged user's).
+          sourceLogin: source.login,
+          targetLogin: target.login,
           reason: 'merged_from_disabled_user',
           role: membership.role,
           workspaceStatus: membership.workspaceStatus,
@@ -884,7 +888,13 @@ export const mergeUserHandler: CapabilityHandler = async (
       });
     }
   }
-  return { result: await loadUser(client, target.id), resourceType: 'user', resourceId: target.id };
+  return {
+    result: await loadUser(client, target.id),
+    resourceType: 'user',
+    resourceId: target.id,
+    // On the `merge_user` row too, for every merge: `params.sourceUserId` names a deleted user.
+    auditPayload: { sourceLogin: source.login, targetLogin: target.login },
+  };
 };
 
 // -------------------------------------------------------------------------------------------
