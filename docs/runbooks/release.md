@@ -3094,6 +3094,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.182 agent 的一轮准备时读失败就不启动（#1229，遗留 434，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：入口 / 管理员 agent 的一轮在准备时某项读失败（个人设置、入口定义、Skill、平台说明、运行镜像），现在这一轮结束为失败，不再以默认提示、不带禁止列表或不按个人设置启动。从未发布过入口定义的工作区照旧按没有处理。
+- **怎么认**：内核日志 error，入口为 `could not read … — the entry turn was not started`，管理员 agent 为 `the admin agent turn could not be prepared — not started`。升级后如果看到这两句，查对应的读为什么失败。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
