@@ -238,14 +238,55 @@ describe.runIf(DATABASE_URL !== undefined)(
       return { preview, proposal, endpoint, connectionSecret };
     }
 
+    /** Every page of `list_gate_address_changes` for `params`, `limit` rows at a time. */
+    async function allListed(
+      params: Record<string, unknown>,
+      limit?: number,
+    ): Promise<{ items: PlatformGateAddressChangeWire[]; pages: number }> {
+      const items: PlatformGateAddressChangeWire[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await asAdmin<{ items: PlatformGateAddressChangeWire[]; nextCursor?: string }>(
+          'list_gate_address_changes',
+          {
+            ...params,
+            ...(limit !== undefined ? { limit } : {}),
+            ...(cursor !== undefined ? { cursor } : {}),
+          },
+        );
+        items.push(...page.items);
+        cursor = page.nextCursor;
+        pages += 1;
+        if (pages > 500) throw new Error('the list did not end');
+      } while (cursor !== undefined);
+      return { items, pages };
+    }
+
     async function listed(id: string): Promise<PlatformGateAddressChangeWire> {
-      const { items } = await asAdmin<{ items: PlatformGateAddressChangeWire[] }>(
-        'list_gate_address_changes',
-        { workspaceId },
-      );
+      const { items } = await allListed({ workspaceId });
       const item = items.find((entry) => entry.id === id);
       if (item === undefined) throw new Error(`proposal ${id} is not listed`);
       return item;
+    }
+
+    /** Gives two proposals the same `created_at` (triggers off, as `lapse` moves expiry). */
+    async function sameCreatedAt(first: string, second: string): Promise<void> {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('set local session_replication_role = replica');
+        await client.query(
+          `update gate_address_changes
+              set created_at = (select created_at from gate_address_changes
+                                 where workspace_id = $1 and id = $2)
+            where workspace_id = $1 and id = $3`,
+          [workspaceId, first, second],
+        );
+        await client.query('commit');
+      } finally {
+        client.release();
+      }
     }
 
     async function selfConnectionRow(gatekeeperId: string) {
@@ -966,6 +1007,94 @@ describe.runIf(DATABASE_URL !== undefined)(
         previewDigest: (await listed(fourth.proposal.id)).previewDigest,
       });
       expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+    });
+
+    it('legacy 717: the platform lists ended proposals as its history, filters by the status each shows (one past its expiry is expired, not proposed), and pages them in a stable order', async () => {
+      const ids = async (params: Record<string, unknown>) =>
+        new Set((await allListed({ workspaceId, ...params })).items.map((item) => item.id));
+
+      // One of each: open, past its expiry (still stored as proposed), rejected, withdrawn, applied.
+      const open = (await previewAndPropose((await connectedGate()).gatekeeperId)).proposal.id;
+      const lapsed = (await previewAndPropose((await connectedGate()).gatekeeperId)).proposal.id;
+      await lapse(lapsed);
+      const rejected = (await previewAndPropose((await connectedGate()).gatekeeperId)).proposal.id;
+      await asAdmin('reject_gate_address_change', { workspaceId, id: rejected, reason: 'TLS' });
+      const withdrawn = (await previewAndPropose((await connectedGate()).gatekeeperId)).proposal.id;
+      await asOwner('withdraw_gate_address_change', { id: withdrawn });
+      const applied = (await previewAndPropose((await connectedGate()).gatekeeperId)).proposal.id;
+      await asAdmin('approve_gate_address_change', {
+        workspaceId,
+        id: applied,
+        previewDigest: (await listed(applied)).previewDigest,
+      });
+      const mine = [open, lapsed, rejected, withdrawn, applied];
+      const ofMine = (set: Set<string>) => mine.filter((id) => set.has(id));
+
+      // status goes by what each proposal shows: the lapsed one is expired, not proposed.
+      const stored = await pool.query<{ status: string }>(
+        'select status from gate_address_changes where workspace_id = $1 and id = $2',
+        [workspaceId, lapsed],
+      );
+      expect(stored.rows[0]?.status).toBe('proposed');
+      expect(ofMine(await ids({ status: 'proposed' }))).toEqual([open]);
+      expect(ofMine(await ids({ status: 'expired' }))).toEqual([lapsed]);
+      expect(ofMine(await ids({ status: 'rejected' }))).toEqual([rejected]);
+      expect(ofMine(await ids({ status: 'withdrawn' }))).toEqual([withdrawn]);
+      expect(ofMine(await ids({ status: 'applied' }))).toEqual([applied]);
+
+      // ended: true is the history — everything but what still awaits a decision; false the rest.
+      const history = (await allListed({ workspaceId, ended: true })).items;
+      expect(ofMine(new Set(history.map((item) => item.id)))).toEqual([
+        lapsed,
+        rejected,
+        withdrawn,
+        applied,
+      ]);
+      expect(history.every((item) => item.status !== 'proposed')).toBe(true);
+      expect(history.find((item) => item.id === rejected)).toMatchObject({
+        status: 'rejected',
+        rejectionReason: 'TLS',
+        decidedByLogin: admin.login,
+        decidedAt: expect.any(String),
+      });
+      const awaiting = (await allListed({ workspaceId, ended: false })).items;
+      expect(ofMine(new Set(awaiting.map((item) => item.id)))).toEqual([open]);
+      expect(awaiting.every((item) => item.status === 'proposed')).toBe(true);
+      expect(ofMine(await ids({}))).toEqual(mine);
+
+      // Paging walks the same rows in the same order, once each — two proposals made in the same
+      // instant included (the order breaks the tie by workspace and id).
+      await sameCreatedAt(rejected, withdrawn);
+      const whole = (await allListed({ workspaceId }, 200)).items.map((item) => item.id);
+      for (const limit of [1, 2, 3]) {
+        const paged = await allListed({ workspaceId }, limit);
+        expect(paged.items.map((item) => item.id)).toEqual(whole);
+        expect(paged.pages).toBe(Math.ceil(whole.length / limit) || 1);
+      }
+      const times = (await allListed({ workspaceId }, 200)).items.map((item) =>
+        Date.parse(item.createdAt),
+      );
+      expect(times).toEqual([...times].sort((a, b) => b - a));
+      // (Read again: the tie above reordered those two.)
+      const wholeHistory = (await allListed({ workspaceId, ended: true }, 200)).items;
+      const pagedHistory = await allListed({ workspaceId, ended: true }, 1);
+      expect(pagedHistory.items.map((item) => item.id)).toEqual(
+        wholeHistory.map((item) => item.id),
+      );
+
+      // A page that ends the list says so by leaving nextCursor out; a cursor this list did not
+      // write starts from the top.
+      const [first] = (await allListed({ workspaceId }, 200)).items;
+      const top = await asAdmin<{ items: PlatformGateAddressChangeWire[]; nextCursor?: string }>(
+        'list_gate_address_changes',
+        { workspaceId, limit: 1, cursor: Buffer.from('not|a|cursor').toString('base64url') },
+      );
+      expect(top.items.map((item) => item.id)).toEqual([first?.id]);
+      const last = await asAdmin<{ items: PlatformGateAddressChangeWire[]; nextCursor?: string }>(
+        'list_gate_address_changes',
+        { workspaceId, limit: 200 },
+      );
+      expect(last.nextCursor).toBeUndefined();
     });
 
     it('legacy 718: a gate never shows another gate’s outcome, and a new address stored with a credential is shown without it, open or ended', async () => {

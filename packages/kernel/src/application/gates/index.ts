@@ -77,6 +77,7 @@ export {
   recordRotatedConnectionSecret,
 } from './connection-secret-issuances.js';
 export type {
+  GateAddressChangeListPosition,
   GateAddressChangeRow,
   InsertGateAddressChangeInput,
   PlatformGateAddressChangeRow,

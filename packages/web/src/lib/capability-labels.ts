@@ -1498,9 +1498,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   list_gate_address_changes: {
     zh: '查看门地址申请',
     en: 'List gate address changes',
-    zhHint: '列出各工作区更换自己接入的门地址的申请，以及会跟着门走的授权。',
+    zhHint: '列出各工作区更换自己接入的门地址的申请（待审批的和已结束的），以及会跟着门走的授权。',
     enHint:
-      'Lists workspaces’ proposals to move their self-connected gates, with what follows each gate.',
+      'Lists workspaces’ proposals to move their self-connected gates, awaiting a decision or ended, with what follows each gate.',
   },
   approve_gate_address_change: {
     zh: '批准更换门地址',

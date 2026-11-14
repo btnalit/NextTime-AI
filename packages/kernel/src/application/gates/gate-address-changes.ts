@@ -47,6 +47,15 @@ export interface PlatformGateAddressChangeRow extends GateAddressChangeRow {
   /** `proposed` and past `expires_at` (by the database's clock): it can no longer be applied, and
    *  the next decision or proposal for the gate records it as `expired`. */
   readonly lapsed: boolean;
+  /** `created_at` as the database prints it — full precision, for a keyset cursor (legacy 717). */
+  readonly createdAtCursor: string;
+}
+
+/** Where a page of `listGateAddressChanges` resumes: strictly after this row in its order. */
+export interface GateAddressChangeListPosition {
+  readonly createdAt: string;
+  readonly workspaceId: string;
+  readonly id: string;
 }
 
 interface GateAddressChangeDbRow {
@@ -296,14 +305,30 @@ export async function settleGateAddressChange(
   return row ? mapRow(row) : null;
 }
 
-/** Platform plane: proposals newest first, optionally one status's or one workspace's — or one
- *  proposal (`id`). */
+/**
+ * The status a proposal shows as: a `proposed` row past `expires_at` is `expired` (`lapsed`) —
+ * what `toPlatformWire` sends — even before the next decision or proposal for the gate records it
+ * so. The filters below go by this, so a platform reader asking for `proposed` gets only what can
+ * still be approved, and one asking for `expired` gets every proposal that ran out (legacy 717).
+ */
+const SHOWN_STATUS = `(case when c.status = 'proposed' and now() >= c.expires_at then 'expired' else c.status end)`;
+
+/**
+ * Platform plane: proposals newest first (`created_at`, then `workspace_id` and `id` so the order
+ * is total), optionally one status's (as shown: `SHOWN_STATUS`), only the ended ones (`ended:
+ * true`: applied, rejected, withdrawn, or expired — lapsed included) or only the open ones
+ * (`ended: false`), one workspace's — or one proposal (`id`). `after` and `limit` page it by
+ * keyset (legacy 717); without `limit` every matching row comes back.
+ */
 export async function listGateAddressChanges(
   client: PoolClient,
   filter: {
     readonly status?: GateAddressChangeStatusWire;
+    readonly ended?: boolean;
     readonly workspaceId?: string;
     readonly id?: string;
+    readonly after?: GateAddressChangeListPosition;
+    readonly limit?: number;
   } = {},
 ): Promise<PlatformGateAddressChangeRow[]> {
   const result = await client.query<
@@ -315,23 +340,38 @@ export async function listGateAddressChanges(
       target: string | null;
       suspended: boolean;
       lapsed: boolean;
+      created_at_cursor: string;
     }
   >(
     `select ${COLUMNS}, w.name as workspace_name, p.display_name as proposed_by_name,
             u.login as decided_by_login, s.connector, s.target,
             (s.suspended_at is not null) as suspended,
-            (c.status = 'proposed' and now() >= c.expires_at) as lapsed
+            (c.status = 'proposed' and now() >= c.expires_at) as lapsed,
+            c.created_at::text as created_at_cursor
        from gate_address_changes c
        join workspaces w on w.id = c.workspace_id
        left join principals p on p.workspace_id = c.workspace_id and p.id = c.proposed_by
        left join users u on u.id = c.decided_by_user_id
        left join workspace_self_connections s
          on s.workspace_id = c.workspace_id and s.gatekeeper_object_id = c.gatekeeper_object_id
-      where ($1::text is null or c.status = $1::text)
-        and ($2::uuid is null or c.workspace_id = $2::uuid)
-        and ($3::uuid is null or c.id = $3::uuid)
-      order by c.created_at desc, c.workspace_id, c.id`,
-    [filter.status ?? null, filter.workspaceId ?? null, filter.id ?? null],
+      where ($1::text is null or ${SHOWN_STATUS} = $1::text)
+        and ($2::boolean is null or (${SHOWN_STATUS} <> 'proposed') = $2::boolean)
+        and ($3::uuid is null or c.workspace_id = $3::uuid)
+        and ($4::uuid is null or c.id = $4::uuid)
+        and ($5::timestamptz is null
+             or (c.created_at, c.workspace_id, c.id) < ($5::timestamptz, $6::uuid, $7::uuid))
+      order by c.created_at desc, c.workspace_id desc, c.id desc
+      limit $8`,
+    [
+      filter.status ?? null,
+      filter.ended ?? null,
+      filter.workspaceId ?? null,
+      filter.id ?? null,
+      filter.after?.createdAt ?? null,
+      filter.after?.workspaceId ?? null,
+      filter.after?.id ?? null,
+      filter.limit ?? null,
+    ],
   );
   return result.rows.map((row) => ({
     ...mapRow(row),
@@ -344,5 +384,6 @@ export async function listGateAddressChanges(
     target: row.target ?? '',
     suspended: row.suspended === true,
     lapsed: row.lapsed === true,
+    createdAtCursor: row.created_at_cursor,
   }));
 }
