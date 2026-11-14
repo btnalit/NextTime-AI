@@ -4611,13 +4611,21 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
       await waitFor(() =>
         expect(within(detail).getByTestId('operation-detail-version').textContent).toBe('v1'),
       );
-      fireEvent.click(within(detail).getByTestId('operation-deprecated-live-link'));
+      const link = within(detail).getByTestId('operation-deprecated-live-link');
+      // A click focuses the link first, as a browser does — the focus the note takes with it.
+      link.focus();
+      fireEvent.click(link);
       await waitFor(() =>
         expect(
           within(screen.getByTestId('catalog-detail')).getByTestId('operation-detail-version')
             .textContent,
         ).toBe('v2'),
       );
+      // Legacy 755: the link left with the note, so focus lands on v2's detail title.
+      await waitFor(() =>
+        expect(document.activeElement?.classList.contains('catalog-detail-title')).toBe(true),
+      );
+      expect(screen.getByTestId('catalog-detail').contains(document.activeElement)).toBe(true);
       expect(window.location.hash).toBe(hrefs.catalog('operations', 'gk-1::docker.restart'));
       expect(screen.queryByTestId('operation-deprecated-note')).toBeNull();
       // Back is the hash going back to v1's — the deprecated version opens again.
