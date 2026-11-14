@@ -2574,6 +2574,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'An upgrade revoked Handles still valid while acting for a member, user or workspace that had been disabled.',
   },
+  'principal.disabled_api_key_cleared': {
+    zh: '停用成员 key 已清除',
+    en: 'Disabled member’s key cleared',
+    zhHint: '升级时清掉了停用时留在成员上的 API key；成员停用后这把 key 本来就不能登录。',
+    enHint:
+      'An upgrade cleared the API key a disable had left on a member; it could not sign in once the member was disabled.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Platform audit events (`workspace_id` null, not capability names)

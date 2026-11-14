@@ -25,6 +25,7 @@ const OTHER_AUDIT_ACTIONS = [
   'principal.container_handles_revoked',
   'principal.revoked_session_handles_revoked',
   'principal.disabled_authority_handles_revoked',
+  'principal.disabled_api_key_cleared',
   'workspace.created',
   'workspace.create_failed',
   'user.identity_claimed',
