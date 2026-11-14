@@ -411,6 +411,10 @@ function createFakePool(
     failQueries: (sqlPrefix: string, after = 0) => {
       failing.set(sqlPrefix, { remaining: after });
     },
+    /** Legacy 751: every query answers again (the database is back). */
+    restoreQueries: () => {
+      failing.clear();
+    },
   };
 }
 
@@ -1210,6 +1214,7 @@ describe('AgentHostRuntime — legacy 434 a read that fails ends the entry Turn,
   const GRANTS = 'select distinct resource_id';
   const SKILLS = 'select distinct on (id)';
   const PLATFORM_SETTINGS = 'select settings, version, updated_at from platform_settings';
+  const HANDLE_INSERT = 'insert into capability_handles';
 
   async function harness() {
     const input = startTurnInput();
@@ -1307,6 +1312,12 @@ describe('AgentHostRuntime — legacy 434 a read that fails ends the entry Turn,
       after: 1,
       step: 'the active runtime image',
     },
+    {
+      read: 'the entry Handle (issued last, legacy 751)',
+      prefix: HANDLE_INSERT,
+      after: 0,
+      step: 'the entry session/Handle',
+    },
   ])(
     '$read cannot be read: the Turn ends failed and nothing is sent',
     async ({ prefix, after, step }) => {
@@ -1316,6 +1327,8 @@ describe('AgentHostRuntime — legacy 434 a read that fails ends the entry Turn,
       await runtime.startTurn(input);
 
       expect(sent).toEqual([]);
+      // Legacy 751: the Handle is issued after every read, so a Turn ended by one issues none.
+      expect(fake.handleCount.get(input.principalId) ?? 0).toBe(0);
       expect(events).toEqual([turnEnded(input, 'failed')]);
       const logged = lines.map((line) => JSON.parse(line) as { level: string; msg: string });
       expect(logged).toContainEqual(
@@ -1336,6 +1349,22 @@ describe('AgentHostRuntime — legacy 434 a read that fails ends the entry Turn,
     await runtime.startTurn(input);
 
     expect(fake.handleCount.get(input.principalId) ?? 0).toBe(0);
+  });
+
+  it('legacy 751: a Turn that failed on a read caches no Handle — the next Turn issues its own', async () => {
+    const { input, fake, runtime, sent } = await harness();
+    fake.failQueries(PLATFORM_SETTINGS, 1); // the last read, the active runtime image
+
+    await runtime.startTurn(input);
+    expect(fake.handleCount.get(input.principalId) ?? 0).toBe(0);
+
+    fake.restoreQueries();
+    const next = { ...input, turnId: `${input.turnId}-next` };
+    const startPromise = runtime.startTurn(next);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: next.turnId });
+    await startPromise;
+    expect(fake.handleCount.get(input.principalId)).toBe(1);
   });
 
   it('a Turn stopped while preparing, whose read then fails, ends interrupted', async () => {
