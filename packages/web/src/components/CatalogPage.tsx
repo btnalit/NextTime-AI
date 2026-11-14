@@ -3671,6 +3671,25 @@ function definitionItems(row: WorkerDefinitionSummary, t: Translate): KeyValueIt
  * version of a Worker with a newer published one: that it is earlier — still invocable by its
  * version — and which one is newest.
  */
+/** Legacy 746: on a 「我的草稿」 row, a draft below its family's newest published version — it is
+ *  not published any more (legacy 742); the detail's note says what to do with it. */
+function SupersededDraftMark({ head }: { readonly head: number | undefined }) {
+  const t = useT();
+  if (head === undefined) return null;
+  return (
+    <span
+      className="chip chip-warn chip-s"
+      data-testid="workers-my-draft-superseded"
+      title={t(
+        `这个定义已经发布了更新的 v${head}，这份草稿不能再发布。打开它看怎么处理。`,
+        `This definition already has a newer published version, v${head}, so this draft can no longer be published. Open it to see what to do.`,
+      )}
+    >
+      {t(`已有更新的 v${head}`, `Newer v${head} published`)}
+    </span>
+  );
+}
+
 function WorkerVersionNote({
   row,
   inUseEntry,
@@ -4368,15 +4387,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const familyHeads = publishedFamilyHeads(everyRow);
   // Legacy 742: a draft below its family's newest published version is not published any more —
   // the kernel refuses it (409 draft_superseded); the detail says so instead of offering Publish.
-  const selectedPublishedHead = selected
-    ? latestPublishedVersion(everyRow, selected.id)
-    : undefined;
-  const selectedSupersededBy =
-    selected?.status === 'draft' &&
-    selectedPublishedHead !== undefined &&
-    selectedPublishedHead > selected.version
-      ? selectedPublishedHead
-      : undefined;
+  // Legacy 746: the 「我的草稿」 row says so too.
+  function supersededByOf(row: WorkerDefinitionSummary | undefined): number | undefined {
+    if (row?.status !== 'draft') return undefined;
+    const head = latestPublishedVersion(everyRow, row.id);
+    return head !== undefined && head > row.version ? head : undefined;
+  }
+  const selectedSupersededBy = supersededByOf(selected);
   // S11 GO16b: a family by id — its newest version the reader has read (published first, then
   // their own draft), as a name and a detail link.
   function familyOf(id: string): WorkerFamilyRef | null {
@@ -4461,6 +4478,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                     <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                     <AgentDraftMark origin={row.origin} status={row.status} />
+                    <SupersededDraftMark head={supersededByOf(row)} />
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>

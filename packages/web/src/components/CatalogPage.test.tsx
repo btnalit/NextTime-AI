@@ -5647,6 +5647,12 @@ describe('CatalogPage — a Worker draft below the published head (legacy 742)',
     renderPage(http, 'workers');
     const section = await screen.findByTestId('workers-my-drafts-section');
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    // Legacy 746: the row says so before it is opened.
+    const mark = within(within(section).getByTestId('workers-my-draft-row')).getByTestId(
+      'workers-my-draft-superseded',
+    );
+    expect(mark.textContent).toBe(`已有更新的 v${3}`);
+    expect(mark.getAttribute('title')).toMatch(/这份草稿不能再发布/);
     const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
     const note = within(detail).getByTestId('worker-detail-superseded');
     expect(note.textContent).toMatch(/已经发布了更新的 v3，这份草稿 v2 不能再发布/);
@@ -5715,6 +5721,7 @@ describe('CatalogPage — a Worker draft below the published head (legacy 742)',
     });
     renderPage(http, 'workers');
     const section = await screen.findByTestId('workers-my-drafts-section');
+    expect(within(section).queryByTestId('workers-my-draft-superseded')).toBeNull();
     const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
     expect(within(detail).queryByTestId('worker-detail-superseded')).toBeNull();
     fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
@@ -5723,6 +5730,12 @@ describe('CatalogPage — a Worker draft below the published head (legacy 742)',
     expect(toast.textContent).toContain('已经发布了比这份草稿更新的版本');
     const note = await screen.findByTestId('worker-detail-superseded');
     expect(note.textContent).toMatch(/更新的 v3，这份草稿 v2 不能再发布/);
+    // Legacy 746: after the reload the row is marked too.
+    expect(
+      within(await screen.findByTestId('workers-my-drafts-section')).getByTestId(
+        'workers-my-draft-superseded',
+      ).textContent,
+    ).toBe(`已有更新的 v${3}`);
     expect(screen.queryByTestId('worker-draft-publish')).toBeNull();
   });
 });

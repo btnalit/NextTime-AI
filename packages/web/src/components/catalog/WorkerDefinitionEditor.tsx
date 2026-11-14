@@ -29,7 +29,7 @@ import {
   type DefinitionReferenceRefusal,
   definitionReferenceFieldText,
 } from '../../lib/definition-reference.js';
-import { isForbiddenError } from '../../lib/errors.js';
+import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type {
   CapabilityNameRow,
   GatekeeperListRow,
@@ -44,6 +44,7 @@ import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
 import {
+  workerDefinitionGoneText,
   workerDraftChangedOf,
   workerDraftChangedText,
   workerDraftPendingOf,
@@ -327,8 +328,9 @@ export function WorkerDefinitionEditor({
   }
 
   /** `replacesDraft`: the caller's own pending draft this version replaces — the one being edited,
-   *  or the one a `draft_pending` refusal named, on 「用这次的内容替换」. */
-  async function submit(replacesDraft: number | undefined): Promise<void> {
+   *  or the one a `draft_pending` refusal named, on 「用这次的内容替换」. `asNewDefinition`
+   *  (legacy 747): propose what was written as a new definition, naming no family. */
+  async function submit(replacesDraft: number | undefined, asNewDefinition = false): Promise<void> {
     if (busy) return;
     const normalizedForm = normalizeEgressDeny(form);
     if (normalizedForm !== form) setForm(normalizedForm);
@@ -343,8 +345,10 @@ export function WorkerDefinitionEditor({
     setError(null);
     try {
       const result = await http.call<ProposedDraft>('propose_worker_definition', {
-        ...(newVersionOf ? { definitionId: newVersionOf.id } : {}),
-        ...(newVersionOf && replacesDraft !== undefined ? { replacesDraft } : {}),
+        ...(newVersionOf && !asNewDefinition ? { definitionId: newVersionOf.id } : {}),
+        ...(newVersionOf && !asNewDefinition && replacesDraft !== undefined
+          ? { replacesDraft }
+          : {}),
         kind: normalizedForm.kind,
         definition: validated.value,
       });
@@ -362,6 +366,11 @@ export function WorkerDefinitionEditor({
   // Legacy 744: the draft being edited went (published, discarded or expired) — what was written
   // can still be proposed, as the family's next version with nothing to replace.
   const changedDraft = newVersionOf ? workerDraftChangedOf(error) : null;
+  // Legacy 747: saving the draft being edited found no version of its definition at all — the
+  // draft was discarded or expired and nothing of it was ever published. What was written can
+  // start a new definition (a `worker` one: an entry definition is never started here, J7).
+  const definitionGone =
+    replacing !== undefined && error !== null && describeError(error).code === 'not_found';
 
   if (proposed) {
     return (
@@ -798,6 +807,7 @@ export function WorkerDefinitionEditor({
             overrides={{
               draft_pending: workerDraftPendingText(error, t),
               draft_changed: workerDraftChangedText(error, t),
+              ...(definitionGone ? { not_found: workerDefinitionGoneText(form.kind, t) } : {}),
             }}
             action={
               newVersionOf && pendingDraft ? (
@@ -836,6 +846,16 @@ export function WorkerDefinitionEditor({
                 >
                   {t('用这次的内容新建草稿', 'Save this as a new draft')}
                 </Button>
+              ) : definitionGone && form.kind === 'worker' ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  loading={busy}
+                  onClick={() => void submit(undefined, true)}
+                  data-testid="worker-propose-as-new-definition"
+                >
+                  {t('用这次的内容新建一个定义', 'Start a new definition with this')}
+                </Button>
               ) : undefined
             }
             testId="worker-editor-error"
@@ -845,13 +865,14 @@ export function WorkerDefinitionEditor({
 
       <div className="row overlay-actions">
         {/* UX acceptance of #1220 (P3): after `draft_changed` a save would replace the same gone
-         *  draft and be refused again — the banner's 「用这次的内容新建草稿」 is the way on. */}
+         *  draft and be refused again — the banner's 「用这次的内容新建草稿」 is the way on. The
+         *  same after legacy 747's not-found, whose way on is 「用这次的内容新建一个定义」. */}
         {/* ux-lint-allow-disabled: the refusal banner above says why and offers the way on. */}
         <Button
           type="submit"
           variant="primary"
           loading={busy}
-          disabled={changedDraft !== null}
+          disabled={changedDraft !== null || definitionGone}
           data-testid="worker-submit"
         >
           {t('保存草稿', 'Save draft')}
