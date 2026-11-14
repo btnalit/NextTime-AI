@@ -197,7 +197,8 @@ wait_for_gate_health() {
 
 # R-01 (maintainer decision D-01): a self-connected gate authenticates the kernel with its own
 # connection secret, never the platform gate token. mint_gate_secret <ownerKey> <step> prints a
-# fresh one (`mint_connection_secret` stores nothing); it runs inside a command substitution, so
+# fresh one (`mint_connection_secret` keeps only its salt, usable by one connection within 24
+# hours — legacy 711); it runs inside a command substitution, so
 # the caller checks for an empty result. write_gate_secret <secret> <file> puts it where the gate's
 # GATE_KERNEL_TOKEN_FILE points (docker-compose.yml), readable by the gate's uid 10001 — a
 # throwaway acceptance directory, like the store.key beside it.

@@ -157,6 +157,9 @@ const PURGE_COUNT_LABELS = {
   // administrator's admin agent may propose to.
   adminAgentTargets: { zh: '管理员智能体的目标工作区', en: 'Admin agent targets' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
+  // Legacy 711 (migrations/core/0058): one row per connection secret issued (its salt, never the
+  // secret) — the name 连接密钥 has everywhere else.
+  connectionSecretIssuances: { zh: '连接密钥的签发记录', en: 'Connection secret issuances' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   // S10 E3-1a / E3-1b / E3-2a / E3-2b / E3-2c (migrations/worker/0007–0011): the names 治理 → 评测
   // uses.

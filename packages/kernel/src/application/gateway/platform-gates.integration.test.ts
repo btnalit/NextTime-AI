@@ -69,6 +69,7 @@ import {
   landGatekeeper,
   operationPlatformStatus,
   readGatekeeperPlatformPolicy,
+  recordMintedConnectionSecret,
   upsertAnnouncement,
 } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
@@ -1327,13 +1328,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       // stubbed open here (these cases are about the catalog guard, which runs first anyway).
       const connectionSecrets = createGateConnectionSecrets('platform-gates-guard-gate-token-0123');
 
-      function selfConnect(endpoint: string) {
+      async function selfConnect(endpoint: string) {
+        // Issued as mint_connection_secret issues it: its salt recorded (legacy 711).
+        const minted = connectionSecrets.mint(workspaceId);
+        await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, (client) =>
+          recordMintedConnectionSecret(client, workspaceId, minted.salt, ownerPrincipalId),
+        );
         return callAsOwner('create_connection', {
           kind: 'http',
           target: 'a-system-of-my-own',
           endpoint,
           credentialKind: 'shared',
-          connectionSecret: connectionSecrets.mint(workspaceId).secret,
+          connectionSecret: minted.secret,
         });
       }
 

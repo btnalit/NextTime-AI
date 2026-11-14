@@ -33,7 +33,11 @@ import {
   publishOperation,
 } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
-import { insertGateLink, upsertAnnouncement } from '../gates/index.js';
+import {
+  insertGateLink,
+  recordMintedConnectionSecret,
+  upsertAnnouncement,
+} from '../gates/index.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
@@ -170,7 +174,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** A new self-connected gate: its own connection secret (one per connection, R-01) and its own
      *  address (P0b: one Gatekeeper per address in a workspace). */
     async function startNewGate(manifest: readonly Operation[]): Promise<void> {
-      connectionSecret = CONNECTION_SECRETS.mint(workspaceId).secret;
+      const minted = CONNECTION_SECRETS.mint(workspaceId);
+      connectionSecret = minted.secret;
+      // Issued as mint_connection_secret issues it: its salt recorded (legacy 711).
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        recordMintedConnectionSecret(client, workspaceId, minted.salt, ownerId),
+      );
       gatePort = 0;
       await startGate(manifest);
     }

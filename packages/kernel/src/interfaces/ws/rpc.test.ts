@@ -18,6 +18,8 @@ import {
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
+  ConnectionSecretExpiredError,
+  ConnectionSecretInUseError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -384,6 +386,17 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
       }),
     );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  // Legacy 711 (review #501 of #1176): both refusals of a connection secret are HTTP 409s.
+  it.each([
+    new ConnectionSecretExpiredError('create_connection'),
+    new ConnectionSecretInUseError('create_connection: that connectionSecret was already used'),
+  ])('$name maps to ILLEGAL_TRANSITION, like HTTP 409, with its message as is', (err) => {
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: err.message,
+    });
   });
 
   it('SkillNameConflictError (S11 P1-D) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {

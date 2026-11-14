@@ -232,6 +232,7 @@ export {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
   ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,

@@ -93,6 +93,7 @@ import {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
   ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
@@ -998,8 +999,8 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
     return { status: 409, code: 'conflict', message: err.message };
   }
   // R-01 / legacy 701: the secret already belongs to a Gatekeeper, or already served a proposal to
-  // move a gate — "get a new one" in both cases.
-  if (err instanceof ConnectionSecretInUseError) {
+  // move a gate; legacy 711: or it is no longer fresh — "get a new one" in every case.
+  if (err instanceof ConnectionSecretInUseError || err instanceof ConnectionSecretExpiredError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // Legacy 701 (gate-address-change-handlers.ts): each refusal carries its own status and code.
