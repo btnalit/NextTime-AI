@@ -3024,6 +3024,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，函数可以留着，旧代码不调用它。要连迁移一起撤：`drop function console_session_is_live(uuid, uuid)`，再 `delete from schema_migrations where module = 'governance' and version = 45`。
 - 主机无其他手工步骤。下一次主机升级的提示要带上本节。
 
+### 3.178 合并已停用的用户时逐条审计恢复可用的成员资格（#1185，遗留 719，0.68.0 之后的下一版）
+
+没有迁移。
+
+- **行为变化**：`merge_user` 的来源用户已停用时，每条没有移出的成员资格写一条平台审计 `platform.membership_restored`（控制台显示「成员身份恢复可用」，平台审计可按任一用户或工作区查到）。`merge_user` 审计行多带 `sourceLogin`、`targetLogin`。凭证不会因此回来。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
