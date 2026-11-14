@@ -543,6 +543,16 @@ export async function importManifest(
   return { imported, skipped };
 }
 
+/** The `origin` of an Operation version a proposer writes, from the caller kind recorded beside
+ *  them: `human` for a person, `agent` for anything else — an agent through a Handle, or a service
+ *  Principal's API key (legacy 616: an automation credential is not a person, as `draftOriginOf`
+ *  holds for every other draft). One rule for `proposeOperation` and `publishOperationRevision`. */
+export function operationOriginOf(
+  kind: PrincipalKind,
+): Extract<OperationOrigin, 'human' | 'agent'> {
+  return kind === 'human' ? 'human' : 'agent';
+}
+
 export interface ProposeOperationInput {
   readonly gatekeeperId: string;
   readonly operation: Operation;
@@ -565,8 +575,7 @@ export interface ProposeOperationInput {
  *  A fully `deprecated` identity (no live draft or published row) falls back to outcome 2 — the
  *  existing pre-S3.12 behavior for that edge case, unchanged here.
  *
- *  `proposedBy.kind` decides the draft's `origin` (`'human'` for a human caller of this
- *  Handle-channel capability, `'agent'` otherwise). */
+ *  `proposedBy.kind` decides the draft's `origin` (`operationOriginOf`). */
 export async function proposeOperation(
   client: PoolClient,
   workspaceId: string,
@@ -610,7 +619,7 @@ export async function proposeOperation(
     throw new OperationIdentityConflictError(gatekeeperId, name, existing.status);
   }
 
-  const origin: OperationOrigin = input.proposedBy.kind === 'human' ? 'human' : 'agent';
+  const origin = operationOriginOf(input.proposedBy.kind);
   const written = await registerOperationDraftObject(client, workspaceId, {
     gatekeeperId,
     name,
@@ -1393,7 +1402,7 @@ export async function publishOperationRevision(
     operation: input.operation,
     proposedBy: input.publishedBy,
     activityId: input.activityId,
-    origin: input.publishedBy.kind === 'human' ? 'human' : 'agent',
+    origin: operationOriginOf(input.publishedBy.kind),
     insertOnly: true,
   });
   if (!written) throw new OperationIdentityConflictError(gatekeeperId, name, 'draft');
