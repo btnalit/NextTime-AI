@@ -199,6 +199,7 @@ import {
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  ReplacedDraftNotPendingError,
   SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
@@ -842,6 +843,16 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // family whose latest version is still a draft, or a Skill version under another name. Nothing
   // was proposed.
   if (err instanceof FamilyDraftPendingError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { familyId: err.familyId, draftVersion: err.draftVersion },
+    };
+  }
+  // Legacy 680: `propose_worker_definition{replacesDraft}` named a draft that is no longer the
+  // caller's pending one. Nothing was proposed or discarded.
+  if (err instanceof ReplacedDraftNotPendingError) {
     return {
       status: 409,
       code: err.code,

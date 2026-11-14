@@ -18,6 +18,7 @@ import {
 } from '../../lib/entry-template.js';
 import { describeError } from '../../lib/errors.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { workerDraftPendingOf, workerDraftPendingText } from '../../lib/worker-draft-pending.js';
 import { Button } from '../kit/button.js';
 import { InlineError } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
@@ -97,12 +98,16 @@ export function EntryTemplateNotice({
   status,
   row,
   onProposed,
+  onShowDraft,
 }: {
   readonly http: CapabilityCaller;
   readonly status: EntryTemplateStatusResource;
   readonly row: Pick<WorkerDefinitionWire, 'id' | 'version' | 'definition'>;
   /** The draft the call returned (`created: false`: the caller's own identical one). */
   readonly onProposed: (upgrade: EntryTemplateUpgradeWire) => void;
+  /** Legacy 680: the caller's own other draft of the entry definition, which the refusal
+   *  (409 `draft_pending`) names — the error offers to show it. */
+  readonly onShowDraft?: (draft: { readonly id: string; readonly version: number }) => void;
 }) {
   const t = useT();
   const can = useRoleCan(http);
@@ -150,6 +155,7 @@ export function EntryTemplateNotice({
     }
   }
 
+  const pendingDraft = workerDraftPendingOf(error);
   const changes = capabilityChanges(
     entryCapabilitiesOf(row.definition),
     data.template.capabilities,
@@ -226,7 +232,23 @@ export function EntryTemplateNotice({
           )}
         </p>
       )}
-      <InlineError error={error} testId="entry-template-propose-error" />
+      <InlineError
+        error={error}
+        overrides={{ draft_pending: workerDraftPendingText(error, t, true) }}
+        testId="entry-template-propose-error"
+      />
+      {onShowDraft && pendingDraft ? (
+        <div className="row-wrap">
+          <Button
+            variant="secondary"
+            size="s"
+            onClick={() => onShowDraft(pendingDraft)}
+            data-testid="entry-template-show-pending-draft"
+          >
+            {t('查看那份草稿', 'Show that draft')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

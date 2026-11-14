@@ -1283,14 +1283,16 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { definitionId, kind, definition } = params as {
+  const { definitionId, replacesDraft, kind, definition } = params as {
     definitionId?: string;
+    replacesDraft?: number;
     kind: WorkerDefinitionKind;
     definition: Record<string, unknown>;
   };
   const principalId = await currentPrincipalId(client);
   const row = await proposeWorkerDefinition(client, workspaceId, principalId, {
     definitionId,
+    replacesDraft,
     kind,
     definition,
     origin: draftOriginOf(ctx),

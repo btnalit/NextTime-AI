@@ -328,6 +328,143 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect.objectContaining({ templateDigest: before.template.digest, created: false }),
         ]);
 
+        // Legacy 680: a family holds one pending draft of each proposer. The builder's hand-edited
+        // next version beside their template draft is refused, naming it…
+        const beside = await refusal(
+          dispatchCapability({ pool }, human(builderId, 'builder'), 'propose_worker_definition', {
+            definitionId: v1.id,
+            kind: 'entry',
+            definition: { ...upgrade.draft.definition, egressDeny: ['other.example'] },
+          }),
+        );
+        expect(beside).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: upgrade.draft.version },
+        });
+        // …and the template's draft beside the owner's own hand-edited one is refused, naming
+        // theirs; the builder's draft does not count for the owner (I16).
+        const handEdited = await dispatchCapability(
+          { pool },
+          human(ownerId, 'owner'),
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['owner.example'] },
+          },
+        );
+        const handEditedVersion = (handEdited as { version: number }).version;
+        expect(handEditedVersion).toBe(upgrade.draft.version + 1);
+        const overOwn = await refusal(
+          dispatchCapability({ pool }, human(ownerId, 'owner'), 'propose_entry_template_upgrade', {
+            templateDigest: before.template.digest,
+            basedOn,
+          }),
+        );
+        expect(overOwn).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: handEditedVersion },
+        });
+        // Review #493 on #1218: an agent acting for the owner (a Handle proposes as them) does not
+        // replace the draft the owner wrote — refused as their pending draft, which stays (the
+        // owner's own replace below takes it, under the next number).
+        const agent = handleCaller(workspaceId, ownerId, {
+          capabilities: ['propose_worker_definition'],
+          resources: {},
+        });
+        const overPerson = await refusal(
+          dispatchCapability({ pool }, agent, 'propose_worker_definition', {
+            definitionId: v1.id,
+            replacesDraft: handEditedVersion,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['agent.example'] },
+          }),
+        );
+        expect(overPerson).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: handEditedVersion },
+        });
+        // Editing that draft replaces it, in one call and under the next number; the audit record
+        // of the call names the draft it replaced.
+        const reEdited = await dispatchCapability(
+          { pool },
+          human(ownerId, 'owner'),
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            replacesDraft: handEditedVersion,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['owner-edited.example'] },
+          },
+        );
+        const reEditedVersion = (reEdited as { version: number }).version;
+        expect(reEditedVersion).toBe(handEditedVersion + 1);
+        const replaceAudit = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ payload: { params?: Record<string, unknown> } }>(
+                `select payload from audit_records
+                  where workspace_id = $1 and action = 'propose_worker_definition'
+                  order by created_at desc
+                  limit 1`,
+                [workspaceId],
+              )
+            ).rows[0],
+          { skipRoleSwitch: true },
+        );
+        expect(replaceAudit?.payload.params).toMatchObject({
+          definitionId: v1.id,
+          replacesDraft: handEditedVersion,
+        });
+        await dispatchCapability({ pool }, human(ownerId, 'owner'), 'discard_draft', {
+          kind: 'worker_definition',
+          id: v1.id,
+          version: reEditedVersion,
+        });
+        // Named again once it is gone: 409 draft_changed, nothing proposed.
+        const stale = await refusal(
+          dispatchCapability({ pool }, human(ownerId, 'owner'), 'propose_worker_definition', {
+            definitionId: v1.id,
+            replacesDraft: reEditedVersion,
+            kind: 'entry',
+            definition: v1.definition,
+          }),
+        );
+        expect(stale).toMatchObject({
+          status: 409,
+          code: 'draft_changed',
+          details: { familyId: v1.id, draftVersion: reEditedVersion },
+        });
+        // A draft the agent wrote, the agent replaces (then the owner discards it).
+        const agentDraft = (await dispatchCapability({ pool }, agent, 'propose_worker_definition', {
+          definitionId: v1.id,
+          kind: 'entry',
+          definition: { ...v1.definition, egressDeny: ['agent.example'] },
+        })) as { version: number; origin?: string };
+        expect(agentDraft.origin).toBe('agent');
+        const agentRedraft = (await dispatchCapability(
+          { pool },
+          agent,
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            replacesDraft: agentDraft.version,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['agent-edited.example'] },
+          },
+        )) as { version: number; origin?: string };
+        expect(agentRedraft).toMatchObject({ version: agentDraft.version + 1, origin: 'agent' });
+        await dispatchCapability({ pool }, human(ownerId, 'owner'), 'discard_draft', {
+          kind: 'worker_definition',
+          id: v1.id,
+          version: agentRedraft.version,
+        });
+
         // Nothing runs differently until it is published — by the owner (the live version is
         // theirs, so the builder who proposed the draft cannot supersede it).
         expect((await status()).current?.version).toBe(own.version);

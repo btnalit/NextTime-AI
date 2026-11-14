@@ -64442,6 +64442,10 @@
             "worker"
           ],
           "type": "string"
+        },
+        "replacesDraft": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [

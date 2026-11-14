@@ -330,6 +330,31 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toMatchObject({ status: 'recorded', segmentId: installed });
     });
 
+    it('legacy 680: the installer’s own pending draft of a WorkerDefinition family stays as it was; the upgrade is published beside it', async () => {
+      const ws = await newWorkspace();
+      const definitionId = randomUUID();
+      const w1 = { name: 'fixer', systemPrompt: 'You fix things.' };
+      await apply(ws, workerSegment(definitionId, w1));
+      // The owner edits the installed Worker by hand and leaves the draft pending.
+      const own = await inWorkspace(ws, (client) =>
+        proposeWorkerDefinition(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
+          definitionId,
+          kind: 'worker',
+          definition: { ...w1, systemPrompt: 'You fix things by hand.' },
+        }),
+      );
+      expect(own.version).toBe(2);
+      // A WorkerDefinition is published by its version, not as its family's latest, so the
+      // install takes nothing's place: it goes in published, and the owner's draft is still theirs.
+      await apply(ws, workerSegment(definitionId, { ...w1, systemPrompt: 'You fix things well.' }));
+      expect(await workerVersions(ws, definitionId)).toEqual([
+        { version: 1, status: 'published' },
+        { version: 2, status: 'draft' },
+        { version: 3, status: 'published' },
+      ]);
+    });
+
     it('a version a person published since: the rollback is refused, nothing written', async () => {
       const ws = await newWorkspace();
       const skillId = randomUUID();

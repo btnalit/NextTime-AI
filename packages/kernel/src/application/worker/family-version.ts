@@ -25,22 +25,54 @@ import type { PoolClient } from 'pg';
  * the pending draft reveals nothing the caller could not read.
  */
 
-export type FamilyKind = 'skill' | 'procedure';
+/** `worker_definition` (legacy 680): a WorkerDefinition family's pending draft is the
+ *  proposer's own — see `application/worker/definitions.ts`'s `proposeWorkerDefinition`. */
+export type FamilyKind = 'skill' | 'procedure' | 'worker_definition';
 
-/** The family's latest version is a draft: publish, discard or reject it before proposing another. */
+/** The family's latest version is a draft: publish, discard or reject it before proposing another.
+ *  For a WorkerDefinition: the caller's own draft of the family — publish or discard it first.
+ *  `personWrote`: an agent named that draft to replace (`replacesDraft`), and no agent wrote it —
+ *  the person it acts for's, to publish, discard or edit (review #493 on #1218). */
 export class FamilyDraftPendingError extends Error {
   readonly code = 'draft_pending' as const;
   readonly kind: FamilyKind;
   readonly familyId: string;
   readonly draftVersion: number;
-  constructor(kind: FamilyKind, familyId: string, draftVersion: number, draftName?: string) {
-    const label = kind === 'skill' ? 'Skill' : 'Procedure';
+  constructor(
+    kind: FamilyKind,
+    familyId: string,
+    draftVersion: number,
+    draftName?: string,
+    personWrote?: 'person_wrote',
+  ) {
     const named = draftName === undefined ? '' : ` "${draftName}"`;
     super(
-      `${label}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
+      personWrote
+        ? `WorkerDefinition${named} ${familyId}@${draftVersion} is a draft of the person you act for that no agent wrote — an agent replaces only a draft an agent wrote, and this one is theirs to publish, discard or edit. Nothing was proposed or discarded; ask them`
+        : kind === 'worker_definition'
+          ? `WorkerDefinition${named} ${familyId}@${draftVersion} is your draft that has not been published or discarded — a family holds one pending draft of yours at a time, so the next version would sit beside it. Publish it, or discard it (discard_draft), then propose the next version. Nothing was proposed`
+          : `${kind === 'skill' ? 'Skill' : 'Procedure'}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
     );
     this.name = 'FamilyDraftPendingError';
     this.kind = kind;
+    this.familyId = familyId;
+    this.draftVersion = draftVersion;
+  }
+}
+
+/** Legacy 680: `propose_worker_definition{replacesDraft}` named a version that is no longer a
+ *  pending draft of the caller's (published, discarded or expired since they looked), while they
+ *  hold no other pending draft of the family. Nothing was proposed or discarded; the caller reloads.
+ *  Same code as a reviewed draft that changed (`ReviewedDraftChangedError`). */
+export class ReplacedDraftNotPendingError extends Error {
+  readonly code = 'draft_changed' as const;
+  readonly familyId: string;
+  readonly draftVersion: number;
+  constructor(familyId: string, draftVersion: number) {
+    super(
+      `WorkerDefinition ${familyId}@${draftVersion} is not a pending draft of yours any more (published, discarded or expired since you looked), so there is nothing to replace. Nothing was proposed or discarded; reload the family and look again`,
+    );
+    this.name = 'ReplacedDraftNotPendingError';
     this.familyId = familyId;
     this.draftVersion = draftVersion;
   }

@@ -43,6 +43,11 @@ import { sameNameIds } from '../../lib/same-name.js';
 import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
+import {
+  workerDraftChangedText,
+  workerDraftPendingOf,
+  workerDraftPendingText,
+} from '../../lib/worker-draft-pending.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { ModelHealthNote, ModelOption, withModelHealthNote } from '../kit/model-health.js';
 import { SameNameId } from '../kit/same-name-id.js';
@@ -59,7 +64,9 @@ import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
 export interface WorkerDefinitionEditorProps {
   readonly http: CapabilityCaller;
   /** "编辑（生成新草稿版本）": `propose_worker_definition{definitionId}` proposes the next version
-   *  under this family — `kind` is immutable per family and locked here. */
+   *  under this family — `kind` is immutable per family and locked here. A draft here is the
+   *  caller's own (only its proposer sees it), and the save replaces it (legacy 680:
+   *  `replacesDraft`, a family holds one pending draft of each proposer). */
   readonly newVersionOf?: WorkerDefinitionSummary;
   /** Legacy 302: opened from a publish the kernel refused for naming what is not there — each
    *  field it named starts marked with what to change (`definitionReferenceFieldText`), and a
@@ -69,6 +76,10 @@ export interface WorkerDefinitionEditorProps {
    *  `opsRunnerTemplateForm()`) instead of starting blank. Ignored when `newVersionOf` is given —
    *  editing an existing family always prefills from that row, never from a template. */
   readonly initialForm?: WorkerDefinitionForm;
+  /** With `newVersionOf` (legacy 680): when the kernel refuses because the caller's own draft of
+   *  the family is still pending (409 `draft_pending`), the error offers to show that draft — and,
+   *  in any case, to replace it with this form. */
+  readonly onShowPendingDraft?: (draft: { readonly id: string; readonly version: number }) => void;
   /** `list_models` rows for the model dropdown (optional — still loading, or unavailable). */
   readonly models?: readonly ModelRow[];
   /** `list_capability_names` rows for the capabilities picker (optional). */
@@ -219,6 +230,7 @@ export function WorkerDefinitionEditor({
   newVersionOf,
   unresolved,
   initialForm,
+  onShowPendingDraft,
   models,
   capabilityNames,
   gatekeepers,
@@ -305,8 +317,17 @@ export function WorkerDefinitionEditor({
     setView('form');
   }
 
+  // Legacy 680: editing the caller's own draft replaces it (one pending draft per proposer).
+  const replacing = newVersionOf?.status === 'draft' ? newVersionOf.version : undefined;
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    await submit(replacing);
+  }
+
+  /** `replacesDraft`: the caller's own pending draft this version replaces — the one being edited,
+   *  or the one a `draft_pending` refusal named, on 「用这次的内容替换」. */
+  async function submit(replacesDraft: number | undefined): Promise<void> {
     if (busy) return;
     const normalizedForm = normalizeEgressDeny(form);
     if (normalizedForm !== form) setForm(normalizedForm);
@@ -322,6 +343,7 @@ export function WorkerDefinitionEditor({
     try {
       const result = await http.call<ProposedDraft>('propose_worker_definition', {
         ...(newVersionOf ? { definitionId: newVersionOf.id } : {}),
+        ...(newVersionOf && replacesDraft !== undefined ? { replacesDraft } : {}),
         kind: normalizedForm.kind,
         definition: validated.value,
       });
@@ -334,6 +356,8 @@ export function WorkerDefinitionEditor({
       setBusy(false);
     }
   }
+
+  const pendingDraft = workerDraftPendingOf(error);
 
   if (proposed) {
     return (
@@ -403,7 +427,22 @@ export function WorkerDefinitionEditor({
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="worker-definition-editor"
     >
-      {newVersionOf ? (
+      {newVersionOf && replacing !== undefined ? (
+        <Notice testId="worker-edit-draft-notice">
+          {t(
+            <>
+              修改 <strong>{newVersionName}</strong> 的草稿 v{replacing}
+              ：保存后生成一份新的草稿版本替换它（v{replacing}{' '}
+              随之丢弃），类型不可更改；发布前只有你可见。
+            </>,
+            <>
+              Editing draft v{replacing} of <strong>{newVersionName}</strong>: saving makes a new
+              draft version that replaces it (v{replacing} is discarded), the kind cannot change;
+              private to you until published.
+            </>,
+          )}
+        </Notice>
+      ) : newVersionOf ? (
         <Notice testId="worker-new-version-notice">
           {t(
             <>
@@ -433,8 +472,8 @@ export function WorkerDefinitionEditor({
       {unresolved ? (
         <Notice tone="warn" testId="worker-unresolved-notice">
           {t(
-            `v${newVersionOf?.version ?? ''} 引用了不存在的东西，没能发布。下面标出了要改的字段：改好后保存为新版本草稿，再发布。`,
-            `v${newVersionOf?.version ?? ''} names what is not there and was not published. The fields to change are marked below: fix them, save the new version draft, then publish it.`,
+            `v${newVersionOf?.version ?? ''} 引用了不存在的东西，没能发布。下面标出了要改的字段：改好后保存，新草稿替换 v${newVersionOf?.version ?? ''}，再发布。`,
+            `v${newVersionOf?.version ?? ''} names what is not there and was not published. The fields to change are marked below: fix them and save (the new draft replaces v${newVersionOf?.version ?? ''}), then publish it.`,
           )}
         </Notice>
       ) : null}
@@ -748,6 +787,39 @@ export function WorkerDefinitionEditor({
           <ErrorBanner
             error={error}
             title={t('无法创建草稿', 'Could not propose the draft')}
+            overrides={{
+              draft_pending: workerDraftPendingText(error, t),
+              draft_changed: workerDraftChangedText(error, t),
+            }}
+            action={
+              newVersionOf && pendingDraft ? (
+                <span className="row-wrap">
+                  {onShowPendingDraft ? (
+                    <Button
+                      variant="secondary"
+                      size="s"
+                      onClick={() => onShowPendingDraft(pendingDraft)}
+                      disabled={busy}
+                      data-testid="worker-show-pending-draft"
+                    >
+                      {t('查看那份草稿', 'Show that draft')}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="secondary"
+                    size="s"
+                    loading={busy}
+                    onClick={() => void submit(pendingDraft.version)}
+                    data-testid="worker-replace-pending-draft"
+                  >
+                    {t(
+                      `用这次的内容替换草稿 v${pendingDraft.version}`,
+                      `Replace draft v${pendingDraft.version} with this`,
+                    )}
+                  </Button>
+                </span>
+              ) : undefined
+            }
             testId="worker-editor-error"
           />
         </div>

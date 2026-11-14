@@ -21,6 +21,7 @@ export function WorkerEditorHost({
   newVersionOf,
   unresolved,
   initialForm,
+  onShowPendingDraft,
   capabilityNames,
   onProposed,
   onDone,
@@ -31,6 +32,8 @@ export function WorkerEditorHost({
   /** Legacy 302: as `WorkerDefinitionEditor`'s. */
   readonly unresolved?: DefinitionReferenceRefusal;
   readonly initialForm?: WorkerDefinitionForm;
+  /** Legacy 680: as `WorkerDefinitionEditor`'s. */
+  readonly onShowPendingDraft?: (draft: { readonly id: string; readonly version: number }) => void;
   readonly capabilityNames?: readonly CapabilityNameRow[];
   readonly onProposed: () => void;
   readonly onDone: () => void;
@@ -47,6 +50,7 @@ export function WorkerEditorHost({
       newVersionOf={newVersionOf}
       unresolved={unresolved}
       initialForm={initialForm}
+      onShowPendingDraft={onShowPendingDraft}
       models={models.state.status === 'ready' ? models.state.data.items : undefined}
       capabilityNames={capabilityNames}
       gatekeepers={gatekeepers.rows}

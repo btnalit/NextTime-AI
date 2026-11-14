@@ -2775,9 +2775,14 @@ const workerCapabilities = [
     // principal's drafts carry it (legacy 492: before, an unknown id started a family under it).
     // `kind` is immutable per `id` across versions (enforced by application/worker/definitions.ts,
     // not by this schema alone — a Zod shape has no way to see prior versions).
+    // Legacy 680: `replacesDraft` — the version of the caller's own pending draft of that family
+    // this version replaces (deleted in the same call): how a draft is edited, since a family holds
+    // one pending draft of each proposer. It needs `definitionId`, checked by the kernel (no
+    // `.refine()` here, so the params stay a plain object shape).
     paramsSchema: z
       .object({
         definitionId: id.optional(),
+        replacesDraft: z.number().int().positive().optional(),
         kind: WorkerDefinitionKindSchema,
         definition: jsonRecord,
       })
@@ -2793,7 +2798,7 @@ const workerCapabilities = [
     // names, WORKER_INFRASTRUCTURE_CAPABILITY_NAMES in kernel handles.ts, are always added), so the
     // text says to list the reads too: `["request_action"]` alone would drop search and get_object.
     description:
-      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind. A kind "worker" definition holds systemPrompt (required), name, description, model, skills (the Skills it loads, by name or id), gates (the Gatekeeper ids it acts on) and capabilities. Without capabilities the Worker gets the default set: graph reads such as search and get_object, and proposing, but no actions. A capabilities list replaces that default (get_task, list_allowed_operations, observe_operation and report_task_result are always added): for the Worker to request actions on its gates (execute-class Operations, each an ActionRequest that waits for approval), list "request_action" together with the reads it needs, for example ["search", "get_object", "request_action"].',
+      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind; while a draft of yours of that family is neither published nor discarded, the next version is refused (409 draft_pending): publish or discard that draft first, or edit it — pass replacesDraft: its version, and this version replaces it (that draft is deleted in the same call; 409 draft_changed when it is no longer your pending draft). Called by an agent, replacesDraft replaces only a draft an agent wrote: a draft the person wrote or asked for stays theirs to publish, discard or edit (409 draft_pending). A kind "worker" definition holds systemPrompt (required), name, description, model, skills (the Skills it loads, by name or id), gates (the Gatekeeper ids it acts on) and capabilities. Without capabilities the Worker gets the default set: graph reads such as search and get_object, and proposing, but no actions. A capabilities list replaces that default (get_task, list_allowed_operations, observe_operation and report_task_result are always added): for the Worker to request actions on its gates (execute-class Operations, each an ActionRequest that waits for approval), list "request_action" together with the reads it needs, for example ["search", "get_object", "request_action"].',
   },
   {
     // Legacy 145: the platform's entry template against the entry definition the workspace runs
@@ -2829,7 +2834,7 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.EntryTemplateUpgradeWireSchema,
     description:
-      'Propose your private draft of the next entry definition version: the platform template’s prompt and capabilities over the published version’s own model, egressDeny, name and description. Returns your identical draft instead of a second one. 409 entry_template_current when nothing differs; 409 entry_template_changed when the template or the published entry version is not the one in templateDigest / basedOn.',
+      'Propose your private draft of the next entry definition version: the platform template’s prompt and capabilities over the published version’s own model, egressDeny, name and description. Returns your identical draft instead of a second one; 409 draft_pending when another draft of yours of the entry definition is pending (publish or discard it first). 409 entry_template_current when nothing differs; 409 entry_template_changed when the template or the published entry version is not the one in templateDigest / basedOn.',
   },
   {
     // D-24 (review 2026-10-02) — see publish_operation (meta group) for the rule.

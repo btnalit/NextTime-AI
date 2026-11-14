@@ -239,6 +239,31 @@ describe('EntryTemplateNotice (legacy 145)', () => {
     expect(status.reload).toHaveBeenCalled();
   });
 
+  it('legacy 680: refused over the caller’s own other entry draft, it says so and offers to show that draft', async () => {
+    const http = caller('owner', async () => {
+      throw new HttpError('capability_error', 'kernel text', 'draft_pending', {
+        familyId: ENTRY,
+        draftVersion: 4,
+      });
+    });
+    const onShowDraft = vi.fn();
+    inPermissions(
+      <EntryTemplateNotice
+        http={http}
+        status={ready(statusOf())}
+        row={row}
+        onProposed={vi.fn()}
+        onShowDraft={onShowDraft}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId('entry-template-propose'));
+    const error = await screen.findByTestId('entry-template-propose-error');
+    expect(error.textContent).toMatch(/你在入口定义下已经有一份草稿 v4，还没有发布或丢弃/);
+    expect(error.textContent).toMatch(/所以没有按模板生成新草稿/);
+    fireEvent.click(screen.getByTestId('entry-template-show-pending-draft'));
+    expect(onShowDraft).toHaveBeenCalledWith({ id: ENTRY, version: 4 });
+  });
+
   it('says it matches when nothing differs, and says nothing on a version not in use', () => {
     const { unmount } = inPermissions(
       <EntryTemplateNotice

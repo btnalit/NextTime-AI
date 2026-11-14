@@ -127,7 +127,7 @@ export type {
 
 export type { DraftViewer } from './draft-visibility.js';
 
-export { FamilyDraftPendingError } from './family-version.js';
+export { FamilyDraftPendingError, ReplacedDraftNotPendingError } from './family-version.js';
 export type { FamilyKind } from './family-version.js';
 
 export { lockWorkerRegistry } from './registry-lock.js';

@@ -392,9 +392,13 @@ export async function applyFamilyItem(
   } else {
     const { definitionId } = planned.target;
     // As the Skill above: the pack derives the family id, so its first install starts the family.
+    // Legacy 680: published just below, so it never stands as a second pending draft of the
+    // installer's — their own draft of the family, if any, stays as it was (a WorkerDefinition is
+    // published by its version, not as its family's latest, so the install takes nothing's place).
     const draft = await proposeWorkerDefinition(client, workspaceId, appliedBy, {
       definitionId,
       onMissingFamily: 'start',
+      ownPendingDraft: 'beside',
       kind: 'worker',
       definition: { ...planned.content },
       origin,

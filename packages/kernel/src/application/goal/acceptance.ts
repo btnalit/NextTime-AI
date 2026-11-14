@@ -64,6 +64,7 @@ import type { GoalControlActor, GoalRunRow } from './types.js';
  *     (an observation, a Fact it judges) and every review (S11 GO18, `review.ts`) passed. A
  *     Decision of theirs (`goal_outcome`, `achieved`, naming the run, the round and the check) is
  *     what the row passes on; the run is due, and the advance completes it (`advance.ts` phase V).
+ *     A retry once it did names the same Decision, `changed: false` (legacy 682).
  *   - {@link endGoalRun}: the requester ends the run with an outcome, on their word (`requester`
  *     basis, their Decision on the run): `not_achieved` from `verifying` or `paused` (S6: "按未达成
  *     结束"); `achieved` from `paused` only — the round's own way to `achieved` is the confirmation
@@ -176,6 +177,37 @@ export interface ConfirmGoalAcceptanceResult {
   readonly decisionId: string | null;
 }
 
+/**
+ * Legacy 682: the Decision a completed run's `achieved` rests on, when it is the requester's
+ * confirmation of the run's last round (`checkKey`, when given, names it) — what a retry of that
+ * confirmation finds once the advance completed the run, as it does at once (`markGoalRunDue`).
+ * The run ended on that round when its basis is the platform's checks (the advance records no
+ * Decision then) or that very Decision; an `achieved` the requester declared by `end_goal` after a
+ * hold rests on another Decision of theirs, and the confirmation is no longer what ended it.
+ * `null` otherwise.
+ */
+async function confirmationThatCompleted(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+  checkKey: string | undefined,
+): Promise<string | null> {
+  if (goal.outcome !== 'achieved') return null;
+  const checks = await listAcceptanceChecks(client, workspaceId, goal.id);
+  const lastRound = Math.max(...checks.map((check) => check.round));
+  const confirmation = checks.find(
+    (check) =>
+      check.round === lastRound &&
+      check.kind === 'requester_confirm' &&
+      (checkKey === undefined || check.checkKey === checkKey),
+  );
+  if (confirmation?.status !== 'passed' || confirmation.decisionId === null) return null;
+  const restsOnIt =
+    goal.outcomeBasis === 'verified_by_check' ||
+    (goal.outcomeBasis === 'requester' && goal.outcomeDecisionId === confirmation.decisionId);
+  return restsOnIt ? confirmation.decisionId : null;
+}
+
 /** The requester confirms the round's `requester_confirm` check — see the module comment. */
 export async function confirmGoalAcceptance(
   client: PoolClient,
@@ -183,6 +215,10 @@ export async function confirmGoalAcceptance(
   input: ConfirmGoalAcceptanceInput,
 ): Promise<ConfirmGoalAcceptanceResult> {
   const goal = await lockRequesterRun(client, workspaceId, input.goalRunId, input.actor);
+  if (goal.status === 'completed') {
+    const confirmed = await confirmationThatCompleted(client, workspaceId, goal, input.checkKey);
+    if (confirmed) return { status: goal.status, changed: false, decisionId: confirmed };
+  }
   if (goal.status !== 'verifying') {
     throw new GoalRunStateError(
       `goal run ${goal.id} is ${goal.status}; a confirmation is given while it is verifying`,
