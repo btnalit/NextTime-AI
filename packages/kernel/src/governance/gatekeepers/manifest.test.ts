@@ -2796,6 +2796,54 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(await live(name)).toMatchObject({ status: 'published', version: 2 });
     });
 
+    it('naming the version it looked at (v1), a deprecate waiting on a publish of v2 is refused version_changed and deprecates nothing: the v2 nobody reviewed stays live (review #493 on #1223)', async () => {
+      const name = await liveWithRevision(ownerId, ownerId);
+      const outcome = await whileHeld(
+        (client) => publishOperation(client, workspaceId, { gatekeeperId, name }),
+        (client) =>
+          deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            version: 1,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+      );
+      expect(outcome.status).toBe('rejected');
+      expect(outcome.status === 'rejected' ? outcome.reason : undefined).toMatchObject({
+        name: 'ReviewedVersionChangedError',
+        code: 'version_changed',
+        reviewedVersion: 1,
+        currentVersion: 2,
+      });
+      expect(await live(name)).toMatchObject({ status: 'published', version: 2 });
+      expect(await version(name, 1)).toBe('deprecated');
+    });
+
+    it('the version named is checked before the authority question: v1’s proposer naming v1 once v2 is live is told version_changed; naming v2, not_proposer; the owner naming v2 deprecates it', async () => {
+      const name = await liveWithRevision(attackerId, ownerId);
+      await inTx((client) => publishOperation(client, workspaceId, { gatekeeperId, name }));
+      const deprecate = (by: { principalId: string; role: 'owner' | 'builder' }, v: number) =>
+        inTx((client) =>
+          deprecateOperation(client, workspaceId, { gatekeeperId, name, version: v, actor: by }),
+        );
+      const builder = { principalId: attackerId, role: 'builder' } as const;
+      await expect(deprecate(builder, 1)).rejects.toMatchObject({
+        code: 'version_changed',
+        currentVersion: 2,
+      });
+      await expect(deprecate(builder, 2)).rejects.toMatchObject({ code: 'not_proposer' });
+      expect(await live(name)).toMatchObject({ status: 'published', version: 2 });
+      await expect(deprecate({ principalId: ownerId, role: 'owner' }, 2)).resolves.toMatchObject({
+        status: 'deprecated',
+        version: 2,
+      });
+      expect(await live(name)).toBeNull();
+      // Nothing live: the call is the transition refusal it always was, whichever version it names.
+      await expect(deprecate({ principalId: ownerId, role: 'owner' }, 1)).rejects.toBeInstanceOf(
+        IllegalTransition,
+      );
+    });
+
     it('a publish waiting on a deprecate of v1 publishes v2 after it, superseding nothing — no deadlock either way round', async () => {
       const name = await liveWithRevision(ownerId, ownerId);
       const outcome = await whileHeld(

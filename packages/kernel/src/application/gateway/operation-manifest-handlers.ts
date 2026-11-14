@@ -236,15 +236,21 @@ export const deprecateOperationHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { gatekeeperId, name } = params as { gatekeeperId: string; name: string };
+  const { gatekeeperId, name, version } = params as {
+    gatekeeperId: string;
+    name: string;
+    version?: number;
+  };
   const record = await deprecateOperation(client, workspaceId, {
     gatekeeperId,
     name,
+    ...(version !== undefined ? { version } : {}),
     actor: publishActorOf('deprecate_operation', ctx),
   });
   return {
-    // Legacy 423: the version deprecated — the one live when it was locked, newer than the one the
-    // caller saw if a publish committed in between — in the result and in the audit record.
+    // Legacy 423: the version deprecated — the one live when it was locked (with `version`, the one
+    // the caller named; without, newer than the one it saw if a publish committed in between) — in
+    // the result and in the audit record.
     result: {
       gatekeeperId: record.gatekeeperId,
       name: record.name,

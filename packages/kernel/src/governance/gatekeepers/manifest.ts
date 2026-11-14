@@ -36,7 +36,12 @@ import {
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
-import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
+import {
+  type PublishActor,
+  assertPublishAuthority,
+  assertReviewedVersion,
+  seesEveryDraft,
+} from '../capability/index.js';
 import {
   assertDraftCredentialsReviewed,
   boundedEcho,
@@ -1546,6 +1551,10 @@ export async function publishImportedDrafts(
 export interface DeprecateOperationInput {
   readonly gatekeeperId: string;
   readonly name: string;
+  /** Review #493 on #1223 (legacy 423): the version the caller looked at. When the version live once
+   *  its row is locked is another one, `ReviewedVersionChangedError` and nothing is deprecated.
+   *  Omitted: the version live then is deprecated, whichever it is. */
+  readonly version?: number;
   /** D-24: the `deprecate_operation` caller — the published row's proposer or the owner (see
    *  `PublishOperationInput.actor`). */
   readonly actor?: PublishActor;
@@ -1555,11 +1564,17 @@ export interface DeprecateOperationInput {
  *  if not currently `published`. Targets the live published row directly (`requirePublishedOperation`
  *  above) — unaffected by any pending revision draft against the same identity (S3.12).
  *
- *  Legacy 423: the call names an Operation, not a version, and means "stop using it", so it
- *  deprecates the version live when its lock is granted. When a publish of a newer version commits
- *  while this waits, that newer version is the one deprecated — what the same two calls do one after
- *  the other — and the authority check is made on it. The returned record names the version
- *  deprecated (`deprecate_operation`'s result and audit carry it). */
+ *  Legacy 423: it deprecates the version live once its lock is granted, and the authority check is
+ *  made on that version. A deprecation cannot be undone and retires the name with its last live
+ *  version (`proposalRefusalFor` then refuses a new proposal under it), so a caller that names the
+ *  version it looked at (`input.version`, which the console always sends) is refused
+ *  `ReviewedVersionChangedError` when a publish of a newer version committed in between — the
+ *  publish already retired the version it meant to stop, and the newer one is not deprecated
+ *  unseen (review #493 on #1223). That check comes before the authority check: the caller acted
+ *  on a version that is no longer live, and the version live now is one any builder can list.
+ *  Without `input.version` the version live then is deprecated, what the same two calls do one
+ *  after the other. The returned record names the version deprecated (`deprecate_operation`'s
+ *  result and audit carry it). */
 export async function deprecateOperation(
   client: PoolClient,
   workspaceId: string,
@@ -1571,6 +1586,14 @@ export async function deprecateOperation(
     input.gatekeeperId,
     input.name,
   );
+  if (existing.status === 'published') {
+    assertReviewedVersion(
+      'deprecate_operation',
+      `Operation ${quotedName(input.name)} on gatekeeper ${input.gatekeeperId}`,
+      input.version,
+      existing.version,
+    );
+  }
   assertPublishAuthority(
     'deprecate_operation',
     input.actor,

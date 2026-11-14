@@ -1445,10 +1445,19 @@ const metaCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder', // D-24 — see publish_operation above.
-    paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    // Legacy 423 (review #493 on #1223): a deprecation cannot be undone and retires the name with
+    // its last live version, so `version` names the one the caller looked at — when a newer version
+    // was published in between, 409 version_changed and nothing is deprecated.
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        name: z.string().min(1),
+        version: z.number().int().positive().optional(),
+      })
+      .strict(),
     resultSchema: wire.OperationDeprecateResultWireSchema,
     description:
-      'Deprecate a published Operation: the version live when the call runs, which the result’s version names — when a newer version was published after the caller looked, that newer one is deprecated. Builder floor; only the deprecated version’s proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
+      'Deprecate a published Operation — the version live when the call runs, which the result’s version names. version is the version you looked at (pass it: a deprecation cannot be undone, and an Operation with no live version left cannot be proposed again under its name): when another version is live now — a newer one published since — 409 version_changed and nothing is deprecated. Without version, whichever version is live then is deprecated. Builder floor; only the deprecated version’s proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
     // Legacy 278 (UX acceptance of #577): a draft Operation nobody will publish — the gate no longer

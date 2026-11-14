@@ -1589,9 +1589,13 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         ...(action === 'publish_operation' && row.draftDigest !== undefined
           ? { draftDigest: row.draftDigest }
           : {}),
+        // Legacy 423 (review #493 on #1223): the version this detail shows — when another one was
+        // published since, the kernel refuses `version_changed` and deprecates nothing.
+        ...(action === 'deprecate_operation' && row.version !== undefined
+          ? { version: row.version }
+          : {}),
       });
-      // Legacy 423: the kernel deprecates the version live when the call runs — a newer one than
-      // this row when it was published after the page read the catalog.
+      // Legacy 423: the result names the version the kernel deprecated.
       const deprecatedVersion =
         action === 'deprecate_operation' ? (result?.version ?? row.version) : undefined;
       const shown = actionKindTagToastText(row.name);
@@ -1607,16 +1611,6 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               ? t(`${shown} 已发布 v${row.version}`, `${shown} v${row.version} published`)
               : t(`${shown} 已发布`, `${shown} published`)
             : deprecatedTitle,
-        ...(deprecatedVersion !== undefined &&
-        row.version !== undefined &&
-        deprecatedVersion !== row.version
-          ? {
-              description: t(
-                `页面上是 v${row.version}，弃用之前 v${deprecatedVersion} 刚发布，弃用的是正在生效的 v${deprecatedVersion}。`,
-                `The page showed v${row.version}; v${deprecatedVersion} was published just before, so the version in effect, v${deprecatedVersion}, was deprecated.`,
-              ),
-            }
-          : {}),
       });
       // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
       // 「未找到」 after publishing) — follow it to the version now in effect.
@@ -1635,8 +1629,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // S11 「门确认不存在」 B-a: the kernel's question about declared "not there" answers, likewise.
       if (action === 'publish_operation' && absentReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
-      // The toast says it was reloaded: show what is there now.
-      if (isDraftChangedError(err)) refresh();
+      // The toast says it was reloaded: show what is there now — for a deprecate refused
+      // `version_changed`, the version published since (legacy 423).
+      if (isDraftChangedError(err) || isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',

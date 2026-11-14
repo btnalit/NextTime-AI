@@ -12565,6 +12565,10 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
