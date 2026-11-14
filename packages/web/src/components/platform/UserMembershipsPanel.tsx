@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { roleDescription, roleLabel } from '../../lib/labels.js';
-import { isStaleMembershipError } from '../../lib/platform-errors.js';
+import { isMembershipRemovedError, isStaleMembershipError } from '../../lib/platform-errors.js';
 import {
   WorkspacePicker,
   soleOwnedWorkspaces,
@@ -265,6 +265,9 @@ function MembershipRow({
   }
 
   const roleFieldId = `um-role-${membership.workspaceId}`;
+  // Legacy 733: refused as removed and read again, the row is read-only now and its note explains
+  // why; the refusal adds only that this attempt did not go through, said once inside that note.
+  const refusedAsRemoved = membership.disabled && isMembershipRemovedError(error);
 
   return (
     <li className="data-row" data-testid="user-membership-row">
@@ -289,6 +292,14 @@ function MembershipRow({
         </div>
         {membership.disabled ? (
           <div className="stack-s" data-testid="user-membership-removed">
+            {refusedAsRemoved ? (
+              <Notice tone="warn" testId="user-membership-removed-refused">
+                {t(
+                  '刚才的修改没有生效：你打开这里之后，这条成员资格已经被移出了。',
+                  'Your change did not go through: this membership was removed after you opened this.',
+                )}
+              </Notice>
+            ) : null}
             <div className="row-wrap">
               <span className="field-label">{t('停用时的角色', 'Role when disabled')}</span>
               <span>{roleLabel(membership.role, t)}</span>
@@ -357,7 +368,7 @@ function MembershipRow({
           </Notice>
         ) : null}
         <PlatformError
-          error={error}
+          error={refusedAsRemoved ? null : error}
           title={t('无法修改成员资格', 'Could not change this membership')}
         />
       </div>

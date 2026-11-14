@@ -46,6 +46,7 @@ import { useToast } from '../ui/Toast.js';
 import { ActingThroughChip } from './ActingThroughChip.js';
 import { AuditPayloadNotes, adminProposalBreakerTarget } from './AuditPayloadNotes.js';
 import { AuditRefusedChip } from './AuditRefusedChip.js';
+import { AuditUnchangedChip } from './AuditUnchangedChip.js';
 
 export interface AuditLogSectionProps {
   readonly http: CapabilityCaller;
@@ -417,6 +418,7 @@ export function AuditLogSection({
                      *  text an auditor filters by. */}
                     <span>{actionLabel(row.action, t)}</span>
                     <AuditRefusedChip payload={row.payload} />
+                    <AuditUnchangedChip payload={row.payload} />
                     <span className="mono text-3 text-small">{row.action}</span>
                     <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
                       {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}

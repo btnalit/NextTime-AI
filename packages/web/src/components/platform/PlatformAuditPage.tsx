@@ -25,6 +25,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { ActingThroughChip } from '../audit/ActingThroughChip.js';
 import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
 import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
+import { AuditUnchangedChip } from '../audit/AuditUnchangedChip.js';
 import { Combobox } from '../kit/combobox.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
@@ -327,7 +328,8 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                 <div className="data-row-main">
                   <div className="data-row-title audit-row-title">
                     <span className="mono text-small">{formatDateTime(row.createdAt)}</span> —{' '}
-                    {actionLabel(row.action, t)} <AuditRefusedChip payload={row.payload} />{' '}
+                    {actionLabel(row.action, t)} <AuditRefusedChip payload={row.payload} />
+                    <AuditUnchangedChip payload={row.payload} />{' '}
                     <span className="mono text-3 text-small">{row.action}</span>
                   </div>
                   <div className="data-row-meta">
