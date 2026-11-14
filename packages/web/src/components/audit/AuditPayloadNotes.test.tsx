@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RouteAccessProvider } from '../../hooks/useCanOpen.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime } from '../../lib/format.js';
+import { auditPayloadShown, formatDateTime } from '../../lib/format.js';
 import { LangProvider } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { CredentialReview } from '../kit/credential-review.js';
@@ -262,6 +262,27 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     render(<AuditPayloadNotes payload={{ redactedValues: 1, params: { apiKey: '[redacted]' } }} />);
     expect(screen.getByTestId('audit-redacted-values')).toBeTruthy();
     expect(screen.queryByTestId('audit-payload-redacted')).toBeNull();
+  });
+
+  it('legacy 606: a gate instance row shows its credential mode, and nothing it shows needs a note', () => {
+    const row = {
+      connector: 'http',
+      transportKind: 'http',
+      credentialMode: 'shared',
+      params: { gateId: 'kb-main', credentialMode: '[redacted]' },
+      redactedValues: 1,
+    };
+    expect(auditPayloadShown(row)).toEqual(row);
+    render(<AuditPayloadNotes payload={row} />);
+    expect(screen.getByTestId('audit-redacted-values')).toBeTruthy();
+    expect(screen.queryByTestId('audit-payload-redacted')).toBeNull();
+    // Only the two modes: anything else under the name is masked as before, at any depth.
+    expect(auditPayloadShown({ credentialMode: 'plain-word' })).toEqual({
+      credentialMode: '[redacted]',
+    });
+    expect(auditPayloadShown({ definition: { credentialMode: 'shared' } })).toEqual({
+      definition: { credentialMode: '[redacted]' },
+    });
   });
 
   it('legacy 420: explains a field the console masks by its name when nothing counted it', () => {
