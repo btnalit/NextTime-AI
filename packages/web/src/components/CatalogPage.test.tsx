@@ -4546,13 +4546,22 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
       if (!row) throw new Error(`no row ${key}`);
       const detail = await selectRow(row);
       expect(within(detail).getByTestId('operation-detail-version').textContent).toBe('v1');
-      return within(detail).getByTestId('operation-deprecated-note').textContent ?? '';
+      return within(detail).getByTestId('operation-deprecated-note');
     };
     const restart = await noteOf('gk-1::docker.restart@v1');
-    expect(restart).toMatch(/这个 Operation 的 v2（已发布）不受影响/);
-    expect(restart).not.toMatch(/版本都已弃用/);
+    expect(restart.textContent).toMatch(/这个 Operation 的 v2（已发布）不受影响/);
+    expect(restart.textContent).not.toMatch(/版本都已弃用/);
+    // Legacy 753: the version named links to its own detail.
+    const restartLink = within(restart).getByTestId('operation-deprecated-live-link');
+    expect(restartLink.textContent).toBe('v2');
+    expect(restartLink.getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Adocker.restart',
+    );
     const stop = await noteOf('gk-1::docker.stop@v1');
-    expect(stop).toMatch(/这个 Operation 的 v2（草稿）不受影响/);
+    expect(stop.textContent).toMatch(/这个 Operation 的 v2（草稿）不受影响/);
+    expect(within(stop).getByTestId('operation-deprecated-live-link').getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Adocker.stop',
+    );
   });
 
   it('legacy 423: a deprecate of the version shown names that version in the toast', async () => {
