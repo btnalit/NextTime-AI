@@ -2985,6 +2985,23 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.175 连接密钥一次性、24 小时有效（#1176，遗留 711，core 0058，0.68.0 之后的下一版）
+
+**迁移 core 0058**：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥本身），带检查约束、触发器和强制 RLS。
+
+- **行为变化**：
+  - `mint_connection_secret` 签出的密钥 24 小时内有效，只能用一次：接一个门（`create_connection`），或提交一次换地址申请。`rotate_connection_secret` 签出的直接装到门上，视为已用。
+  - 已用过的回 409 `connection_secret_in_use`；过期或没有签发记录的回新码 409 `connection_secret_expired`（WS 都是 `ILLEGAL_TRANSITION`）。
+- **升级影响**：
+  - 升级前签出、还没用的连接密钥没有签发记录，升级后会报 `connection_secret_expired`，要在控制台重新签出。若主机上有正在进行的接门或换地址操作，升级后重新生成密钥。
+  - 已接入的门不受影响：门的鉴权仍然重新派生，不查这张表。
+- **升级后只读核对**（`psql -U nexttime`）：
+  - 表存在且 RLS 已启用并强制：`select relrowsecurity, relforcerowsecurity from pg_class where relname = 'connection_secret_issuances';` 两列都是 `t`；
+  - core 迁移版本为 58。
+- **回滚**：0058 是纯新增，旧代码从不读写这张表，回退代码即可，表可以留着。要连迁移一起撤，按迁移注释的三步：`drop table connection_secret_issuances`，`drop function connection_secret_issuances_guard()`，再 `delete from schema_migrations where module = 'core' and version = 58`（#501 在事务里实测跑通）。
+- **staging 注意**：0058 在合并前就地改过（插入时拒绝 `issued_at > now()`）。跑过 PR 分支旧版 0058 的 staging 库，迁移 checksum 对不上会被拒，需要重建。主机没跑过 0058，不受影响。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
