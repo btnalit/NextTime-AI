@@ -47,6 +47,44 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.getByTestId('audit-revoked-handles').textContent).toContain('吊销了 4 个凭证');
   });
 
+  it('legacy 719: names the merged accounts by login, the workspace, and the memberships let go', () => {
+    const target = 'alice';
+    render(
+      <AuditPayloadNotes
+        payload={{
+          sourceLogin: 'alice.pending',
+          targetLogin: 'alice',
+          workspaceName: 'Acme',
+          params: { sourceUserId: 'u-1', targetUserId: 'u-2' },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-merge').textContent).toBe(
+      `账户 alice.pending → ${target} · 工作区 Acme`,
+    );
+    cleanup();
+    render(
+      <AuditPayloadNotes
+        payload={{
+          sourceLogin: 'alice.pending',
+          targetLogin: 'alice',
+          detachedPrincipals: [
+            { workspaceId: 'w-1', principalId: 'p-1', userId: 'u-1' },
+            { workspaceId: 'w-2', principalId: 'p-2', userId: 'u-2' },
+          ],
+        }}
+      />,
+    );
+    const note = screen.getByTestId('audit-merge').textContent ?? '';
+    expect(note).toContain(`账户 alice.pending → ${target}`);
+    expect(note).not.toContain('工作区 ');
+    expect(note).toContain('2 条已停用的成员资格');
+    cleanup();
+    // A row without both logins (an older merge) says nothing of it.
+    render(<AuditPayloadNotes payload={{ sourceLogin: 'alice.pending' }} />);
+    expect(screen.queryByTestId('audit-merge')).toBeNull();
+  });
+
   it('S10 E3-1c: says where the evaluation seal stopped content, what that left, and that the record holds none of it', () => {
     const cases: [Record<string, unknown>, string][] = [
       [

@@ -227,7 +227,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function expectPlatformError(
       call: () => Promise<unknown>,
       code: PlatformErrorCode,
-    ): Promise<void> {
+    ): Promise<PlatformAdminError> {
       const thrown = await call().then(
         () => {
           throw new Error(`expected PlatformAdminError("${code}"), but the call resolved`);
@@ -236,6 +236,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(thrown).toBeInstanceOf(PlatformAdminError);
       expect((thrown as PlatformAdminError).code).toBe(code);
+      return thrown as PlatformAdminError;
     }
 
     /** R-12: a Handle minted under a fresh session of `kind` on `principalId`'s behalf — the
@@ -1275,6 +1276,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             targetLogin,
             reason: 'merged_from_disabled_user',
             role: 'member',
+            workspaceName: expect.any(String),
             workspaceStatus: 'active',
           },
         });
@@ -1338,6 +1340,250 @@ describe.runIf(DATABASE_URL !== undefined)(
           sourceLogin,
           targetLogin,
         });
+      });
+
+      // UX acceptance of #1185 (P2): a removed membership is never deleted and every new user
+      // joins the default workspace, so counting removed ones as a clash made "remove one first" a
+      // dead end. Only two memberships that are not removed clash; a removed one is detached.
+      async function mergeWorkspaces(count: number): Promise<string[]> {
+        const ids = Array.from({ length: count }, () => randomUUID());
+        await withAdminClient(pool, async (client) => {
+          for (const id of ids) {
+            await client.query('insert into workspaces (id, name) values ($1, $2)', [
+              id,
+              `merge-clash-${id.slice(0, 8)}`,
+            ]);
+          }
+        });
+        return ids;
+      }
+
+      async function principalUser(workspace: string, principalId: string): Promise<unknown> {
+        const row = await withAdminClient(pool, (client) =>
+          client.query<{ user_id: string | null; disabled: boolean }>(
+            `select user_id, disabled_at is not null as disabled
+               from principals where workspace_id = $1 and id = $2`,
+            [workspace, principalId],
+          ),
+        );
+        return row.rows[0];
+      }
+
+      it('two memberships in one workspace clash only when neither is removed; "remove one first" then works', async () => {
+        const [shared] = await mergeWorkspaces(1);
+        const source = await createUser(pool, {
+          login: `merge-clash-src-${randomUUID().slice(0, 8)}`,
+          displayName: 'Clash Source',
+        });
+        const target = await createUser(pool, {
+          login: `merge-clash-dst-${randomUUID().slice(0, 8)}`,
+          displayName: 'Clash Target',
+          password: PASSWORD,
+        });
+        const ours = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId: shared,
+          role: 'member',
+        });
+        const theirs = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: target.id,
+          workspaceId: shared,
+          role: 'member',
+        });
+
+        const refused = await expectPlatformError(
+          () => callAsAdmin('merge_user', { sourceUserId: source.id, targetUserId: target.id }),
+          'already_member',
+        );
+        expect(refused.message).toContain(`merge-clash-${shared?.slice(0, 8)}`);
+
+        // What the refusal says to do, done: the target's membership there is removed.
+        await callAsAdmin('remove_membership', { userId: target.id, workspaceId: shared });
+        const merged = await callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        expect(merged.memberships.filter((m) => m.workspaceId === shared)).toEqual([
+          expect.objectContaining({ principalId: ours.principalId, disabled: false }),
+        ]);
+        expect(await principalUser(shared as string, theirs.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+      });
+
+      it('a removed membership on either side is detached: the one not removed stays or moves', async () => {
+        const [sourceRemoved, targetRemoved, bothRemoved] = await mergeWorkspaces(3);
+        const source = await createUser(pool, {
+          login: `merge-det-src-${randomUUID().slice(0, 8)}`,
+          displayName: 'Detach Source',
+        });
+        const targetLogin = `merge-det-dst-${randomUUID().slice(0, 8)}`;
+        const target = await createUser(pool, {
+          login: targetLogin,
+          displayName: 'Detach Target',
+          password: PASSWORD,
+        });
+        const add = (userId: string, workspace: string | undefined) =>
+          callAsAdmin<UserMembershipWire>('add_membership', {
+            userId,
+            workspaceId: workspace,
+            role: 'member',
+          });
+        const remove = (userId: string, workspace: string | undefined) =>
+          callAsAdmin('remove_membership', { userId, workspaceId: workspace });
+        const s1 = await add(source.id, sourceRemoved);
+        const t1 = await add(target.id, sourceRemoved);
+        const s2 = await add(source.id, targetRemoved);
+        const t2 = await add(target.id, targetRemoved);
+        const s3 = await add(source.id, bothRemoved);
+        const t3 = await add(target.id, bothRemoved);
+        await remove(source.id, sourceRemoved);
+        await remove(target.id, targetRemoved);
+        await remove(source.id, bothRemoved);
+        await remove(target.id, bothRemoved);
+
+        const merged = await callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        const kept = (workspace: string | undefined) =>
+          merged.memberships
+            .filter((m) => m.workspaceId === workspace)
+            .map((m) => ({ principalId: m.principalId, disabled: m.disabled }));
+        // The source's removed one goes; the target keeps its own.
+        expect(kept(sourceRemoved)).toEqual([{ principalId: t1.principalId, disabled: false }]);
+        expect(await principalUser(sourceRemoved as string, s1.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+        // The target's removed one goes; the source's moves to the target.
+        expect(kept(targetRemoved)).toEqual([{ principalId: s2.principalId, disabled: false }]);
+        expect(await principalUser(targetRemoved as string, t2.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+        // Both removed: the source's goes, the target keeps its own, removed as it was.
+        expect(kept(bothRemoved)).toEqual([{ principalId: t3.principalId, disabled: true }]);
+        expect(await principalUser(bothRemoved as string, s3.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+
+        // The merge_user row says whose each detached membership was.
+        const mergeRow = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'merge_user'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(mergeRow.rows[0]?.payload).toMatchObject({ targetLogin });
+        expect(mergeRow.rows[0]?.payload.detachedPrincipals).toEqual(
+          expect.arrayContaining([
+            { workspaceId: sourceRemoved, principalId: s1.principalId, userId: source.id },
+            { workspaceId: targetRemoved, principalId: t2.principalId, userId: target.id },
+            { workspaceId: bothRemoved, principalId: s3.principalId, userId: source.id },
+          ]),
+        );
+        expect(mergeRow.rows[0]?.payload.detachedPrincipals).toHaveLength(3);
+      });
+
+      // #1189 #501 P3-1: a workspace-side disable takes only the Principal's lock. The merge reads
+      // the memberships again once it holds the Principals' locks, so one removed while it waited
+      // counts as removed: no clash, and no `membership_restored` for it.
+      it('a membership removed while the merge waits for its lock counts as removed: it clashes with nothing and is not restored', async () => {
+        const [shared, own] = await mergeWorkspaces(2);
+        const source = await createUser(pool, {
+          login: `merge-race-src-${randomUUID().slice(0, 8)}`,
+          displayName: 'Race Source',
+        });
+        const target = await createUser(pool, {
+          login: `merge-race-dst-${randomUUID().slice(0, 8)}`,
+          displayName: 'Race Target',
+          password: PASSWORD,
+        });
+        const add = (userId: string, workspace: string | undefined) =>
+          callAsAdmin<UserMembershipWire>('add_membership', {
+            userId,
+            workspaceId: workspace,
+            role: 'member',
+          });
+        // Both hold one in `shared` (a clash, until the source's is removed); the source alone in
+        // `own` (restored by the merge, until it is removed).
+        const sharedSource = await add(source.id, shared);
+        const sharedTarget = await add(target.id, shared);
+        const ownSource = await add(source.id, own);
+        await callAsAdmin<UserWire>('set_user_status', { userId: source.id, status: 'disabled' });
+
+        // A writer that removes both of the source's memberships the way `disable_principal` does
+        // (its trigger takes each Principal's lock), and holds its transaction open.
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let removing!: () => void;
+        const removed = new Promise<void>((resolve) => {
+          removing = resolve;
+        });
+        const writer = withAdminClient(pool, async (client) => {
+          for (const [ws, principalId] of [
+            [shared, sharedSource.principalId],
+            [own, ownSource.principalId],
+          ] as const) {
+            await client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [ws, principalId],
+            );
+          }
+          removing();
+          await released;
+        });
+        await removed;
+
+        const merge = callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        for (let attempt = 0; ; attempt += 1) {
+          const { rows } = await pool.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'
+                and position('lock_authorities' in query) > 0`,
+          );
+          if ((rows[0]?.waiting ?? 0) > 0) break;
+          if (attempt > 200) throw new Error('the merge never waited on the Principals’ locks');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        release();
+        await writer;
+        const merged = await merge;
+
+        // The source's removed one in `shared` is detached, the target's stays; `own` moves, removed.
+        expect(
+          merged.memberships
+            .map((m) => ({ principalId: m.principalId, disabled: m.disabled }))
+            .sort((a, b) => a.principalId.localeCompare(b.principalId)),
+        ).toEqual(
+          [
+            { principalId: sharedTarget.principalId, disabled: false },
+            { principalId: ownSource.principalId, disabled: true },
+          ].sort((a, b) => a.principalId.localeCompare(b.principalId)),
+        );
+        expect(await principalUser(shared as string, sharedSource.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+        const restoredRows = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where action = 'platform.membership_restored'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(restoredRows.rowCount).toBe(0);
       });
     });
 
