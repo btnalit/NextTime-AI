@@ -463,11 +463,15 @@ function DeprecateConfirm({
   busy,
   target,
   impact,
+  description,
   onConfirm,
   testId,
 }: {
   readonly busy: boolean;
   readonly target: string;
+  /** What brings the row back afterwards, when it is not 「重新提议并发布」 (legacy 749: an
+   *  Operation, whose deprecated identity takes no new version). */
+  readonly description?: string;
   readonly impact?: readonly string[];
   readonly onConfirm: () => Promise<void>;
   readonly testId: string;
@@ -493,10 +497,13 @@ function DeprecateConfirm({
       title={t(`弃用 ${target}`, `Deprecate ${target}`)}
       // Legacy 501: the kernel has no way back from `deprecated` (PUBLISHABLE_EDGES: published →
       // deprecated is the last edge) — say so, and what does bring it back.
-      description={t(
-        '弃用后 Agent 不能再使用它；已发生的调用与审计不受影响。弃用不能撤销：以后要再用，需要重新提议并发布。',
-        'Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected. It cannot be undone: to use it again, propose it again and publish it.',
-      )}
+      description={
+        description ??
+        t(
+          '弃用后 Agent 不能再使用它；已发生的调用与审计不受影响。弃用不能撤销：以后要再用，需要重新提议并发布。',
+          'Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected. It cannot be undone: to use it again, propose it again and publish it.',
+        )
+      }
       target={target}
       impact={impact}
       confirmLabel={t('弃用', 'Deprecate')}
@@ -1187,6 +1194,7 @@ function OperationDetailView({
   onEditDescription,
   onRewritten,
   rewrittenFrom,
+  liveVersion,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OperationCatalogRow;
@@ -1215,6 +1223,10 @@ function OperationDetailView({
   /** UX acceptance of #567 P3: this draft was just rewritten here — the params it dropped, said
    *  until another row is opened (the draft is not a revision, so no diff block shows it). */
   readonly rewrittenFrom: readonly GateOwnedParamWire[] | null;
+  /** Legacy 749: on a deprecated version, another version of the same Operation that is still
+   *  published or a draft — the note says it is unaffected; without one, the name takes no new
+   *  version. */
+  readonly liveVersion?: OperationCatalogRow;
 }) {
   const t = useT();
   const key = catalogOperationKey(row);
@@ -1349,16 +1361,41 @@ function OperationDetailView({
           >
             {actionKindTagText(row.name)}
           </strong>
+          {/* Legacy 750: which version this is — after a refused deprecate (`version_changed`)
+           *  the detail shows the newer one, and the title says so. */}
+          {row.version !== undefined ? (
+            <span className="text-3 text-small" data-testid="operation-detail-version">
+              v{row.version}
+            </span>
+          ) : null}
         </div>
       </header>
       <KeyValue items={items} />
       {row.status === 'deprecated' ? (
         // Legacy 501: no button brings a deprecated version back — the detail says what does.
+        // Legacy 749: what is true of the name — another version still live, or none, and then a
+        // proposal or import of the same name is refused (manifest.ts `proposeOperation` /
+        // `importManifest`), so it does not come back as a new version.
         <Notice testId="operation-deprecated-note">
-          {t(
-            '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。之后再导入或提议这个 Operation，会作为新版本出现，发布后即可再用。',
-            'This version is deprecated: agents can no longer call it, and it cannot be undone. If this Operation is imported or proposed again, it comes back as a new version, usable once published.',
-          )}
+          {liveVersion
+            ? liveVersion.version !== undefined
+              ? liveVersion.status === 'draft'
+                ? t(
+                    `这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的 v${liveVersion.version}（草稿）不受影响。`,
+                    `This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation's v${liveVersion.version} (a draft) is not affected.`,
+                  )
+                : t(
+                    `这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的 v${liveVersion.version}（已发布）不受影响。`,
+                    `This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation's v${liveVersion.version} (published) is not affected.`,
+                  )
+              : t(
+                  '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 还有未弃用的版本，不受影响。',
+                  'This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation has a version that is not deprecated, which is not affected.',
+                )
+            : t(
+                '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的版本都已弃用，同名的提议和导入都会被拒绝，不能再开新版本。',
+                'This version is deprecated: agents can no longer call it, and it cannot be undone. Every version of this Operation is deprecated, and proposing or importing the same name is refused, so no new version can be opened.',
+              )}
         </Notice>
       ) : null}
       {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
@@ -1437,6 +1474,12 @@ function OperationDetailView({
                   ]
                 : undefined
             }
+            // Legacy 749: a fully deprecated Operation takes no new version — proposing or
+            // importing the same name is refused (manifest.ts `proposeOperation` / `importManifest`).
+            description={t(
+              '弃用后 Agent 不能再调用它；已发生的调用与审计不受影响。弃用不能撤销：除非它已有一份待发布的草稿，弃用后同名的提议和导入都会被拒绝，不能再开新版本。',
+              'Once deprecated, agents can no longer call it; past calls and the audit trail are unaffected. It cannot be undone: unless a draft of it is waiting to be published, proposing or importing the same name is refused afterwards, so no new version can be opened.',
+            )}
             onConfirm={onDeprecate}
             testId={`operation-deprecate-confirm-${key}`}
           />
@@ -1801,6 +1844,15 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           (row) => row.status === 'published' && operationKey(row) === operationKey(selected),
         )
       : undefined;
+  // Legacy 749: on a deprecated version, the same Operation's version still published (or else a
+  // draft of it) — the note says it is unaffected.
+  const selectedStillLive =
+    selected?.status === 'deprecated'
+      ? (rows.find(
+          (row) => row.status === 'published' && operationKey(row) === operationKey(selected),
+        ) ??
+        rows.find((row) => row.status === 'draft' && operationKey(row) === operationKey(selected)))
+      : undefined;
   const proposerOnly = selected
     ? proposerOnlyFor(
         selected,
@@ -1850,6 +1902,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           ? rewritten.params
           : null
       }
+      liveVersion={selectedStillLive}
     />
   ) : (
     <SelectionPlaceholder
