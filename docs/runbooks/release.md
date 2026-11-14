@@ -3103,6 +3103,26 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.183 服务账号提议的 Operation 草稿记为非人工写的（#1234，遗留 616，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：服务账号的 API key 提议的 Operation 草稿，起草方现在记为 `agent`，审阅页显示「智能体或服务账号写的」，列表行带「智能体」标记，与 Skill、流程、Worker、本体的规则一致。以前这类草稿记为 `human`。
+- **已有记录**：升级不改写旧记录。想知道有多少条旧记录还记着 `human`，可跑只读计数：
+
+  ```sql
+  select count(*) as service_written_as_human
+    from objects o
+    join principals p
+      on p.workspace_id = o.workspace_id and p.id::text = o.properties ->> 'proposedBy'
+   where o.object_type = 'Operation'
+     and o.properties ->> 'origin' = 'human'
+     and p.kind <> 'human';
+  ```
+
+- **回滚**：回退代码即可。
+- 无主机动作；下一次主机升级的提示可带上上面的计数 SQL。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
