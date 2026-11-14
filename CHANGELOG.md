@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.69.2](https://github.com/btnalit/NextTime-AI/compare/v0.69.1...v0.69.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* a WorkerDefinition draft below the published head is not published, and the entry version in use is the entry family's head (legacy 742) ([#1221](https://github.com/btnalit/NextTime-AI/issues/1221)) ([0a8faf1](https://github.com/btnalit/NextTime-AI/commit/0a8faf18f776ea113f4af27608812b4391fa6a5c))
+* an agent Turn whose definition, profile or platform settings cannot be read is not started (legacy 434) ([#1229](https://github.com/btnalit/NextTime-AI/issues/1229)) ([20097bd](https://github.com/btnalit/NextTime-AI/commit/20097bdae306d21fe418aa832ee2bfd0f7ad2f35))
+* deprecate_operation locks the live version and refuses version_changed when it is not the one the caller looked at (legacy 423) ([#1223](https://github.com/btnalit/NextTime-AI/issues/1223)) ([2bef11a](https://github.com/btnalit/NextTime-AI/commit/2bef11ac24276fab0a649dbde3436d89c543de36))
+* **kernel:** a repeat call that changes nothing writes nothing (legacy 679 / 685 / 686 / 689) ([#1214](https://github.com/btnalit/NextTime-AI/issues/1214)) ([195da73](https://github.com/btnalit/NextTime-AI/commit/195da7300870bae9f9f66c3ce6ddb27e26dc189e))
+* one pending WorkerDefinition draft per proposer, edited by replacing it; a confirmation retry after completion is a no-op (legacy 680 / 682) ([#1218](https://github.com/btnalit/NextTime-AI/issues/1218)) ([a23d20f](https://github.com/btnalit/NextTime-AI/commit/a23d20fedf4850b8cfa68550e28f95bf7944466d))
+* **web:** a deprecated Operation says what is true of its name, and its detail title carries the version (legacy 749, 750) ([#1231](https://github.com/btnalit/NextTime-AI/issues/1231)) ([c19e76b](https://github.com/btnalit/NextTime-AI/commit/c19e76b2348ea38868abc915a8cb4deddc04cf84))
+* **web:** a Worker draft row says a newer version is published; a draft whose definition went can start a new one (legacy 746, 747) ([#1225](https://github.com/btnalit/NextTime-AI/issues/1225)) ([9143aaa](https://github.com/btnalit/NextTime-AI/commit/9143aaa918bb02403c369ba869aae356576749aa))
+* **web:** migration-written audit rows say so; the Worker editor keeps what was written when its draft went (legacy 740, 743, 744, 745) ([#1220](https://github.com/btnalit/NextTime-AI/issues/1220)) ([60d2e32](https://github.com/btnalit/NextTime-AI/commit/60d2e32e13bf5c368f595dd4b57f2e824a12ec97))
+
 ## [0.69.1](https://github.com/btnalit/NextTime-AI/compare/v0.69.0...v0.69.1) (2026-11-14)
 
 
