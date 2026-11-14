@@ -1289,8 +1289,14 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   if (err instanceof DraftEvaluatingError) {
     return { status: 409, code: err.code, message: err.message };
   }
+  // Legacy 502: which step, why and what it names, as `details` (`ProcedureStepReferenceError`).
   if (err instanceof ProcedureStepReferenceError) {
-    return { status: 400, code: 'invalid_step_reference', message: err.message };
+    return {
+      status: 400,
+      code: 'invalid_step_reference',
+      message: err.message,
+      details: { ...err.details },
+    };
   }
   // S11 GO5d-2: the goal plan a Procedure makes does not pass — the same 400 a plan's problems get.
   if (err instanceof ProcedureTemplateError) {

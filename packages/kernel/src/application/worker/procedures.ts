@@ -4,6 +4,7 @@ import {
   type OutputSchema,
   PUBLISHABLE_TRANSITIONS,
   type ProcedureStep,
+  type ProcedureStepReferenceReason,
   type PublishableStatus,
   transition,
   usesPlanTemplateFields,
@@ -20,7 +21,12 @@ import { assertDraftCredentialsReviewed, quotedName } from '../../governance/red
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
-import { requirePublishedWorkerDefinition, workerDefinitionFamilyKind } from './definitions.js';
+import {
+  WorkerDefinitionNotFoundError,
+  WorkerDefinitionNotPublishedError,
+  requirePublishedWorkerDefinition,
+  workerDefinitionFamilyKind,
+} from './definitions.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
@@ -150,18 +156,49 @@ export class ProcedureNotFoundError extends Error {
   }
 }
 
+/** What a step that does not resolve names (legacy 502): its Operation (`gatekeeperId` +
+ *  `operationName`) or its WorkerDefinition version (`definitionId` + `version`, and
+ *  `definitionKind` when that definition is of another kind). */
+export type ProcedureStepTarget = OperationStepTarget | WorkerStepTarget;
+interface OperationStepTarget {
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+}
+interface WorkerStepTarget {
+  readonly definitionId: string;
+  readonly version: number;
+  readonly definitionKind?: string;
+}
+
 /** Thrown by `publishProcedure` when `steps` is empty, or any `operation`/`worker` step fails to
  *  resolve to a currently-published Operation/worker-kind WorkerDefinition (and by
  *  `proposeProcedure` for a `worker` step naming a family of another kind, legacy 486) — this task's own acceptance bar
  *  ("Procedure 的步骤引用不存在的 Operation 时发布被拒"), and a stable error shape a caller (or a
- *  test) can match on regardless of which step failed or why. */
+ *  test) can match on regardless of which step failed or why. Legacy 502: why (`reason`) and
+ *  what the step names are fields too, so the 400 carries them as `details` and no client has to
+ *  read them out of the message. */
 export class ProcedureStepReferenceError extends Error {
   readonly stepIndex: number;
+  readonly reason: ProcedureStepReferenceReason;
+  /** `invalid_step_reference`'s `details` (`PROCEDURE_STEP_REFERENCE_REASON_VALUES`): the step,
+   *  counted from 0 (`null` when the refusal is about the Procedure as a whole), why, and what it
+   *  names. */
+  readonly details: {
+    readonly stepIndex: number | null;
+    readonly reason: ProcedureStepReferenceReason;
+  } & Partial<OperationStepTarget & WorkerStepTarget>;
 
-  constructor(stepIndex: number, reason: string) {
-    super(`Procedure step ${stepIndex} does not resolve: ${reason}`);
+  constructor(
+    stepIndex: number,
+    reason: ProcedureStepReferenceReason,
+    because: string,
+    target?: ProcedureStepTarget,
+  ) {
+    super(`Procedure step ${stepIndex} does not resolve: ${because}`);
     this.name = 'ProcedureStepReferenceError';
     this.stepIndex = stepIndex;
+    this.reason = reason;
+    this.details = { stepIndex: stepIndex >= 0 ? stepIndex : null, reason, ...target };
   }
 }
 
@@ -248,7 +285,7 @@ export async function proposeProcedure(
       proposerPrincipalId,
     );
     if (kind !== null && kind !== 'worker') {
-      throw new ProcedureStepReferenceError(stepIndex, notWorkerKind(step, kind));
+      throw notWorkerKind(stepIndex, step, kind);
     }
   }
   const version = await nextVersion(client, workspaceId, input.procedureId);
@@ -326,10 +363,16 @@ interface ResolvedStepTarget {
 
 /** Why a `worker` step naming a WorkerDefinition of `kind` cannot run (legacy 486). */
 function notWorkerKind(
+  stepIndex: number,
   step: { readonly definitionId: string; readonly version: number },
   kind: string,
-): string {
-  return `WorkerDefinition ${step.definitionId}@${step.version} is ${kind}-kind: a step runs only a worker-kind WorkerDefinition`;
+): ProcedureStepReferenceError {
+  return new ProcedureStepReferenceError(
+    stepIndex,
+    'not_worker_kind',
+    `WorkerDefinition ${step.definitionId}@${step.version} is ${kind}-kind: a step runs only a worker-kind WorkerDefinition`,
+    { definitionId: step.definitionId, version: step.version, definitionKind: kind },
+  );
 }
 
 /** Resolves every `operation`/`worker` step to its graph Object id, throwing
@@ -357,7 +400,9 @@ async function resolveStepTargets(
       if (!operation) {
         throw new ProcedureStepReferenceError(
           stepIndex,
+          'operation_not_published',
           `Operation ${quotedName(step.operationName)} on Gatekeeper ${step.gatekeeperId} is not published (or does not exist)`,
+          { gatekeeperId: step.gatekeeperId, operationName: step.operationName },
         );
       }
       // `getPublishedOperation` already resolved this Object and carries its own id (S3.12:
@@ -378,13 +423,23 @@ async function resolveStepTargets(
           publisher,
         );
       } catch (err) {
+        // Legacy 502: only "no such published version" is the step's fault — anything else (a
+        // failed query) is not a 400 about the step.
+        if (
+          !(err instanceof WorkerDefinitionNotFoundError) &&
+          !(err instanceof WorkerDefinitionNotPublishedError)
+        ) {
+          throw err;
+        }
         throw new ProcedureStepReferenceError(
           stepIndex,
-          `WorkerDefinition ${step.definitionId}@${step.version} is not published: ${err instanceof Error ? err.message : String(err)}`,
+          'worker_not_published',
+          `WorkerDefinition ${step.definitionId}@${step.version} is not published: ${err.message}`,
+          { definitionId: step.definitionId, version: step.version },
         );
       }
       if (definition.kind !== 'worker') {
-        throw new ProcedureStepReferenceError(stepIndex, notWorkerKind(step, definition.kind));
+        throw notWorkerKind(stepIndex, step, definition.kind);
       }
       const workerDefObject = await graphStore.getObjectByIdentity(
         client,
@@ -395,7 +450,9 @@ async function resolveStepTargets(
       if (!workerDefObject) {
         throw new ProcedureStepReferenceError(
           stepIndex,
+          'no_graph_projection',
           `WorkerDefinition ${step.definitionId}@${step.version} has no graph projection`,
+          { definitionId: step.definitionId, version: step.version },
         );
       }
       targets.push({ stepIndex, targetObjectId: workerDefObject.id });
@@ -482,7 +539,11 @@ export async function publishProcedure(
   });
 
   if (row.steps.length === 0) {
-    throw new ProcedureStepReferenceError(-1, 'a Procedure must have at least one step to publish');
+    throw new ProcedureStepReferenceError(
+      -1,
+      'no_steps',
+      'a Procedure must have at least one step to publish',
+    );
   }
   assertDraftCredentialsReviewed(
     'procedure',

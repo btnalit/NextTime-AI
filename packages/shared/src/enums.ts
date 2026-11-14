@@ -506,6 +506,30 @@ export type ProcedureFailurePlace = (typeof PROCEDURE_FAILURE_PLACE_VALUES)[numb
 export const ProcedureFailurePlaceSchema = asEnum(PROCEDURE_FAILURE_PLACE_VALUES);
 
 /**
+ * Legacy 502: why `propose_procedure` / `publish_procedure` refused a Procedure with 400
+ * `invalid_step_reference` — its `details.reason`, beside `details.stepIndex` (the step, counted
+ * from 0; `null` when the refusal is about the Procedure as a whole) and what the step names
+ * (`gatekeeperId` + `operationName` for an operation step, `definitionId` + `version` for a worker
+ * step, and `definitionKind` when that definition is of another kind):
+ *   - `no_steps`: the Procedure has no step to publish;
+ *   - `operation_not_published`: no published Operation by that name on that Gatekeeper;
+ *   - `worker_not_published`: that WorkerDefinition version is not published (a draft, deprecated,
+ *     discarded, or none — a draft that is not the publisher's reads as none);
+ *   - `not_worker_kind`: the definition is of another kind (an entry definition) — a step runs only
+ *     a worker-kind one;
+ *   - `no_graph_projection`: the published version has no graph Object to link the step to.
+ */
+export const PROCEDURE_STEP_REFERENCE_REASON_VALUES = [
+  'no_steps',
+  'operation_not_published',
+  'worker_not_published',
+  'not_worker_kind',
+  'no_graph_projection',
+] as const;
+export type ProcedureStepReferenceReason = (typeof PROCEDURE_STEP_REFERENCE_REASON_VALUES)[number];
+export const ProcedureStepReferenceReasonSchema = asEnum(PROCEDURE_STEP_REFERENCE_REASON_VALUES);
+
+/**
  * Why a member-management capability refused a well-formed request (`PrincipalOperationRefusedError`,
  * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
  * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a

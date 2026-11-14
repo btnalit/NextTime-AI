@@ -272,6 +272,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           message: expect.stringMatching(
             /is entry-kind: a step runs only a worker-kind WorkerDefinition/,
           ),
+          // Legacy 502: the same, as the 400's details.
+          details: {
+            stepIndex: 1,
+            reason: 'not_worker_kind',
+            definitionId: entryDefinitionId,
+            version: entryDefinitionVersion,
+            definitionKind: 'entry',
+          },
         });
         // Any version of an entry family: its kind never changes.
         await expect(
@@ -369,6 +377,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         const nothing = await publishAs(ownerId, unknown);
         expect(theirs).toBeInstanceOf(ProcedureStepReferenceError);
         expect(theirs.message).not.toMatch(/draft/);
+        // Legacy 502: and its details say no more — the reason a version that is not there gets.
+        expect((theirs as ProcedureStepReferenceError).details).toEqual({
+          stepIndex: 0,
+          reason: 'worker_not_published',
+          definitionId: othersDraft.id,
+          version: othersDraft.version,
+        });
+        expect((nothing as ProcedureStepReferenceError).details.reason).toBe(
+          'worker_not_published',
+        );
         expect(theirs.message.replaceAll(othersDraft.id, '<id>')).toBe(
           nothing.message.replaceAll(unknown.id, '<id>'),
         );
@@ -387,6 +405,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(refused).rejects.toMatchObject({
           stepIndex: 0,
           message: expect.stringMatching(/is entry-kind/),
+          details: { stepIndex: 0, reason: 'not_worker_kind', definitionKind: 'entry' },
         });
         const status = await withWorkspace(
           pool,
@@ -487,6 +506,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(published.status).toBe('published');
       });
 
+      it('legacy 502: a read that fails while resolving a worker step is that failure — not a 400 about the step', async () => {
+        const draft = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
+            name: `proc-worker-read-fails-${randomUUID()}`,
+            description: 'A procedure with one worker step.',
+            steps: [
+              {
+                kind: 'worker',
+                definitionId: publishedWorkerDefinitionId,
+                version: publishedWorkerDefinitionVersion,
+              },
+            ],
+          }),
+        );
+        const VERSION_READ =
+          /from worker_definitions\s+where workspace_id = \$1 and id = \$2 and version = \$3/;
+        let failed = false;
+        const refused = inTx(ownerId, (client) => {
+          const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+          const wrapped = Object.create(client) as PoolClient;
+          wrapped.query = (async (text: unknown, ...rest: unknown[]) => {
+            if (!failed && typeof text === 'string' && VERSION_READ.test(text)) {
+              failed = true;
+              throw new Error('canceling statement due to statement timeout');
+            }
+            return query(text, ...rest);
+          }) as PoolClient['query'];
+          return publishProcedure(wrapped, workspaceId, ownerId, draft.id);
+        });
+        await expect(refused).rejects.toThrow('canceling statement due to statement timeout');
+        await expect(refused).rejects.not.toBeInstanceOf(ProcedureStepReferenceError);
+        expect(failed).toBe(true);
+        // Nothing was published: once the read answers, the same draft publishes.
+        const published = await inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, draft.id),
+        );
+        expect(published.status).toBe('published');
+      });
+
       it('publishes a procedure whose approval/verify steps have no external reference', async () => {
         const unique = `proc-approval-verify-${randomUUID()}`;
         const draft = await inTx(proposerId, (client) =>
@@ -516,25 +575,37 @@ describe.runIf(DATABASE_URL !== undefined)(
             steps: [],
           }),
         );
-        await expect(
-          inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
-        ).rejects.toThrow(ProcedureStepReferenceError);
+        const refused = inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, draft.id),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        // Legacy 502: about the Procedure as a whole — no step.
+        await expect(refused).rejects.toMatchObject({
+          details: { stepIndex: null, reason: 'no_steps' },
+        });
       });
 
       it('rejects publishing a procedure whose operation step references a nonexistent Operation, leaving the row in draft', async () => {
+        const operationName = `nonexistent.${randomUUID()}`;
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
             origin: 'human',
             name: `proc-bad-op-${randomUUID()}`,
             description: 'References an Operation that does not exist.',
             steps: [
-              { kind: 'operation', gatekeeperId, operationName: `nonexistent.${randomUUID()}` },
+              { kind: 'approval', description: 'A human approves.' },
+              { kind: 'operation', gatekeeperId, operationName },
             ],
           }),
         );
-        await expect(
-          inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
-        ).rejects.toThrow(ProcedureStepReferenceError);
+        const refused = inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, draft.id),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        // Legacy 502: which step, why, and what it names — no client reads them from the message.
+        await expect(refused).rejects.toMatchObject({
+          details: { stepIndex: 1, reason: 'operation_not_published', gatekeeperId, operationName },
+        });
 
         const stillDraft = await inTx(ownerId, (client) =>
           listProcedures(client, workspaceId, { principalId: ownerId, role: 'member' }),
@@ -562,9 +633,13 @@ describe.runIf(DATABASE_URL !== undefined)(
             steps: [{ kind: 'operation', gatekeeperId, operationName: draftOp.name }],
           }),
         );
-        await expect(
-          inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
-        ).rejects.toThrow(ProcedureStepReferenceError);
+        const refused = inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, draft.id),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        await expect(refused).rejects.toMatchObject({
+          details: { stepIndex: 0, reason: 'operation_not_published', operationName: draftOp.name },
+        });
       });
 
       it('rejects publishing a procedure whose worker step references an unpublished WorkerDefinition', async () => {
@@ -589,9 +664,18 @@ describe.runIf(DATABASE_URL !== undefined)(
             ],
           }),
         );
-        await expect(
-          inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
-        ).rejects.toThrow(ProcedureStepReferenceError);
+        const refused = inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, draft.id),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        await expect(refused).rejects.toMatchObject({
+          details: {
+            stepIndex: 0,
+            reason: 'worker_not_published',
+            definitionId: unpublishedWorker.id,
+            version: unpublishedWorker.version,
+          },
+        });
       });
     });
 
