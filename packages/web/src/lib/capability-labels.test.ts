@@ -26,6 +26,7 @@ const OTHER_AUDIT_ACTIONS = [
   'principal.revoked_session_handles_revoked',
   'principal.disabled_authority_handles_revoked',
   'workspace.created',
+  'workspace.create_failed',
   'user.identity_claimed',
   'principal.user_rebound',
   'platform.membership_restored',
