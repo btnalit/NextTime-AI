@@ -3032,7 +3032,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.179 已停用的成员没有 API key，由数据库保证（#1210，遗留 738，core 0059，0.69.0 之后的下一版）
+### 3.179 已停用的成员没有 API key，由数据库保证（#1210，遗留 738，core 0059，0.69.1 起）
 
 **迁移 core 0059**：清掉已停用成员行上残留的 `api_key_hash`，每个成员写一条审计；加约束 `principals_disabled_no_api_key`（`disabled_at is null or api_key_hash is null`）；加 BEFORE UPDATE 触发器 `principals_disabled_clears_api_key`。
 
@@ -3244,7 +3244,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.0 | governance `0044_action_request_gate_endpoint_key`（#1156，遗留 701）：`action_requests.gate_endpoint_key` 可空列与守卫触发器 `action_requests_gate_endpoint_key_guard` | 可逆 | 只加可空列：上一版插入不写这一列（为 NULL，守卫放行） | 只需回退代码。要撤：删触发器与函数 `action_requests_gate_endpoint_key_guard()`，`alter table action_requests drop column gate_endpoint_key`，再删 `schema_migrations` 里 governance 44 那一行 |
 | v0.69.0 | core `0058_connection_secret_issuances`（#1176，遗留 711）：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥），检查约束、守卫触发器、强制 RLS | 可逆 | 只加新表：上一版不读也不写。升级前签出、还没用的连接密钥升级后要重新签出（§3.175） | 只需回退代码，表可以留着。要删：`drop table connection_secret_issuances`、`drop function connection_secret_issuances_guard()`，再删 `schema_migrations` 里 core 58 那一行 |
 | v0.69.0 | governance `0045_console_session_is_live`（#1180，遗留 712）：`security definer` 函数 `console_session_is_live(uuid, uuid)`，只回答这个用户的这个控制台会话是否还在；只授给 `nexttime_app` | 可逆 | 只加函数：上一版不调它 | 只需回退代码。要撤：`drop function console_session_is_live(uuid, uuid)`，再删 `schema_migrations` 里 governance 45 那一行 |
-| v0.69.0 之后的下一版 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
+| v0.69.1 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
