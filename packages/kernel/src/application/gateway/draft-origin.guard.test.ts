@@ -7,8 +7,9 @@ import {
   PRINCIPAL_KIND_VALUES,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
+import { operationOriginOf } from '../../governance/gatekeepers/index.js';
 import type { CapabilityHandlerContext } from './capability-handler.js';
-import { draftOriginOf } from './draft-viewer.js';
+import { callerKindOf, draftOriginOf } from './draft-viewer.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 
 /**
@@ -28,6 +29,11 @@ import { CAPABILITY_HANDLERS } from './handlers.js';
  *     the goal planner's definition. And no gateway file writes a literal draft origin, so a
  *     capability handler gets one only from `draftOriginOf`.
  *
+ *  4. Legacy 616: a write that records the caller's kind beside the Principal it is for
+ *     (`propose_operation`'s proposer) takes it from `callerKindOf`, never from the channel alone
+ *     (a service's API key is the human channel too), and the origin an Operation draft derives
+ *     from that kind (`operationOriginOf`) is always `draftOriginOf`'s.
+ *
  * A new path that writes `platform` changes rule 3's list in review, with the reason it has no
  * caller.
  */
@@ -44,6 +50,10 @@ const PLATFORM_ORIGIN_WRITERS = [
 /** Placeholder patterns, never dispatched as themselves (capabilities.ts, the gate group): their
  *  params are a gate Operation's own input, and they have no handler. */
 const GATE_PLACEHOLDER_NAMES = new Set(['<gate>.<op>', '<gate>.<op>:execute']);
+
+/** A caller kind taken from the channel alone: `channel === 'human' ? 'human' : 'agent'`. */
+const KIND_FROM_CHANNEL =
+  /channel\s*===\s*(['"`])human\1\s*\?\s*(['"`])human\2\s*:\s*(['"`])agent\3/;
 
 /** `origin: 'platform'` (any quote) — a draft-origin literal. */
 const PLATFORM_ORIGIN = /\borigin\s*:\s*(['"`])platform\1/g;
@@ -83,6 +93,54 @@ describe('S11 AA3a: no caller can produce a platform draft origin', () => {
       expect(draftOriginOf({ channel } as CapabilityHandlerContext), channel).toBe('agent');
     }
     expect(draftOriginOf(undefined)).toBe('agent');
+  });
+
+  it('legacy 616: the caller kind is the authenticated Principal’s own over the human channel, agent otherwise, and an Operation draft’s origin from it is draftOriginOf’s', () => {
+    for (const channel of CAPABILITY_CHANNEL_VALUES) {
+      for (const kind of PRINCIPAL_KIND_VALUES) {
+        const ctx = {
+          channel,
+          principalId: 'p',
+          principal: { id: 'p', kind, role: 'owner', displayName: null },
+        } as CapabilityHandlerContext;
+        expect(callerKindOf(ctx), `${channel} ${kind}`).toBe(channel === 'human' ? kind : 'agent');
+        expect(operationOriginOf(callerKindOf(ctx)), `${channel} ${kind}`).toBe(draftOriginOf(ctx));
+      }
+      const bare = { channel } as CapabilityHandlerContext;
+      expect(callerKindOf(bare), channel).toBe('agent');
+      expect(operationOriginOf(callerKindOf(bare)), channel).toBe(draftOriginOf(bare));
+    }
+    expect(callerKindOf(undefined)).toBe('agent');
+    // The service case the leftover is about: the human channel, and still not a person.
+    const service = {
+      channel: 'human',
+      principalId: 'svc',
+      principal: { id: 'svc', kind: 'service', role: 'owner', displayName: 'ci-bot' },
+    } as CapabilityHandlerContext;
+    expect(callerKindOf(service)).toBe('service');
+    expect(operationOriginOf(callerKindOf(service))).toBe('agent');
+  });
+
+  it('legacy 616: no gateway file takes a caller kind from the channel alone', () => {
+    const fromChannel = files
+      .filter((file) => file.relative.startsWith('application/gateway/'))
+      .filter((file) => KIND_FROM_CHANNEL.test(file.text))
+      .map((file) => file.relative);
+    expect(fromChannel).toEqual([]);
+    // The pattern matches the form it stands for (a pattern that never matches would pass anything).
+    expect(KIND_FROM_CHANNEL.test("const k = ctx?.channel === 'human' ? 'human' : 'agent';")).toBe(
+      true,
+    );
+    const callers = files
+      .filter((file) => file.relative.startsWith('application/gateway/'))
+      .filter((file) => /\bcallerKindOf\s*\(ctx\)/.test(file.text))
+      .map((file) => file.relative);
+    // The two writes that record a caller kind, and `draftOriginOf`, defined from it.
+    expect(callers.sort()).toEqual([
+      'application/gateway/connection-handlers.ts',
+      'application/gateway/draft-viewer.ts',
+      'application/gateway/operation-manifest-handlers.ts',
+    ]);
   });
 
   it('every dispatchable capability refuses an origin param', () => {

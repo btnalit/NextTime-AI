@@ -40,6 +40,7 @@ export {
   importManifest,
   storableManifestOperation,
   proposeOperation,
+  operationOriginOf,
   getOperation,
   getPublishedOperation,
   isPublishedOperationName,

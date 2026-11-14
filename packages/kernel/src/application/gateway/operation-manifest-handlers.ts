@@ -27,6 +27,7 @@ import { shownObjectProperties } from '../../substrate/graph/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
+import { callerKindOf } from './draft-viewer.js';
 
 /**
  * application/gateway/operation-manifest-handlers: `propose_operation` (Handle channel, drafts
@@ -100,10 +101,13 @@ export const proposeOperationHandler: CapabilityHandler = async (
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   // propose_operation is a `channel:'handle'` capability (packages/shared/src/capabilities.ts) —
   // its normal caller is an agent/Worker session, but `authorizeCapabilityCall` also permits a
-  // human caller (§9.3 "human 通道调用同样允许"); derive the CallerPrincipal kind `assertFact`'s
-  // epistemic-status derivation needs (substrate/graph/store.ts) from the actual channel used
-  // rather than assuming 'agent' unconditionally.
-  const proposerKind = ctx?.channel === 'human' ? 'human' : 'agent';
+  // human caller (§9.3 "human 通道调用同样允许"). Legacy 616: the kind recorded beside the
+  // proposer, which decides the draft's origin (`proposeOperation`), is the caller's own
+  // (`callerKindOf`), not the channel's: a service Principal's API key over the human channel is
+  // `service`, so its draft is `agent`-written, as every other gateway draft by the same caller is
+  // (`draftOriginOf`). The `exposes` Fact's epistemic status is not taken from it: the store reads
+  // the Principal row (`CallerPrincipal.kind`).
+  const proposerKind = callerKindOf(ctx);
 
   const activity = await startActivity(client, workspaceId, {
     kind: 'operation_proposal',
