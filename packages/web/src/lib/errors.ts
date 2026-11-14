@@ -100,6 +100,7 @@ const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>>
   platform_managed: 'Managed by the platform',
   human_api_key: 'People sign in with a password',
   reserved_name: 'Name reserved',
+  disabled: 'Disabled',
 };
 
 const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
@@ -108,6 +109,7 @@ const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, strin
   platform_managed: '由平台管理',
   human_api_key: '人类用户用密码登录',
   reserved_name: '名称被保留',
+  disabled: '已停用',
 };
 
 /** The platform plane's own `last_owner` / `self_disable` keep their `lib/platform-errors.ts` copy,
@@ -134,6 +136,10 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
   reserved_name: {
     zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
     en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
+  },
+  disabled: {
+    zh: '这个成员已停用，角色不能再改，什么也没有改。要让这个人回到这个工作区，按登录名重新添加成员，会新建一条成员资格；服务账号则新建一个。',
+    en: 'This member is disabled, so their role cannot change, and nothing changed. To bring a person back to this workspace, add them again by login, which makes a new membership; for a service account, create a new one.',
   },
 };
 

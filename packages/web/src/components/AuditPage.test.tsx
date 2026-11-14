@@ -235,6 +235,47 @@ describe('AuditPage entry points', () => {
     window.history.replaceState(null, '', '#/');
   });
 
+  // Legacy 729 (#1193 UX P3): someone added back after a removal has two memberships of one name.
+  it('the actor picker lists active members first and the disabled ones in their own group at the bottom', async () => {
+    const row = (id: string, displayName: string, disabledAt: string | null) => ({
+      id,
+      kind: 'human',
+      role: 'member',
+      displayName,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hasApiKey: false,
+      disabledAt,
+    });
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [auditRow()] }),
+      list_principals: () => ({
+        items: [
+          row('p-old-bob', 'Bob', '2026-09-02T00:00:00.000Z'),
+          {
+            ...principal,
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: true,
+            disabledAt: null,
+          },
+          row('p-new-bob', 'Bob', null),
+        ],
+      }),
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const select = (await screen.findByTestId('audit-actor-select')) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(4));
+    const top = [...select.children]
+      .filter((child) => child.tagName === 'OPTION')
+      .map((option) => (option as HTMLOptionElement).value);
+    expect(top).toEqual(['', 'p-1', 'p-new-bob']);
+    const group = screen.getByTestId('audit-actor-disabled') as HTMLOptGroupElement;
+    expect(group.label).toBe('已停用的成员（含之前的成员资格）');
+    expect([...group.querySelectorAll('option')].map((option) => option.value)).toEqual([
+      'p-old-bob',
+    ]);
+  });
+
   it('#541 acceptance: an auditor opening an approval is told who may open it — no get_action, no dead link', async () => {
     const http = scriptedHttp({
       get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-a', role: 'auditor' } }),

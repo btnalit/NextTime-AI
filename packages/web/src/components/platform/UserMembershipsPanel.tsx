@@ -38,12 +38,22 @@ export interface UserMembershipsPanelProps {
  * workspace this user was removed from stays pickable — `add_membership` adds them back as a new
  * membership (the removed one stays behind for audit lineage, with its drafts and goals), and the
  * form says so before 加入.
+ *
+ * Legacy 730 (687): a removed membership is history. Its row says 已停用 and the role it was
+ * removed with, read-only — `set_membership_role` refuses it (`membership_removed`) and removing it
+ * again changes nothing — and points at 加入工作区 below, the one way back. Active memberships come
+ * first.
  */
 export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMembershipsPanelProps) {
   const t = useT();
   const held = user.memberships
     .filter((membership) => !membership.disabled)
     .map((membership) => membership.workspaceId);
+  // Active first; each group keeps the order `list_users` gives (workspace, then membership age).
+  const shown = [
+    ...user.memberships.filter((membership) => !membership.disabled),
+    ...user.memberships.filter((membership) => membership.disabled),
+  ];
   const workspaces = useActiveWorkspaces(http);
   const [workspaceChoice, setWorkspaceChoice] = useState('');
   const [role, setRole] = useState<Role>('member');
@@ -92,7 +102,7 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
         />
       ) : (
         <ul className="data-list" aria-label="Memberships" data-testid="user-memberships-list">
-          {user.memberships.map((membership) => (
+          {shown.map((membership) => (
             <MembershipRow
               key={membership.workspaceId}
               http={http}
@@ -255,7 +265,20 @@ function MembershipRow({
         <div className="data-row-meta">
           <span className="mono">{membership.workspaceId}</span>
         </div>
-        {soleOwner ? (
+        {membership.disabled ? (
+          <div className="stack-s" data-testid="user-membership-removed">
+            <div className="row-wrap">
+              <span className="field-label">{t('停用时的角色', 'Role when disabled')}</span>
+              <span>{roleLabel(membership.role, t)}</span>
+            </div>
+            <p className="field-hint">
+              {t(
+                '这条成员资格已停用（被移出），只留作审计溯源：角色不能再改，也没有可移出的了。要让这位用户回到这个工作区，在下面「加入工作区」里重新加入，会新建一条成员资格。',
+                'This membership is disabled (removed) and kept only for audit lineage: its role cannot change, and there is nothing left to remove. To bring the user back to this workspace, add them under “Add to a workspace” below, which makes a new membership.',
+              )}
+            </p>
+          </div>
+        ) : soleOwner ? (
           <div className="stack-s" data-testid="user-membership-sole-owner">
             <div className="row-wrap">
               <span className="field-label">{t('角色', 'Role')}</span>
@@ -269,7 +292,7 @@ function MembershipRow({
             </Notice>
           </div>
         ) : null}
-        {soleOwner ? null : (
+        {soleOwner || membership.disabled ? null : (
           <div className="row-wrap">
             <label className="field-label" htmlFor={roleFieldId}>
               {t('角色', 'Role')}

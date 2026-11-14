@@ -510,8 +510,10 @@ export const ProcedureFailurePlaceSchema = asEnum(PROCEDURE_FAILURE_PLACE_VALUES
  * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
  * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a
  * platform service account), `human_api_key` (a person signs in with a password, not an API key),
- * `reserved_name` (a display name reserved for platform identities). The console's copy is keyed
- * by this type, so a new reason does not compile until it has copy.
+ * `reserved_name` (a display name reserved for platform identities), `disabled` (the Principal is
+ * disabled — a removed membership — and its role no longer means anything: a person who should be
+ * back is added again, as a new membership, legacy 730). The console's copy is keyed by this type,
+ * so a new reason does not compile until it has copy. Values are only ever added.
  */
 export const PRINCIPAL_REFUSAL_REASON_VALUES = [
   'last_owner',
@@ -519,6 +521,7 @@ export const PRINCIPAL_REFUSAL_REASON_VALUES = [
   'platform_managed',
   'human_api_key',
   'reserved_name',
+  'disabled',
 ] as const;
 export type PrincipalRefusalReason = (typeof PRINCIPAL_REFUSAL_REASON_VALUES)[number];
 export const PrincipalRefusalReasonSchema = asEnum(PRINCIPAL_REFUSAL_REASON_VALUES);

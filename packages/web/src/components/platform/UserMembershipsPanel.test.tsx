@@ -221,6 +221,54 @@ describe('UserMembershipsPanel', () => {
     });
   });
 
+  // Legacy 730 (687): `set_membership_role` refuses a removed membership and removing it again
+  // changes nothing, so its row offers neither, and says how the person comes back.
+  it('a removed membership is read-only: its role as it was, no role change or 移出, and the way back; active ones come first', async () => {
+    const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
+    renderPanel(
+      http,
+      user({
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'operator',
+            disabled: true,
+          },
+          {
+            workspaceId: 'ws-2',
+            workspaceName: 'Beta',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-2',
+            role: 'builder',
+            disabled: false,
+          },
+        ],
+      }),
+    );
+    const rows = screen.getAllByTestId('user-membership-row');
+    expect(rows.map((row) => within(row).getByText(/Acme|Beta/).textContent)).toEqual([
+      'Beta',
+      'Acme',
+    ]);
+    const [active, removed] = rows as [HTMLElement, HTMLElement];
+    expect(within(active).getByRole('combobox')).toBeTruthy();
+    expect(within(active).getByRole('button', { name: '移出' })).toBeTruthy();
+
+    expect(within(removed).getByText('已停用')).toBeTruthy();
+    expect(within(removed).queryByRole('combobox')).toBeNull();
+    expect(within(removed).queryByRole('button', { name: '移出' })).toBeNull();
+    const note = within(removed).getByTestId('user-membership-removed');
+    expect(note.textContent).toContain('停用时的角色操作员');
+    expect(note.textContent).toContain('在下面「加入工作区」里重新加入，会新建一条成员资格');
+    await screen.findByTestId('user-memberships-workspace-empty');
+    expect(http.calls.map((call) => call.name)).toEqual(['list_workspaces']);
+  });
+
   it('removing a membership says the person can be added back, as a new membership', async () => {
     const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
     const what = '草稿和目标';
@@ -272,13 +320,13 @@ describe('UserMembershipsPanel', () => {
             workspaceStatus: 'disabled',
             principalId: 'p-1',
             role: 'operator',
-            disabled: true,
+            disabled: false,
           },
         ],
       }),
     );
     const row = screen.getByTestId('user-membership-row');
-    expect(within(row).getByText('已停用')).toBeTruthy();
+    expect(within(row).queryByText('已停用')).toBeNull();
     expect(within(row).getByText('工作区已停用')).toBeTruthy();
     const rowRole = within(row).getByLabelText(/角色/) as HTMLSelectElement;
     const addRole = screen.getByLabelText(/^角色/, { selector: '#um-role' }) as HTMLSelectElement;

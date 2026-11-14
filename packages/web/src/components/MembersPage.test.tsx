@@ -469,6 +469,45 @@ describe('MembersPage', () => {
     );
   });
 
+  // Legacy 729 (#1193 UX P3): someone added back after a removal has a new membership; the old,
+  // disabled one would read as a duplicate of it, so the disabled ones fold away below.
+  it('disabled members fold into a closed 「已停用的成员（N）」 section below the active ones, still openable', async () => {
+    const bobNow = principal({ id: 'p-2', displayName: 'Bob' });
+    const bobBefore = principal({
+      id: 'p-1',
+      displayName: 'Bob',
+      disabledAt: '2026-09-02T00:00:00.000Z',
+    });
+    const carol = principal({ id: 'p-3', role: 'owner', displayName: 'Carol' });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [bobBefore, carol, bobNow] }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('members-list');
+    expect(
+      within(list)
+        .getAllByTestId('member-row')
+        .map((row) => row.textContent),
+    ).toEqual([expect.stringContaining('Carol'), expect.stringContaining('Bob')]);
+    expect(within(list).queryByText('已停用')).toBeNull();
+
+    const folded = screen.getByTestId('members-disabled') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.querySelector('summary')?.textContent).toBe('已停用的成员（1）');
+    const old = within(folded).getByTestId('member-row');
+    expect(old.textContent).toContain('Bob');
+    expect(within(old).getByText('已停用')).toBeTruthy();
+    fireEvent.click(old);
+    expect(await screen.findByTestId('principal-detail')).toBeTruthy();
+  });
+
+  it('with no disabled member, there is no folded section', async () => {
+    const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+    expect(screen.queryByTestId('members-disabled')).toBeNull();
+  });
+
   it('console sweep: with more pages still unloaded, the last-owner rule is not claimed', async () => {
     const carol = principal({ id: 'p-2', role: 'owner', displayName: 'Carol' });
     const http = scriptedHttp({

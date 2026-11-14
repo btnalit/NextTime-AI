@@ -28,6 +28,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '该用户不在这个工作区',
     en: 'That user is not a member of this workspace',
   },
+  // Legacy 730: a removed membership keeps the role it was removed with (the panel shows it read-
+  // only; this is for a page opened before it was removed).
+  membership_removed: {
+    zh: '这条成员资格已停用（被移出），角色不能再改，什么也没有改。要让这位用户回到这个工作区，在「加入工作区」里重新加入，会新建一条成员资格。',
+    en: 'This membership is disabled (removed), so its role cannot change, and nothing changed. To bring the user back to this workspace, add them under “Add to a workspace”, which makes a new membership.',
+  },
   login_taken: { zh: '这个登录名已被占用', en: 'That login is already taken' },
   already_member: { zh: '已经是该工作区的成员', en: 'Already a member of that workspace' },
   already_claimed: {

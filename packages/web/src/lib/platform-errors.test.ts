@@ -44,3 +44,17 @@ describe('platformErrorMessage — trial workspace (S11 AA3a)', () => {
     expect(platformErrorMessage(err, en)).toContain('trial workspace cannot be the default');
   });
 });
+
+describe('platformErrorMessage — removed membership (legacy 730)', () => {
+  it('membership_removed says the role is frozen and the user comes back by being added again', () => {
+    const err = new HttpError(
+      'capability_error',
+      "the user's membership in workspace ws-1 is removed",
+      'membership_removed',
+    );
+    expect(platformErrorMessage(err, zh)).toContain('角色不能再改');
+    expect(platformErrorMessage(err, zh)).toContain('在「加入工作区」里重新加入');
+    expect(platformErrorMessage(err, en)).toContain('Add to a workspace');
+    expect(platformErrorMessage(err, zh)).not.toContain('ws-1');
+  });
+});

@@ -38,7 +38,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "conflict: already_member" # sequential calls; two at once, the second is a 500 (legacy 688)
+    repeat: "conflict: already_member" # two at once too: the user's lock orders them, and the second is refused the same way (legacy 688)
   add_membership:
     console: required
     agents: []
@@ -211,7 +211,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: idempotent
+    repeat: idempotent # already disabled: nothing is written or revoked, and the audit row says unchanged (legacy 729)
   discard_draft:
     console: required
     agents: []
@@ -826,7 +826,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: idempotent # the membership is already disabled and its credentials already revoked
+    repeat: idempotent # already removed: nothing is written or revoked, and the audit row says unchanged (legacy 729)
   rename_chat:
     console: required
     agents: []

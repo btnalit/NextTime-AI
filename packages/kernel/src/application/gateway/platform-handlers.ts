@@ -72,6 +72,9 @@ export type PlatformErrorCode =
   | 'user_not_found'
   | 'workspace_not_found'
   | 'membership_not_found'
+  /** Legacy 730: a role change on a removed membership — its role no longer means anything; the
+   *  person comes back by being added again, as a new membership (legacy 725). */
+  | 'membership_removed'
   | 'login_taken'
   | 'already_member'
   | 'already_claimed'
@@ -748,25 +751,25 @@ async function loadMembership(
 // counting toward it.
 export const setMembershipRoleHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
-  const membership = await loadMembership(client, input.userId, input.workspaceId);
+  const seen = await loadMembership(client, input.userId, input.workspaceId);
+  assertMembershipNotRemoved(seen, input.workspaceId);
   // Legacy 696: the role is already the one asked for, so the person's authority does not change
   // and nothing else does either — no write, no session ends, no Handle is revoked. Ending the
   // sessions here used to leave the Handles they had issued valid until ttl (`verifyHandle` reads
   // only a Handle's own `revoked_at`): a session revoked while its Handles still worked. The audit
   // row says the call changed nothing.
-  if (input.role === membership.role) {
-    return {
-      result: membership,
-      resourceType: 'principal',
-      resourceId: membership.principalId,
-      auditPayload: { unchanged: true },
-    };
-  }
+  if (input.role === seen.role) return unchangedRole(seen);
   // Legacy 702 (governance 0043): the Principal's authority lock before any row is locked here.
-  await lockAuthoritiesForChange(client, { principalIds: [membership.principalId] });
+  await lockAuthoritiesForChange(client, { principalIds: [seen.principalId] });
+  // Legacy 730: read again under the lock. A `remove_membership` or the workspace's own
+  // `disable_principal` takes this Principal's lock too, so one that committed while this waited
+  // is seen here, and a removed membership keeps the role it was removed with.
+  const membership = await loadMembership(client, input.userId, input.workspaceId);
+  assertSameMembership(seen, membership, input.workspaceId);
+  assertMembershipNotRemoved(membership, input.workspaceId);
+  if (input.role === membership.role) return unchangedRole(membership);
   if (
     membership.role === 'owner' &&
-    !membership.disabled &&
     (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
     throw new PlatformAdminError(
@@ -792,18 +795,68 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
   return { result: after, resourceType: 'principal', resourceId: membership.principalId };
 };
 
+function unchangedRole(membership: UserMembershipWire) {
+  return {
+    result: membership,
+    resourceType: 'principal',
+    resourceId: membership.principalId,
+    auditPayload: { unchanged: true },
+  };
+}
+
+/** Legacy 730 (687): a removed membership is history — its role no longer grants anything, and the
+ *  person comes back by being added again, which makes a new membership (legacy 725). */
+function assertMembershipNotRemoved(membership: UserMembershipWire, workspaceId: string): void {
+  if (membership.disabled) {
+    throw new PlatformAdminError(
+      'membership_removed',
+      `the user's membership in workspace ${workspaceId} is removed: its role cannot change — add the user to the workspace again for a new membership`,
+    );
+  }
+}
+
+/** The membership read under the locks is the one locked: between the two reads it could only
+ *  have been replaced by being removed and the user added back (legacy 725), which is a removal
+ *  of the one the caller saw. */
+function assertSameMembership(
+  seen: UserMembershipWire,
+  locked: UserMembershipWire,
+  workspaceId: string,
+): void {
+  if (locked.principalId !== seen.principalId) {
+    throw new PlatformAdminError(
+      'membership_removed',
+      `the user's membership in workspace ${workspaceId} was removed and the user added back while this waited — read it again`,
+    );
+  }
+}
+
 export const removeMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string };
-  const membership = await loadMembership(client, input.userId, input.workspaceId);
+  const seen = await loadMembership(client, input.userId, input.workspaceId);
   // Legacy 702 (governance 0043): the user's and the Principal's authority locks, in that order,
   // before any row is locked here (`revokeUserCredentials` takes the user's again).
   await lockAuthoritiesForChange(client, {
     userIds: [input.userId],
-    principalIds: [membership.principalId],
+    principalIds: [seen.principalId],
   });
+  // Legacy 729: read again under the locks, and a membership already removed — here or by the
+  // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is: it
+  // has nothing left to revoke (its sessions, their Handles and any API key went when it was
+  // removed), so nothing is written and the audit row says the call changed nothing (legacy 696).
+  const membership = await loadMembership(client, input.userId, input.workspaceId);
+  assertSameMembership(seen, membership, input.workspaceId);
+  const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };
+  if (membership.disabled) {
+    return {
+      result,
+      resourceType: 'principal',
+      resourceId: membership.principalId,
+      auditPayload: { unchanged: true },
+    };
+  }
   if (
     membership.role === 'owner' &&
-    !membership.disabled &&
     (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
     throw new PlatformAdminError(
@@ -819,7 +872,6 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   // R-12 (D-25): the membership's sessions, their Handles and any legacy API key go with it —
   // identity's one revocation, scoped to this workspace.
   await revokeUserCredentials(client, input.userId, { workspaceId: input.workspaceId });
-  const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };
   return {
     result,
     resourceType: 'principal',
