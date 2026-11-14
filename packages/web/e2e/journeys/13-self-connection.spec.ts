@@ -462,7 +462,10 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     // Legacy 716: the gate's card says a move waits, without opening anything.
     const card = page.getByTestId('gatekeeper-card').filter({ hasText: TARGET });
     const mark = card.getByTestId('gatekeeper-address-change-pending');
-    await expect(mark).toHaveText('换地址待审批', { timeout: 15_000 });
+    await expect(mark.getByTestId('gatekeeper-address-change-pending-label')).toHaveText(
+      '换地址待审批',
+      { timeout: 15_000 },
+    );
 
     // --- 在门那边：放回现在的密钥（CI 里新旧地址背后是同一个门，见文件头） ------------------------
     giveGateSecret(connectionSecret);

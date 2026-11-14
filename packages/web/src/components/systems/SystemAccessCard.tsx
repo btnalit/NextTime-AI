@@ -564,9 +564,15 @@ export function SystemAccessCard({
             )}
             data-testid="gatekeeper-address-change-pending"
           >
-            <span className="chip chip-info chip-s">
+            <span
+              className="chip chip-info chip-s"
+              data-testid="gatekeeper-address-change-pending-label"
+            >
               {t('换地址待审批', 'Move awaiting approval')}
             </span>
+            {/* #1187 UX P3: the chip alone reads as a status like the ones beside it, and a touch
+                screen shows no title — say it opens. */}
+            <span aria-hidden="true">{t('查看 ›', 'View ›')}</span>
           </Button>
         ) : null}
         {canManage ? (

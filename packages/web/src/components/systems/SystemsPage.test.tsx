@@ -1242,7 +1242,11 @@ describe('SystemsPage', () => {
     const card = (id: string) =>
       cards.find((element) => element.dataset.gatekeeperId === id) as HTMLElement;
     const mark = await within(card('gk-1')).findByTestId('gatekeeper-address-change-pending');
-    expect(mark.textContent).toBe('换地址待审批');
+    expect(within(mark).getByTestId('gatekeeper-address-change-pending-label').textContent).toBe(
+      '换地址待审批',
+    );
+    // #1187 UX P3: it says it opens, as a touch screen shows no title.
+    expect(mark.textContent).toContain('查看');
     expect(within(card('gk-2')).queryByTestId('gatekeeper-address-change-pending')).toBeNull();
 
     // The mark opens the move sheet, where the proposal stands with 撤回.
