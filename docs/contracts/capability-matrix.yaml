@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 18
+  repeat_unclear: 13
 capabilities:
   add_eval_case:
     console: required
@@ -59,7 +59,7 @@ capabilities:
   agent_withdraw_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_not_open"  # withdrawn by the first call, so the same call again finds no segment still proposed (409)
   apply_admin_proposal_segment:
     console: required
     agents: []
@@ -69,7 +69,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # applied by the first call, so the same call again finds it decided (409)
   approve:
     console: required
     agents: []
@@ -661,7 +661,7 @@ capabilities:
   propose_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
-    repeat: "unclear: 664"
+    repeat: creates  # each call is another proposal (a new id), from the same agent to the same workspace
   propose_definition_from_combination:
     console: required
     agents: []
@@ -806,7 +806,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # rejected by the first call, so the same call again finds it decided (409)
   release_eval_seal_hold:
     console: required
     agents: []
@@ -910,7 +910,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: platform_change_segment_rolled_back"  # rolled back by the first call, so the same call again finds it rolled back (409)
   roll_entry_containers:
     console: required
     agents: []
