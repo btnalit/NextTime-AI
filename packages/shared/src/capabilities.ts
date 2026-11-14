@@ -1165,10 +1165,12 @@ const connectionCapabilities = [
     // the console's gate picker (grant/launcher flows, J6/SY2); omitted returns every Gatekeeper,
     // exactly today's behavior.
     paramsSchema: z.object({ q: z.string().min(1).optional() }).strict(),
-    resultSchema: listEnvelope(wire.GatekeeperSummaryWireSchema),
+    resultSchema: listEnvelope(wire.GatekeeperListItemWireSchema),
     description:
       'List every registered Gatekeeper instance (health/manifest not included — see ' +
-      'get_gatekeeper), optionally narrowed by q (case-insensitive substring on name).',
+      'get_gatekeeper), optionally narrowed by q (case-insensitive substring on name). For a ' +
+      'workspace owner, a gate the workspace connected itself also says whether a move to a new ' +
+      'address awaits a platform administrator (addressChangePending).',
   },
   {
     name: 'issue_service_handle',

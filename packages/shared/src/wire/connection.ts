@@ -76,6 +76,16 @@ export const GatekeeperSummaryWireSchema = z
   .strict();
 export type GatekeeperSummaryWire = z.infer<typeof GatekeeperSummaryWireSchema>;
 
+/** `list_gatekeepers`' item: the summary, plus (legacy 716) whether a gate the workspace connected
+ *  itself has an open proposal to move to a new address — for a workspace owner only, as
+ *  `get_gatekeeper`'s `pendingAddressChange` is: `true` while one awaits a platform administrator
+ *  (and is not past its expiry), `false` when none does, absent for anyone else and for a
+ *  platform-catalog gate, whose address is the platform instance's. */
+export const GatekeeperListItemWireSchema = GatekeeperSummaryWireSchema.extend({
+  addressChangePending: z.boolean().optional(),
+});
+export type GatekeeperListItemWire = z.infer<typeof GatekeeperListItemWireSchema>;
+
 /** Legacy K (UX acceptance of #538): one param of an Operation's `params_schema` — where the gate
  *  sends it (`x-in`, lower-cased; absent = the request body) and whether it is required. */
 export const OperationParamSummaryWireSchema = z

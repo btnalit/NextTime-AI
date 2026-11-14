@@ -43700,6 +43700,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "addressChangePending": {
+                "type": "boolean"
+              },
               "createdAt": {
                 "type": "string"
               },

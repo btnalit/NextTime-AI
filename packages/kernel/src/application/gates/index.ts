@@ -89,6 +89,7 @@ export {
   findLatestEndedGateAddressChange,
   findOpenGateAddressChange,
   gateAddressChangeSaltUsed,
+  gatekeepersWithOpenGateAddressChange,
   insertGateAddressChange,
   isExpired as gateAddressChangeExpired,
   listGateAddressChanges,
