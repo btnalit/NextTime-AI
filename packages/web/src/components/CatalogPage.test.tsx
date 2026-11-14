@@ -1507,7 +1507,7 @@ describe('CatalogPage', () => {
     }
     const old = await selectRow(byVersion(1));
     expect(within(old).getByTestId('worker-detail-not-in-use').textContent).toMatch(
-      /入口 agent 用的是最近发布的 v3/,
+      /入口 agent 用的是 v3。/,
     );
     fireEvent.click(within(old).getByTestId('worker-detail-open-in-use'));
     const inUse = await screen.findByTestId('worker-detail-in-use');
@@ -5605,5 +5605,124 @@ describe('CatalogPage — keeping a combination as a definition (S11 GO16b)', ()
     );
     expect(within(detail).queryByTestId('combination-candidates')).toBeNull();
     expect(http.calls.some((call) => call.name === 'get_combination_candidates')).toBe(false);
+  });
+});
+
+// Legacy 742: a draft below its family's newest published version is not published any more — the
+// kernel refuses it (409 draft_superseded). The detail says so on the draft instead of offering
+// Publish, points at the newer version, and the draft's content goes in again as the next version.
+describe('CatalogPage — a Worker draft below the published head (legacy 742)', () => {
+  const version = (n: number, status: string, proposedBy = 'p-me') => ({
+    id: 'wd-7',
+    version: n,
+    kind: 'worker',
+    status,
+    proposedBy,
+    definition: { name: 'Runner', systemPrompt: `Run, v${n}.` },
+  });
+
+  it('the draft says the newer published version, offers no Publish, and is edited into the next version', async () => {
+    const http = scriptedHttp({
+      // A builder: the live v3 is someone else's, so "only its proposer publishes" would be the
+      // hint — but nobody publishes this draft, and the note says why instead.
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 3,
+        gatekeeperCount: 1,
+        caller: { id: 'p-me', role: 'builder', displayName: 'Me', kind: 'human' },
+      }),
+      list_worker_definitions: (params) => {
+        const published = [version(1, 'published'), version(3, 'published', 'p-other')];
+        return {
+          items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+            ? [...published, version(2, 'draft')]
+            : published,
+        };
+      },
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => version(4, 'draft'),
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    const note = within(detail).getByTestId('worker-detail-superseded');
+    expect(note.textContent).toMatch(/已经发布了更新的 v3，这份草稿 v2 不能再发布/);
+    expect(note.textContent).toMatch(/点「修改这份草稿」保存，它会成为下一版/);
+    expect(within(detail).queryByTestId('worker-draft-publish')).toBeNull();
+    expect(within(detail).queryByTestId('catalog-proposer-only')).toBeNull();
+
+    fireEvent.click(within(detail).getByTestId('worker-draft-edit'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(drawer.textContent).toMatch(/修改草稿 v2/);
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_worker_definition')?.params).toMatchObject({
+      definitionId: 'wd-7',
+      replacesDraft: 2,
+    });
+  });
+
+  it('the newer published version opens from the note, focus on its title', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const published = [version(1, 'published'), version(3, 'published')];
+        return {
+          items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+            ? [...published, version(2, 'draft')]
+            : published,
+        };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByTestId('worker-detail-open-superseding'));
+    const shown = await screen.findByTestId('worker-detail');
+    await waitFor(() => expect(shown.getAttribute('data-worker-key')).toBe('wd-7@3'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  it('a draft above every published version is published as before; a Publish the kernel refuses as superseded reloads, and the draft then says why', async () => {
+    let newer = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const published = newer
+          ? [version(1, 'published'), version(3, 'published')]
+          : [version(1, 'published')];
+        return {
+          items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+            ? [...published, version(2, 'draft')]
+            : published,
+        };
+      },
+      publish_worker_definition: () => {
+        // Another person's v3 was published after the page read the family.
+        newer = true;
+        return Promise.reject(
+          new HttpError(
+            'capability_error',
+            'WorkerDefinition wd-7@2 is a draft below the family’s published v3',
+            'draft_superseded',
+            { familyId: 'wd-7', draftVersion: 2, publishedVersion: 3 },
+          ),
+        );
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    expect(within(detail).queryByTestId('worker-detail-superseded')).toBeNull();
+    fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('无法发布该草稿');
+    expect(toast.textContent).toContain('已经发布了比这份草稿更新的版本');
+    const note = await screen.findByTestId('worker-detail-superseded');
+    expect(note.textContent).toMatch(/更新的 v3，这份草稿 v2 不能再发布/);
+    expect(screen.queryByTestId('worker-draft-publish')).toBeNull();
   });
 });

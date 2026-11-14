@@ -31,6 +31,7 @@ import { entryCapabilitiesOf, entryPromptOf } from '../lib/entry-template.js';
 import {
   errorToastText,
   isDraftChangedError,
+  isDraftSupersededError,
   isEvidenceMovedError,
   isForbiddenError,
   isVersionChangedError,
@@ -80,6 +81,7 @@ import {
   type WorkerDefinitionSummary,
   definitionName,
   inUseEntryVersion,
+  latestPublishedVersion,
   publishedFamilyHeads,
   sameNameDefinitionIds,
   unnamedDefinitionLabel,
@@ -3673,14 +3675,50 @@ function WorkerVersionNote({
   row,
   inUseEntry,
   familyHead,
+  supersededBy,
+  canPropose,
   onOpen,
 }: {
   readonly row: WorkerDefinitionSummary;
   readonly inUseEntry: { readonly definitionId: string; readonly version: number } | null;
   readonly familyHead: number | undefined;
+  /** Legacy 742: on a draft, the family's newest published version when it is above the draft —
+   *  the draft is not published any more. */
+  readonly supersededBy?: number;
+  /** Whether the reader may edit the draft — saved, it becomes the family's next version. */
+  readonly canPropose?: boolean;
   readonly onOpen: (ref: { readonly id: string; readonly version: number }) => void;
 }) {
   const t = useT();
+  if (row.status === 'draft' && supersededBy !== undefined) {
+    return (
+      <Notice tone="warn" testId="worker-detail-superseded">
+        <p>
+          {t(
+            `这个定义已经发布了更新的 v${supersededBy}，这份草稿 v${row.version} 不能再发布：发布后旧内容会排到新版本后面。`,
+            `This definition already has a newer published version, v${supersededBy}, so this draft (v${row.version}) can no longer be published: the older content would come after it.`,
+          )}
+          {canPropose
+            ? t(
+                '要用这份内容，点「修改这份草稿」保存，它会成为下一版；不需要就丢弃它。',
+                ' To use this content, choose Edit this draft and save — it becomes the next version; otherwise discard it.',
+              )
+            : t(
+                '要用这份内容，请它的提议者修改后另存为下一版；不需要就丢弃它。',
+                ' To use this content, its proposer edits it and saves it as the next version; otherwise discard it.',
+              )}
+        </p>
+        <Button
+          variant="ghost"
+          size="s"
+          onClick={() => onOpen({ id: row.id, version: supersededBy })}
+          data-testid="worker-detail-open-superseding"
+        >
+          {t(`查看已发布的 v${supersededBy}`, `See v${supersededBy}, the published one`)}
+        </Button>
+      </Notice>
+    );
+  }
   if (row.status !== 'published') return null;
   if (row.kind === 'entry') {
     if (inUseEntry === null) return null;
@@ -3688,8 +3726,8 @@ function WorkerVersionNote({
       return (
         <p className="text-small" data-testid="worker-detail-in-use">
           {t(
-            '入口 agent 正在用这一版：它是最近发布的入口定义。',
-            'The entry agent runs with this version: it is the most recently published entry definition.',
+            '入口 agent 正在用这一版：它是最近发布的入口定义的最新一版。',
+            'The entry agent runs with this version: the latest version of the most recently published entry definition.',
           )}
         </p>
       );
@@ -3698,8 +3736,8 @@ function WorkerVersionNote({
       <Notice testId="worker-detail-not-in-use">
         <p>
           {t(
-            `这一版已发布，但没有生效：入口 agent 用的是最近发布的 v${inUseEntry.version}。`,
-            `This version is published but not in use: the entry agent runs with v${inUseEntry.version}, the most recently published one.`,
+            `这一版已发布，但没有生效：入口 agent 用的是 v${inUseEntry.version}。`,
+            `This version is published but not in use: the entry agent runs with v${inUseEntry.version}.`,
           )}
         </p>
         <Button
@@ -4127,6 +4165,9 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         return;
       }
       if (isForbiddenError(err)) permissions.markDenied('publish_worker_definition');
+      // Legacy 742: a newer version of the family was published since the page read it — reload,
+      // and the draft says it is not published any more.
+      if (isDraftSupersededError(err)) refresh();
       toast.push({
         tone: 'danger',
         title: t('无法发布该草稿', 'Could not publish this draft'),
@@ -4325,6 +4366,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     : null;
   // Legacy 481: Workers with several published versions — each stays invocable by its version.
   const familyHeads = publishedFamilyHeads(everyRow);
+  // Legacy 742: a draft below its family's newest published version is not published any more —
+  // the kernel refuses it (409 draft_superseded); the detail says so instead of offering Publish.
+  const selectedPublishedHead = selected
+    ? latestPublishedVersion(everyRow, selected.id)
+    : undefined;
+  const selectedSupersededBy =
+    selected?.status === 'draft' &&
+    selectedPublishedHead !== undefined &&
+    selectedPublishedHead > selected.version
+      ? selectedPublishedHead
+      : undefined;
   // S11 GO16b: a family by id — its newest version the reader has read (published first, then
   // their own draft), as a name and a detail link.
   function familyOf(id: string): WorkerFamilyRef | null {
@@ -4603,9 +4655,9 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       row={selected}
       isMyDraft={selected.status === 'draft'}
       canPropose={canPropose}
-      canPublish={canPublish && selectedProposerOnly === null}
+      canPublish={canPublish && selectedProposerOnly === null && selectedSupersededBy === undefined}
       canDeprecate={canDeprecate && selectedProposerOnly === null}
-      proposerOnly={selectedProposerOnly}
+      proposerOnly={selectedSupersededBy === undefined ? selectedProposerOnly : null}
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
       credentialReview={credentialReview}
@@ -4621,6 +4673,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           row={selected}
           inUseEntry={inUseEntryRef}
           familyHead={familyHeads.get(selected.id)}
+          supersededBy={selectedSupersededBy}
+          canPropose={canPropose}
           onOpen={(ref) => {
             // UX acceptance of #763 (P2-1): the button goes away with the detail it is on; focus
             // moves to the title of the version it opens.

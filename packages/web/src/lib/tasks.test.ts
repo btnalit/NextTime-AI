@@ -6,6 +6,7 @@ import {
   distinctDefinitionName,
   inUseEntryVersion,
   latestPerDefinition,
+  latestPublishedVersion,
   publishedFamilyHeads,
   taskNeed,
   versionOptionText,
@@ -151,6 +152,41 @@ describe('which published version matters (legacy 481)', () => {
     ).toEqual({ definitionId: 'e-b', version: 1 });
     // No publish time to go by (a deprecated or draft row only): unknown, never a guess.
     expect(inUseEntryVersion([row('e-a', 1, 'entry', 'deprecated', null)])).toBeNull();
+  });
+
+  it('legacy 742: within the family published to last, the newest version is in use — not the one stamped last', () => {
+    // v2 stamped after v3 (two publishes a moment apart, or rows from before the refusal): the
+    // kernel's family head, v3, is in use.
+    expect(
+      inUseEntryVersion([
+        row('e-a', 1, 'entry', 'published', '2026-10-01T00:00:00.000Z'),
+        row('e-a', 3, 'entry', 'published', '2026-10-02T00:00:00.000Z'),
+        row('e-a', 2, 'entry', 'published', '2026-10-03T00:00:00.000Z'),
+        row('e-a', 4, 'entry', 'draft', null),
+      ]),
+    ).toEqual({ definitionId: 'e-a', version: 3 });
+    // The family is the one published to last; its head even when that head's own stamp is older
+    // than another family's.
+    expect(
+      inUseEntryVersion([
+        row('e-a', 2, 'entry', 'published', '2026-10-01T00:00:00.000Z'),
+        row('e-a', 1, 'entry', 'published', '2026-10-05T00:00:00.000Z'),
+        row('e-b', 1, 'entry', 'published', '2026-10-04T00:00:00.000Z'),
+      ]),
+    ).toEqual({ definitionId: 'e-a', version: 2 });
+  });
+
+  it('legacy 742: latestPublishedVersion is the family head — drafts, deprecated rows and other families aside', () => {
+    const rows = [
+      row('w-1', 1, 'worker', 'published', null),
+      row('w-1', 3, 'worker', 'published', null),
+      row('w-1', 4, 'worker', 'deprecated', null),
+      row('w-1', 5, 'worker', 'draft', null),
+      row('w-2', 9, 'worker', 'published', null),
+    ];
+    expect(latestPublishedVersion(rows, 'w-1')).toBe(3);
+    expect(latestPublishedVersion(rows, 'w-2')).toBe(9);
+    expect(latestPublishedVersion(rows, 'w-3')).toBeUndefined();
   });
 
   it('a family head only where a Worker has several published versions', () => {
