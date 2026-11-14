@@ -639,7 +639,9 @@ describe('AuditPage entry points', () => {
     expect(migration.querySelector('[data-ref-kind="principal"]')).toBeNull();
     const subject = migration.querySelector('[data-ref-kind="object"][data-ref-id="p-1"]');
     // UX acceptance of #1220 (P2): by its name, not only its id.
-    expect(subject?.textContent).toContain('成员 Alice');
+    expect(subject?.querySelector('.ref-chip-name')?.textContent).toBe(
+      `成员 ${principal.displayName}`,
+    );
 
     for (const action of ['disable_principal', 'set_principal_role']) {
       const person = meta(rowOf(action));
