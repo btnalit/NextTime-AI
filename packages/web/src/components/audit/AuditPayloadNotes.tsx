@@ -64,6 +64,40 @@ const READDED_ACTIONS: ReadonlySet<string> = new Set([
  *  row, so the two logins are what still say whose memberships these were; the workspace's name,
  *  when the row is about one; the removed memberships that no longer belong to any account —
  *  legacy 725 (UX on #1189): named as whose and where, when the row says so. */
+/** Legacy 735: why a `workspace.create_failed` row's attempt made no workspace — the code the
+ *  caller got for a platform refusal (`details.code`), else the error's kind (`details.error`).
+ *  The same workspace id's `workspace.created` row records only the attempt. */
+function createFailedNote(
+  record: Readonly<Record<string, unknown>>,
+  action: string | undefined,
+): { readonly zh: string; readonly en: string } | undefined {
+  if (action !== 'workspace.create_failed') return undefined;
+  const details = asRecord(record.details);
+  const code = typeof details?.code === 'string' ? details.code : undefined;
+  const error = typeof details?.error === 'string' ? details.error : undefined;
+  const reason =
+    code === 'user_not_found'
+      ? {
+          zh: '所有者用户在创建过程中被删除了',
+          en: 'the owner user was deleted while it was being made',
+        }
+      : code === 'user_disabled'
+        ? {
+            zh: '所有者用户在创建过程中被停用了',
+            en: 'the owner user was disabled while it was being made',
+          }
+        : code !== undefined
+          ? { zh: `创建被拒绝（${code}）`, en: `it was refused (${code})` }
+          : {
+              zh: `创建过程中出错${error !== undefined ? `（${error}）` : ''}`,
+              en: `it failed while being made${error !== undefined ? ` (${error})` : ''}`,
+            };
+  return {
+    zh: `这次没有建出工作区：${reason.zh}。同一 id 的「工作区已创建」那条记的只是这次尝试。`,
+    en: `No workspace was made: ${reason.en}. The “Workspace created” row with the same id records only this attempt.`,
+  };
+}
+
 function mergeNote(record: Readonly<Record<string, unknown>>):
   | {
       readonly source: string;
@@ -301,7 +335,7 @@ function ReaddedNote({ entry }: { readonly entry: DetachedMembership }) {
  * opens again and the rejected proposals. Legacy 719 / 725: and, on a `merge_user` row, the two
  * accounts and the removed memberships it let go of; on a row that gave a person a membership where
  * a removed one of theirs was (`action`), that the removed one stays behind with its drafts and
- * goals.
+ * goals. Legacy 735: and, on a `workspace.create_failed` row, why no workspace was made.
  * Renders nothing when the payload has none of them.
  */
 export function AuditPayloadNotes({
@@ -328,6 +362,7 @@ export function AuditPayloadNotes({
   const breaker = breakerNote(record);
   const merge = mergeNote(record);
   const readded = action !== undefined && READDED_ACTIONS.has(action) ? detachedAt(record) : [];
+  const createFailed = createFailedNote(record, action);
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -340,6 +375,7 @@ export function AuditPayloadNotes({
     breaker === undefined &&
     merge === undefined &&
     readded.length === 0 &&
+    createFailed === undefined &&
     !masked
   ) {
     return null;
@@ -397,6 +433,9 @@ export function AuditPayloadNotes({
           )}
           {merge.detached.length > 0 ? <MergeDetached detached={merge.detached} /> : null}
         </li>
+      ) : null}
+      {createFailed !== undefined ? (
+        <li data-testid="audit-create-failed">{t(createFailed.zh, createFailed.en)}</li>
       ) : null}
       {readded.length > 0 ? (
         <li data-testid="audit-readded">

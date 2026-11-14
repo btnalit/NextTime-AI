@@ -370,6 +370,58 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     }
   });
 
+  it('legacy 735: a workspace.create_failed row says no workspace was made and why, by the code the caller got', () => {
+    const failed = (details: Record<string, unknown>) =>
+      render(
+        <AuditPayloadNotes
+          action="workspace.create_failed"
+          payload={{ channel: 'platform', details, triggeredBy: 'create_workspace' }}
+        />,
+      );
+    failed({ code: 'user_disabled', error: 'PlatformAdminError' });
+    expect(screen.getByTestId('audit-create-failed').textContent).toBe(
+      '这次没有建出工作区：所有者用户在创建过程中被停用了。同一 id 的「工作区已创建」那条记的只是这次尝试。',
+    );
+    cleanup();
+    failed({ code: 'user_not_found', error: 'PlatformAdminError' });
+    expect(screen.getByTestId('audit-create-failed').textContent).toContain(
+      '所有者用户在创建过程中被删除了',
+    );
+    cleanup();
+    failed({ code: null, error: 'Error' });
+    expect(screen.getByTestId('audit-create-failed').textContent).toContain(
+      '创建过程中出错（Error）',
+    );
+    cleanup();
+    // The same details on another action say nothing of the kind.
+    render(
+      <AuditPayloadNotes
+        action="workspace.created"
+        payload={{ details: { code: 'user_disabled', error: 'PlatformAdminError' } }}
+      />,
+    );
+    expect(screen.queryByTestId('audit-create-failed')).toBeNull();
+  });
+
+  it('legacy 735: says it in English too', () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <AuditPayloadNotes
+            action="workspace.create_failed"
+            payload={{ details: { code: 'user_not_found', error: 'PlatformAdminError' } }}
+          />
+        </LangProvider>,
+      );
+      expect(screen.getByTestId('audit-create-failed').textContent).toBe(
+        'No workspace was made: the owner user was deleted while it was being made. The “Workspace created” row with the same id records only this attempt.',
+      );
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
+  });
+
   it('renders nothing for an ordinary payload or a malformed count', () => {
     const { container } = render(
       <>

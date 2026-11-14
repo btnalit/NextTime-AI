@@ -1447,7 +1447,8 @@ export const createWorkspaceHandler: CapabilityHandler = async (
   // — application/workspace/create.ts), which a platform transaction deliberately does not have.
   // The id is fixed here so the audit row written with this phase names the workspace; if the
   // bootstrap then fails, the caller sees the error and the audit row records an attempt with no
-  // matching workspace (see development-tasks.md P-A2 实现说明).
+  // matching workspace (see development-tasks.md P-A2 实现说明) — followed, since legacy 735, by a
+  // `workspace.create_failed` row for the same id that says so and why.
   const workspaceId = randomUUID();
 
   // D4: "平台审计 workspace.created 的 details 记 defaultModules，Activity 记 triggeredBy:
@@ -1496,15 +1497,20 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,
         purpose: input.purpose ?? 'standard',
-      }).catch((err: unknown) => {
+      }).catch(async (err: unknown) => {
         // Legacy 726: the owner was deleted or disabled after the read above (the bootstrap reads
         // it again under the user's lock) — the same refusals that read gives.
-        if (err instanceof WorkspaceOwnerUnavailableError) {
-          throw err.reason === 'not_found'
-            ? new PlatformAdminError('user_not_found', 'the owner user no longer exists')
-            : new PlatformAdminError('user_disabled', 'the owner must be an active user');
-        }
-        throw err;
+        const failure =
+          err instanceof WorkspaceOwnerUnavailableError
+            ? err.reason === 'not_found'
+              ? new PlatformAdminError('user_not_found', 'the owner user no longer exists')
+              : new PlatformAdminError('user_disabled', 'the owner must be an active user')
+            : err;
+        // Legacy 735: the bootstrap is one transaction, so nothing of the workspace is left — but
+        // phase 1's `create_workspace` and `workspace.created` rows are, naming this id. One more
+        // row says the attempt ended there and why.
+        await auditWorkspaceCreateFailed(pool, acting, workspaceId, failure);
+        throw failure;
       });
       // P2 hotfix (post-v0.16.0 review, "default modules drift"): only known once the bootstrap
       // above has actually run its install loop — too late for the phase-1 `workspace.created` row
@@ -1536,6 +1542,48 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     },
   };
 };
+
+/** Legacy 735: `workspace.create_failed`, written when `create_workspace`'s bootstrap (phase 2)
+ *  fails after phase 1 committed its rows for `workspaceId` — same platform shape and resource as
+ *  `workspace.created`. `details.code` is the code the caller got for a platform refusal (the owner
+ *  deleted or disabled meanwhile: `user_not_found` / `user_disabled`), `null` for any other failure;
+ *  `details.error` the error's kind, never its message. The caller's error is what matters: a row
+ *  that cannot be written is logged, and the call still fails with that error. */
+async function auditWorkspaceCreateFailed(
+  pool: PoolLike,
+  acting: { id: string; login: string },
+  workspaceId: string,
+  failure: unknown,
+): Promise<void> {
+  const code = failure instanceof PlatformAdminError ? failure.code : null;
+  const error = failure instanceof Error ? failure.name : typeof failure;
+  try {
+    await withPlatform(pool, { userId: acting.id }, (platformClient) =>
+      writeAudit(platformClient, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        actorUserId: acting.id,
+        action: 'workspace.create_failed',
+        resourceType: 'workspace',
+        resourceId: workspaceId,
+        payload: {
+          channel: 'platform',
+          actorLogin: acting.login,
+          details: { code, error },
+          triggeredBy: 'create_workspace',
+        },
+      }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    console.error(
+      `[kernel] audit of a failed create_workspace (workspace ${workspaceId}, code ${code ?? 'none'}) could not be written: ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
 
 export const updateWorkspaceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   // `entryModel` cannot be cleared here (the wire keeps it non-nullable): the entry

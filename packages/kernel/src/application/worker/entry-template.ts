@@ -18,6 +18,7 @@ import {
   proposeWorkerDefinition,
   validateWorkerDefinitionContent,
 } from './definitions.js';
+import { lockWorkerRegistry } from './registry-lock.js';
 
 /**
  * application/worker/entry-template (legacy 145): the entry WorkerDefinition the platform ships
@@ -187,6 +188,7 @@ export interface EntryTemplateUpgrade {
  * `principalId`'s private draft. Refuses when the template or `current` is not what `expected`
  * says (`EntryTemplateChangedError`) or when there is nothing to change
  * (`EntryTemplateCurrentError`); returns the caller's own identical draft instead of a second one.
+ * Under `lockWorkerRegistry`, taken first (legacy 736).
  */
 export async function proposeEntryTemplateUpgrade(
   client: PoolClient,
@@ -199,6 +201,11 @@ export async function proposeEntryTemplateUpgrade(
   if (expected.templateDigest !== template.digest) {
     throw new EntryTemplateChangedError('the platform entry template');
   }
+  // Legacy 736: the workspace's WorkerDefinition registry lock before anything is read — the
+  // published entry version (a publish or deprecate takes this lock too) and, below, the caller's
+  // own identical draft. Two calls at once by one person then run one after the other, and the
+  // second finds the first's draft instead of making another.
+  await lockWorkerRegistry(client, workspaceId);
   const current = await getPublishedEntryDefinition(client, workspaceId);
   const basedOn = current ? { definitionId: current.id, version: current.version } : null;
   if (
@@ -226,7 +233,8 @@ export async function proposeEntryTemplateUpgrade(
 
   // The caller's own draft with this very content, returned instead of a second one: the next
   // version of the published family, or — none published (legacy 691) — the first version of an
-  // entry family nothing was ever published from (a new family per call otherwise).
+  // entry family nothing was ever published from (a new family per call otherwise). Read under the
+  // registry lock taken above (legacy 736), so a concurrent call's draft is committed or not begun.
   const mine = await client.query<{
     id: string;
     version: number;

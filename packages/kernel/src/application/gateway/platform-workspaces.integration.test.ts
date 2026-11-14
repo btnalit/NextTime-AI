@@ -252,6 +252,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       return callAs<T>(platformCaller(admin), name, params);
     }
 
+    /** Legacy 735: the platform audit rows of one `create_workspace` call, found by the name it
+     *  asked for — its own row, the hand-written `workspace.created`, and any
+     *  `workspace.create_failed` — in that order, with each row's `details`. */
+    async function attemptRows(
+      name: string,
+    ): Promise<{ action: string; details: Record<string, unknown> | null }[]> {
+      const order = ['create_workspace', 'workspace.created', 'workspace.create_failed'];
+      const { rows } = await withAdminClient(pool, (client) =>
+        client.query<{ action: string; details: Record<string, unknown> | null }>(
+          `select a.action, a.payload->'details' as details from audit_records a
+            where a.workspace_id is null and a.action = any($2::text[])
+              and a.resource_id = (
+                select c.resource_id from audit_records c
+                 where c.action = 'create_workspace' and c.payload->'params'->>'name' = $1)`,
+          [name, order],
+        ),
+      );
+      return rows.sort((a, b) => order.indexOf(a.action) - order.indexOf(b.action));
+    }
+
     /** `PlatformAdminError` carries the code interfaces/http maps to 404/409 — assert the code,
      *  not the message. */
     async function expectPlatformError(
@@ -828,7 +848,57 @@ describe.runIf(DATABASE_URL !== undefined)(
             client.query('select 1 from workspaces where name = $1', [name]),
           );
           expect(made.rowCount).toBe(0);
+          // Legacy 735: phase 1's two rows name the id the workspace would have had; a third says
+          // the attempt ended there, with the code the caller got.
+          expect(await attemptRows(name)).toEqual([
+            { action: 'create_workspace', details: null },
+            {
+              action: 'workspace.created',
+              details: expect.objectContaining({ purpose: 'standard' }),
+            },
+            {
+              action: 'workspace.create_failed',
+              details: {
+                code: change === 'deleted' ? 'user_not_found' : 'user_disabled',
+                error: 'PlatformAdminError',
+              },
+            },
+          ]);
         }
+      });
+
+      // Legacy 735: any other bootstrap failure is recorded too, with no platform code (the caller
+      // gets an internal error) and the error's kind, never its message.
+      it('a bootstrap that fails for any other reason leaves a workspace.create_failed row with no code', async () => {
+        const name = `bootstrap-fails-${randomUUID().slice(0, 8)}`;
+        const saved = process.env.ONTOLOGY_DIR;
+        // The bootstrap reads the meta-ontology and the entry template from here: an empty
+        // directory fails it after phase 1 committed.
+        const empty = await mkdtemp(path.join(tmpdir(), 'create-fails-'));
+        process.env.ONTOLOGY_DIR = empty;
+        let thrown: unknown;
+        try {
+          await callAsAdmin('create_workspace', { name, ownerUserId: owner.id });
+        } catch (err) {
+          thrown = err;
+        } finally {
+          if (saved === undefined) Reflect.deleteProperty(process.env, 'ONTOLOGY_DIR');
+          else process.env.ONTOLOGY_DIR = saved;
+          await rm(empty, { recursive: true, force: true });
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        expect(thrown).not.toBeInstanceOf(PlatformAdminError);
+        const made = await withAdminClient(pool, (client) =>
+          client.query('select 1 from workspaces where name = $1', [name]),
+        );
+        expect(made.rowCount).toBe(0);
+        const rows = await attemptRows(name);
+        expect(rows.map((row) => row.action)).toEqual([
+          'create_workspace',
+          'workspace.created',
+          'workspace.create_failed',
+        ]);
+        expect(rows[2]?.details).toEqual({ code: null, error: (thrown as Error).name });
       });
 
       // S11 AA3a (plan §3.1 "试验工作区", I-A6; migration core 0050): `purpose: 'admin_trial'`
