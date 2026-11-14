@@ -21,7 +21,7 @@ import {
   assertWorkerDefinitionReferencesResolve,
 } from './definition-references.js';
 import { DERIVED_FROM_SQL } from './derivations.js';
-import { FamilyDraftPendingError } from './family-version.js';
+import { FamilyDraftPendingError, ReplacedDraftNotPendingError } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -224,6 +224,15 @@ export interface ProposeWorkerDefinitionInput {
    *  stands as a second pending draft of theirs: a pack's install (`application/change-plan/
    *  family-item.ts`), which leaves the installer's own draft as it was. */
   readonly ownPendingDraft?: 'refuse' | 'beside';
+  /** Legacy 680: the version of the proposer's own pending draft of the family this version
+   *  replaces — that draft is deleted in the same transaction, as `discard_draft` would, so the
+   *  family still holds one pending draft of theirs (editing a draft: legacy 302's "fix what it
+   *  names", the console's 「修改这份草稿」). Needs `definitionId`. It must be the draft the
+   *  refusal above would name: another pending draft of theirs is `FamilyDraftPendingError` naming
+   *  it; none at all is `ReplacedDraftNotPendingError` (409 `draft_changed`). The new version is
+   *  the family's next number, not the replaced draft's: whoever holds the old draft's
+   *  `id@version` never finds other content under it. Not with `ownPendingDraft: 'beside'`. */
+  readonly replacesDraft?: number;
   readonly kind: WorkerDefinitionKind;
   readonly definition: Record<string, unknown>;
   /** S11 AA3a (legacy 293): who writes this version, from the call channel (a Handle → `agent`;
@@ -284,13 +293,22 @@ export async function workerDefinitionFamilyKind(
  *  draft is not there for them (I16 — a WorkerDefinition draft is its proposer's alone, unlike a
  *  Skill's, which builders and the owner see), and a WorkerDefinition is published by its version,
  *  not as its family's latest, so a draft beside someone else's takes nothing's place. Read under
- *  `lockWorkerRegistry`, so two proposals of one person cannot both pass. */
+ *  `lockWorkerRegistry`, so two proposals of one person cannot both pass. Or the version replaces
+ *  that draft (`replacesDraft`): one transaction deletes it and adds the next version. As two calls
+ *  (discard_draft, then propose) a family whose only version is that draft would be lost — once
+ *  it is discarded nobody sees the family, and its next version is not found. */
 export async function proposeWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   proposerPrincipalId: string,
   input: ProposeWorkerDefinitionInput,
 ): Promise<WorkerDefinitionRow> {
+  if (input.replacesDraft !== undefined && !input.definitionId) {
+    throw new WorkerDefinitionValidationError(
+      'replacesDraft names a draft of the family definitionId names — give definitionId too',
+    );
+  }
+  let replaced: number | undefined;
   if (input.definitionId) {
     await lockWorkerRegistry(client, workspaceId);
     const starts = input.onMissingFamily === 'start';
@@ -317,17 +335,35 @@ export async function proposeWorkerDefinition(
             [workspaceId, input.definitionId, proposerPrincipalId],
           );
     const own = pending?.rows[0];
-    if (own) {
+    if (input.replacesDraft !== undefined && own?.version === input.replacesDraft) {
+      replaced = own.version;
+    } else if (own) {
       throw new FamilyDraftPendingError(
         'worker_definition',
         input.definitionId,
         own.version,
         own.name ?? undefined,
       );
+    } else if (input.replacesDraft !== undefined) {
+      throw new ReplacedDraftNotPendingError(input.definitionId, input.replacesDraft);
     }
   }
 
+  // Before the replaced draft goes: the next number counts it (see `replacesDraft`).
   const version = await nextVersion(client, workspaceId, input.definitionId);
+  if (replaced !== undefined) {
+    // Held by `lockWorkerRegistry` against another proposal, and by the row's own lock against a
+    // publish or discard_draft that read it first (either changes or deletes the row, and this
+    // delete then finds nothing): nothing is proposed then, as if it was gone when we looked.
+    const gone = await client.query(
+      `delete from worker_definitions
+        where workspace_id = $1 and id = $2 and version = $3 and status = 'draft' and proposed_by = $4`,
+      [workspaceId, input.definitionId, replaced, proposerPrincipalId],
+    );
+    if ((gone.rowCount ?? 0) !== 1) {
+      throw new ReplacedDraftNotPendingError(input.definitionId as string, replaced);
+    }
+  }
   const result = await client.query<WorkerDefinitionDbRow>(
     `insert into worker_definitions
        (workspace_id, id, version, kind, status, definition, proposed_by, origin)

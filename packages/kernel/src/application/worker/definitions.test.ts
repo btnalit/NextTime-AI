@@ -24,7 +24,7 @@ import {
   validateWorkerDefinitionContent,
 } from './definitions.js';
 import { discardDraft } from './draft-lifecycle.js';
-import { FamilyDraftPendingError } from './family-version.js';
+import { FamilyDraftPendingError, ReplacedDraftNotPendingError } from './family-version.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL — same pattern as
@@ -348,6 +348,116 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           ),
         ).rejects.toBeInstanceOf(FamilyDraftPendingError);
+      });
+
+      it('legacy 680: replacesDraft edits the proposer’s own pending draft — that draft goes and the next number comes, in one call', async () => {
+        // A family whose only version is that draft: as discard_draft then propose, it would be
+        // lost (once discarded, nobody sees it). Replaced, the family keeps its id.
+        const only = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            kind: 'worker',
+            definition: { ...VALID_WORKER_DEFINITION, name: 'Fixer' },
+          }),
+        );
+        const edited = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            definitionId: only.id,
+            replacesDraft: 1,
+            kind: 'worker',
+            definition: { ...VALID_WORKER_DEFINITION, name: 'Fixer', systemPrompt: 'Fixed.' },
+          }),
+        );
+        expect(edited).toMatchObject({
+          id: only.id,
+          version: 2,
+          status: 'draft',
+          proposedBy: builderId,
+        });
+        expect(edited.definition.systemPrompt).toBe('Fixed.');
+        const before = await inTx(builderId, (client) =>
+          getWorkerDefinition(client, workspaceId, { definitionId: only.id, version: 1 }),
+        );
+        expect(before).toBeNull();
+
+        // Naming another version than the pending one: refused, naming the pending one.
+        const wrong = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            definitionId: only.id,
+            replacesDraft: 1,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        ).catch((caught: unknown) => caught);
+        expect(wrong).toBeInstanceOf(FamilyDraftPendingError);
+        expect(wrong).toMatchObject({ familyId: only.id, draftVersion: 2 });
+
+        // Published since: nothing of theirs pending to replace — 409, nothing proposed.
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: only.id,
+            version: 2,
+          }),
+        );
+        const stale = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            definitionId: only.id,
+            replacesDraft: 2,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        ).catch((caught: unknown) => caught);
+        expect(stale).toBeInstanceOf(ReplacedDraftNotPendingError);
+        expect(stale).toMatchObject({ code: 'draft_changed', familyId: only.id, draftVersion: 2 });
+        const published = await inTx(builderId, (client) =>
+          getWorkerDefinition(client, workspaceId, { definitionId: only.id, version: 2 }),
+        );
+        expect(published?.status).toBe('published');
+        const next = await inTx(builderId, (client) =>
+          getWorkerDefinition(client, workspaceId, { definitionId: only.id, version: 3 }),
+        );
+        expect(next).toBeNull();
+
+        // Someone else's pending draft is not theirs to replace — the same 409 as none at all, so
+        // it says nothing of that draft (I16).
+        const theirs = await inTx(otherBuilderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            origin: 'human',
+            definitionId: only.id,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        await expect(
+          inTx(builderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, builderId, {
+              origin: 'human',
+              definitionId: only.id,
+              replacesDraft: theirs.version,
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          ),
+        ).rejects.toBeInstanceOf(ReplacedDraftNotPendingError);
+        const kept = await inTx(otherBuilderId, (client) =>
+          getWorkerDefinition(client, workspaceId, { definitionId: only.id, version: 3 }),
+        );
+        expect(kept).toMatchObject({ status: 'draft', proposedBy: otherBuilderId });
+
+        // replacesDraft names a draft of a family: without definitionId it is refused.
+        await expect(
+          inTx(builderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, builderId, {
+              origin: 'human',
+              replacesDraft: 1,
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          ),
+        ).rejects.toThrow(WorkerDefinitionValidationError);
       });
 
       it('legacy 492: a family only someone else has drafted is not found, as an id nothing has', async () => {

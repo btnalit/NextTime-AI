@@ -367,10 +367,58 @@ describe.runIf(DATABASE_URL !== undefined)(
           code: 'draft_pending',
           details: { familyId: v1.id, draftVersion: handEditedVersion },
         });
+        // Editing that draft replaces it, in one call and under the next number; the audit record
+        // of the call names the draft it replaced.
+        const reEdited = await dispatchCapability(
+          { pool },
+          human(ownerId, 'owner'),
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            replacesDraft: handEditedVersion,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['owner-edited.example'] },
+          },
+        );
+        const reEditedVersion = (reEdited as { version: number }).version;
+        expect(reEditedVersion).toBe(handEditedVersion + 1);
+        const replaceAudit = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ payload: { params?: Record<string, unknown> } }>(
+                `select payload from audit_records
+                  where workspace_id = $1 and action = 'propose_worker_definition'
+                  order by created_at desc
+                  limit 1`,
+                [workspaceId],
+              )
+            ).rows[0],
+          { skipRoleSwitch: true },
+        );
+        expect(replaceAudit?.payload.params).toMatchObject({
+          definitionId: v1.id,
+          replacesDraft: handEditedVersion,
+        });
         await dispatchCapability({ pool }, human(ownerId, 'owner'), 'discard_draft', {
           kind: 'worker_definition',
           id: v1.id,
-          version: handEditedVersion,
+          version: reEditedVersion,
+        });
+        // Named again once it is gone: 409 draft_changed, nothing proposed.
+        const stale = await refusal(
+          dispatchCapability({ pool }, human(ownerId, 'owner'), 'propose_worker_definition', {
+            definitionId: v1.id,
+            replacesDraft: reEditedVersion,
+            kind: 'entry',
+            definition: v1.definition,
+          }),
+        );
+        expect(stale).toMatchObject({
+          status: 409,
+          code: 'draft_changed',
+          details: { familyId: v1.id, draftVersion: reEditedVersion },
         });
 
         // Nothing runs differently until it is published — by the owner (the live version is

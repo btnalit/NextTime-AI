@@ -3751,6 +3751,8 @@ function WorkerDetailView({
   focusTitle,
   onTitleFocused,
   onEditAsNewVersion,
+  ownDraft,
+  onOpenOwnDraft,
   onFixReferences,
   onPublish,
   onDeprecate,
@@ -3782,9 +3784,16 @@ function WorkerDetailView({
    *  on its title, not left on the page; `onTitleFocused` clears the request. */
   readonly focusTitle: boolean;
   readonly onTitleFocused: () => void;
+  /** The editor on this version: on a published one, its next version; on the reader's own draft,
+   *  a version that replaces it (legacy 680, 「修改这份草稿」). */
   readonly onEditAsNewVersion: () => void;
-  /** Legacy 302: the editor on a next version of this draft, the refused fields marked; absent
-   *  when the reader cannot propose. */
+  /** Legacy 680 (UX acceptance of #1218, P2): on a version that is not a draft, the reader's own
+   *  pending draft of the family, if any — a family holds one of theirs at a time, so instead of an
+   *  editor whose save is refused, the detail offers that draft (`onOpenOwnDraft`). */
+  readonly ownDraft?: { readonly version: number };
+  readonly onOpenOwnDraft?: () => void;
+  /** Legacy 302: the editor on a version that replaces this draft, the refused fields marked;
+   *  absent when the reader cannot propose. */
   readonly onFixReferences?: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -3930,6 +3939,18 @@ function WorkerDetailView({
       {isMyDraft && publishReferences ? (
         <PublishReferenceProblem refusal={publishReferences} onFix={onFixReferences} />
       ) : null}
+      {!isMyDraft && canPropose && ownDraft && onOpenOwnDraft ? (
+        <p
+          id="worker-own-draft-note"
+          className="text-3 text-small"
+          data-testid="worker-own-draft-note"
+        >
+          {t(
+            `你在这个定义下已有草稿 v${ownDraft.version}，还没有发布或丢弃：打开它继续修改，或丢弃后再从这一版起草。`,
+            `You already have a draft (v${ownDraft.version}) of this definition, neither published nor discarded: open it to keep editing, or discard it and start again from this version.`,
+          )}
+        </p>
+      ) : null}
       <div className="row-wrap">
         {isMyDraft ? (
           <>
@@ -3947,6 +3968,17 @@ function WorkerDetailView({
             ) : proposerOnly !== null ? (
               <ProposerOnlyHint action={proposerOnly} />
             ) : null}
+            {canPropose ? (
+              <Button
+                variant="ghost"
+                size="s"
+                disabled={busy}
+                onClick={onEditAsNewVersion}
+                data-testid="worker-draft-edit"
+              >
+                {t('修改这份草稿', 'Edit this draft')}
+              </Button>
+            ) : null}
             {canDiscard ? (
               <DiscardDraftConfirm
                 busy={busy}
@@ -3958,7 +3990,17 @@ function WorkerDetailView({
           </>
         ) : (
           <>
-            {canPropose ? (
+            {canPropose && ownDraft && onOpenOwnDraft ? (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={onOpenOwnDraft}
+                aria-describedby="worker-own-draft-note"
+                data-testid="worker-open-own-draft"
+              >
+                {t(`打开草稿 v${ownDraft.version}`, `Open draft v${ownDraft.version}`)}
+              </Button>
+            ) : canPropose ? (
               <Button
                 variant="ghost"
                 size="s"
@@ -4159,11 +4201,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const editorPane = editor ? (
     <div className="stack">
       <h2 className="catalog-detail-title">
-        {editor.kind === 'copy'
-          ? t('提议新版本', 'Propose a new version')
-          : editor.kind === 'template'
-            ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
-            : t('新建 Worker 定义草稿', 'New Worker definition draft')}
+        {editor.kind === 'copy' && editor.row.status === 'draft'
+          ? t(`修改草稿 v${editor.row.version}`, `Edit draft v${editor.row.version}`)
+          : editor.kind === 'copy'
+            ? t('提议新版本', 'Propose a new version')
+            : editor.kind === 'template'
+              ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
+              : t('新建 Worker 定义草稿', 'New Worker definition draft')}
       </h2>
       <p className="text-3 text-small">
         {t(
@@ -4247,6 +4291,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // Same-name definitions (a template instantiated twice) differ only by id: show it on those.
   const sameName = sameNameDefinitionIds(allRows);
   const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
+  // Legacy 680: the reader's own pending draft of the selected version's family (the latest one,
+  // which a refusal would name), when that version is not itself a draft.
+  const selectedOwnDraft =
+    selected && selected.status !== 'draft'
+      ? myDraftRows
+          .filter((row) => row.id === selected.id)
+          .reduce<CatalogWorkerRow | undefined>(
+            (latest, row) => (latest === undefined || row.version > latest.version ? row : latest),
+            undefined,
+          )
+      : undefined;
   // UX acceptance of #747 (P2-1): the entry version the entry agent runs with — the one
   // `get_entry_template_status` names — which an entry draft is compared against. Looked up in the
   // rows already read (the own-drafts read brings every published row too); unknown otherwise.
@@ -4608,6 +4663,15 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         ) : null
       }
       onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
+      ownDraft={selectedOwnDraft}
+      onOpenOwnDraft={
+        selectedOwnDraft
+          ? () => {
+              setFocusKey(workerKey(selectedOwnDraft));
+              selectRow(workerKey(selectedOwnDraft));
+            }
+          : undefined
+      }
       onFixReferences={
         canPropose && publishRefusal !== null && publishRefusal.key === workerKey(selected)
           ? () => openEditor({ kind: 'copy', row: selected, unresolved: publishRefusal.refusal })

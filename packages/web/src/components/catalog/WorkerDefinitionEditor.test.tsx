@@ -537,7 +537,7 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
   });
 
   it('legacy 680: a next version refused over the caller’s own pending draft says so and offers to show that draft', async () => {
-    const { caller } = http({
+    const { caller, calls } = http({
       propose_worker_definition: () => {
         throw new HttpError('capability_error', 'kernel text', 'draft_pending', {
           familyId: 'wd-d',
@@ -564,11 +564,95 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.click(screen.getByTestId('worker-submit'));
     const banner = await screen.findByTestId('worker-editor-error');
     expect(banner.textContent).toMatch(/你在这个 Worker 定义下已经有一份草稿 v3/);
-    expect(banner.textContent).toMatch(/先发布或丢弃那份草稿/);
+    expect(banner.textContent).toMatch(/用这次写的内容替换它/);
     // Not the Skill sentence (a Skill's publish takes the latest version).
     expect(banner.textContent).not.toMatch(/发布总是取最新版本/);
+    // A next version of a published one: nothing replaced on the first save.
+    expect(calls[0]?.params).not.toHaveProperty('replacesDraft');
     fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
     expect(onShowPendingDraft).toHaveBeenCalledWith({ id: 'wd-d', version: 3 });
+  });
+
+  it('legacy 680 (UX acceptance of #1218): refused over the caller’s own draft, the form replaces that draft on request — what was written is kept', async () => {
+    let first = true;
+    const { caller, calls } = http({
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          throw new HttpError('capability_error', 'kernel text', 'draft_pending', {
+            familyId: 'wd-d',
+            draftVersion: 3,
+          });
+        }
+        return { id: 'wd-d', version: 4, status: 'draft' };
+      },
+    });
+    const onProposed = vi.fn();
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 2,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={onProposed}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Written here' } });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    // No way to show it here, but replacing it is the form's own.
+    expect(within(banner).queryByTestId('worker-show-pending-draft')).toBeNull();
+    const replace = within(banner).getByTestId('worker-replace-pending-draft');
+    expect(replace.textContent).toMatch(/替换草稿 v3/);
+    fireEvent.click(replace);
+    await waitFor(() => expect(onProposed).toHaveBeenCalledTimes(1));
+    expect(calls.map((call) => call.params)).toEqual([
+      expect.not.objectContaining({ replacesDraft: expect.anything() }),
+      expect.objectContaining({
+        definitionId: 'wd-d',
+        replacesDraft: 3,
+        definition: expect.objectContaining({ systemPrompt: 'Written here' }),
+      }),
+    ]);
+  });
+
+  it('legacy 680: editing the caller’s own draft says it replaces it and sends replacesDraft; gone since, it says so', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => {
+        throw new HttpError('capability_error', 'kernel text', 'draft_changed', {
+          familyId: 'wd-d',
+          draftVersion: 2,
+        });
+      },
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 2,
+          kind: 'worker',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('worker-edit-draft-notice').textContent).toMatch(
+      /的草稿 v2.*替换它（v2 随之丢弃）/,
+    );
+    expect(screen.queryByTestId('worker-new-version-notice')).toBeNull();
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(calls[0]?.params).toMatchObject({ definitionId: 'wd-d', replacesDraft: 2 });
+    expect(banner.textContent).toMatch(/你在改的草稿 v2 已经不是待审草稿了/);
+    expect(within(banner).queryByTestId('worker-replace-pending-draft')).toBeNull();
   });
 
   it('legacy 680: without a family (a new draft) no draft is offered', async () => {
@@ -592,6 +676,7 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.click(screen.getByTestId('worker-submit'));
     const banner = await screen.findByTestId('worker-editor-error');
     expect(within(banner).queryByTestId('worker-show-pending-draft')).toBeNull();
+    expect(within(banner).queryByTestId('worker-replace-pending-draft')).toBeNull();
   });
 });
 

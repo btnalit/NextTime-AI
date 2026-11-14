@@ -5512,6 +5512,39 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      it('legacy 682 (review #493 on #1218): a run confirmed in round 1, paused before the advance and resumed, ends on round 2’s confirmation — the retry names that one, not round 1’s', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester);
+        const first = await confirmAs(goalRunId, requester);
+        expect(first.changed).toBe(true);
+        await asRequester(requester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        await asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+        expect(
+          (await rowsOf(goalRunId)).map((row) => [row.round, row.checkKey, row.status]),
+        ).toEqual([
+          [1, 'requester_confirm', 'passed'],
+          [2, 'requester_confirm', 'pending'],
+        ]);
+        const second = await confirmAs(goalRunId, requester);
+        expect(second.decisionId).not.toBe(first.decisionId);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: second.decisionId,
+        });
+        expect(await confirmAs(goalRunId, requester)).toEqual({
+          status: 'completed',
+          changed: false,
+          decisionId: second.decisionId,
+        });
+      });
+
       it('I-G5: what the step’s Worker or the entry agent reports gives the goal no outcome — the Task’s agent_reported achieved neither passes a check nor completes the run', async () => {
         const requester = await newPrincipal();
         for (const acceptance of [[observe()], undefined]) {

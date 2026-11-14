@@ -3093,7 +3093,59 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
   });
 
-  it('Workers (legacy 680): a next version refused over the caller’s own pending draft offers that draft, and showing it opens it', async () => {
+  it('Workers (legacy 680): a next version refused over the caller’s own pending draft the list did not know of offers that draft, and showing it opens it', async () => {
+    const published = {
+      id: 'wd-1',
+      version: 2,
+      kind: 'worker',
+      status: 'published',
+      definition: { name: 'Runner', systemPrompt: 'Run.' },
+    };
+    const draft = {
+      ...published,
+      version: 3,
+      status: 'draft',
+      definition: { name: 'Runner', systemPrompt: 'Run, then check.' },
+    };
+    // Proposed elsewhere (another tab, an agent) after the list was read.
+    let drafted = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items:
+          (params as { includeOwnDrafts?: boolean }).includeOwnDrafts && drafted
+            ? [published, draft]
+            : [published],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => {
+        drafted = true;
+        return Promise.reject(
+          new HttpError('capability_error', 'kernel text', 'draft_pending', {
+            familyId: 'wd-1',
+            draftVersion: 3,
+          }),
+        );
+      },
+    });
+    renderPage(http, 'workers');
+    const rows = await screen.findAllByTestId('catalog-row');
+    const publishedRow = rows.find((row) => !row.textContent?.includes('草稿')) ?? rows[0];
+    const detail = await selectRow(publishedRow as HTMLElement);
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    const banner = await within(drawer).findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/你在这个 Worker 定义下已经有一份草稿 v3/);
+    fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
+    await waitFor(() => expect(screen.queryByTestId('worker-editor-drawer')).toBeNull());
+    const shown = await screen.findByTestId('catalog-detail');
+    await waitFor(() => expect(shown.textContent).toContain('Run, then check.'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  it('Workers (legacy 680, UX acceptance of #1218): over the reader’s own pending draft, a published version offers that draft, not an editor; the draft is edited by replacing it', async () => {
     const published = {
       id: 'wd-1',
       version: 2,
@@ -3114,30 +3166,35 @@ describe('CatalogPage editors (S6-A A2)', () => {
           : [published],
       }),
       list_models: () => ({ items: [] }),
-      propose_worker_definition: () =>
-        Promise.reject(
-          new HttpError('capability_error', 'kernel text', 'draft_pending', {
-            familyId: 'wd-1',
-            draftVersion: 3,
-          }),
-        ),
+      propose_worker_definition: () => ({ ...draft, version: 4 }),
     });
     renderPage(http, 'workers');
     const rows = await screen.findAllByTestId('catalog-row');
     const publishedRow = rows.find((row) => !row.textContent?.includes('草稿')) ?? rows[0];
     const detail = await selectRow(publishedRow as HTMLElement);
-    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
-    const drawer = await screen.findByTestId('worker-editor-drawer');
-    fireEvent.click(within(drawer).getByTestId('worker-submit'));
-    const banner = await within(drawer).findByTestId('worker-editor-error');
-    expect(banner.textContent).toMatch(/你在这个 Worker 定义下已经有一份草稿 v3/);
-    fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
-    await waitFor(() => expect(screen.queryByTestId('worker-editor-drawer')).toBeNull());
+    expect(within(detail).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    expect(within(detail).getByTestId('worker-own-draft-note').textContent).toMatch(
+      /已有草稿 v3.*打开它继续修改/,
+    );
+    const open = within(detail).getByTestId('worker-open-own-draft');
+    expect(open.textContent).toMatch(/打开草稿 v3/);
+    fireEvent.click(open);
     const shown = await screen.findByTestId('catalog-detail');
     await waitFor(() => expect(shown.textContent).toContain('Run, then check.'));
     await waitFor(() =>
       expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
     );
+    expect(within(shown).queryByTestId('worker-own-draft-note')).toBeNull();
+    fireEvent.click(within(shown).getByTestId('worker-draft-edit'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(drawer.textContent).toMatch(/修改草稿 v3/);
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_worker_definition')?.params).toMatchObject({
+      definitionId: 'wd-1',
+      replacesDraft: 3,
+      definition: { name: 'Runner', systemPrompt: 'Run, then check.' },
+    });
   });
 
   it('at a narrow width, a half-filled Procedure editor asks before Escape or 取消 drops it (legacy 497)', async () => {

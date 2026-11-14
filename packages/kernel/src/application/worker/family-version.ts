@@ -50,6 +50,24 @@ export class FamilyDraftPendingError extends Error {
   }
 }
 
+/** Legacy 680: `propose_worker_definition{replacesDraft}` named a version that is no longer a
+ *  pending draft of the caller's (published, discarded or expired since they looked), while they
+ *  hold no other pending draft of the family. Nothing was proposed or discarded; the caller reloads.
+ *  Same code as a reviewed draft that changed (`ReviewedDraftChangedError`). */
+export class ReplacedDraftNotPendingError extends Error {
+  readonly code = 'draft_changed' as const;
+  readonly familyId: string;
+  readonly draftVersion: number;
+  constructor(familyId: string, draftVersion: number) {
+    super(
+      `WorkerDefinition ${familyId}@${draftVersion} is not a pending draft of yours any more (published, discarded or expired since you looked), so there is nothing to replace. Nothing was proposed or discarded; reload the family and look again`,
+    );
+    this.name = 'ReplacedDraftNotPendingError';
+    this.familyId = familyId;
+    this.draftVersion = draftVersion;
+  }
+}
+
 export interface FamilyHead {
   readonly version: number;
   readonly status: string;
