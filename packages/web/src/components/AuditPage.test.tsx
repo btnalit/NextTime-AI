@@ -659,6 +659,10 @@ describe('AuditPage entry points', () => {
 
     // A row about something else keeps whose rule it was, as 「记在 [member]」 — not as its actor.
     const policyRow = meta(rowOf('policy.auto_approve_definition_unproven'));
+    // UX acceptance of #1220 (P3): governance 0020's rows read by their label, not the action name.
+    expect(rowOf('policy.auto_approve_definition_unproven').textContent).toContain(
+      '自动批准规则已暂停',
+    );
     expect(within(policyRow).getByTestId('audit-by-migration').textContent).toBe('升级时写入');
     expect(within(policyRow).queryByTestId('audit-acting-through')).toBeNull();
     const recordedUnder = within(policyRow).getByTestId('audit-by-migration-recorded-under');

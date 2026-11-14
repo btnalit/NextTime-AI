@@ -30,8 +30,8 @@ export function AuditMigrationActor({
         className="chip chip-s chip-neutral"
         data-testid="audit-by-migration"
         title={t(
-          '这一条是平台升级时由数据迁移写下的，不是哪位成员的操作。审计表要求记一个操作者，迁移就把它记在一位相关成员名下（它处理的成员，或这条规则的设置者）。',
-          'A data migration wrote this row while the platform was upgraded; no member did this. The audit table needs an actor, so the migration recorded it under a related member (the one it acted on, or the rule’s writer).',
+          '这一条是平台升级时由数据迁移写下的，不是哪位成员的操作。审计表要求记一个操作者，迁移就把它记在一位相关成员名下（它处理的成员，或这条规则的设置者；没有记下设置者时是工作区所有者）。',
+          'A data migration wrote this row while the platform was upgraded; no member did this. The audit table needs an actor, so the migration recorded it under a related member (the one it acted on, or the rule’s writer; the workspace owner when no writer is on record).',
         )}
       >
         {t('升级时写入', 'Written by an upgrade')}
