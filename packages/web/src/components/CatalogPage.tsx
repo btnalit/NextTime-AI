@@ -1375,27 +1375,39 @@ function OperationDetailView({
         // Legacy 501: no button brings a deprecated version back — the detail says what does.
         // Legacy 749: what is true of the name — another version still live, or none, and then a
         // proposal or import of the same name is refused (manifest.ts `proposeOperation` /
-        // `importManifest`), so it does not come back as a new version.
+        // `importManifest`), so it does not come back as a new version. Legacy 753: the live
+        // version is a link to its detail.
         <Notice testId="operation-deprecated-note">
-          {liveVersion
-            ? liveVersion.version !== undefined
-              ? liveVersion.status === 'draft'
-                ? t(
-                    `这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的 v${liveVersion.version}（草稿）不受影响。`,
-                    `This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation's v${liveVersion.version} (a draft) is not affected.`,
-                  )
-                : t(
-                    `这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的 v${liveVersion.version}（已发布）不受影响。`,
-                    `This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation's v${liveVersion.version} (published) is not affected.`,
-                  )
-              : t(
-                  '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 还有未弃用的版本，不受影响。',
-                  'This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation has a version that is not deprecated, which is not affected.',
-                )
-            : t(
-                '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的版本都已弃用，同名的提议和导入都会被拒绝，不能再开新版本。',
-                'This version is deprecated: agents can no longer call it, and it cannot be undone. Every version of this Operation is deprecated, and proposing or importing the same name is refused, so no new version can be opened.',
-              )}
+          {liveVersion ? (
+            liveVersion.version !== undefined ? (
+              <>
+                {t(
+                  '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的 ',
+                  "This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation's ",
+                )}
+                <a
+                  href={hrefs.catalog('operations', catalogOperationKey(liveVersion))}
+                  className="link-inline"
+                  data-testid="operation-deprecated-live-link"
+                >
+                  v{liveVersion.version}
+                </a>
+                {liveVersion.status === 'draft'
+                  ? t('（草稿）不受影响。', ' (a draft) is not affected.')
+                  : t('（已发布）不受影响。', ' (published) is not affected.')}
+              </>
+            ) : (
+              t(
+                '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 还有未弃用的版本，不受影响。',
+                'This version is deprecated: agents can no longer call it, and it cannot be undone. This Operation has a version that is not deprecated, which is not affected.',
+              )
+            )
+          ) : (
+            t(
+              '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。这个 Operation 的版本都已弃用，同名的提议和导入都会被拒绝，不能再开新版本。',
+              'This version is deprecated: agents can no longer call it, and it cannot be undone. Every version of this Operation is deprecated, and proposing or importing the same name is refused, so no new version can be opened.',
+            )
+          )}
         </Notice>
       ) : null}
       {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
