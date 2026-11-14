@@ -12,12 +12,14 @@ import {
   WorkerDefinitionKindMismatchError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
+  WorkerDefinitionSupersededError,
   WorkerDefinitionValidationError,
   deprecateWorkerDefinition,
   getPublishedEntryDefinition,
   getWorkerDefinition,
   listWorkerDefinitions,
   listWorkerDefinitionsPage,
+  loadPublishedWorkerDefinitionHead,
   proposeWorkerDefinition,
   publishWorkerDefinition,
   requirePublishedWorkerDefinition,
@@ -698,6 +700,127 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ).rejects.toThrow(WorkerDefinitionNotFoundError);
       });
+
+      // Legacy 742: a family's published versions come in version order.
+      async function familyWithStaleDraft(): Promise<string> {
+        const v1 = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: v1.id,
+            version: 1,
+          }),
+        );
+        // The builder's draft v2, then another builder's v3 beside it (legacy 680: another
+        // person's draft does not hold a next version back), published first.
+        for (const proposer of [builderId, otherBuilderId]) {
+          await inTx(proposer, (client) =>
+            proposeWorkerDefinition(client, workspaceId, proposer, {
+              origin: 'human',
+              kind: 'worker',
+              definitionId: v1.id,
+              definition: { systemPrompt: `You are ops-runner, by ${proposer}.` },
+            }),
+          );
+        }
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: v1.id,
+            version: 3,
+          }),
+        );
+        return v1.id;
+      }
+
+      it('legacy 742: a draft below the published head is refused 409 draft_superseded — by anyone, before the authority question — and goes in again as the next version', async () => {
+        const id = await familyWithStaleDraft();
+        // Its own proposer, a builder: the family's live v3 is another builder's, so the authority
+        // question alone would be a 403; nobody may publish v2, and the refusal says why.
+        let refused: unknown;
+        try {
+          await inTx(builderId, (client) =>
+            publishWorkerDefinition(
+              client,
+              workspaceId,
+              builderId,
+              { definitionId: id, version: 2 },
+              { principalId: builderId, role: 'builder' },
+            ),
+          );
+        } catch (err) {
+          refused = err;
+        }
+        expect(refused).toBeInstanceOf(WorkerDefinitionSupersededError);
+        expect(refused).toMatchObject({
+          code: 'draft_superseded',
+          familyId: id,
+          draftVersion: 2,
+          publishedVersion: 3,
+        });
+        // The owner, and an internal caller, alike.
+        await expect(
+          inTx(ownerId, (client) =>
+            publishWorkerDefinition(
+              client,
+              workspaceId,
+              ownerId,
+              { definitionId: id, version: 2 },
+              { principalId: ownerId, role: 'owner' },
+            ),
+          ),
+        ).rejects.toThrow(WorkerDefinitionSupersededError);
+        await expect(
+          inTx(ownerId, (client) =>
+            publishWorkerDefinition(client, workspaceId, ownerId, { definitionId: id, version: 2 }),
+          ),
+        ).rejects.toThrow(WorkerDefinitionSupersededError);
+
+        const stale = await inTx(builderId, (client) =>
+          getWorkerDefinition(client, workspaceId, { definitionId: id, version: 2 }),
+        );
+        expect(stale?.status).toBe('draft');
+        expect(stale?.publishedAt).toBeNull();
+        const head = await inTx(ownerId, (client) =>
+          loadPublishedWorkerDefinitionHead(client, workspaceId, id),
+        );
+        expect(head?.version).toBe(3);
+
+        // Its proposer puts its content in again: it replaces the draft as v4, above the head.
+        const next = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            kind: 'worker',
+            definitionId: id,
+            replacesDraft: 2,
+            definition: stale?.definition ?? {},
+          }),
+        );
+        expect(next.version).toBe(4);
+        const published = await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, { definitionId: id, version: 4 }),
+        );
+        expect(published.status).toBe('published');
+      });
+
+      it('legacy 742: a deprecated version is not the head — a draft above the versions still published goes in', async () => {
+        const id = await familyWithStaleDraft();
+        await inTx(ownerId, (client) =>
+          deprecateWorkerDefinition(client, workspaceId, { definitionId: id, version: 3 }),
+        );
+        const published = await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, { definitionId: id, version: 2 }),
+        );
+        expect(published.status).toBe('published');
+        const head = await inTx(ownerId, (client) =>
+          loadPublishedWorkerDefinitionHead(client, workspaceId, id),
+        );
+        expect(head?.version).toBe(2);
+      });
     });
 
     describe('requirePublishedWorkerDefinition ("引用 draft 被拒")', () => {
@@ -814,6 +937,81 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           publishedWorkers.every((row) => row.status === 'published' && row.kind === 'worker'),
         ).toBe(true);
+      });
+
+      it('legacy 742: the entry version in use is the head of the entry family published to last — whatever order its versions were stamped in', async () => {
+        const ws = await adminInsertWorkspace('worker-definitions-entry-head-workspace');
+        const owner = randomUUID();
+        const admin = <T>(fn: (client: import('pg').PoolClient) => Promise<T>) =>
+          withWorkspace(pool, { workspaceId: ws, principalId: owner }, fn, {
+            skipRoleSwitch: true,
+          });
+        await admin((client) =>
+          client.query(
+            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', 'owner', 'owner')",
+            [ws, owner],
+          ),
+        );
+        const asOwner = <T>(fn: (client: import('pg').PoolClient) => Promise<T>) =>
+          withWorkspace(pool, { workspaceId: ws, principalId: owner }, fn);
+        async function publishNext(
+          definitionId?: string,
+        ): Promise<{ id: string; version: number }> {
+          const draft = await asOwner((client) =>
+            proposeWorkerDefinition(client, ws, owner, {
+              origin: 'human',
+              kind: 'entry',
+              ...(definitionId !== undefined ? { definitionId } : {}),
+              definition: VALID_ENTRY_DEFINITION,
+            }),
+          );
+          await asOwner((client) =>
+            publishWorkerDefinition(client, ws, owner, {
+              definitionId: draft.id,
+              version: draft.version,
+            }),
+          );
+          return { id: draft.id, version: draft.version };
+        }
+        const stamp = (id: string, version: number, at: string) =>
+          admin((client) =>
+            client.query(
+              'update worker_definitions set published_at = $4::timestamptz where workspace_id = $1 and id = $2 and version = $3',
+              [ws, id, version, at],
+            ),
+          );
+        const inUse = async () => {
+          const row = await asOwner((client) => getPublishedEntryDefinition(client, ws));
+          return row ? { id: row.id, version: row.version } : null;
+        };
+
+        const first = await publishNext();
+        await publishNext(first.id);
+        await publishNext(first.id);
+        // v2 stamped after v3 — two publishes a moment apart stamped against their lock order, or
+        // rows published before the refusal existed. Both reads still name v3.
+        await stamp(first.id, 1, '2026-01-01T00:00:00Z');
+        await stamp(first.id, 3, '2026-01-02T00:00:00Z');
+        await stamp(first.id, 2, '2026-01-03T00:00:00Z');
+        expect(await inUse()).toEqual({ id: first.id, version: 3 });
+        const head = await asOwner((client) =>
+          loadPublishedWorkerDefinitionHead(client, ws, first.id),
+        );
+        expect(head?.version).toBe(3);
+
+        // Another entry family published to later is the one in use, at its own head; published
+        // to earlier, the first family is again.
+        const second = await publishNext();
+        await publishNext(second.id);
+        expect(await inUse()).toEqual({ id: second.id, version: 2 });
+        await stamp(second.id, 1, '2025-12-01T00:00:00Z');
+        await stamp(second.id, 2, '2025-12-02T00:00:00Z');
+        expect(await inUse()).toEqual({ id: first.id, version: 3 });
+        // Its head deprecated, the family's next published version is in use.
+        await asOwner((client) =>
+          deprecateWorkerDefinition(client, ws, { definitionId: first.id, version: 3 }),
+        );
+        expect(await inUse()).toEqual({ id: first.id, version: 2 });
       });
     });
 

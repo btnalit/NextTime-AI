@@ -42,9 +42,11 @@ import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   DraftNotRejectableError,
   FamilyDraftPendingError,
+  ReplacedDraftNotPendingError,
   SkillFamilyNameChangedError,
   SkillNameConflictError,
   WorkerDefinitionReferenceError,
+  WorkerDefinitionSupersededError,
 } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import {
@@ -412,6 +414,15 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
     expect(
       mapDispatchError(new SkillFamilyNameChangedError('skill-1', 'fix-it', 'fix-it-2')).code,
     ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('ReplacedDraftNotPendingError (legacy 680) and WorkerDefinitionSupersededError (legacy 742) map to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    expect(mapDispatchError(new ReplacedDraftNotPendingError('wd-1', 2)).code).toBe(
+      WS_ERROR_CODES.ILLEGAL_TRANSITION,
+    );
+    const superseded = mapDispatchError(new WorkerDefinitionSupersededError('wd-1', 2, 3));
+    expect(superseded.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+    expect(superseded.message).toContain('published v3');
   });
 
   it('ReviewedDraftChangedError (review #493 on #764 F1) maps to ILLEGAL_TRANSITION, like HTTP 409 draft_changed', () => {

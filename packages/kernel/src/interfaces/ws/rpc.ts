@@ -166,6 +166,7 @@ import {
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  ReplacedDraftNotPendingError,
   SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
@@ -174,6 +175,7 @@ import {
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionReferenceError,
+  WorkerDefinitionSupersededError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import {
@@ -589,6 +591,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // S11 W1a E2-0: mirrors HTTP 409 `draft_pending` / `skill_name_changed` (capability-route.ts).
   if (err instanceof FamilyDraftPendingError || err instanceof SkillFamilyNameChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Legacy 680: mirrors HTTP 409 `draft_changed` for a `replacesDraft` that is no longer the
+  // caller's pending draft; legacy 742: HTTP 409 `draft_superseded` (capability-route.ts).
+  if (
+    err instanceof ReplacedDraftNotPendingError ||
+    err instanceof WorkerDefinitionSupersededError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).

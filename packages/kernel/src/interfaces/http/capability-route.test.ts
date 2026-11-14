@@ -82,6 +82,7 @@ import {
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionReferenceError,
+  WorkerDefinitionSupersededError,
 } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import {
@@ -900,6 +901,16 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
         details: { familyId: 'family-1', draftVersion: 3 },
       });
     }
+  });
+
+  it('WorkerDefinitionSupersededError (publish_worker_definition, legacy 742) → 409 draft_superseded with the family, the draft and the published head', () => {
+    const mapped = mapCapabilityError(new WorkerDefinitionSupersededError('family-1', 2, 3));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'draft_superseded',
+      details: { familyId: 'family-1', draftVersion: 2, publishedVersion: 3 },
+    });
+    expect(mapped.message).toMatch(/family-1@2 .*published v3.*Nothing was published/);
   });
 
   it('SkillFamilyNameChangedError (propose_skill{skillId}, S11 W1a E2-0) → 409 skill_name_changed with the family name', () => {

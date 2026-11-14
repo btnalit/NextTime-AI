@@ -208,6 +208,7 @@ import {
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionReferenceError,
+  WorkerDefinitionSupersededError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import {
@@ -858,6 +859,20 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
       code: err.code,
       message: err.message,
       details: { familyId: err.familyId, draftVersion: err.draftVersion },
+    };
+  }
+  // Legacy 742: `publish_worker_definition` named a draft below the family's published head.
+  // Nothing was published.
+  if (err instanceof WorkerDefinitionSupersededError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        familyId: err.familyId,
+        draftVersion: err.draftVersion,
+        publishedVersion: err.publishedVersion,
+      },
     };
   }
   if (err instanceof SkillFamilyNameChangedError) {
