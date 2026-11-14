@@ -197,9 +197,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     }
 
     /** The administrator's own entry agent in the trial workspace: same Principal, an entry
-     *  session and Handle. */
-    async function entryAgent(): Promise<ResolvedCaller> {
-      const entrySession = await insertSession(trialWs, 'entry', adminPrincipalId);
+     *  session and Handle. Legacy 443: `mcp_session` — a client they issued a Handle to instead. */
+    async function entryAgent(kind: 'entry' | 'mcp_session' = 'entry'): Promise<ResolvedCaller> {
+      const entrySession = await insertSession(trialWs, kind, adminPrincipalId);
       const entryHandle = await inWs(trialWs, adminPrincipalId, (client) =>
         issueHandle(client, {
           sessionId: entrySession,
@@ -758,6 +758,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       try {
         expect(await taskTurn(await invoke(caller, 'T-attr-1'))).toBe(adminTurn);
         expect(await taskTurn(await invoke(entryCaller, 'T-attr-2'))).toBe(entryTurn);
+        // Legacy 443: a client the person issued a Handle to (`mcp_session`) starts its Task from
+        // no Turn, whichever of the person's agents is running one.
+        const ownClient = await entryAgent('mcp_session');
+        const ownTask = await invoke(ownClient, 'T-attr-2b');
+        expect(await taskTurn(ownTask)).toBeNull();
+        // The supervisor fake keeps every WorkerRun running: end this one so the person stays
+        // under the concurrency quota for the call below.
+        await dispatchCapability({ pool }, person(trialWs, adminPrincipalId), 'cancel_task', {
+          taskId: ownTask,
+        });
 
         // No running Turn of its own: the admin agent's Task belongs to no Turn, even with the
         // person's entry Turn still running.
