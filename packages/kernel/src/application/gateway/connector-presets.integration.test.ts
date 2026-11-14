@@ -351,6 +351,22 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         },
       ]);
+      // Legacy 606: the call's own row records the definition the preset resolved to — the
+      // params carry the preset's name only, never its kind or mode.
+      const callRows = await pool.query<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where action = 'create_gate_instance' and payload ->> 'resourceRef' = 'kb-main'`,
+      );
+      expect(callRows.rows).toHaveLength(1);
+      const callRow = callRows.rows[0]?.payload ?? {};
+      expect(callRow).toMatchObject({
+        connector: 'ragflow',
+        transportKind: 'http',
+        credentialMode: 'shared',
+        params: { gateId: 'kb-main', preset: 'ragflow', target: RAGFLOW_TARGET },
+      });
+      expect(callRow.params).not.toHaveProperty('credentialMode');
+      expect(callRow).not.toHaveProperty('redactedValues');
 
       // A second instance of the same system joins the connector the first one created.
       await callAsAdmin('create_gate_instance', {

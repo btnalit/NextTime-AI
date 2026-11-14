@@ -300,11 +300,18 @@ export function redactSensitive(value: unknown): unknown {
   return maskSecretFields(value);
 }
 
+/** A gate instance's credential modes (`credentialMode`, a closed enum on every wire that carries
+ *  one): which slot its credential lives in, never the credential. */
+const GATE_CREDENTIAL_MODES: ReadonlySet<unknown> = new Set(['shared', 'connected_account']);
+
 /** An audit row's payload as the audit pages show it (legacy 420): `redactSensitive` over every
  *  field but the kernel's own `credentialReview` record (`{suspectedSecretValues,
  *  suspectedSecretPaths?, confirmed?}`). Its names name a secret and its values are a count, field
  *  paths and a flag — the field rule would show them as `[redacted]`, a mask that hides nothing
- *  (`AuditPayloadNotes` says them in words). The kernel already reads the payload out masked
+ *  (`AuditPayloadNotes` says them in words). Legacy 606: nor a top-level `credentialMode` that is
+ *  one of the two modes (what `create_gate_instance` and `gate_instance.created` record the
+ *  instance was made with) — any other value under it is masked as before, and so is the copy in
+ *  `params`, which the kernel already replaced. The kernel already reads the payload out masked
  *  (`shownAuditPayload`). */
 export function auditPayloadShown(payload: unknown): unknown {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
@@ -314,7 +321,7 @@ export function auditPayloadShown(payload: unknown): unknown {
     Object.entries(payload).map(([key, inner]) => [
       key,
       // Masked with its own key, so a top-level secret-named field is hidden as a nested one is.
-      key === 'credentialReview'
+      key === 'credentialReview' || (key === 'credentialMode' && GATE_CREDENTIAL_MODES.has(inner))
         ? inner
         : (redactSensitive({ [key]: inner }) as Record<string, unknown>)[key],
     ]),

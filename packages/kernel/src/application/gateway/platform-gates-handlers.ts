@@ -553,6 +553,15 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     result: displayedGateInstance(instance),
     resourceType: 'gate_instance',
     resourceId: instance.gateId,
+    // Legacy 606: the params copy replaces `credentialMode` whole (a field named after a
+    // credential, `namesASecretField`), and a preset's instance never types it at all — so the
+    // row records the definition as resolved: its connector, kind and mode, the fields an admin
+    // proposal's `gate_instance.created` row records. Closed enums and a connector name.
+    auditPayload: {
+      connector,
+      transportKind: definition.transportKind,
+      credentialMode: definition.credentialMode,
+    },
   };
 };
 

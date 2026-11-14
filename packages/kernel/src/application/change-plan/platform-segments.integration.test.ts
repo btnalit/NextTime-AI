@@ -1920,6 +1920,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Only `credentialMode` (a field named after a credential: the field rule replaces it whole,
       // as it always has) is counted; no address is.
       expect(clean).toMatchObject({ params: { credentialMode: '[redacted]' }, redactedValues: 1 });
+      // Legacy 606: the row still says which mode the instance was created with — the handler
+      // records the definition as resolved beside the params copy.
+      expect(clean).toMatchObject({
+        connector: 'http',
+        transportKind: 'http',
+        credentialMode: 'shared',
+      });
 
       // The wall behind the handler's own check: a create_gate_instance handler that forgot it —
       // takes the address as typed and puts it in its own audit additions too — still leaves a row
