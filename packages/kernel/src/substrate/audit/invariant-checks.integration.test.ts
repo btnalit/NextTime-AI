@@ -249,7 +249,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
-    it('I6: transitions one transaction wrote (one created_at) are compared in lifecycle order, not by their ids — an edge they skip is still a violation', async () => {
+    it('I6: transitions one transaction wrote (one created_at) are compared in lifecycle order, not by their ids — an edge they skip, or a step back across two, is still a violation', async () => {
       const togetherId = randomUUID();
       const skippedId = randomUUID();
       const at = new Date(Date.now() - 20_000);
@@ -303,10 +303,29 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       }
 
+      // A step back across two transactions: `executed`, then `approved` a second later. The
+      // depth order is only within one `created_at`; across two, the recorded order stands.
+      const backId = randomUUID();
+      await insertAuditRecord({
+        action: 'action_request.complete',
+        resourceType: 'action_request',
+        resourceId: backId,
+        resultingStatus: 'executed',
+        createdAt: new Date(at.getTime() - 1000),
+      });
+      await insertAuditRecord({
+        action: 'action_request.approve',
+        resourceType: 'action_request',
+        resourceId: backId,
+        resultingStatus: 'approved',
+        createdAt: at,
+      });
+
       const i6 = (await runInvariantChecks(pool)).find((result) => result.invariant === 'I6');
       expect(i6?.sample.filter((row) => row.includes(togetherId))).toEqual([]);
       expect(i6?.sample).toContain(`${workspaceId}:${skippedId} approved->executed`);
-      expect(i6?.violations).toBe((baselineI6?.violations ?? 0) + 1);
+      expect(i6?.sample).toContain(`${workspaceId}:${backId} executed->approved`);
+      expect(i6?.violations).toBe((baselineI6?.violations ?? 0) + 2);
     });
 
     it('I6: an annotation of a request (no resultingStatus, or one restating its status) is not a transition — it is neither a violation nor hides one', async () => {
