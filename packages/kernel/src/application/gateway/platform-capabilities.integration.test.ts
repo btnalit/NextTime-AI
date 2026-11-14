@@ -815,6 +815,143 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      it('add_membership: a removed membership does not count — adding the user back makes a new one, and the removed one stops belonging to them (legacy 725)', async () => {
+        const login = `readd-${randomUUID().slice(0, 8)}`;
+        const user = await createUser(pool, {
+          login,
+          displayName: 'Re-add Fixture',
+          password: PASSWORD,
+        });
+        const first = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+
+        const again = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'builder',
+        });
+        expect(again).toMatchObject({ workspaceId, role: 'builder', disabled: false });
+        expect(again.principalId).not.toBe(first.principalId);
+
+        // The removed one stays removed, its row kept, no longer the user's: removal is final.
+        const rows = await withAdminClient(pool, (client) =>
+          client.query<{ id: string; user_id: string | null; disabled: boolean }>(
+            `select id, user_id, disabled_at is not null as disabled
+               from principals where workspace_id = $1 and id = any($2::uuid[])`,
+            [workspaceId, [first.principalId, again.principalId]],
+          ),
+        );
+        expect(rows.rows.find((row) => row.id === first.principalId)).toMatchObject({
+          user_id: null,
+          disabled: true,
+        });
+        expect(rows.rows.find((row) => row.id === again.principalId)).toMatchObject({
+          user_id: user.id,
+          disabled: false,
+        });
+        const listed = await callAsAdmin<{ items: UserMembershipWire[] }>('list_user_memberships', {
+          userId: user.id,
+        });
+        expect(listed.items.map((m) => m.principalId)).toEqual([again.principalId]);
+
+        // The add_membership row names the one it replaced: whose, where.
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown>; name: string }>(
+            `select a.payload, w.name from audit_records a, workspaces w
+              where a.action = 'add_membership' and a.resource_id = $1 and w.id = $2`,
+            [again.principalId, workspaceId],
+          ),
+        );
+        expect(audit.rows[0]?.payload.detachedPrincipals).toEqual([
+          {
+            workspaceId,
+            principalId: first.principalId,
+            userId: user.id,
+            login,
+            workspaceName: audit.rows[0]?.name,
+          },
+        ]);
+        const firstAudit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records where action = 'add_membership' and resource_id = $1`,
+            [first.principalId],
+          ),
+        );
+        expect(firstAudit.rows[0]?.payload).not.toHaveProperty('detachedPrincipals');
+
+        // The new one is active: the same call again is a duplicate.
+        await expectPlatformError(
+          () => callAsAdmin('add_membership', { userId: user.id, workspaceId, role: 'member' }),
+          'already_member',
+        );
+      });
+
+      // Legacy 725 (#493 on #1189): every path that gives a user a membership holds the user's
+      // authority lock, so two of them never race to the `(workspace_id, user_id)` unique index.
+      it('add_membership waits for the user’s lock: a membership given to the user meanwhile makes it already_member, not a unique-index 500', async () => {
+        const user = await createUser(pool, {
+          login: `readd-race-${randomUUID().slice(0, 8)}`,
+          displayName: 'Re-add Race Fixture',
+          password: PASSWORD,
+        });
+        let go!: () => void;
+        const going = new Promise<void>((resolve) => {
+          go = resolve;
+        });
+        let locked!: () => void;
+        const holding = new Promise<void>((resolve) => {
+          locked = resolve;
+        });
+        // Another membership change for the user (as `merge_user` or binding a key would be),
+        // holding the user's lock, that gives the user a membership in the workspace.
+        const writer = withAdminClient(pool, async (client) => {
+          await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+            [],
+            [user.id],
+            [],
+          ]);
+          locked();
+          await going;
+          await client.query(
+            `insert into principals (workspace_id, kind, role, display_name, user_id)
+             values ($1, 'human', 'member', 'Re-add Race Fixture', $2)`,
+            [workspaceId, user.id],
+          );
+        });
+        await holding;
+
+        const add = callAsAdmin('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        // Not left unhandled while the poll below runs.
+        const outcome = add.then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        for (let attempt = 0; ; attempt += 1) {
+          const { rows } = await pool.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'
+                and position('lock_authorities' in query) > 0`,
+          );
+          if ((rows[0]?.waiting ?? 0) > 0) break;
+          if (attempt > 200) throw new Error('add_membership never waited on the user’s lock');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        go();
+        await writer;
+        await expectPlatformError(async () => {
+          const err = await outcome;
+          if (err !== undefined) throw err;
+        }, 'already_member');
+      });
+
       it('set_membership_role: the workspace’s last owner cannot be demoted', async () => {
         await expectPlatformError(
           () =>
@@ -1414,8 +1551,9 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('a removed membership on either side is detached: the one not removed stays or moves', async () => {
         const [sourceRemoved, targetRemoved, bothRemoved] = await mergeWorkspaces(3);
+        const sourceLogin = `merge-det-src-${randomUUID().slice(0, 8)}`;
         const source = await createUser(pool, {
-          login: `merge-det-src-${randomUUID().slice(0, 8)}`,
+          login: sourceLogin,
           displayName: 'Detach Source',
         });
         const targetLogin = `merge-det-dst-${randomUUID().slice(0, 8)}`;
@@ -1480,11 +1618,25 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
         expect(mergeRow.rows[0]?.payload).toMatchObject({ targetLogin });
+        // Legacy 725 (UX on #1189): with the login and the workspace's name, so the audit says
+        // whose membership it was and where without a lookup (the source row is gone).
+        const entry = (
+          workspace: string | undefined,
+          principalId: string,
+          user: { id: string },
+          login: string,
+        ) => ({
+          workspaceId: workspace,
+          principalId,
+          userId: user.id,
+          login,
+          workspaceName: `merge-clash-${workspace?.slice(0, 8)}`,
+        });
         expect(mergeRow.rows[0]?.payload.detachedPrincipals).toEqual(
           expect.arrayContaining([
-            { workspaceId: sourceRemoved, principalId: s1.principalId, userId: source.id },
-            { workspaceId: targetRemoved, principalId: t2.principalId, userId: target.id },
-            { workspaceId: bothRemoved, principalId: s3.principalId, userId: source.id },
+            entry(sourceRemoved, s1.principalId, source, sourceLogin),
+            entry(targetRemoved, t2.principalId, target, targetLogin),
+            entry(bothRemoved, s3.principalId, source, sourceLogin),
           ]),
         );
         expect(mergeRow.rows[0]?.payload.detachedPrincipals).toHaveLength(3);
@@ -1584,6 +1736,85 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
         expect(restoredRows.rowCount).toBe(0);
+      });
+      // Legacy 725 (#493 on #1189): the target's membership in a workspace the source is in is
+      // among the locks the merge waits for, so one removed while it waits counts as removed —
+      // the target's is let go and the source's moves, instead of a clash read before the removal.
+      it('the target’s membership removed while the merge waits for its lock counts as removed: the source’s moves', async () => {
+        const [shared] = await mergeWorkspaces(1);
+        const source = await createUser(pool, {
+          login: `merge-trace-src-${randomUUID().slice(0, 8)}`,
+          displayName: 'Target Race Source',
+        });
+        const target = await createUser(pool, {
+          login: `merge-trace-dst-${randomUUID().slice(0, 8)}`,
+          displayName: 'Target Race Target',
+          password: PASSWORD,
+        });
+        const sharedSource = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId: shared,
+          role: 'member',
+        });
+        const sharedTarget = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: target.id,
+          workspaceId: shared,
+          role: 'member',
+        });
+
+        // The target's removed the way `disable_principal` does (its trigger takes the
+        // Principal's lock, and no user's), the transaction held open.
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let removing!: () => void;
+        const removed = new Promise<void>((resolve) => {
+          removing = resolve;
+        });
+        const writer = withAdminClient(pool, async (client) => {
+          await client.query(
+            'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+            [shared, sharedTarget.principalId],
+          );
+          removing();
+          await released;
+        });
+        await removed;
+
+        const merge = callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        const outcome = merge.then(
+          (user) => ({ user }),
+          (error: unknown) => ({ error }),
+        );
+        for (let attempt = 0; ; attempt += 1) {
+          const { rows } = await pool.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'
+                and position('lock_authorities' in query) > 0`,
+          );
+          if ((rows[0]?.waiting ?? 0) > 0) break;
+          if (attempt > 200) throw new Error('the merge never waited on the target’s lock');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        release();
+        await writer;
+        const settled = await outcome;
+        if ('error' in settled) throw settled.error;
+
+        expect(
+          settled.user.memberships.map((m) => ({
+            principalId: m.principalId,
+            disabled: m.disabled,
+          })),
+        ).toEqual([{ principalId: sharedSource.principalId, disabled: false }]);
+        expect(await principalUser(shared as string, sharedTarget.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
       });
     });
 

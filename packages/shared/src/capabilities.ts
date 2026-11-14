@@ -3273,7 +3273,7 @@ const membersCapabilities = [
     paramsSchema: z.object({ login: z.string().min(1), role: RoleSchema }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Add an existing platform user to this workspace by login with a role (P-A1) — creates the membership Principal (no API key). 404 user_not_found for an unknown or disabled login, 409 already_member if they already belong here.',
+      'Add an existing platform user to this workspace by login with a role (P-A1) — creates the membership Principal (no API key). 404 user_not_found for an unknown or disabled login, 409 already_member if they already belong here. A removed membership does not count: adding the person back creates a new membership, and the removed one stops belonging to them (the row stays, as do the drafts and goals made under it; they do not get those back). The audit row lists it under `detachedPrincipals`.',
   },
   {
     name: 'set_principal_role',
@@ -3604,7 +3604,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.UserMembershipWireSchema,
     description:
-      'Add a user to a workspace with a role — creates the human Principal (no API key); the AgentProfile inherits the workspace default model until the user changes it. 409 already_member if the user already has a membership there.',
+      'Add a user to a workspace with a role — creates the human Principal (no API key); the AgentProfile inherits the workspace default model until the user changes it. 409 already_member if the user already has a membership there that is not removed. A removed one does not count: adding the user back creates a new membership, and the removed one stops belonging to the user (as `merge_user` and `purge_user` let go of removed memberships; the row stays, as do the drafts and goals made under it, which the user does not get back). The audit row lists it under `detachedPrincipals`.',
   },
   {
     name: 'set_membership_role',

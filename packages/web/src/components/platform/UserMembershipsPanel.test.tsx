@@ -72,6 +72,14 @@ function user(overrides: Partial<UserWire> = {}): UserWire {
   };
 }
 
+/** Alice, an active member of Acme (the default `user()` was removed from it). */
+function memberOfAcme(): UserWire {
+  const removed = user();
+  return user({
+    memberships: removed.memberships.map((membership) => ({ ...membership, disabled: false })),
+  });
+}
+
 function renderPanel(http: CapabilityCaller, row: UserWire = user()) {
   const onChanged = vi.fn();
   render(<UserMembershipsPanel http={http} user={row} onChanged={onChanged} onBack={vi.fn()} />);
@@ -152,14 +160,14 @@ describe('UserMembershipsPanel', () => {
       }),
       add_membership: () => ({}),
     });
-    const { onChanged } = renderPanel(http);
+    const { onChanged } = renderPanel(http, memberOfAcme());
     const select = screen.getByLabelText(/加入工作区/) as HTMLSelectElement;
     await waitFor(() => expect(select.options.length).toBe(3));
     expect(http.calls[0]).toEqual({
       name: 'list_workspaces',
       params: { status: 'active', includeExpired: false },
     });
-    // Acme is already held (even as a disabled membership) — not offered; no typed-id option.
+    // Acme is already held — not offered; no typed-id option.
     expect([...select.options].map((option) => option.textContent)).toEqual([
       '选择工作区',
       'Beta',
@@ -180,11 +188,54 @@ describe('UserMembershipsPanel', () => {
       workspaceId: 'ws-3',
       role: 'builder',
     });
+    expect(screen.queryByTestId('user-membership-readd')).toBeNull();
+  });
+
+  // Legacy 725: `add_membership` adds a removed member back, as a new membership.
+  it('offers a workspace the user was removed from, and says the drafts and goals from before stay behind', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [workspace(), workspace({ id: 'ws-2', name: 'Beta' })] }),
+      add_membership: () => ({}),
+    });
+    const { onChanged } = renderPanel(http);
+    const select = screen.getByLabelText(/加入工作区/) as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...select.options].map((option) => option.textContent)).toEqual([
+        '选择工作区',
+        'Acme',
+        'Beta',
+      ]),
+    );
+    fireEvent.change(select, { target: { value: 'ws-2' } });
+    expect(screen.queryByTestId('user-membership-readd')).toBeNull();
+    fireEvent.change(select, { target: { value: 'ws-1' } });
+    expect(screen.getByTestId('user-membership-readd').textContent).toBe(
+      `这位用户曾被移出「${'Acme'}」。加入会新建一条成员资格，原来那条留着供审计溯源；这位用户看不到移出前的草稿和目标。`,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '加入' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(http.calls.find((call) => call.name === 'add_membership')?.params).toEqual({
+      userId: 'u-1',
+      workspaceId: 'ws-1',
+      role: 'member',
+    });
+  });
+
+  it('removing a membership says the person can be added back, as a new membership', async () => {
+    const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
+    const what = '草稿和目标';
+    renderPanel(http, memberOfAcme());
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.click(within(row).getByRole('button', { name: '移出' }));
+    expect(row.textContent).toContain(
+      `之后可以再加入，但那是一条新的成员资格，看不到移出前的${what}。`,
+    );
+    await screen.findByTestId('user-memberships-workspace-empty');
   });
 
   it('says so when the user already belongs to every active workspace', async () => {
     const http = scriptedHttp({ list_workspaces: () => ({ items: [workspace()] }) });
-    renderPanel(http);
+    renderPanel(http, memberOfAcme());
     expect(await screen.findByTestId('user-memberships-workspace-empty')).toBeTruthy();
     expect(screen.getByText(/已加入所有可用的工作区/)).toBeTruthy();
   });

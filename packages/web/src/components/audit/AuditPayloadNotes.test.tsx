@@ -85,6 +85,116 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.queryByTestId('audit-merge')).toBeNull();
   });
 
+  it('legacy 725 (UX on #1189): a merge row names whose and where each membership let go was', () => {
+    const target = 'alice';
+    render(
+      <AuditPayloadNotes
+        action="merge_user"
+        payload={{
+          sourceLogin: 'alice.pending',
+          targetLogin: 'alice',
+          detachedPrincipals: [
+            {
+              workspaceId: 'w-1',
+              principalId: 'p-1',
+              userId: 'u-1',
+              login: 'alice.pending',
+              workspaceName: 'Acme',
+            },
+            {
+              workspaceId: 'w-2',
+              principalId: 'p-2',
+              userId: 'u-2',
+              login: 'alice',
+              workspaceName: 'Beta',
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-merge').textContent).toBe(
+      `账户 alice.pending → ${target}；2 条已停用的成员资格因为另一个账户在同一工作区也有成员资格，不再属于任何账户：alice.pending 在 Acme 的那条、alice 在 Beta 的那条。`,
+    );
+    // A merge row is not a re-add.
+    expect(screen.queryByTestId('audit-readded')).toBeNull();
+  });
+
+  it('legacy 725: a row that added a removed member back says the removed membership and its drafts and goals stay behind', () => {
+    const where = 'Acme';
+    render(
+      <AuditPayloadNotes
+        action="add_membership"
+        payload={{
+          params: { userId: 'u-1', workspaceId: 'w-1', role: 'member' },
+          detachedPrincipals: [
+            {
+              workspaceId: 'w-1',
+              principalId: 'p-1',
+              userId: 'u-1',
+              login: 'bob',
+              workspaceName: where,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-readded').textContent).toBe(
+      `bob 之前在 ${where} 被移出的那条成员资格不再属于任何账户（那条的行和审计历史都留着）；现在在那里的是另一条成员资格，移出前那条的草稿和目标不会跟过来。`,
+    );
+    cleanup();
+    // The workspace's own audit: add_member names the person, the workspace is the one shown.
+    render(
+      <AuditPayloadNotes
+        action="add_member"
+        payload={{
+          detachedPrincipals: [
+            { workspaceId: 'w-1', principalId: 'p-1', userId: 'u-1', login: 'bob' },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-readded').textContent).toContain(
+      `${'bob'} 之前在这个工作区被移出的那条成员资格`,
+    );
+    cleanup();
+    // Binding an API key: the caller's own removed membership there.
+    render(
+      <AuditPayloadNotes
+        action="principal.user_rebound"
+        payload={{
+          from: null,
+          to: 'u-1',
+          detachedPrincipals: [{ workspaceId: 'w-1', principalId: 'p-1', userId: 'u-1' }],
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-readded').textContent).toContain(
+      `这个账户之前在${'这个工作区'}被移出的那条成员资格`,
+    );
+    cleanup();
+    // `platform.user_purged` lists detachedPrincipals too, for another reason: no re-add note.
+    render(
+      <AuditPayloadNotes
+        action="platform.user_purged"
+        payload={{
+          login: 'bob',
+          detachedPrincipals: [{ workspaceId: 'w-1', principalId: 'p-1' }],
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('audit-payload-notes')).toBeNull();
+    cleanup();
+    // Without the action, nothing is assumed.
+    render(
+      <AuditPayloadNotes
+        payload={{
+          detachedPrincipals: [{ workspaceId: 'w-1', principalId: 'p-1', userId: 'u-1' }],
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('audit-payload-notes')).toBeNull();
+  });
+
   it('S10 E3-1c: says where the evaluation seal stopped content, what that left, and that the record holds none of it', () => {
     const cases: [Record<string, unknown>, string][] = [
       [

@@ -444,7 +444,11 @@ export function AuditLogSection({
                       </>
                     ) : null}
                   </div>
-                  <AuditPayloadNotes payload={row.payload} workspaceNames={targetNames} />
+                  <AuditPayloadNotes
+                    payload={row.payload}
+                    action={row.action}
+                    workspaceNames={targetNames}
+                  />
                   <details className="platform-audit-payload">
                     <summary>{t('负载', 'Payload')}</summary>
                     <pre className="code-block pre-wrap">

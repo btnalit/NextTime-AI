@@ -17,6 +17,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { freeMembershipSlot } from './memberships.js';
 import {
   MIN_PASSWORD_LENGTH,
   hashPassword,
@@ -386,86 +387,137 @@ export interface BindPrincipalInput {
  * changes, and the Principal's former passwordless user row is deleted when nothing else points
  * at it. Refused when that former user has a password (`already_claimed`: it is somebody's
  * account, and a workspace key must never absorb a platform account) or when the caller already
- * has a membership in that workspace (`already_member`, the `(workspace_id, user_id)` unique
- * index). Binding a Principal that is already the caller's own is a no-op.
+ * has an active membership in that workspace (`already_member`, the `(workspace_id, user_id)`
+ * unique index); a removed one of the caller's there is let go instead (legacy 725). Binding a
+ * Principal that is already the caller's own is a no-op.
  */
 export async function bindPrincipalToUser(
   pool: PoolLike,
   input: BindPrincipalInput,
 ): Promise<void> {
-  await withAdminClient(pool, async (client) => {
-    // Legacy 702 (governance 0043): the Principal moves to the caller's user — that user's and the
-    // Principal's authority locks before the row lock below. An issuer for the Principal either
-    // commits first or re-reads the new user and refuses; a disable of the caller's user waits, so
-    // its revocation sees the moved membership.
-    await lockAuthoritiesForChange(client, {
-      userIds: [input.userId],
-      principalIds: [input.principalId],
-    });
-    const current = await client.query<{ user_id: string | null }>(
-      `select user_id from principals
-        where workspace_id = $1 and id = $2 and kind = 'human' and disabled_at is null
-        for update`,
-      [input.workspaceId, input.principalId],
-    );
-    const row = current.rows[0];
-    if (!row)
-      throw new IdentityError('invalid_api_key', 'that API key does not belong to a person');
-    const formerUserId = row.user_id;
-    if (formerUserId === input.userId) return;
-    const clash = await client.query(
-      'select 1 from principals where workspace_id = $1 and user_id = $2 and id <> $3',
-      [input.workspaceId, input.userId, input.principalId],
-    );
-    if ((clash.rowCount ?? 0) > 0) {
-      throw new IdentityError('already_member', 'you already have a membership in that workspace');
-    }
-    if (formerUserId) {
-      const former = await client.query<{ password_hash: string | null }>(
-        'select password_hash from users where id = $1 for update',
-        [formerUserId],
-      );
-      if (former.rows[0]?.password_hash) {
+  // Legacy 725: the former user's lock is taken with the caller's, in one call, from a read made
+  // before it; a bind that finds the key moved to yet another user meanwhile starts over, its
+  // transaction (and the locks it took) rolled back, rather than lock that user out of order.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await withAdminClient(pool, (client) => bindOnce(client, input));
+      return;
+    } catch (err) {
+      if (!(err instanceof FormerUserMoved)) throw err;
+      if (attempt >= BIND_ATTEMPTS) {
         throw new IdentityError(
           'already_claimed',
-          'that API key belongs to an account that already has its own password',
+          'that API key kept moving to another account while it was being bound; try again',
         );
       }
     }
-    await client.query('update principals set user_id = $3 where workspace_id = $1 and id = $2', [
-      input.workspaceId,
-      input.principalId,
-      input.userId,
-    ]);
-    let formerUserDeleted = false;
-    if (formerUserId) {
-      const stillReferenced = await client.query(
-        'select 1 from principals where user_id = $1 limit 1',
-        [formerUserId],
+  }
+}
+
+const BIND_ATTEMPTS = 3;
+
+/** The key's Principal belongs to another user than the one locked for it: start over. */
+class FormerUserMoved extends Error {}
+
+async function bindOnce(client: PoolClient, input: BindPrincipalInput): Promise<void> {
+  // Legacy 702 (governance 0043): the Principal moves to the caller's user — that user's and the
+  // Principal's authority locks before the row lock below. An issuer for the Principal either
+  // commits first or re-reads the new user and refuses; a disable of the caller's user waits, so
+  // its revocation sees the moved membership.
+  //
+  // Legacy 725: with the caller's own membership in that workspace, if any — a removed one is let
+  // go below (`freeMembershipSlot`), under its lock, and one lock call keeps the global order.
+  // Read before the user's lock, so `freeMembershipSlot` reads it again under it. And the user
+  // the key's Principal belongs to now: it loses that membership, and may be deleted below, so
+  // `add_membership`, `add_member` or `merge_user` for that user (which take its lock) either
+  // commit first — and the bind sees the membership they gave — or wait for the bind.
+  const theirs = await client.query<{ id: string }>(
+    `select id from principals
+      where workspace_id = $1 and user_id = $2 and kind = 'human' and id <> $3`,
+    [input.workspaceId, input.userId, input.principalId],
+  );
+  const before = await client.query<{ user_id: string | null }>(
+    'select user_id from principals where workspace_id = $1 and id = $2',
+    [input.workspaceId, input.principalId],
+  );
+  const formerGuess = before.rows[0]?.user_id ?? null;
+  await lockAuthoritiesForChange(client, {
+    userIds:
+      formerGuess !== null && formerGuess !== input.userId
+        ? [input.userId, formerGuess]
+        : [input.userId],
+    principalIds: [input.principalId, ...theirs.rows.map((row) => row.id)],
+  });
+  const current = await client.query<{ user_id: string | null }>(
+    `select user_id from principals
+      where workspace_id = $1 and id = $2 and kind = 'human' and disabled_at is null
+      for update`,
+    [input.workspaceId, input.principalId],
+  );
+  const row = current.rows[0];
+  if (!row) throw new IdentityError('invalid_api_key', 'that API key does not belong to a person');
+  const formerUserId = row.user_id;
+  if (formerUserId === input.userId) return;
+  // Every move of a Principal to another user holds its lock or its user's, both taken above, so
+  // the owner read here stays; a different one means it moved between the first read and the lock.
+  if (formerUserId !== formerGuess) throw new FormerUserMoved();
+  // Legacy 725: only an active membership of the caller's there clashes; a removed one stops
+  // belonging to the caller (identity/memberships.ts) and the bound Principal takes its place.
+  const slot = await freeMembershipSlot(client, {
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    exceptPrincipalId: input.principalId,
+  });
+  if (slot.state === 'held') {
+    throw new IdentityError('already_member', 'you already have a membership in that workspace');
+  }
+  if (formerUserId) {
+    const former = await client.query<{ password_hash: string | null }>(
+      'select password_hash from users where id = $1 for update',
+      [formerUserId],
+    );
+    if (former.rows[0]?.password_hash) {
+      throw new IdentityError(
+        'already_claimed',
+        'that API key belongs to an account that already has its own password',
       );
-      if ((stillReferenced.rowCount ?? 0) === 0) {
-        await client.query('delete from user_sessions where user_id = $1', [formerUserId]);
-        await client.query('delete from users where id = $1', [formerUserId]);
-        formerUserDeleted = true;
-      }
     }
-    // Review 2026-10-02 R-28: a membership moved to another account — recorded in the same
-    // transaction, so "when, and to whom, did this membership move" has an answer even after the
-    // key is rotated. Attributed to the calling user (the account that now owns it).
-    await writeAudit(client, {
-      workspaceId: null,
-      actorPrincipalId: null,
-      actorUserId: input.userId,
-      action: 'principal.user_rebound',
-      resourceType: 'principal',
-      resourceId: input.principalId,
-      payload: {
-        workspaceId: input.workspaceId,
-        from: formerUserId,
-        to: input.userId,
-        formerUserDeleted,
-      },
-    });
+  }
+  await client.query('update principals set user_id = $3 where workspace_id = $1 and id = $2', [
+    input.workspaceId,
+    input.principalId,
+    input.userId,
+  ]);
+  let formerUserDeleted = false;
+  if (formerUserId) {
+    const stillReferenced = await client.query(
+      'select 1 from principals where user_id = $1 limit 1',
+      [formerUserId],
+    );
+    if ((stillReferenced.rowCount ?? 0) === 0) {
+      await client.query('delete from user_sessions where user_id = $1', [formerUserId]);
+      await client.query('delete from users where id = $1', [formerUserId]);
+      formerUserDeleted = true;
+    }
+  }
+  // Review 2026-10-02 R-28: a membership moved to another account — recorded in the same
+  // transaction, so "when, and to whom, did this membership move" has an answer even after the
+  // key is rotated. Attributed to the calling user (the account that now owns it).
+  await writeAudit(client, {
+    workspaceId: null,
+    actorPrincipalId: null,
+    actorUserId: input.userId,
+    action: 'principal.user_rebound',
+    resourceType: 'principal',
+    resourceId: input.principalId,
+    payload: {
+      workspaceId: input.workspaceId,
+      from: formerUserId,
+      to: input.userId,
+      formerUserDeleted,
+      // Legacy 725: the caller's removed membership there, let go for this one.
+      ...(slot.released !== null ? { detachedPrincipals: [slot.released] } : {}),
+    },
   });
 }
 

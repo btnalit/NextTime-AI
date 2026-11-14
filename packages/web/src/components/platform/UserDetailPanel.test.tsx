@@ -447,8 +447,10 @@ describe('UserDetailPanel', () => {
     await findComboboxOption(target, 'bob — Bob');
     await pickComboboxOption(target, 'bob — Bob');
     expect(merge.hasAttribute('disabled')).toBe(true);
+    // Legacy 725 (UX on #1189): and where each one is removed.
+    const clashWith = 'bob';
     expect(screen.getByTestId('user-merge-missing').textContent).toBe(
-      '两个账户在工作区 Gamma 都有没停用的成员资格：先在那里移出其中一个',
+      `两个账户在工作区 Gamma 都有没停用的成员资格：先在那里移出其中一个（alice 的在本页「管理成员资格」里移出，${clashWith} 的在 ${clashWith} 的用户详情里移出）`,
     );
     fireEvent.click(merge);
     expect(screen.queryByTestId('user-merge-confirm')).toBeNull();
@@ -462,8 +464,9 @@ describe('UserDetailPanel', () => {
     expect(impact).toContain(
       '工作区 Acme · 成员（已停用）：carol 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）',
     );
+    // Legacy 725 (UX on #1189): the target is a member there again.
     expect(impact).toContain(
-      '工作区 Beta · 成员 → carol；carol 在这里已停用的那条成员资格不再属于任何账户（平台审计记下它原来属于谁）',
+      '工作区 Beta · 成员 → carol：carol 曾被移出这里，合并后以这一条的角色重新成为这里的成员；carol 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）',
     );
     const to = 'carol';
     expect(impact).toContain(`工作区 Gamma · 成员 → ${to}`);

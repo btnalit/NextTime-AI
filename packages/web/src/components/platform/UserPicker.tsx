@@ -22,7 +22,8 @@ export interface UserPickerProps {
   /** User ids to leave out of the list — e.g. the workspace's existing owners. */
   readonly exclude?: readonly string[];
   /** Legacy 153 ⑤: a workspace whose members stay listed but cannot be picked, marked
-   *  「已是本工作区成员」 — adding one again could only be refused. */
+   *  「已是本工作区成员」 — adding one again could only be refused. Legacy 725: one removed from it
+   *  can be picked, marked 「曾被移出本工作区」 — `add_member` adds them back as a new membership. */
   readonly memberOf?: string;
   readonly testId?: string;
 }
@@ -92,14 +93,22 @@ export function UserPicker({
   const picked = value === '' ? undefined : known.current.get(value);
   const listed = picked && !rows.some((row) => row.id === picked.id) ? [picked, ...rows] : rows;
 
-  const isMember = (user: UserWire): boolean =>
-    memberOf !== undefined && user.memberships.some((m) => m.workspaceId === memberOf);
-  const options: ComboboxOption[] = listed.map((user) => ({
-    value: user.id,
-    label: `${user.login} — ${user.displayName}`,
-    disabled: isMember(user),
-    secondary: isMember(user) ? t('已是本工作区成员', 'Already a member here') : undefined,
-  }));
+  const membershipHere = (user: UserWire) =>
+    memberOf === undefined ? undefined : user.memberships.find((m) => m.workspaceId === memberOf);
+  const options: ComboboxOption[] = listed.map((user) => {
+    const here = membershipHere(user);
+    return {
+      value: user.id,
+      label: `${user.login} — ${user.displayName}`,
+      disabled: here !== undefined && !here.disabled,
+      secondary:
+        here === undefined
+          ? undefined
+          : here.disabled
+            ? t('曾被移出本工作区', 'Removed from here before')
+            : t('已是本工作区成员', 'Already a member here'),
+    };
+  });
   // A value the directory has not named yet (a default owner past the first page, or still
   // loading) reads as a short id, never the whole raw id.
   if (value !== '' && picked === undefined) {

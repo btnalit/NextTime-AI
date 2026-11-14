@@ -19,6 +19,7 @@ import { Button } from './kit/button.js';
 import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
+import { Notice } from './kit/notice.js';
 import { Select } from './kit/select.js';
 import { StillNeeded } from './kit/still-needed.js';
 import { UserPicker } from './platform/UserPicker.js';
@@ -136,6 +137,10 @@ export function AddMemberForm({
   }, [shouldProbe, directory.caller, probeAttempt]);
 
   const picked = mode === 'directory' ? directory.find(pickedUserId) : undefined;
+  // Legacy 725: a person removed from this workspace before is added back as a new membership.
+  const removedHere =
+    workspaceId !== undefined &&
+    picked?.memberships.some((m) => m.workspaceId === workspaceId && m.disabled) === true;
   const normalizedLogin = normalizeLoginInput(login);
   const typedLoginError = mode === 'typed' ? loginError(normalizedLogin, t) : null;
   const typedLoginNote = mode === 'typed' ? loginNormalizedNote(login, t) : null;
@@ -209,6 +214,14 @@ export function AddMemberForm({
             memberOf={workspaceId}
             testId="add-member-user"
           />
+          {removedHere ? (
+            <Notice testId="add-member-readd">
+              {t(
+                '这个人曾被移出本工作区。添加会新建一条成员资格，原来那条留着供审计溯源；这个人看不到移出前的草稿和目标。',
+                'This person was removed from this workspace before. Adding them creates a new membership and the removed one is kept for audit lineage; they will not see their drafts and goals from before the removal.',
+              )}
+            </Notice>
+          ) : null}
           <div className="row">
             <Button
               variant="ghost"

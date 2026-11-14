@@ -6,6 +6,7 @@ import {
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { freeMembershipSlot } from '../identity/memberships.js';
 import { applyRoleChange } from '../task/role-change.js';
 import { generateApiKey, hashApiKey, isLastActiveHumanOwner } from './auth.js';
 import { ForbiddenError } from './authorize.js';
@@ -383,18 +384,29 @@ const SetPrincipalRoleParams = (params: unknown) => params as { principalId: str
  */
 export const addMemberHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { login, role } = params as { login: string; role: Role };
-  const found = await client.query<{ id: string; display_name: string; status: string }>(
-    'select id, display_name, status from lookup_user_by_login($1)',
-    [login.trim().toLowerCase()],
-  );
-  const user = found.rows[0];
-  if (!user) throw new MemberUserNotFoundError(login);
-  if (user.status !== 'active') throw new MemberUserNotFoundError(login);
-  const existing = await client.query(
-    `select 1 from principals where workspace_id = $1 and user_id = $2 and kind = 'human'`,
-    [workspaceId, user.id],
-  );
-  if ((existing.rowCount ?? 0) > 0) throw new AlreadyMemberError(login);
+  const normalized = login.trim().toLowerCase();
+  const lookUp = async () =>
+    (
+      await client.query<{ id: string; display_name: string; status: string }>(
+        'select id, display_name, status from lookup_user_by_login($1)',
+        [normalized],
+      )
+    ).rows[0];
+  const found = await lookUp();
+  if (!found) throw new MemberUserNotFoundError(login);
+  // Legacy 725: the user's authority lock, as every path that changes a user's memberships takes
+  // it (`add_membership`, `merge_user`, binding an API key), then the user read again under it —
+  // a disable that was committing has committed.
+  await lockAuthoritiesForChange(client, { userIds: [found.id] });
+  const user = await lookUp();
+  if (!user || user.id !== found.id || user.status !== 'active') {
+    throw new MemberUserNotFoundError(login);
+  }
+  // Legacy 725: only an active membership makes the person a member already. A removed one stops
+  // belonging to them and a new membership takes its place (identity/memberships.ts): the
+  // removed one's drafts and goals stay in the workspace under it, the person starts afresh.
+  const slot = await freeMembershipSlot(client, { workspaceId, userId: user.id });
+  if (slot.state === 'held') throw new AlreadyMemberError(login);
   const inserted = await client.query<{ id: string; created_at: Date }>(
     `insert into principals (workspace_id, kind, role, display_name, user_id)
      values ($1, 'human', $2, $3, $4)
@@ -413,7 +425,27 @@ export const addMemberHandler: CapabilityHandler = async (client, workspaceId, p
     hasApiKey: false,
     disabledAt: null,
   };
-  return { result: toWirePrincipal(principal), resourceType: 'principal', resourceId: row.id };
+  return {
+    result: toWirePrincipal(principal),
+    resourceType: 'principal',
+    resourceId: row.id,
+    // Legacy 725: the removed membership this one replaces, as `merge_user` lists the ones it
+    // lets go — named by the login the owner typed, never by the platform user id: this row is
+    // the workspace's, and the workspace plane does not carry platform user ids.
+    ...(slot.released !== null
+      ? {
+          auditPayload: {
+            detachedPrincipals: [
+              {
+                workspaceId: slot.released.workspaceId,
+                principalId: slot.released.principalId,
+                login: normalized,
+              },
+            ],
+          },
+        }
+      : {}),
+  };
 };
 
 export class MemberUserNotFoundError extends Error {

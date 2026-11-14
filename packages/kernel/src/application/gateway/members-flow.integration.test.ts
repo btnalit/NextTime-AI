@@ -16,7 +16,7 @@ import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { createUser } from '../identity/index.js';
-import { authenticateHuman, hashApiKey } from './auth.js';
+import { authenticateHuman, hashApiKey, withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
@@ -359,6 +359,179 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(
         dispatchCapability({ pool }, owner, 'add_member', { login, role: 'member' }),
       ).rejects.toThrow(AlreadyMemberError);
+    });
+
+    // Legacy 725: a removed member (here removed from the workspace, `disable_principal`) is added
+    // back as a new membership; the removed one stays removed and stops belonging to them.
+    it('add_member: a removed member can be added back — a new membership, the removed one no longer theirs', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-back-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Back Fixture',
+        password: 'correct horse battery staple',
+      });
+      const first = (await dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      })) as { id: string };
+      await dispatchCapability({ pool }, owner, 'disable_principal', { principalId: first.id });
+
+      const again = (await dispatchCapability({ pool }, owner, 'add_member', {
+        login: login.toUpperCase(),
+        role: 'member',
+      })) as { id: string; kind: string; disabledAt: string | null };
+      expect(again.id).not.toBe(first.id);
+      expect(again.kind).toBe('human');
+      expect(again.disabledAt).toBeNull();
+
+      const rows = await withAdminClient(pool, (client) =>
+        client.query<{ id: string; user_id: string | null; disabled: boolean }>(
+          `select id, user_id, disabled_at is not null as disabled from principals
+            where workspace_id = $1 and id = any($2::uuid[])`,
+          [workspaceId, [first.id, again.id]],
+        ),
+      );
+      expect(rows.rows.find((row) => row.id === first.id)).toMatchObject({
+        user_id: null,
+        disabled: true,
+      });
+      expect(rows.rows.find((row) => row.id === again.id)).toMatchObject({
+        user_id: user.id,
+        disabled: false,
+      });
+      const audit = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'add_member' and resource_id = $2`,
+          [workspaceId, again.id],
+        ),
+      );
+      // The workspace's own row names the person by login, never by platform user id.
+      expect(audit.rows[0]?.payload.detachedPrincipals).toEqual([
+        { workspaceId, principalId: first.id, login },
+      ]);
+      expect(JSON.stringify(audit.rows[0]?.payload)).not.toContain(user.id);
+
+      await expect(
+        dispatchCapability({ pool }, owner, 'add_member', { login, role: 'member' }),
+      ).rejects.toThrow(AlreadyMemberError);
+    });
+
+    // Legacy 725: `add_member` holds the user's authority lock, as `add_membership`, `merge_user`
+    // and binding a key do, so a membership given to the user meanwhile is seen, not raced to the
+    // unique index.
+    it('add_member waits for the user’s lock: a membership given to the user meanwhile makes it already_member', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-race-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Race Fixture',
+        password: 'correct horse battery staple',
+      });
+      let go!: () => void;
+      const going = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const writer = withAdminClient(pool, async (client) => {
+        await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+          [],
+          [user.id],
+          [],
+        ]);
+        locked();
+        await going;
+        await client.query(
+          `insert into principals (workspace_id, kind, role, display_name, user_id)
+           values ($1, 'human', 'member', 'Add Race Fixture', $2)`,
+          [workspaceId, user.id],
+        );
+      });
+      await holding;
+
+      const outcome = dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position('lock_authorities' in query) > 0`,
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) break;
+        if (attempt > 200) throw new Error('add_member never waited on the user’s lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      go();
+      await writer;
+      expect(await outcome).toBeInstanceOf(AlreadyMemberError);
+    });
+
+    // Legacy 725: and reads the user again under that lock — a disable that held it meanwhile has
+    // committed, so the disabled user gets no membership.
+    it('add_member reads the user again under the lock: a user disabled meanwhile is refused (user not found)', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-off-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Off Fixture',
+        password: 'correct horse battery staple',
+      });
+      let go!: () => void;
+      const going = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const writer = withAdminClient(pool, async (client) => {
+        await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+          [],
+          [user.id],
+          [],
+        ]);
+        locked();
+        await going;
+        await client.query(`update users set status = 'disabled' where id = $1`, [user.id]);
+      });
+      await holding;
+
+      const outcome = dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position('lock_authorities' in query) > 0`,
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) break;
+        if (attempt > 200) throw new Error('add_member never waited on the user’s lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      go();
+      await writer;
+      expect(await outcome).toBeInstanceOf(MemberUserNotFoundError);
+      const memberships = await withAdminClient(pool, (client) =>
+        client.query('select 1 from principals where workspace_id = $1 and user_id = $2', [
+          workspaceId,
+          user.id,
+        ]),
+      );
+      expect(memberships.rowCount).toBe(0);
     });
 
     it('rotate_api_key never mints a key for a person (D-25): refused self-service and for an owner, the legacy key untouched', async () => {

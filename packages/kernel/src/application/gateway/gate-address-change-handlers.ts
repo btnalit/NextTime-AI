@@ -700,6 +700,39 @@ const GATE_ADDRESS_CHANGE_PAGE = 50;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** `created_at::text` as Postgres writes a `timestamptz` (DateStyle ISO): `YYYY-MM-DD HH:MM:SS`,
+ *  up to six fraction digits, and the offset `±HH`, `±HH:MM` or `±HH:MM:SS`. */
+const PG_TIMESTAMPTZ =
+  /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?[+-](\d{2})(?::[0-5]\d){0,2}$/;
+
+/** #493 on #1191: whether `text` is one `created_at::text` could have written — a real calendar
+ *  day and time, an offset Postgres accepts. `Date.parse` takes far more ("1", "x 1"), and those
+ *  reached the query as a cast it could not make (22007). */
+function isCursorTimestamp(text: string): boolean {
+  const match = PG_TIMESTAMPTZ.exec(text);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second, offsetHours] = match.slice(1).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    year >= 1 &&
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    hour < 24 &&
+    minute < 60 &&
+    second < 60 &&
+    offsetHours <= 15
+  );
+}
+
 function encodeListCursor(row: PlatformGateAddressChangeRow): string {
   return Buffer.from(`${row.createdAtCursor}|${row.workspaceId}|${row.id}`).toString('base64url');
 }
@@ -711,7 +744,7 @@ function decodeListCursor(cursor: string): GateAddressChangeListPosition | null 
   const parts = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
   if (parts.length !== 3) return null;
   const [createdAt, workspaceId, id] = parts as [string, string, string];
-  if (Number.isNaN(Date.parse(createdAt)) || !UUID.test(workspaceId) || !UUID.test(id)) return null;
+  if (!isCursorTimestamp(createdAt) || !UUID.test(workspaceId) || !UUID.test(id)) return null;
   return { createdAt, workspaceId, id };
 }
 
