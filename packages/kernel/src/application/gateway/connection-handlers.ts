@@ -6,7 +6,7 @@ import {
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
-import type { Operation, PrincipalKind, Role } from '@nexttime/shared';
+import type { Operation, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type {
   GateConnectionSecrets,
@@ -57,6 +57,7 @@ import {
 } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { callerKindOf } from './draft-viewer.js';
 import { platformGateIdForEndpoint } from './gate-target.js';
 import { grantAuditPayload, toWireConnectionRequest, toWireGrant } from './resource-wire.js';
 
@@ -447,7 +448,8 @@ export const requestConnectionHandler: CapabilityHandler = async (
     kind,
     principalId,
   );
-  const requesterKind: PrincipalKind = ctx?.channel === 'human' ? 'human' : 'agent';
+  // Legacy 616: the caller's own kind, never the channel's (`callerKindOf`).
+  const requesterKind = callerKindOf(ctx);
 
   const row = await requestConnection(client, workspaceId, {
     kind,

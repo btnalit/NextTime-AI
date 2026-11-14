@@ -1,4 +1,4 @@
-import type { DraftOrigin, Role } from '@nexttime/shared';
+import type { DraftOrigin, PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { DraftViewer } from '../../application/worker/index.js';
 import { seesEveryDraft } from '../../governance/capability/index.js';
@@ -23,7 +23,21 @@ import type { CapabilityHandlerContext } from './capability-handler.js';
  * a Handle, as `propose_operation`'s proposer kind does.
  */
 export function draftOriginOf(ctx: CapabilityHandlerContext | undefined): DraftOrigin {
-  return ctx?.channel === 'human' && ctx.principal?.kind === 'human' ? 'human' : 'agent';
+  return callerKindOf(ctx) === 'human' ? 'human' : 'agent';
+}
+
+/**
+ * Legacy 616: what kind of caller made this call, for a write that records one beside the
+ * Principal it is for (`propose_operation`'s `proposedBy.kind`, `request_connection`'s
+ * `requestedBy.kind`). Over the human channel, the Principal dispatch.ts authenticated, by its own
+ * kind: a person `human`, a service Principal's API key `service`. Through a Handle, or with no
+ * resolved Principal (a test driving the handler directly), `agent`, as `draftOriginOf` counts
+ * it. Never the channel alone: a service's API key is the human channel too. A draft's origin is
+ * `human` exactly when this is `human` (`draftOriginOf` is defined from it), so the two cannot
+ * disagree.
+ */
+export function callerKindOf(ctx: CapabilityHandlerContext | undefined): PrincipalKind {
+  return ctx?.channel === 'human' && ctx.principal ? ctx.principal.kind : 'agent';
 }
 
 /**
