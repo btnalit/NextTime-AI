@@ -844,7 +844,15 @@ export function WorkerDefinitionEditor({
       ) : null}
 
       <div className="row overlay-actions">
-        <Button type="submit" variant="primary" loading={busy} data-testid="worker-submit">
+        {/* UX acceptance of #1220 (P3): after `draft_changed` a save would replace the same gone
+         *  draft and be refused again — the banner's 「用这次的内容新建草稿」 is the way on. */}
+        <Button
+          type="submit"
+          variant="primary"
+          loading={busy}
+          disabled={changedDraft !== null}
+          data-testid="worker-submit"
+        >
           {t('保存草稿', 'Save draft')}
         </Button>
         <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>

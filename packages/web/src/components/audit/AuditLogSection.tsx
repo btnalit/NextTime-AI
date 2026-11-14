@@ -212,6 +212,19 @@ export function AuditLogSection({
     </option>
   );
 
+  /** The resource chip's name: its type, and — legacy 740 (UX acceptance of #1220) — for a member,
+   *  that member's name from the same directory the actor chip reads (a row a migration wrote
+   *  names its member only here). */
+  const resourceChipName = (
+    resourceType: string | null,
+    resourceId: string,
+  ): string | undefined => {
+    if (!resourceType) return undefined;
+    const label = auditResourceTypeLabel(resourceType, t);
+    const member = resourceType === 'principal' ? nameOf(principalNames, resourceId) : null;
+    return member ? `${label} ${member}` : label;
+  };
+
   return (
     <section className="section" aria-labelledby="audit-query-title" data-testid="audit-log">
       <div className="section-header">
@@ -445,11 +458,7 @@ export function AuditLogSection({
                         <RefChip
                           kind="object"
                           id={row.resourceId}
-                          name={
-                            row.resourceType
-                              ? auditResourceTypeLabel(row.resourceType, t)
-                              : undefined
-                          }
+                          name={resourceChipName(row.resourceType, row.resourceId)}
                           href={resourceHref(
                             row.resourceType,
                             row.resourceId,

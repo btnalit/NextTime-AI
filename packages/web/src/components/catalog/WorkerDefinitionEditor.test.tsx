@@ -722,6 +722,8 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.click(screen.getByTestId('worker-submit'));
     const banner = await screen.findByTestId('worker-editor-error');
     expect(banner.textContent).toMatch(/这次写的内容还在编辑器里/);
+    // UX acceptance of #1220 (P3): saving would replace the gone draft again — the banner is the way on.
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(true);
     const again = within(banner).getByTestId('worker-propose-after-changed');
     expect(again.textContent).toBe('用这次的内容新建草稿');
     fireEvent.click(again);
