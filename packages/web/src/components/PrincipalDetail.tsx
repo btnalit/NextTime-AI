@@ -7,6 +7,7 @@ import { formatDateTime, formatRelative } from '../lib/format.js';
 import {
   type PrincipalRow,
   type RotateApiKeyResult,
+  apiKeyStatusLabel,
   ownerCredentialConfirmCopy,
 } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
@@ -149,6 +150,9 @@ export function PrincipalDetail({
     } catch (err) {
       if (isForbiddenError(err)) onForbidden('rotate_api_key');
       setRotateError(err);
+      // Legacy 734: disabled since the drawer read it — read the members again, and the drawer
+      // turns read-only with no rotate button.
+      if (isPrincipalRefusal(err, 'disabled')) onStale?.();
     } finally {
       setRotating(false);
     }
@@ -198,7 +202,7 @@ export function PrincipalDetail({
     {
       key: 'apiKey',
       label: 'API key',
-      value: principal.hasApiKey ? t('已签发', 'issued') : t('无', 'none'),
+      value: apiKeyStatusLabel(principal, 'detail', t),
     },
     {
       key: 'createdAt',
@@ -342,13 +346,14 @@ export function PrincipalDetail({
                     'People sign in with a password and get no API key — use a service credential for automation.',
                   )}
                 </span>
-              ) : rotated ? null : (
+              ) : rotated || disabled ? null : (
+                // Legacy 734: no rotate for a disabled service account — nothing would sign in with
+                // the new key, and the kernel refuses it (`disabled`).
                 <Button
                   variant="secondary"
                   size="s"
                   onClick={() => void rotateKey()}
                   aria-busy={rotating}
-                  disabled={disabled}
                 >
                   {t('轮换 API key', 'Rotate API key')}
                 </Button>

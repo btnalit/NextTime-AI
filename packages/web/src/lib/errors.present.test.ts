@@ -617,7 +617,7 @@ describe('member-management refusals', () => {
     ['platform_managed', '由平台管理', '平台自己管理的身份'],
     ['human_api_key', '人类用户用密码登录', '创建一个服务账号'],
     ['reserved_name', '名称被保留', '换一个名字'],
-    ['disabled', '已停用', '角色不能再改'],
+    ['disabled', '已停用', '角色和 API key 都不能再改'],
   ])('%s reads as its own refusal, not a generic conflict', (reason, title, step) => {
     const err = new HttpError('capability_error', 'kernel text in English', 'conflict', {
       reason,

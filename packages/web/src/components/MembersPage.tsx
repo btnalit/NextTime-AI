@@ -7,7 +7,7 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { shortId } from '../lib/format.js';
-import type { PrincipalRow } from '../lib/governance.js';
+import { type PrincipalRow, apiKeyStatusLabel } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -195,7 +195,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
         <span className="meta-sep" />
         <span className="mono">{shortId(row.id)}</span>
         <span className="meta-sep" />
-        <span>{row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}</span>
+        <span>{apiKeyStatusLabel(row, 'list', t)}</span>
       </span>
     </ListRow>
   );
