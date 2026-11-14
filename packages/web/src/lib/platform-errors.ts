@@ -37,8 +37,8 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   // #1198 review: removed and the user added back while the call waited — the user is a member
   // there again, as another membership the caller has not seen yet.
   membership_replaced: {
-    zh: '你操作的时候，这条成员资格被移出了，这位用户又被重新加入了这个工作区，现在是一条新的成员资格。什么也没有改；列表已重新读取，如果还要改，请对新的那条再操作一次。',
-    en: 'While you were doing this, the membership was removed and the user added back to this workspace, as a new membership. Nothing changed; the list has been read again, so act on the new one if you still need to.',
+    zh: '这个页面读到这条成员资格之后，它被移出了，这位用户又被重新加入了这个工作区，现在是一条新的成员资格。什么也没有改；列表已重新读取，如果还要改，请对新的那条再操作一次。',
+    en: 'Since this page read the membership, it was removed and the user added back to this workspace, as a new membership. Nothing changed; the list has been read again, so act on the new one if you still need to.',
   },
   login_taken: { zh: '这个登录名已被占用', en: 'That login is already taken' },
   already_member: { zh: '已经是该工作区的成员', en: 'Already a member of that workspace' },

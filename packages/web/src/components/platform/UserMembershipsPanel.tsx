@@ -224,10 +224,13 @@ function MembershipRow({
     setSaving(true);
     setError(null);
     try {
+      // Legacy 732: the membership this row shows, so a user removed and added back since it was
+      // read is refused (`membership_replaced`) instead of changing the new membership.
       await http.call<UserMembershipWire>('set_membership_role', {
         userId,
         workspaceId: membership.workspaceId,
         role: next,
+        principalId: membership.principalId,
       });
       onChanged();
     } catch (err) {
@@ -243,7 +246,11 @@ function MembershipRow({
     setRemoving(true);
     setError(null);
     try {
-      await http.call('remove_membership', { userId, workspaceId: membership.workspaceId });
+      await http.call('remove_membership', {
+        userId,
+        workspaceId: membership.workspaceId,
+        principalId: membership.principalId,
+      });
       setConfirmingRemove(false);
       onChanged();
     } catch (err) {

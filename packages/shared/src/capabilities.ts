@@ -3300,7 +3300,7 @@ const membersCapabilities = [
     paramsSchema: z.object({ principalId: id }).strict(),
     resultSchema: wire.RotateApiKeyResultWireSchema,
     description:
-      'Rotate a service Principal’s API key — the old key stops working immediately; the new plaintext key is returned once. A person’s membership is never issued a key (409 conflict): people sign in with a password, and personal automation uses a service Principal or an MCP Handle.',
+      'Rotate a service Principal’s API key — the old key stops working immediately; the new plaintext key is returned once. A person’s membership is never issued a key (409 conflict): people sign in with a password, and personal automation uses a service Principal or an MCP Handle. A disabled Principal is refused (409 conflict, reason disabled): nothing authenticates with its key, so none is issued — create a new service account instead.',
   },
   {
     name: 'disable_principal',
@@ -3311,7 +3311,7 @@ const membersCapabilities = [
     paramsSchema: z.object({ principalId: id }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Disable a human or service Principal: its API key and every Handle issued on its behalf stop working immediately. Refuses the workspace’s last active human owner, an agent or internal Principal, and disabling oneself. A Principal already disabled is left as it is: nothing is revoked again and the audit row says the call changed nothing.',
+      'Disable a human or service Principal: its API key is cleared and every Handle issued on its behalf stops working immediately. Refuses the workspace’s last active human owner, an agent or internal Principal, and disabling oneself. A Principal already disabled is left as it is: nothing is revoked again and the audit row says the call changed nothing.',
   },
   {
     name: 'get_workspace',
@@ -3613,11 +3613,16 @@ const platformCapabilities = [
     channel: 'human',
     scope: 'platform',
     paramsSchema: z
-      .object({ userId: platformUserId, workspaceId: z.string().min(1), role: RoleSchema })
+      .object({
+        userId: platformUserId,
+        workspaceId: z.string().min(1),
+        role: RoleSchema,
+        principalId: id.optional(),
+      })
       .strict(),
     resultSchema: wire.UserMembershipWireSchema,
     description:
-      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11). The role it already has changes nothing. 409 membership_removed for a removed membership, which keeps the role it was removed with: add the user to the workspace again for a new membership. 409 membership_replaced when the membership was removed and the user added back while the call waited: nothing changed, and the new membership is read again before acting on it.',
+      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11). The role it already has changes nothing. 409 membership_removed for a removed membership, which keeps the role it was removed with: add the user to the workspace again for a new membership. `principalId` (optional) is the membership the caller read: 409 membership_replaced when the user’s membership there is no longer that one, or when it was removed and the user added back while the call waited — nothing changed, and the new membership is read again before acting on it.',
   },
   {
     name: 'remove_membership',
@@ -3625,10 +3630,16 @@ const platformCapabilities = [
     mode: 'write',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ userId: platformUserId, workspaceId: z.string().min(1) }).strict(),
+    paramsSchema: z
+      .object({
+        userId: platformUserId,
+        workspaceId: z.string().min(1),
+        principalId: id.optional(),
+      })
+      .strict(),
     resultSchema: wire.RemoveMembershipResultWireSchema,
     description:
-      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner). A membership already removed is left as it is: nothing is revoked again and the audit row says the call changed nothing. 409 membership_replaced when it was removed and the user added back while the call waited: the new membership is not touched.',
+      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner). A membership already removed is left as it is: nothing is revoked again and the audit row says the call changed nothing. `principalId` (optional) is the membership the caller read: 409 membership_replaced when the user’s membership there is no longer that one, or when it was removed and the user added back while the call waited — the new membership is not touched.',
   },
   {
     name: 'merge_user',

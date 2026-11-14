@@ -525,6 +525,9 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
     }
   }
 
+  // Legacy 734: the Principal's authority lock before its row is read, as `disable_principal`
+  // takes it — a disable that committed while this waited is seen below.
+  await lockAuthoritiesForChange(client, { principalIds: [principalId] });
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'rotate_api_key');
@@ -537,6 +540,14 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
     throw new PrincipalOperationRefusedError(
       'human_api_key',
       `rotate_api_key: principal ${target.id} is a person — people sign in with a password; issue automation keys to a service Principal`,
+    );
+  }
+  // Legacy 734: a disabled Principal authenticates with no key (`lookupPrincipalByApiKeyHash`
+  // skips it), so a key minted for it would never work and the result would say otherwise.
+  if (target.disabledAt !== null) {
+    throw new PrincipalOperationRefusedError(
+      'disabled',
+      `rotate_api_key: principal ${target.id} is disabled — a disabled service account cannot be issued a key; create a new service account if one is needed`,
     );
   }
 
@@ -604,8 +615,11 @@ export const disablePrincipalHandler: CapabilityHandler = async (
   }
   await assertNotLastActiveHumanOwner(client, workspaceId, target);
 
+  // Legacy 734: its API key goes with it, as the platform's `remove_membership` clears one
+  // (`revokeUserCredentials`) — a disabled Principal's key already authenticated nothing (key
+  // lookups skip a disabled Principal), and now it no longer stays on the row either.
   const disabled = await client.query<{ disabled_at: Date }>(
-    `update principals set disabled_at = coalesce(disabled_at, now())
+    `update principals set disabled_at = coalesce(disabled_at, now()), api_key_hash = null
      where workspace_id = $1 and id = $2
      returning disabled_at`,
     [workspaceId, principalId],
@@ -621,7 +635,11 @@ export const disablePrincipalHandler: CapabilityHandler = async (
   // comment.
   await revokeOnBehalfOfSessionHandles(client, workspaceId, principalId);
 
-  const wire = toWirePrincipal({ ...target, disabledAt: disabledRow.disabled_at });
+  const wire = toWirePrincipal({
+    ...target,
+    disabledAt: disabledRow.disabled_at,
+    hasApiKey: false,
+  });
   return {
     result: wire,
     resourceType: 'principal',

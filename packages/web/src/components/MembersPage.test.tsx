@@ -603,7 +603,58 @@ describe('MembersPage', () => {
     expect(within(drawer).getByTestId('principal-disabled-readonly').textContent).toContain(
       '按登录名重新添加成员',
     );
-    expect(within(drawer).getByText(/角色不能再改，什么也没有改/)).toBeTruthy();
+    expect(within(drawer).getByText(/都不能再改，什么也没有改/)).toBeTruthy();
+  });
+
+  it('legacy 734: a disabled service account’s key reads as no longer working, and its drawer offers no rotation', async () => {
+    const service = principal({
+      id: 'p-svc',
+      kind: 'service',
+      displayName: 'CI',
+      hasApiKey: true,
+      disabledAt: '2026-09-02T00:00:00.000Z',
+    });
+    const http = scriptedHttp({ list_principals: () => ({ items: [service] }) });
+    renderPage(http);
+    const folded = await screen.findByTestId('members-disabled');
+    const row = within(folded).getByTestId('member-row');
+    expect(row.textContent).toContain('API key 已失效');
+    expect(row.textContent).not.toContain('已签发');
+
+    fireEvent.click(row);
+    const drawer = await screen.findByTestId('principal-detail');
+    expect(drawer.textContent).toContain('已失效（已停用的成员不能用 key 认证）');
+    expect(within(drawer).queryByRole('button', { name: /轮换/ })).toBeNull();
+  });
+
+  it('legacy 734: a rotation refused as disabled reads the members again; the rotate button goes and the refusal stays', async () => {
+    const service = principal({ id: 'p-svc', kind: 'service', displayName: 'CI' });
+    let disabledNow = false;
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [disabledNow ? { ...service, disabledAt: '2026-09-08T00:00:00.000Z' } : service],
+      }),
+      rotate_api_key: () => {
+        disabledNow = true;
+        return Promise.reject(
+          new HttpError('capability_error', 'principal is disabled', 'conflict', {
+            reason: 'disabled',
+          }),
+        );
+      },
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+    fireEvent.click(within(drawer).getByRole('button', { name: /轮换/ }));
+
+    await waitFor(() =>
+      expect(within(drawer).getByTestId('principal-status').textContent).toBe('已停用'),
+    );
+    expect(http.calls.filter((call) => call.name === 'list_principals')).toHaveLength(2);
+    expect(within(drawer).queryByRole('button', { name: /轮换/ })).toBeNull();
+    expect(within(drawer).getByText(/角色和 API key 都不能再改，什么也没有改/)).toBeTruthy();
+    expect(drawer.textContent).toContain('已失效');
   });
 
   it('a disabled member’s drawer says why the role cannot change, and the way back for its kind', async () => {

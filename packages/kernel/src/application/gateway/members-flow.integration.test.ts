@@ -700,6 +700,95 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
+    it('a disabled service account gets no new key (legacy 734): disabling clears its key, rotate_api_key is refused (disabled) — also when it was disabled while the rotation waited for its lock', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const keyHash = (principalId: string) =>
+        withAdminClient(pool, async (client) => {
+          const result = await client.query<{ api_key_hash: string | null }>(
+            'select api_key_hash from principals where workspace_id = $1 and id = $2',
+            [workspaceId, principalId],
+          );
+          return result.rows[0]?.api_key_hash ?? null;
+        });
+
+      const created = (await dispatchCapability({ pool }, owner, 'create_principal', {
+        role: 'member',
+        displayName: 'Disabled key',
+      })) as { principal: { id: string }; apiKey: string };
+      const serviceId = created.principal.id;
+      expect(await keyHash(serviceId)).not.toBeNull();
+      const disabled = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+        principalId: serviceId,
+      })) as { hasApiKey: boolean; disabledAt: string | null };
+      expect(disabled).toMatchObject({ hasApiKey: false });
+      expect(disabled.disabledAt).not.toBeNull();
+      expect(await keyHash(serviceId)).toBeNull();
+      const listed = (await dispatchCapability({ pool }, owner, 'list_principals', {})) as {
+        items: { id: string; hasApiKey: boolean }[];
+      };
+      expect(listed.items.find((item) => item.id === serviceId)?.hasApiKey).toBe(false);
+      await expectRefused(
+        () => dispatchCapability({ pool }, owner, 'rotate_api_key', { principalId: serviceId }),
+        'disabled',
+      );
+      expect(await keyHash(serviceId)).toBeNull();
+
+      // Disabled while the rotation waited for its lock — as a disable from before legacy 734
+      // left it, key still on the row: the rotation sees it under the lock and writes nothing.
+      const other = (await dispatchCapability({ pool }, owner, 'create_principal', {
+        role: 'member',
+        displayName: 'Disabled meanwhile',
+      })) as { principal: { id: string }; apiKey: string };
+      const otherId = other.principal.id;
+      const hashBefore = await keyHash(otherId);
+      let go!: () => void;
+      const going = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const writer = withAdminClient(pool, async (client) => {
+        await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+          [],
+          [],
+          [otherId],
+        ]);
+        locked();
+        await going;
+        await client.query(
+          'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+          [workspaceId, otherId],
+        );
+      });
+      await holding;
+      const outcome = dispatchCapability({ pool }, owner, 'rotate_api_key', {
+        principalId: otherId,
+      }).then(
+        (result) => ({ result }),
+        (err: unknown) => ({ err }),
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position('lock_authorities' in query) > 0`,
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) break;
+        if (attempt > 200) throw new Error('rotate_api_key never waited on the Principal’s lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      go();
+      await writer;
+      const settled = await outcome;
+      await expectRefused(async () => {
+        if ('err' in settled) throw settled.err;
+      }, 'disabled');
+      expect(await keyHash(otherId)).toBe(hashBefore);
+      expect(await authenticateHuman(pool, other.apiKey)).toBeNull();
+    });
+
     it('create_principal refuses the reserved internal `__…__` display name (R-06)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await expectRefused(

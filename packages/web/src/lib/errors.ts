@@ -139,9 +139,10 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
   },
   // How to come back depends on the kind of member, so the drawer says that part
   // (`PrincipalDetail`, which reads the member again on this refusal) — #1198 UX P3.
+  // `set_principal_role` and `rotate_api_key` (legacy 734) both refuse a disabled member.
   disabled: {
-    zh: '这个成员已停用，角色不能再改，什么也没有改。',
-    en: 'This member is disabled, so their role cannot change, and nothing changed.',
+    zh: '这个成员已停用，角色和 API key 都不能再改，什么也没有改。',
+    en: 'This member is disabled, so neither their role nor their API key can change, and nothing changed.',
   },
 };
 

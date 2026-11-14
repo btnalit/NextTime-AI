@@ -751,8 +751,9 @@ async function loadMembership(
 // auth.ts) — one rule for both planes: the last active human owner, a service owner never
 // counting toward it.
 export const setMembershipRoleHandler: CapabilityHandler = async (client, _workspaceId, params) => {
-  const input = params as { userId: string; workspaceId: string; role: Role };
+  const input = params as { userId: string; workspaceId: string; role: Role; principalId?: string };
   const seen = await loadMembership(client, input.userId, input.workspaceId);
+  assertCallerSawMembership(input.principalId, seen, input.workspaceId);
   assertMembershipNotRemoved(seen, input.workspaceId);
   // Legacy 696: the role is already the one asked for, so the person's authority does not change
   // and nothing else does either — no write, no session ends, no Handle is revoked. Ending the
@@ -816,6 +817,24 @@ function assertMembershipNotRemoved(membership: UserMembershipWire, workspaceId:
   }
 }
 
+/** Legacy 732 (#1198 UX): the membership the caller read, when it says which (`principalId`). A
+ *  page read before the user was removed and added back — both committed before this call — would
+ *  otherwise act on the new membership, which it never saw. Refused as a replacement found under
+ *  the lock is (`assertSameMembership`). Callers that do not name one act on the user's current
+ *  membership there, as before. */
+function assertCallerSawMembership(
+  principalId: string | undefined,
+  current: UserMembershipWire,
+  workspaceId: string,
+): void {
+  if (principalId !== undefined && principalId !== current.principalId) {
+    throw new PlatformAdminError(
+      'membership_replaced',
+      `the membership you read (principal ${principalId}) is no longer the user's membership in workspace ${workspaceId}: it was removed and the user added back, as a new membership — nothing changed; read it again`,
+    );
+  }
+}
+
 /** The membership read under the locks is the one locked: between the two reads it could only
  *  have been replaced by being removed and the user added back (legacy 725). The new one is not
  *  locked here and the caller has not seen it, so nothing is done to it (#1198 review): its own
@@ -834,8 +853,9 @@ function assertSameMembership(
 }
 
 export const removeMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
-  const input = params as { userId: string; workspaceId: string };
+  const input = params as { userId: string; workspaceId: string; principalId?: string };
   const seen = await loadMembership(client, input.userId, input.workspaceId);
+  assertCallerSawMembership(input.principalId, seen, input.workspaceId);
   // Legacy 702 (governance 0043): the user's and the Principal's authority locks, in that order,
   // before any row is locked here (`revokeUserCredentials` takes the user's again).
   await lockAuthoritiesForChange(client, {
@@ -846,9 +866,10 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is,
   // nothing written and the audit row saying the call changed nothing (legacy 696). Nothing left
   // works for it: its sessions and their Handles ended when it was disabled (governance 0043's
-  // trigger, 0042), and none can be issued for it again. A legacy API key the workspace-side
-  // disable left on the row stays there (`has_api_key` still says so) but no longer authenticates:
-  // key lookups skip a disabled Principal (`lookupPrincipalByApiKeyHash`).
+  // trigger, 0042), and none can be issued for it again. A legacy API key a workspace-side disable
+  // left on the row before legacy 734 (which now clears it) stays there (`has_api_key` still says
+  // so) but no longer authenticates: key lookups skip a disabled Principal
+  // (`lookupPrincipalByApiKeyHash`).
   const membership = await loadMembership(client, input.userId, input.workspaceId);
   assertSameMembership(seen, membership, input.workspaceId);
   const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };

@@ -74,6 +74,26 @@ export function principalDisplayRole(
   return principal.kind === 'human' ? role : `${role} · ${principalKindLabel(principal.kind, t)}`;
 }
 
+/** Legacy 734: what a member's API key line says — on the Members list (`'list'`) and in the
+ *  member's drawer (`'detail'`). A disabled member authenticates with no key: disabling clears it
+ *  now, and one a disable left on the row before that reads as not working, never as issued. */
+export function apiKeyStatusLabel(
+  principal: Pick<PrincipalRow, 'hasApiKey' | 'disabledAt'>,
+  form: 'list' | 'detail',
+  t: Translate,
+): string {
+  if (!principal.hasApiKey)
+    return form === 'list' ? t('无 API key', 'No API key') : t('无', 'none');
+  if (principal.disabledAt)
+    return form === 'list'
+      ? t('API key 已失效', 'API key no longer works')
+      : t(
+          '已失效（已停用的成员不能用 key 认证）',
+          'no longer works (a disabled member cannot sign in with a key)',
+        );
+  return form === 'list' ? t('已签发', 'API key issued') : t('已签发', 'issued');
+}
+
 /** R-06 (review 2026-10-02, D-05): what the `kit/confirm` `irreversible` tier says before a
  *  service credential holds the owner role — on create (`CreatePrincipalForm`) and on promotion
  *  (`PrincipalDetail`) alike, so "create as member, then promote" reads the same warning. */
