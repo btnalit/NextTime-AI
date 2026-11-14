@@ -124,6 +124,18 @@ function createFakePool(): PoolLike {
     if (sql.startsWith('select 1 from eval_seal_holds')) {
       return { rows: [], rowCount: 0 };
     }
+    // Legacy 434: the reads an entry Turn is prepared from — none set here (no AgentProfile or
+    // AgentPolicy row, no published Skill or entry WorkerDefinition, default platform settings).
+    // A read that fails now ends the Turn instead of being taken for "none", so each is answered.
+    if (
+      sql.startsWith('select workspace_id, principal_id, model, excluded_skills') ||
+      sql.startsWith('select workspace_id, allowed_models') ||
+      sql.startsWith('select id from skills') ||
+      sql.startsWith('select workspace_id, id, version, kind, status, definition') ||
+      sql.startsWith('select settings, version, updated_at from platform_settings')
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
     throw new Error(`fake pool: unhandled query: ${sql}`);
   });
 

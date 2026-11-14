@@ -191,7 +191,7 @@ interface CachedHandle {
    *  comparison without any extra logic. */
   readonly gatekeeperIds: readonly string[];
   /** S3.13: `agent_profiles.updated_at`/`agent_policies.updated_at`, joined into one comparable
-   *  string (`agentProfileVersionKey` below) — catches a Profile/Policy change that does *not*
+   *  string (`ResolvedAgentProfile.versionKey` below) — catches a Profile/Policy change that does *not*
    *  alter `gatekeeperIds` (a model/Skill-set/promptAddendum/autoApproveLow edit) so this
    *  in-memory cache never keeps serving a token minted under stale settings merely because the
    *  DB-side `revokeEntrySessionHandles` call (`application/gateway/agent-profile-handlers.ts`)
@@ -242,20 +242,10 @@ function sameGatekeeperScope(a: readonly string[], b: readonly string[]): boolea
  *  from both rows' own `updated_at` (see `CachedHandle.profileVersionKey`'s own doc comment for
  *  why a timestamp comparison — not a content hash — is the right freshness signal here: any
  *  committed `set_agent_profile`/`set_agent_policy` write always bumps its own row's `updated_at`,
- *  so a distinct key reliably means "something changed since this was last read", and an
- *  unresolved (`undefined`) sentinel below is itself a distinct, stable key. */
+ *  so a distinct key reliably means "something changed since this was last read"). */
 interface ResolvedAgentProfile {
   readonly effective: EffectiveAgentProfile;
   readonly versionKey: string;
-}
-
-/** `resolved` is `undefined` when `resolveAgentProfile` itself failed (never a Turn-failing
- *  condition — see that method's own doc comment) — represented by a fixed sentinel key distinct
- *  from any real `versionKey`, so a transient resolution failure is still treated as "changed"
- *  relative to a previously-cached success (and vice versa) rather than silently comparing equal
- *  to whatever the cache happened to hold. */
-function agentProfileVersionKey(resolved: ResolvedAgentProfile | undefined): string {
-  return resolved?.versionKey ?? 'unresolved';
 }
 
 /** One Skill mounted by content — the same shape `KernelStartTurnCommandSchema`'s own
@@ -474,101 +464,89 @@ export class AgentHostRuntime implements AgentRuntime {
 
   /** The entry agent's Turn: its Handle, its workspace's published entry WorkerDefinition, the
    *  person's AgentProfile and Skills, the platform's instructions and runtime image. `undefined`
-   *  when the Turn could not be prepared — it has been ended. */
+   *  when the Turn could not be prepared — it has been ended, `failed` (or `interrupted` when
+   *  stopped meanwhile).
+   *
+   *  Legacy 434: all or nothing. Each read below is fresh per Turn (publish is rare; the extra
+   *  read is cheap and rules out a stale-cache class of bug), and a read that fails ends the Turn
+   *  here instead of launching it with that part missing. "Could not read it" is not "there is
+   *  none": the frame would carry no prompt, no egress list, the whole Grant-derived gate set
+   *  instead of the profile's, no platform instructions, no Skills or no image, and
+   *  worker-supervisor reads each absence as the workspace's choice — it removes the written
+   *  prompt on a recreate, applies the (empty) egress list live on a reuse and recreates the
+   *  container without the Skills. Every Task and Worker container (`application/task`) already
+   *  fails its start on the same reads. */
   private async prepareEntryTurn(
     input: StartTurnInput,
     turn: ActiveTurn,
   ): Promise<TurnLaunch | undefined> {
-    // S3.13: the caller's own AgentProfile/AgentPolicy, resolved fresh on every startTurn (same
-    // "cheap, never a stale-cache class of bug" convention `resolveEntryDefinition` below already
-    // established) — computed once and threaded through `ensureEntryHandle` (gate narrowing +
-    // cache freshness), the model/prompt-addendum merge, and the Skill-mount resolution below, so
-    // no consumer re-reads `agent_profiles`/`agent_policies` a second time this Turn.
-    const agentProfile = await this.resolveAgentProfile(input.workspaceId, input.principalId);
-
-    let handleToken: string;
+    const { workspaceId, principalId, turnId } = input;
+    let step = 'the AgentProfile/AgentPolicy';
     try {
-      handleToken = await this.ensureEntryHandle(
-        input.workspaceId,
-        input.principalId,
-        agentProfile,
+      // S3.13: the caller's own AgentProfile/AgentPolicy — computed once and threaded through
+      // `ensureEntryHandle` (gate narrowing + cache freshness), the model/prompt-addendum merge and
+      // the Skill-mount resolution below, so nothing re-reads `agent_profiles`/`agent_policies`.
+      const agentProfile = await this.resolveAgentProfile(workspaceId, principalId);
+      step = 'the entry session/Handle';
+      const handleToken = await this.ensureEntryHandle(workspaceId, principalId, agentProfile);
+      // S2.6: the entry container's system prompt/model/egress list, from the workspace's currently
+      // published `kind='entry'` WorkerDefinition (`undefined` when none is published —
+      // `entrypoint.sh`'s static prompt and pi's default model then apply).
+      step = 'the published entry WorkerDefinition';
+      const entryDefinition = await this.resolveEntryDefinition(workspaceId, principalId);
+      // S3.13: the caller's own `effective.enabledSkills`, rendered into mountable content the same
+      // way `application/task/definition-content.ts`'s `resolveSkillsInline` does for the Task path.
+      step = 'the enabled Skills';
+      const skillsInline = await this.resolveSkillsInline(
+        workspaceId,
+        principalId,
+        agentProfile.effective,
       );
+      // P-A2: the administrator's platform-wide addendum (docs/platform-admin-design.md §6.6).
+      step = 'the platform instructions';
+      const instanceInstructions = await this.resolveInstanceInstructions(workspaceId, principalId);
+      // S7-E (P-C §6.5 决定 E1): the platform's active runtime image (`undefined` when unset —
+      // worker-supervisor's own `WORKER_IMAGE` env default applies).
+      step = 'the active runtime image';
+      const image = await this.resolveActiveRuntimeImage(workspaceId, principalId);
+
+      // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
+      // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
+      const systemPrompt = composeSystemPrompt({
+        base: entryDefinition?.systemPrompt,
+        instanceInstructions,
+        promptAddendum: agentProfile.effective.promptAddendum,
+      });
+
+      // S3.13: the person's AgentProfile `model` wins when set; otherwise the published entry
+      // WorkerDefinition's (see `sendStartTurnFrame`).
+      const model = agentProfile.effective.model
+        ? agentProfile.effective.model
+        : entryDefinition?.model;
+
+      return {
+        handle: handleToken,
+        systemPrompt,
+        model,
+        egressDeny: entryDefinition?.egressDeny,
+        skillsInline,
+        image,
+      };
     } catch (err) {
-      this.activeTurns.delete(input.turnId);
+      this.activeTurns.delete(turnId);
       this.log(
         JSON.stringify({
           level: 'error',
-          msg: 'agent-host-runtime: failed to prepare the entry session/Handle',
-          turnId: input.turnId,
-          principalId: input.principalId,
+          msg: `agent-host-runtime: could not read ${step} — the entry turn was not started`,
+          turnId,
+          workspaceId,
+          principalId,
           error: String(err),
         }),
       );
       await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
       return undefined;
     }
-
-    // S2.6: the entry container's system prompt/model, from the workspace's currently published
-    // `kind='entry'` WorkerDefinition — resolved fresh on every startTurn (publish is rare; the
-    // extra read is cheap and avoids a stale-cache class of bug entirely) and never fatal: a
-    // lookup failure, or no entry definition ever having been published, falls back to `undefined`
-    // fields on the outbound frame, which `entrypoint.sh`'s own write-if-missing static prompt
-    // (and pi's default model selection) already cover — see this class's own doc comment.
-    const entryDefinition = await this.resolveEntryDefinition(
-      input.workspaceId,
-      input.principalId,
-      input.turnId,
-    );
-
-    // S3.13: the caller's own `effective.enabledSkills`, rendered into mountable content the same
-    // way `application/task/definition-content.ts`'s `resolveSkillsInline` already does for the
-    // Task path — see `resolveSkillsInline` below for the "null means mount nothing" decision.
-    const skillsInline = await this.resolveSkillsInline(
-      input.workspaceId,
-      input.principalId,
-      agentProfile?.effective,
-      input.turnId,
-    );
-
-    // P-A2: the administrator's platform-wide addendum (docs/platform-admin-design.md §6.6),
-    // read fresh per Turn like everything else above; a read failure degrades to "none".
-    const instanceInstructions = await this.resolveInstanceInstructions(
-      input.workspaceId,
-      input.principalId,
-      input.turnId,
-    );
-
-    // S7-E (P-C §6.5 决定 E1): the platform's active runtime image, read fresh per Turn like
-    // everything else above; a read failure degrades to `undefined` (worker-supervisor's own
-    // `WORKER_IMAGE` env default applies), never a Turn failure.
-    const image = await this.resolveActiveRuntimeImage(
-      input.workspaceId,
-      input.principalId,
-      input.turnId,
-    );
-
-    // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
-    // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
-    const systemPrompt = composeSystemPrompt({
-      base: entryDefinition?.systemPrompt,
-      instanceInstructions,
-      promptAddendum: agentProfile?.effective.promptAddendum,
-    });
-
-    // S3.13: the person's AgentProfile `model` wins when set; otherwise the published entry
-    // WorkerDefinition's (see `sendStartTurnFrame`).
-    const model = agentProfile?.effective.model
-      ? agentProfile.effective.model
-      : entryDefinition?.model;
-
-    return {
-      handle: handleToken,
-      systemPrompt,
-      model,
-      egressDeny: entryDefinition?.egressDeny,
-      skillsInline,
-      image,
-    };
   }
 
   /**
@@ -586,11 +564,25 @@ export class AgentHostRuntime implements AgentRuntime {
     input: StartTurnInput,
     turn: ActiveTurn,
   ): Promise<TurnLaunch | undefined> {
-    let basePrompt: string;
-    let handleToken: string;
+    const { workspaceId, principalId } = input;
     try {
-      basePrompt = await this.adminAgentSystemPrompt();
-      handleToken = await this.ensureAdminAgentHandle(input);
+      const basePrompt = await this.adminAgentSystemPrompt();
+      const handleToken = await this.ensureAdminAgentHandle(input);
+      // Legacy 434: as for the entry agent (`prepareEntryTurn`), a read that fails ends the Turn.
+      const agentProfile = await this.resolveAgentProfile(workspaceId, principalId);
+      const entryDefinition = agentProfile.effective.model
+        ? undefined
+        : await this.resolveEntryDefinition(workspaceId, principalId);
+      const instanceInstructions = await this.resolveInstanceInstructions(workspaceId, principalId);
+      const image = await this.resolveActiveRuntimeImage(workspaceId, principalId);
+      return {
+        handle: handleToken,
+        systemPrompt: composeSystemPrompt({ base: basePrompt, instanceInstructions }),
+        model: agentProfile.effective.model ? agentProfile.effective.model : entryDefinition?.model,
+        egressDeny: undefined,
+        skillsInline: [],
+        image,
+      };
     } catch (err) {
       this.activeTurns.delete(input.turnId);
       this.log(
@@ -598,7 +590,7 @@ export class AgentHostRuntime implements AgentRuntime {
           level: err instanceof AdminAgentRefused ? 'warn' : 'error',
           msg: 'agent-host-runtime: the admin agent turn could not be prepared — not started',
           turnId: input.turnId,
-          principalId: input.principalId,
+          principalId,
           ...(err instanceof AdminAgentRefused ? { reason: err.reason } : {}),
           error: String(err),
         }),
@@ -606,29 +598,6 @@ export class AgentHostRuntime implements AgentRuntime {
       await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
       return undefined;
     }
-
-    const agentProfile = await this.resolveAgentProfile(input.workspaceId, input.principalId);
-    const entryDefinition = agentProfile?.effective.model
-      ? undefined
-      : await this.resolveEntryDefinition(input.workspaceId, input.principalId, input.turnId);
-    const instanceInstructions = await this.resolveInstanceInstructions(
-      input.workspaceId,
-      input.principalId,
-      input.turnId,
-    );
-    const image = await this.resolveActiveRuntimeImage(
-      input.workspaceId,
-      input.principalId,
-      input.turnId,
-    );
-    return {
-      handle: handleToken,
-      systemPrompt: composeSystemPrompt({ base: basePrompt, instanceInstructions }),
-      model: agentProfile?.effective.model ? agentProfile.effective.model : entryDefinition?.model,
-      egressDeny: undefined,
-      skillsInline: [],
-      image,
-    };
   }
 
   /** What every Turn does once prepared: the evaluation seal, a last look for a stop, then the
@@ -1123,53 +1092,37 @@ export class AgentHostRuntime implements AgentRuntime {
    * `withWorkspace` query, principled the same way `ensureEntrySession`'s own lookup is (RLS-scoped
    * to `workspaceId`), scoped to `principalId` itself only for the RLS session variable (I1) —
    * `worker_definitions` carries no `principal_id` column (see `application/worker/definitions.ts`'s
-   * own doc comment: the entry WorkerDefinition is workspace-wide, not per-user). Never throws:
-   * any failure (no DB reachable, no entry definition ever published, a malformed `definition`
-   * missing `systemPrompt`) is logged and treated as "nothing to add to this frame" — see this
-   * class's own doc comment on why a lookup here must never fail a Turn.
+   * own doc comment: the entry WorkerDefinition is workspace-wide, not per-user). `undefined` when
+   * none is published; a published one without a `systemPrompt`/`model` leaves that field
+   * `undefined`. A failed read throws (legacy 434) — `prepareEntryTurn`'s doc comment has why.
    *
    * feat/egress-definition-lists: also resolves `egressDeny` off the same definition read — no
-   * second query, same never-throws contract (a malformed/missing `egressDeny` degrades to
-   * `undefined`, exactly like a missing `model`, never to a Turn failure).
+   * second query (a missing/malformed `egressDeny` is `undefined`, exactly like a missing `model`).
    */
   private async resolveEntryDefinition(
     workspaceId: string,
     principalId: string,
-    turnId: string,
   ): Promise<ResolvedEntryDefinition | undefined> {
-    try {
-      const definition = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-        getPublishedEntryDefinition(client, workspaceId),
-      );
-      if (!definition) return undefined;
+    const definition = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+      getPublishedEntryDefinition(client, workspaceId),
+    );
+    if (!definition) return undefined;
 
-      const content = definition.definition as {
-        systemPrompt?: unknown;
-        model?: unknown;
-        egressDeny?: unknown;
-      };
-      const systemPrompt =
-        typeof content.systemPrompt === 'string' && content.systemPrompt.length > 0
-          ? content.systemPrompt
-          : undefined;
-      const model =
-        typeof content.model === 'string' && content.model.length > 0 ? content.model : undefined;
-      const egressDeny = Array.isArray(content.egressDeny)
-        ? content.egressDeny.filter((d): d is string => typeof d === 'string')
+    const content = definition.definition as {
+      systemPrompt?: unknown;
+      model?: unknown;
+      egressDeny?: unknown;
+    };
+    const systemPrompt =
+      typeof content.systemPrompt === 'string' && content.systemPrompt.length > 0
+        ? content.systemPrompt
         : undefined;
-      return { systemPrompt, model, egressDeny };
-    } catch (err) {
-      this.log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host-runtime: failed to resolve the published entry WorkerDefinition (falling back to entrypoint.sh’s static prompt/default model)',
-          turnId,
-          workspaceId,
-          error: String(err),
-        }),
-      );
-      return undefined;
-    }
+    const model =
+      typeof content.model === 'string' && content.model.length > 0 ? content.model : undefined;
+    const egressDeny = Array.isArray(content.egressDeny)
+      ? content.egressDeny.filter((d): d is string => typeof d === 'string')
+      : undefined;
+    return { systemPrompt, model, egressDeny };
   }
 
   /**
@@ -1192,7 +1145,7 @@ export class AgentHostRuntime implements AgentRuntime {
    * `effective.enabledGatekeepers` when the profile sets one (`null` = no restriction beyond the
    * Grant ceiling above — S3.13's own core invariant, "Profile 是 Grant 的子集投影，永不扩权": this
    * can only ever remove ids from the Grant-derived list, never add one that is not already
-   * there). The cache-freshness comparison also now includes `agentProfileVersionKey` alongside
+   * there). The cache-freshness comparison also now includes the profile's `versionKey` alongside
    * `sameGatekeeperScope`, so a Profile/Policy change that does not itself alter the gate set
    * (model, Skills, promptAddendum, autoApproveLow) still forces a fresh mint on the caller's very
    * next Turn — see `CachedHandle.profileVersionKey`'s own doc comment for why the in-memory cache
@@ -1206,7 +1159,7 @@ export class AgentHostRuntime implements AgentRuntime {
   private async ensureEntryHandle(
     workspaceId: string,
     principalId: string,
-    agentProfile: ResolvedAgentProfile | undefined,
+    agentProfile: ResolvedAgentProfile,
   ): Promise<string> {
     const cached = this.handleCache.get(principalId);
     const { role, disabled, cachedRevoked } = await this.readHandleFreshness(
@@ -1232,11 +1185,11 @@ export class AgentHostRuntime implements AgentRuntime {
           resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
         }),
     );
-    const enabledGatekeepers = agentProfile?.effective.enabledGatekeepers;
+    const enabledGatekeepers = agentProfile.effective.enabledGatekeepers;
     const gatekeeperIds = enabledGatekeepers
       ? grantedGatekeeperIds.filter((id) => enabledGatekeepers.includes(id))
       : grantedGatekeeperIds;
-    const profileVersionKey = agentProfileVersionKey(agentProfile);
+    const profileVersionKey = agentProfile.versionKey;
 
     if (
       cached &&
@@ -1410,13 +1363,36 @@ export class AgentHostRuntime implements AgentRuntime {
     });
   }
 
+  /** P-A2: `PlatformSettings.instanceInstructions`, `''` when unset. A failed read throws
+   *  (legacy 434, same as `resolveEntryDefinition`). */
+  private async resolveInstanceInstructions(
+    workspaceId: string,
+    principalId: string,
+  ): Promise<string> {
+    return withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+      readInstanceInstructions(client),
+    );
+  }
+
+  /** S7-E (P-C §6.5 决定 E1): `PlatformSettings.activeRuntimeImage`, `undefined` when unset —
+   *  worker-supervisor's own `WORKER_IMAGE` env default then applies. A failed read throws
+   *  (legacy 434, same as `resolveEntryDefinition`): an unreadable setting is not an unset one. */
+  private async resolveActiveRuntimeImage(
+    workspaceId: string,
+    principalId: string,
+  ): Promise<string | undefined> {
+    return withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+      resolveActiveRuntimeImage(client),
+    );
+  }
+
   /**
    * S3.13: resolves the caller's own AgentProfile/AgentPolicy and applies the pure resolution rule
    * (`governance/agent-profile`'s `resolveEffectiveAgentProfile`) — a read-only `withWorkspace`
-   * query, same "resolved fresh on every startTurn, never fatal" convention `resolveEntryDefinition`
-   * above already established (a lookup failure degrades to `undefined`, meaning "no override on
-   * top of whatever the platform WorkerDefinition/entrypoint default already provides", never a
-   * failed Turn).
+   * query, resolved fresh on every startTurn like `resolveEntryDefinition`. No profile row is "no
+   * override"; a failed read throws (legacy 434) — the Handle would otherwise carry every
+   * Grant-derived gate instead of the profile's narrower set, and the prompt addendum, model and
+   * Skills the person chose would be missing.
    *
    * `available.publishedSkillIds`/`grantedGatekeeperIds` are resolved here too — `governance/
    * agent-profile/resolve.ts`'s own doc comment has the full rationale: a `null` (inherit)
@@ -1428,95 +1404,32 @@ export class AgentHostRuntime implements AgentRuntime {
    * feeds `ensureEntryHandle`'s own gate-narrowing), so there is no already-computed value to
    * reuse yet; the extra read is cheap and keeps the two methods independently callable/testable.
    */
-  /** P-A2: `PlatformSettings.instanceInstructions`, `''` when unset or unreadable (never fatal —
-   *  same convention as `resolveEntryDefinition`). */
-  private async resolveInstanceInstructions(
-    workspaceId: string,
-    principalId: string,
-    turnId: string,
-  ): Promise<string> {
-    try {
-      return await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-        readInstanceInstructions(client),
-      );
-    } catch (err) {
-      this.log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host-runtime: failed to read platform instanceInstructions (continuing without)',
-          turnId,
-          error: String(err),
-        }),
-      );
-      return '';
-    }
-  }
-
-  /** S7-E (P-C §6.5 决定 E1): `PlatformSettings.activeRuntimeImage`, `undefined` when unset or
-   *  unreadable (never fatal — same convention as `resolveInstanceInstructions` above; a read
-   *  failure leaves worker-supervisor's own `WORKER_IMAGE` env default in effect, exactly as an
-   *  unset setting already does). */
-  private async resolveActiveRuntimeImage(
-    workspaceId: string,
-    principalId: string,
-    turnId: string,
-  ): Promise<string | undefined> {
-    try {
-      return await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-        resolveActiveRuntimeImage(client),
-      );
-    } catch (err) {
-      this.log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host-runtime: failed to read platform activeRuntimeImage (continuing without)',
-          turnId,
-          error: String(err),
-        }),
-      );
-      return undefined;
-    }
-  }
-
   private async resolveAgentProfile(
     workspaceId: string,
     principalId: string,
-  ): Promise<ResolvedAgentProfile | undefined> {
-    try {
-      return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-        // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries).
-        const profile = await readAgentProfile(client, workspaceId, principalId);
-        const policy = await readAgentPolicy(client, workspaceId);
-        const publishedSkillIds = await listPublishedSkillIds(client, workspaceId);
-        const grantedGatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
-          principalId,
-          resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
-        });
-        return {
-          effective: resolveEffectiveAgentProfile(profile, policy, {
-            publishedSkillIds,
-            grantedGatekeeperIds,
-            // No consumer in this class reads `enabledWorkerDefinitions` — entry Turns never
-            // mount/select a WorkerDefinition of their own — so the ceiling is left empty rather
-            // than paying for a third query (`listWorkerDefinitions`) purely to fill a field
-            // nothing here inspects.
-            publishedWorkerDefinitionIds: [],
-          }),
-          versionKey: `${profile?.updatedAt?.getTime() ?? 0}:${policy.updatedAt?.getTime() ?? 0}`,
-        };
+  ): Promise<ResolvedAgentProfile> {
+    return withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+      // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries).
+      const profile = await readAgentProfile(client, workspaceId, principalId);
+      const policy = await readAgentPolicy(client, workspaceId);
+      const publishedSkillIds = await listPublishedSkillIds(client, workspaceId);
+      const grantedGatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
+        principalId,
+        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
       });
-    } catch (err) {
-      this.log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host-runtime: failed to resolve the caller’s AgentProfile/AgentPolicy (falling back to no override)',
-          workspaceId,
-          principalId,
-          error: String(err),
+      return {
+        effective: resolveEffectiveAgentProfile(profile, policy, {
+          publishedSkillIds,
+          grantedGatekeeperIds,
+          // No consumer in this class reads `enabledWorkerDefinitions` — entry Turns never
+          // mount/select a WorkerDefinition of their own — so the ceiling is left empty rather
+          // than paying for a third query (`listWorkerDefinitions`) purely to fill a field
+          // nothing here inspects.
+          publishedWorkerDefinitionIds: [],
         }),
-      );
-      return undefined;
-    }
+        versionKey: `${profile?.updatedAt?.getTime() ?? 0}:${policy.updatedAt?.getTime() ?? 0}`,
+      };
+    });
   }
 
   /**
@@ -1527,38 +1440,22 @@ export class AgentHostRuntime implements AgentRuntime {
    * `resolveAgentProfile` above (never `null` — "every published Skill" when the principal's own
    * AgentProfile sets no explicit selection, `governance/agent-profile/resolve.ts`'s own doc
    * comment), so this method only ever renders whatever concrete list it is given; an empty list
-   * mounts nothing. Never fatal: a lookup failure degrades to no Skills mounted, same convention
-   * as `resolveEntryDefinition`/`resolveAgentProfile` above.
+   * mounts nothing. A failed read throws (legacy 434), as the Task path's does.
    */
   private async resolveSkillsInline(
     workspaceId: string,
     principalId: string,
-    agentProfile: EffectiveAgentProfile | undefined,
-    turnId: string,
+    agentProfile: EffectiveAgentProfile,
   ): Promise<SkillInlineMount[]> {
-    const refs = agentProfile?.enabledSkills;
+    const refs = agentProfile.enabledSkills;
     if (!refs || refs.length === 0) return [];
-    try {
-      return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-        const skills = await resolvePublishedSkills(client, workspaceId, refs);
-        return skills.map((skill) => ({
-          name: skill.name,
-          files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
-        }));
-      });
-    } catch (err) {
-      this.log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host-runtime: failed to resolve effective.enabledSkills into mountable content (falling back to no Skills mounted)',
-          turnId,
-          workspaceId,
-          principalId,
-          error: String(err),
-        }),
-      );
-      return [];
-    }
+    return withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+      const skills = await resolvePublishedSkills(client, workspaceId, refs);
+      return skills.map((skill) => ({
+        name: skill.name,
+        files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
+      }));
+    });
   }
 
   /**
