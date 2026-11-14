@@ -44,6 +44,7 @@ import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
 import { ActingThroughChip } from './ActingThroughChip.js';
+import { AuditMigrationActor } from './AuditMigrationActor.js';
 import { AuditPayloadNotes, adminProposalBreakerTarget } from './AuditPayloadNotes.js';
 import { AuditRefusedChip } from './AuditRefusedChip.js';
 import { AuditUnchangedChip } from './AuditUnchangedChip.js';
@@ -425,17 +426,19 @@ export function AuditLogSection({
                     </time>
                   </div>
                   <div className="data-row-meta">
-                    <RefChip
-                      kind="principal"
-                      id={row.actorPrincipalId}
-                      name={nameOf(principalNames, row.actorPrincipalId)}
-                      size="s"
-                    />
-                    <ActingThroughChip
-                      actingThrough={row.actingThrough}
-                      actingName={row.actingName}
-                      payload={row.payload}
-                    />
+                    <AuditMigrationActor payload={row.payload}>
+                      <RefChip
+                        kind="principal"
+                        id={row.actorPrincipalId}
+                        name={nameOf(principalNames, row.actorPrincipalId)}
+                        size="s"
+                      />
+                      <ActingThroughChip
+                        actingThrough={row.actingThrough}
+                        actingName={row.actingName}
+                        payload={row.payload}
+                      />
+                    </AuditMigrationActor>
                     {row.resourceId ? (
                       <>
                         <span className="meta-sep" />

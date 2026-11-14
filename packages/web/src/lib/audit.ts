@@ -336,6 +336,21 @@ export function auditUnchanged(
   );
 }
 
+/** Legacy 740: the row a migration wrote while the platform was upgraded (`payload.by`,
+ *  `migration <module>/<file>`, e.g. core 0059's `principal.disabled_api_key_cleared`). The audit
+ *  table needs an actor, so the migration records the member it acted on there — not someone who
+ *  did anything. Returns the migration named after the prefix (`core/0059_…`); null for any other
+ *  row. */
+export function auditMigrationSource(
+  payload: Readonly<Record<string, unknown>> | null | undefined,
+): string | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const by = payload.by;
+  if (typeof by !== 'string' || !by.startsWith('migration ')) return null;
+  const source = by.slice('migration '.length).trim();
+  return source === '' ? null : source;
+}
+
 /** Every workspace-scope capability name from `CAPABILITY_REGISTRY` (a dispatched call is
  *  audited under its own name) plus the lifecycle actions above, deduplicated and sorted — the
  *  action selector's suggestion list (§5.5 "action 用能力注册表做选择器"). */
