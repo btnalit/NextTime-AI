@@ -2974,6 +2974,17 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 平台管理员驳回时，界面提示原因会给工作区所有者看到。
 - 无主机动作。
 
+### 3.174 Handle 治理的三处收尾：权限中途变化回 409、不合并进停用用户、Worker 树撤销覆盖晚到的子 Worker（#1172，遗留 708、713、714，0.68.0 之后的下一版）
+
+没有迁移。
+
+- **行为变化**：
+  - 签发 Handle 时，如果调用方的角色或所属用户在这次调用中途变了（拒签码 `authority_changed`），`/api/cap` 回 409 `conflict`，WS 回 `ILLEGAL_TRANSITION`。以前是 401，控制台会因此回到登录页。消息不带 Principal id 和角色名。其余拒签码不变，仍是 401。
+  - `merge_user` 的目标用户已停用时，返回 409 `user_disabled`，什么都不改。
+  - 撤销 Worker 树时，等待期间新派生的子 Worker 也会被撤销。极少数情况下，同一棵树的两个撤销者之一会整笔回滚并报错，重试即可，不会留下漏撤的 Handle。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
