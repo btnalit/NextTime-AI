@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import type {
+  GateAddressChangeOutcomeWire,
   GateAddressChangePreviewWire,
   GateAddressChangeWire,
   GateAddressManifestComparisonWire,
@@ -60,6 +61,19 @@ const change: GateAddressChangeWire = {
   rejectionReason: null,
 };
 
+/** Legacy 715: the gate's last proposal, rejected with a reason. */
+const lastRejected: GateAddressChangeOutcomeWire = {
+  id: 'gac-0',
+  gatekeeperId: GATE,
+  fromEndpoint: FROM,
+  toEndpoint: 'https://gate-b.example.com',
+  status: 'rejected',
+  createdAt: '2026-11-12T00:00:00.000Z',
+  endedAt: '2026-11-12T06:00:00.000Z',
+  rejectionReason: 'Not that host.',
+  accountCredentialsLeftOnOldHost: false,
+};
+
 interface Script {
   /** The gate's open proposal, read by every `get_gatekeeper`. */
   pending?: GateAddressChangeWire | undefined;
@@ -68,6 +82,8 @@ interface Script {
   propose?: (params: unknown) => unknown;
   /** Every `get_gatekeeper` after a withdrawal never answers (a slow read). */
   stallReadsAfterWithdraw?: boolean;
+  /** Legacy 715: how the gate's last proposal ended, read by every `get_gatekeeper`. */
+  outcome?: GateAddressChangeOutcomeWire;
 }
 
 function scriptedHttp(script: Script): CapabilityCaller & {
@@ -88,6 +104,7 @@ function scriptedHttp(script: Script): CapabilityCaller & {
             name: 'notes',
             endpoint: FROM,
             ...(script.pending ? { pendingAddressChange: script.pending } : {}),
+            ...(script.outcome ? { lastAddressChangeOutcome: script.outcome } : {}),
           };
         case 'mint_connection_secret':
           minted += 1;
@@ -134,6 +151,23 @@ async function enterAddress(value: string): Promise<void> {
 }
 
 describe('GateAddressChangeSheet (legacy 701)', () => {
+  it('legacy 715: why the last move did not take shows above the steps, and gives way to the next proposal', async () => {
+    const http = scriptedHttp({ outcome: lastRejected });
+    show(http);
+    const notice = await screen.findByTestId('gate-address-change-outcome');
+    expect(notice.textContent).toContain('换地址的申请被平台管理员驳回了');
+    expect(screen.getByTestId('gate-address-change-outcome-reason').textContent).toMatch(
+      /^原因：Not that host\.$/,
+    );
+    // The steps are there to propose again.
+    await enterAddress('gate-b:8443');
+    fireEvent.click(previewButton());
+    await screen.findByTestId('gate-address-change-manifest-match');
+    fireEvent.click(proposeButton());
+    await screen.findByTestId('gate-address-change-pending');
+    expect(screen.queryByTestId('gate-address-change-outcome')).toBeNull();
+  });
+
   it('mints a secret for the new address, previews it with that secret, and proposes what was previewed', async () => {
     const http = scriptedHttp({});
     show(http);
@@ -271,7 +305,12 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
   // Review #501 of #1158: the withdrawn proposal and its 撤回 do not linger while the gate is read
   // again — that read still answers with the proposal until it returns.
   it('a withdrawn proposal is gone at once, before the gate is read again', async () => {
-    const http = scriptedHttp({ pending: change, stallReadsAfterWithdraw: true });
+    // Legacy 715: nor does the read's older outcome show up in its place meanwhile.
+    const http = scriptedHttp({
+      pending: change,
+      stallReadsAfterWithdraw: true,
+      outcome: lastRejected,
+    });
     show(http);
     const pending = await screen.findByTestId('gate-address-change-pending');
     fireEvent.click(within(pending).getByTestId('gate-address-change-withdraw'));
@@ -282,6 +321,7 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
     expect(screen.queryByTestId('gate-address-change-pending')).toBeNull();
     expect(screen.queryByTestId('gate-address-change-withdraw')).toBeNull();
     expect((await screen.findByTestId('connection-secret-value')).textContent).toBe(secretNo(1));
+    expect(screen.queryByTestId('gate-address-change-outcome')).toBeNull();
   });
 
   // UX acceptance of #1158 (must-fix): the most common refusal here — the gate at the new address
