@@ -380,7 +380,7 @@ export function SkillEditor({
 
       <Field
         id="skill-name"
-        label={t('名称', 'name')}
+        label={t('名称', 'Name')}
         required
         error={errors.name || null}
         hint={nameHint}
@@ -406,7 +406,7 @@ export function SkillEditor({
       </Field>
       <Field
         id="skill-description"
-        label={t('描述', 'description')}
+        label={t('描述', 'Description')}
         required
         error={errors.description || null}
         hint={t('一句话说明何时用它（≤ 1024 字）。', 'One line on when to use it (≤ 1024 chars).')}

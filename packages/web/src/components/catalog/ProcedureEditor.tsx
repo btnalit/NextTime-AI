@@ -382,7 +382,7 @@ export function ProcedureEditor({
         />
       ) : (
         <>
-          <Field id="procedure-name" label={t('名称', 'name')} required error={errors.name || null}>
+          <Field id="procedure-name" label={t('名称', 'Name')} required error={errors.name || null}>
             <Input
               id="procedure-name"
               value={form.name}
@@ -394,7 +394,7 @@ export function ProcedureEditor({
           </Field>
           <Field
             id="procedure-description"
-            label={t('描述', 'description')}
+            label={t('描述', 'Description')}
             required
             error={errors.description || null}
           >
@@ -458,7 +458,7 @@ export function ProcedureEditor({
                 >
                   <div className="row-wrap">
                     <span className="tag">{index + 1}</span>
-                    <Field id={`${prefix}-kind`} label={t('类型', 'kind')}>
+                    <Field id={`${prefix}-kind`} label={t('类型', 'Kind')}>
                       <Select
                         id={`${prefix}-kind`}
                         value={step.kind}
@@ -542,7 +542,7 @@ export function ProcedureEditor({
                     <div className="row-wrap">
                       <Field
                         id={`${prefix}-definition`}
-                        label={t('Worker 定义', 'definitionId')}
+                        label={t('Worker 定义', 'Worker definition')}
                         required
                         error={definitionError}
                       >
@@ -615,7 +615,7 @@ export function ProcedureEditor({
                       </Field>
                       <Field
                         id={`${prefix}-version`}
-                        label={t('版本', 'version')}
+                        label={t('版本', 'Version')}
                         required
                         error={versionError}
                       >
@@ -705,7 +705,7 @@ export function ProcedureEditor({
                   ) : null}
                   <Field
                     id={`${prefix}-description`}
-                    label={t('说明', 'description')}
+                    label={t('说明', 'Description')}
                     required={step.kind === 'approval' || step.kind === 'verify'}
                     error={fieldError('description')}
                   >

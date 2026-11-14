@@ -5,6 +5,7 @@ import { nextStepKey } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { draftScope, loadDraftValue, saveDraftValue } from '../../lib/drafts.js';
 import { HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { ProcedureEditor } from './ProcedureEditor.js';
 
@@ -1896,6 +1897,25 @@ describe('ProcedureEditor (S6-A A2)', () => {
     const reason = within(step).getByText(/这个 Operation 没有发布，或已不存在/);
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(reason.id);
+  });
+  it('legacy 745: the English field labels are words, not schema keys', () => {
+    try {
+      localStorage.setItem('nexttime.lang', 'en');
+      const { caller } = http({ list_operations: () => ({ items: OPERATIONS }) });
+      render(
+        <LangProvider>
+          <ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />
+        </LangProvider>,
+      );
+      fireEvent.click(screen.getByTestId('procedure-add-step'));
+      expect(screen.getByLabelText(/^Name/)).toBeTruthy();
+      // The Procedure's own and the step's.
+      expect(screen.getAllByLabelText(/^Description/).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByLabelText(/^Kind/)).toBeTruthy();
+      expect(screen.queryByLabelText(/^(name|description|kind)/)).toBeNull();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });
 

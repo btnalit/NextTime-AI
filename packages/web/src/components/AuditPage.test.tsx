@@ -591,6 +591,95 @@ describe('AuditPage entry points', () => {
     expect(within(refused).queryByTestId('audit-unchanged')).toBeNull();
   });
 
+  it('legacy 740: a row a migration wrote says 升级时写入 and names the migration, not the member it recorded', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({
+        items: [
+          auditRow({ id: 'audit-person', action: 'disable_principal', payload: {} }),
+          auditRow({
+            id: 'audit-migration',
+            action: 'principal.disabled_api_key_cleared',
+            resourceType: 'principal',
+            resourceId: 'p-1',
+            payload: { by: 'migration core/0059_disabled_principal_no_api_key', reason: 'r' },
+          }),
+          auditRow({
+            id: 'audit-other-by',
+            action: 'set_principal_role',
+            payload: { by: 'the host operator' },
+          }),
+          // #1220 review P3-1: governance 0020 records the rule's writer, the row being about the policy.
+          auditRow({
+            id: 'audit-migration-policy',
+            action: 'policy.auto_approve_definition_unproven',
+            resourceType: 'policy',
+            resourceId: 'pol-1',
+            payload: {
+              by: 'migration governance/0020_auto_approve_definition',
+              definitionId: 'wd-1',
+            },
+          }),
+        ],
+      }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('audit-list');
+    const rows = within(list).getAllByTestId('audit-row');
+    const rowOf = (action: string) => {
+      const found = rows.find((row) =>
+        Array.from(row.querySelectorAll('.mono')).some((el) => el.textContent === action),
+      );
+      if (!found) throw new Error(`no row for ${action}`);
+      return found;
+    };
+    const meta = (row: HTMLElement) => row.querySelector('.data-row-meta') as HTMLElement;
+
+    const migration = meta(rowOf('principal.disabled_api_key_cleared'));
+    expect(within(migration).getByTestId('audit-by-migration').textContent).toBe('升级时写入');
+    expect(within(migration).getByTestId('audit-by-migration').getAttribute('title')).toContain(
+      '不是哪位成员的操作',
+    );
+    expect(within(migration).getByTestId('audit-by-migration-source').textContent).toBe(
+      'core/0059_disabled_principal_no_api_key',
+    );
+    expect(within(migration).queryByTestId('audit-acting-through')).toBeNull();
+    // The member it acted on is still there, as what the row is about — not as its actor.
+    expect(migration.querySelector('[data-ref-kind="principal"]')).toBeNull();
+    const subject = migration.querySelector('[data-ref-kind="object"][data-ref-id="p-1"]');
+    // UX acceptance of #1220 (P2): by its name, not only its id.
+    expect(subject?.querySelector('.ref-chip-name')?.textContent).toBe(
+      `成员 ${principal.displayName}`,
+    );
+
+    // It acted on that member, so no 「记在 …」 repeats them.
+    expect(within(migration).queryByTestId('audit-by-migration-recorded-under')).toBeNull();
+
+    // A row about something else keeps whose rule it was, as 「记在 [member]」 — not as its actor.
+    const policyRow = meta(rowOf('policy.auto_approve_definition_unproven'));
+    // UX acceptance of #1220 (P3): governance 0020's rows read by their label, not the action name.
+    expect(rowOf('policy.auto_approve_definition_unproven').textContent).toContain(
+      '自动批准规则已暂停',
+    );
+    expect(within(policyRow).getByTestId('audit-by-migration').textContent).toBe('升级时写入');
+    expect(within(policyRow).queryByTestId('audit-acting-through')).toBeNull();
+    const recordedUnder = within(policyRow).getByTestId('audit-by-migration-recorded-under');
+    expect(recordedUnder.textContent).toContain('记在');
+    expect(
+      recordedUnder.querySelector('[data-ref-kind="principal"][data-ref-id="p-1"]'),
+    ).not.toBeNull();
+    expect(policyRow.querySelectorAll('[data-ref-kind="principal"]')).toHaveLength(1);
+
+    for (const action of ['disable_principal', 'set_principal_role']) {
+      const person = meta(rowOf(action));
+      expect(within(person).queryByTestId('audit-by-migration')).toBeNull();
+      expect(within(person).getByTestId('audit-acting-through')).toBeTruthy();
+      expect(person.querySelector('[data-ref-kind="principal"][data-ref-id="p-1"]')).not.toBeNull();
+    }
+  });
+
   it('legacy 628: a refused call says 被拦下 with its code; a refused read is shown as the kernel keeps it', async () => {
     // What the kernel answers `excludeReads` with (legacy 669): no plain read, the refused one kept.
     const http = scriptedHttp({

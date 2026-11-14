@@ -2542,6 +2542,22 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '升级时调整了一条自动批准规则的适用范围。',
     enHint: "An upgrade changed an auto-approval rule's scope.",
   },
+  // Legacy 218 (governance 0020): an existing 「总是允许」 rule bound to, or suspended without, the
+  // definition it allows.
+  'policy.auto_approve_definition_bound': {
+    zh: '自动批准规则已绑定定义',
+    en: 'Auto-approval bound to a definition',
+    zhHint: '升级时，「总是允许」规则记下了它允许的那一版定义：设置者在这个门上最后批准的那一版。',
+    enHint:
+      'An upgrade made an “Always allow” rule name the definition it allows: the one its writer last approved on this gate.',
+  },
+  'policy.auto_approve_definition_unproven': {
+    zh: '自动批准规则已暂停',
+    en: 'Auto-approval suspended',
+    zhHint: '升级时查不到「总是允许」当初允许的是哪一版定义，规则先暂停，等有人重新允许当前定义。',
+    enHint:
+      'An upgrade could not tell which definition an “Always allow” rule was given for, so it is suspended until someone allows the current one again.',
+  },
   'agent_policy.auto_approve_low_default_applied': {
     zh: '低影响自动批准已开启',
     en: 'Low-impact auto-approval on',

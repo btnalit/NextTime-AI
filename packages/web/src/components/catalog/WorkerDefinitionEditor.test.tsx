@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { WorkerDefinitionEditor } from './WorkerDefinitionEditor.js';
 
 /** A capability checkbox's accessible name is its label then its registry name (audit P1-8). */
@@ -571,6 +572,36 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     expect(calls[0]?.params).not.toHaveProperty('replacesDraft');
     fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
     expect(onShowPendingDraft).toHaveBeenCalledWith({ id: 'wd-d', version: 3 });
+    // Legacy 743 / 744: a next version is proposed, not saved over a draft; nothing went.
+    expect(banner.textContent).toContain('无法创建草稿');
+    expect(within(banner).queryByTestId('worker-propose-after-changed')).toBeNull();
+  });
+
+  it('legacy 745: the English field labels are words, not schema keys', () => {
+    try {
+      localStorage.setItem('nexttime.lang', 'en');
+      const { caller } = http({});
+      render(
+        <LangProvider>
+          <WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />
+        </LangProvider>,
+      );
+      for (const label of [
+        'Kind',
+        'Name',
+        'Model',
+        'Description',
+        'System prompt',
+        'Egress deny list',
+      ]) {
+        expect(screen.getByLabelText(new RegExp(`^${label}`))).toBeTruthy();
+      }
+      expect(screen.getByText('Gates')).toBeTruthy();
+      expect(screen.getByText('Skills')).toBeTruthy();
+      expect(screen.queryByLabelText(/^(description|systemPrompt|egressDeny)/)).toBeNull();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 
   it('legacy 680 (UX acceptance of #1218): refused over the caller’s own draft, the form replaces that draft on request — what was written is kept', async () => {
@@ -653,6 +684,150 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     expect(calls[0]?.params).toMatchObject({ definitionId: 'wd-d', replacesDraft: 2 });
     expect(banner.textContent).toMatch(/你在改的草稿 v2 已经不是待审草稿了/);
     expect(within(banner).queryByTestId('worker-replace-pending-draft')).toBeNull();
+    // Legacy 743: saving an existing draft is not proposing one.
+    expect(banner.textContent).toContain('无法保存草稿');
+    expect(banner.textContent).not.toContain('无法创建草稿');
+  });
+
+  it('legacy 744: the draft being edited went since — what was written is proposed as a new draft on request, replacing nothing', async () => {
+    let first = true;
+    const { caller, calls } = http({
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          throw new HttpError('capability_error', 'kernel text', 'draft_changed', {
+            familyId: 'wd-d',
+            draftVersion: 2,
+          });
+        }
+        return { id: 'wd-d', version: 4, status: 'draft' };
+      },
+    });
+    const onProposed = vi.fn();
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 2,
+          kind: 'worker',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={onProposed}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Written here' } });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/这次写的内容还在编辑器里/);
+    // UX acceptance of #1220 (P3): saving would replace the gone draft again — the banner is the way on.
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(true);
+    const again = within(banner).getByTestId('worker-propose-after-changed');
+    expect(again.textContent).toBe('用这次的内容新建草稿');
+    fireEvent.click(again);
+    await waitFor(() => expect(onProposed).toHaveBeenCalledTimes(1));
+    expect(calls.map((call) => call.params)).toEqual([
+      expect.objectContaining({ definitionId: 'wd-d', replacesDraft: 2 }),
+      expect.objectContaining({
+        definitionId: 'wd-d',
+        definition: expect.objectContaining({ systemPrompt: 'Written here' }),
+      }),
+    ]);
+    expect(calls[1]?.params).not.toHaveProperty('replacesDraft');
+  });
+
+  it('legacy 747: the draft being edited went and its definition has no version left — what was written starts a new definition on request', async () => {
+    let first = true;
+    const { caller, calls } = http({
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          throw new HttpError('capability_error', 'WorkerDefinition not found', 'not_found');
+        }
+        return { id: 'wd-new', version: 1, status: 'draft' };
+      },
+    });
+    const onProposed = vi.fn();
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 1,
+          kind: 'worker',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={onProposed}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Written here' } });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/无法保存草稿/);
+    expect(banner.textContent).toMatch(/这个定义已经没有可用的版本了/);
+    expect(within(banner).queryByTestId('worker-propose-after-changed')).toBeNull();
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(true);
+    const asNew = within(banner).getByTestId('worker-propose-as-new-definition');
+    expect(asNew.textContent).toBe('用这次的内容新建一个定义');
+    fireEvent.click(asNew);
+    await waitFor(() => expect(onProposed).toHaveBeenCalledTimes(1));
+    expect(calls[0]?.params).toMatchObject({ definitionId: 'wd-d', replacesDraft: 1 });
+    expect(calls[1]?.params).toMatchObject({
+      kind: 'worker',
+      definition: expect.objectContaining({ systemPrompt: 'Written here' }),
+    });
+    expect(calls[1]?.params).not.toHaveProperty('definitionId');
+    expect(calls[1]?.params).not.toHaveProperty('replacesDraft');
+  });
+
+  it('legacy 747: a not-found on a new version (not a draft being edited) keeps the plain banner; an entry draft gets no new-definition button', async () => {
+    const notFound = () => {
+      throw new HttpError('capability_error', 'WorkerDefinition not found', 'not_found');
+    };
+    const { caller } = http({ propose_worker_definition: notFound });
+    const { unmount } = render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-p',
+          version: 2,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).not.toMatch(/没有可用的版本/);
+    expect(within(banner).queryByTestId('worker-propose-as-new-definition')).toBeNull();
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(false);
+    unmount();
+
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-e',
+          version: 1,
+          kind: 'entry',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const entryBanner = await screen.findByTestId('worker-editor-error');
+    expect(entryBanner.textContent).toMatch(/入口定义不能在这里新建/);
+    expect(within(entryBanner).queryByTestId('worker-propose-as-new-definition')).toBeNull();
   });
 
   it('legacy 680: without a family (a new draft) no draft is offered', async () => {
