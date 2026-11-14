@@ -1101,18 +1101,35 @@ async function requireOperation(
  *  even while a revision draft (S3.12) is sitting under review, so `deprecate_operation` must never
  *  be redirected onto that draft. Falls back to `getOperation` only to name *why* there is no
  *  published row to deprecate (unknown identity vs. draft-only vs. already-deprecated) — same
- *  `OperationNotFoundError`/`IllegalTransition` split `requireOperation` above draws. */
+ *  `OperationNotFoundError`/`IllegalTransition` split `requireOperation` above draws.
+ *
+ *  Legacy 423: the published row comes back locked until the transaction ends. A publish retires
+ *  the live version under that same row's lock (`publishOperation` deprecates it before flipping
+ *  its draft, `publishOperationRevision` locks it first), so a row read without the lock could be
+ *  retired before the write lands: the deprecation would land on a version nobody runs while the
+ *  new one stayed live, and the call reported success. `for update` waits on such a publish; once
+ *  it commits, the retired row no longer matches and the locked read comes back empty, so the live
+ *  row is read again and, when a publish put one there, that one is locked on the next pass. */
 async function requirePublishedOperation(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,
   name: string,
 ): Promise<OperationRecord> {
-  const published = await getPublishedOperation(client, workspaceId, gatekeeperId, name);
-  if (published) return published;
-  const current = await getOperation(client, workspaceId, gatekeeperId, name);
-  if (!current) throw new OperationNotFoundError(gatekeeperId, name);
-  return current;
+  // Each pass waits only on a publish that moved the live row; three in a row is a bug.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const published = await getPublishedOperation(client, workspaceId, gatekeeperId, name, {
+      forUpdate: true,
+    });
+    if (published) return published;
+    if ((await getPublishedOperation(client, workspaceId, gatekeeperId, name)) !== null) continue;
+    const current = await getOperation(client, workspaceId, gatekeeperId, name);
+    if (!current) throw new OperationNotFoundError(gatekeeperId, name);
+    return current;
+  }
+  throw new Error(
+    `requirePublishedOperation: the published version of Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} kept moving while it was locked`,
+  );
 }
 
 export interface PublishOperationInput {
@@ -1536,7 +1553,13 @@ export interface DeprecateOperationInput {
 
 /** Deprecates a published Operation. Throws `OperationNotFoundError` if unknown, `IllegalTransition`
  *  if not currently `published`. Targets the live published row directly (`requirePublishedOperation`
- *  above) — unaffected by any pending revision draft against the same identity (S3.12). */
+ *  above) — unaffected by any pending revision draft against the same identity (S3.12).
+ *
+ *  Legacy 423: the call names an Operation, not a version, and means "stop using it", so it
+ *  deprecates the version live when its lock is granted. When a publish of a newer version commits
+ *  while this waits, that newer version is the one deprecated — what the same two calls do one after
+ *  the other — and the authority check is made on it. The returned record names the version
+ *  deprecated (`deprecate_operation`'s result and audit carry it). */
 export async function deprecateOperation(
   client: PoolClient,
   workspaceId: string,

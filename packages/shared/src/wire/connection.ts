@@ -257,13 +257,18 @@ export const OperationPublishResultWireSchema = z
   })
   .strict();
 
+/** `deprecate_operation`'s result. Legacy 423: `version` is the version deprecated — the one live
+ *  when the kernel locked it, which is a newer one than the caller looked at when a publish
+ *  committed in between. */
 export const OperationDeprecateResultWireSchema = z
   .object({
     gatekeeperId: z.string(),
     name: z.string(),
+    version: z.number().int().positive(),
     status: PublishableStatusSchema,
   })
   .strict();
+export type OperationDeprecateResultWire = z.infer<typeof OperationDeprecateResultWireSchema>;
 
 /** `discard_operation_draft`'s result (legacy 278): the exact draft version that was marked
  *  `discarded` (`OperationStatus`) — kept as a row, left out of every directory read. */

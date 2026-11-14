@@ -1448,7 +1448,7 @@ const metaCapabilities = [
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
     resultSchema: wire.OperationDeprecateResultWireSchema,
     description:
-      'Deprecate a published Operation. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
+      'Deprecate a published Operation: the version live when the call runs, which the result’s version names — when a newer version was published after the caller looked, that newer one is deprecated. Builder floor; only the deprecated version’s proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
     // Legacy 278 (UX acceptance of #577): a draft Operation nobody will publish — the gate no longer

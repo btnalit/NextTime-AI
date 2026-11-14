@@ -12590,11 +12590,16 @@
             "deprecated"
           ],
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
         "gatekeeperId",
         "name",
+        "version",
         "status"
       ],
       "type": "object"

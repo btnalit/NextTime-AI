@@ -2647,4 +2647,172 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       ).toMatchObject({ status: 'published', version: 1 });
     });
   });
+
+  describe('legacy 423: deprecateOperation and a publish that commits while it waits', () => {
+    /** v1 published (proposed by `v1By`), and a revision draft v2 proposed by `v2By`. */
+    async function liveWithRevision(v1By: string, v2By: string): Promise<string> {
+      const name = `deprecate.race.${randomUUID()}`;
+      const propose = async (by: string, operation: Operation) => {
+        const act = await newActivity();
+        return inTx((client) =>
+          proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation,
+            proposedBy: { id: by, kind: 'human' },
+            activityId: act,
+          }),
+        );
+      };
+      await propose(v1By, testOperation({ name }));
+      await inTx((client) => publishOperation(client, workspaceId, { gatekeeperId, name }));
+      const revision = await propose(v2By, testOperation({ name, mode: 'execute' }));
+      expect(revision).toMatchObject({ status: 'draft', version: 2 });
+      return name;
+    }
+
+    /** Runs `holder` in its own transaction and holds it open (its row locks held, not committed)
+     *  until `waiter` — started in a second transaction once the holder has run — is blocked on a
+     *  lock; then commits, and returns how `waiter` settled. */
+    async function whileHeld<T>(
+      holder: (client: PoolClient) => Promise<unknown>,
+      waiter: (client: PoolClient) => Promise<T>,
+    ): Promise<PromiseSettledResult<T>> {
+      let held!: () => void;
+      const heldNow = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const holding = inTx(async (client) => {
+        await holder(client);
+        held();
+        await released;
+      });
+      await heldNow;
+      let waiterPid: number | undefined;
+      const waiting = Promise.allSettled([
+        inTx(async (client) => {
+          const pid = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
+          waiterPid = pid.rows[0]?.pid;
+          return waiter(client);
+        }),
+      ]);
+      let blocked = false;
+      for (let attempt = 0; attempt < 200 && !blocked; attempt += 1) {
+        if (waiterPid !== undefined) {
+          const activity = await pool.query<{ wait_event_type: string | null }>(
+            'select wait_event_type from pg_stat_activity where pid = $1',
+            [waiterPid],
+          );
+          blocked = activity.rows[0]?.wait_event_type === 'Lock';
+        }
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      release();
+      await holding;
+      const [settled] = await waiting;
+      if (!settled) throw new Error('expected a settled result');
+      // The race this test is about: the waiter waited on the holder's lock.
+      expect(blocked).toBe(true);
+      return settled;
+    }
+
+    const live = (name: string) =>
+      inTx((client) => getPublishedOperation(client, workspaceId, gatekeeperId, name));
+    const version = (name: string, v: number) =>
+      inTx(async (client) => {
+        const rows = await listOperations(client, workspaceId, { gatekeeperId });
+        return rows.find((row) => row.name === name && row.version === v)?.status;
+      });
+
+    it('a deprecate waiting on a publish of v2 deprecates v2 — the version live once it runs — not the v1 that publish retired', async () => {
+      const name = await liveWithRevision(ownerId, ownerId);
+      const outcome = await whileHeld(
+        (client) => publishOperation(client, workspaceId, { gatekeeperId, name }),
+        (client) =>
+          deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+      );
+      expect(outcome.status).toBe('fulfilled');
+      expect(outcome.status === 'fulfilled' ? outcome.value : undefined).toMatchObject({
+        status: 'deprecated',
+        version: 2,
+      });
+      expect(await live(name)).toBeNull();
+      expect(await version(name, 1)).toBe('deprecated');
+      expect(await version(name, 2)).toBe('deprecated');
+    });
+
+    it('…and so when the same commit also opens a revision draft v3: the deprecation still lands on the live v2, never on the draft', async () => {
+      const name = await liveWithRevision(ownerId, ownerId);
+      const act = await newActivity();
+      const outcome = await whileHeld(
+        async (client) => {
+          await publishOperation(client, workspaceId, { gatekeeperId, name });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: testOperation({ name, description: 'Revised again.' }),
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          });
+        },
+        (client) =>
+          deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+      );
+      expect(outcome.status).toBe('fulfilled');
+      expect(outcome.status === 'fulfilled' ? outcome.value : undefined).toMatchObject({
+        status: 'deprecated',
+        version: 2,
+      });
+      expect(await version(name, 2)).toBe('deprecated');
+      expect(await version(name, 3)).toBe('draft');
+    });
+
+    it('the authority question is put on the version deprecated: v1’s proposer may not deprecate the v2 someone else proposed, and v2 stays live', async () => {
+      const name = await liveWithRevision(attackerId, ownerId);
+      const outcome = await whileHeld(
+        (client) => publishOperation(client, workspaceId, { gatekeeperId, name }),
+        (client) =>
+          deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            actor: { principalId: attackerId, role: 'builder' },
+          }),
+      );
+      expect(outcome.status).toBe('rejected');
+      expect(outcome.status === 'rejected' ? outcome.reason : undefined).toMatchObject({
+        name: 'NotProposerError',
+        code: 'not_proposer',
+      });
+      expect(await live(name)).toMatchObject({ status: 'published', version: 2 });
+    });
+
+    it('a publish waiting on a deprecate of v1 publishes v2 after it, superseding nothing — no deadlock either way round', async () => {
+      const name = await liveWithRevision(ownerId, ownerId);
+      const outcome = await whileHeld(
+        (client) =>
+          deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+        (client) => publishOperation(client, workspaceId, { gatekeeperId, name }),
+      );
+      expect(outcome.status).toBe('fulfilled');
+      const published = outcome.status === 'fulfilled' ? outcome.value : undefined;
+      expect(published).toMatchObject({ status: 'published', version: 2 });
+      expect(published?.supersedes).toBeUndefined();
+      expect(await version(name, 1)).toBe('deprecated');
+      expect(await live(name)).toMatchObject({ status: 'published', version: 2 });
+    });
+  });
 });

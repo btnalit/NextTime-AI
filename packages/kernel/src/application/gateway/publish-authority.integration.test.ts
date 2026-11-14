@@ -248,15 +248,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(listed.items.find((op) => op.name === name)?.status).toBe('published');
       });
 
-      it('the proposer deprecates their own Operation', async () => {
+      it('the proposer deprecates their own Operation; the result and the audit record name the version deprecated (legacy 423)', async () => {
         const name = await publishedOperationOfBuilder();
-        const deprecated = await call<{ status: string }>(
+        const deprecated = await call<{ status: string; version: number }>(
           builderId,
           'builder',
           'deprecate_operation',
           { gatekeeperId, name },
         );
-        expect(deprecated.status).toBe('deprecated');
+        expect(deprecated).toEqual({ gatekeeperId, name, version: 1, status: 'deprecated' });
+        const audited = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, { action: 'deprecate_operation' }),
+        );
+        const row = audited.find(
+          (entry) => (entry.payload as { params?: { name?: string } }).params?.name === name,
+        );
+        expect(row?.actorPrincipalId).toBe(builderId);
+        expect(row?.payload).toMatchObject({
+          params: { gatekeeperId, name },
+          operationObjectId: expect.any(String),
+          version: 1,
+        });
       });
 
       it('the owner deprecates a builder’s Operation', async () => {

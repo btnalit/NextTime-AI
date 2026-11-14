@@ -34,7 +34,7 @@ import {
  *   - 窄屏: 跳过——`00-gates/` 的截图门槛在 768 宽度下截过能力目录与系统与授权。
  * 成功判据:
  *   - 三个动作都由真实内核答复：确认框里的改动是内核判定的「收紧」，取消后页面说「草稿已保留、未发布」；
- *     丢弃与弃用各有页面的提示（「名称 v2 已丢弃」「名称 已弃用」）。并从页面外读 `list_operations`
+ *     丢弃与弃用各有页面的提示（「名称 v2 已丢弃」「名称 已弃用 v1」）。并从页面外读 `list_operations`
  *     确认真的变了：提议之后这个 Operation 有一份第 2 版、影响范围为高的草稿，在用的第 1 版没变；丢弃后
  *     草稿不再列出，在用的仍是影响范围为低的第 1 版；弃用后另一个 Operation 的第 1 版是已弃用。
  *
@@ -200,7 +200,8 @@ test.describe('Journey ⑰: 一个 Operation 的去留', () => {
     await detail.getByRole('button', { name: '弃用', exact: true }).click();
     const deprecate = page.getByRole('dialog', { name: `弃用 ${EXECUTE_OP}` });
     await deprecate.getByRole('button', { name: '弃用', exact: true }).click();
-    await expect(page.getByText(`${EXECUTE_OP} 已弃用`, { exact: true })).toBeVisible({
+    // Legacy 423: the toast names the version the kernel deprecated.
+    await expect(page.getByText(`${EXECUTE_OP} 已弃用 v1`, { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     // The detail follows the version it deprecated and says there is no way back.

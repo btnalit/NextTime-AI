@@ -2,6 +2,7 @@ import type {
   DraftOrigin,
   EntryTemplateStatusWire,
   GateOwnedParamWire,
+  OperationDeprecateResultWire,
   PublishEvaluationReview,
   SkillDetailWire,
   WorkerDefinitionDerivationWire,
@@ -1579,7 +1580,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     const key = catalogOperationKey(row);
     setBusy(key);
     try {
-      await http.call(action, {
+      const result = await http.call<Partial<OperationDeprecateResultWire> | undefined>(action, {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(action === 'publish_operation' ? credentialReview.params() : {}),
@@ -1589,7 +1590,15 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           ? { draftDigest: row.draftDigest }
           : {}),
       });
+      // Legacy 423: the kernel deprecates the version live when the call runs — a newer one than
+      // this row when it was published after the page read the catalog.
+      const deprecatedVersion =
+        action === 'deprecate_operation' ? (result?.version ?? row.version) : undefined;
       const shown = actionKindTagToastText(row.name);
+      const deprecatedTitle =
+        deprecatedVersion === undefined
+          ? t(`${shown} 已弃用`, `${shown} deprecated`)
+          : t(`${shown} 已弃用 v${deprecatedVersion}`, `${shown} v${deprecatedVersion} deprecated`);
       toast.push({
         tone: 'ok',
         title:
@@ -1597,7 +1606,17 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             ? row.version !== undefined
               ? t(`${shown} 已发布 v${row.version}`, `${shown} v${row.version} published`)
               : t(`${shown} 已发布`, `${shown} published`)
-            : t(`${shown} 已弃用`, `${shown} deprecated`),
+            : deprecatedTitle,
+        ...(deprecatedVersion !== undefined &&
+        row.version !== undefined &&
+        deprecatedVersion !== row.version
+          ? {
+              description: t(
+                `页面上是 v${row.version}，弃用之前 v${deprecatedVersion} 刚发布，弃用的是正在生效的 v${deprecatedVersion}。`,
+                `The page showed v${row.version}; v${deprecatedVersion} was published just before, so the version in effect, v${deprecatedVersion}, was deprecated.`,
+              ),
+            }
+          : {}),
       });
       // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
       // 「未找到」 after publishing) — follow it to the version now in effect.
@@ -1606,8 +1625,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       }
       // Likewise a deprecated version is keyed by its version from now on (UX acceptance of #776:
       // the detail read 「未找到」 after deprecating) — follow it there.
-      if (action === 'deprecate_operation' && itemId === key && row.version !== undefined) {
-        onSelectItem(`${operationKey(row)}@v${row.version}`);
+      if (action === 'deprecate_operation' && itemId === key && deprecatedVersion !== undefined) {
+        onSelectItem(`${operationKey(row)}@v${deprecatedVersion}`);
       }
       refresh();
     } catch (err) {
