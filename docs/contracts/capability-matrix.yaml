@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 13
+  repeat_unclear: 9
 capabilities:
   add_eval_case:
     console: required
@@ -900,7 +900,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: runtime_not_found"  # revoked by the first call, so the same call again finds no active session (404)
   roll_back_change_segment:
     console: required
     agents: []
@@ -915,12 +915,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # stops only residents that need a rebuild; the first call stopped them, so the same call again stops none
   rollback_runtime_image:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # switches back to the last different image: the second call undoes the first (toggles)
   rotate_api_key:
     console: required
     agents: []
@@ -948,7 +948,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # the settings take another version (the one replaced kept in the history), the same image again
   set_admin_agent_targets:
     console: required
     agents: []

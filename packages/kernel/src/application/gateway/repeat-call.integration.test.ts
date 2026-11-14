@@ -11,7 +11,7 @@ import {
 } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -19,6 +19,7 @@ import {
   type GatekeeperClient,
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
+import type { ResidentInventoryEntry } from '../../adapters/supervisor-client/index.js';
 import { ApprovalDrainer, requestAction } from '../../governance/approval/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import {
@@ -133,10 +134,55 @@ interface Recipe {
   /** What must still hold after both calls, beyond the digest: state neither call may change
    *  (an entry Handle a no-op must not re-issue, per #493 on batch 24). */
   readonly holds?: (ctx: RecipeContext, params: Record<string, unknown>) => Promise<void>;
+  /** Puts back, once the case ends however it ends, what its calls changed that is shared with
+   *  the files after this one (the platform's active runtime image). */
+  readonly restore?: (pool: Pool) => Promise<void>;
 }
 
 /** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
 const SPAWNED_HANDLES = new Map<string, string>();
+
+/** The runtime images the supervisor stub lists: two built, allowlisted and carrying the runtime
+ *  contract, the first worker-supervisor's own default. */
+const RUNTIME_CONTRACT = 'repeat-contract';
+const RUNTIME_IMAGES = ['repeat-runtime:one', 'repeat-runtime:two'] as const;
+/** The resident entry containers the supervisor stub lists; `stopResident` stops (drops) one. */
+const RESIDENTS: ResidentInventoryEntry[] = [];
+/** The active runtime image before a case changed it (`restoreActiveRuntimeImage`). */
+let activeRuntimeImageBefore: unknown;
+
+async function keepActiveRuntimeImage(pool: Pool): Promise<void> {
+  const result = await pool.query<{ image: unknown }>(
+    "select settings -> 'activeRuntimeImage' as image from platform_settings where singleton",
+  );
+  activeRuntimeImageBefore = result.rows[0]?.image ?? null;
+}
+
+/** Test-only, outside any capability (as platform-runtime.integration.test.ts resets it): the
+ *  setting as it was, so the files after this one spawn from what they always did. */
+async function restoreActiveRuntimeImage(pool: Pool): Promise<void> {
+  await pool.query(
+    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
+      ? "update platform_settings set settings = settings - 'activeRuntimeImage' where singleton"
+      : "update platform_settings set settings = jsonb_set(settings, '{activeRuntimeImage}', $1::jsonb) where singleton",
+    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
+      ? []
+      : [JSON.stringify(activeRuntimeImageBefore)],
+  );
+}
+
+const activeRuntimeImage = async (ctx: RecipeContext): Promise<unknown> =>
+  (
+    await ctx.pool.query<{ image: unknown }>(
+      "select settings -> 'activeRuntimeImage' as image from platform_settings where singleton",
+    )
+  ).rows[0]?.image ?? null;
+const platformSettingsVersionNow = async (ctx: RecipeContext): Promise<unknown> =>
+  (
+    await ctx.pool.query<{ version: number }>(
+      'select version from platform_settings where singleton',
+    )
+  ).rows[0]?.version;
 /** Verifies the Handles the task runtime signs (its key pair is made in `beforeAll`). */
 let loadHandlePublicKey: ResolveCallerDeps['loadHandlePublicKey'];
 
@@ -2549,6 +2595,87 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       by: heldAdminAgent,
     },
   },
+  set_active_runtime_image: {
+    // The settings are one row: each call keeps the version it replaces in the history and takes
+    // the next, the same image again.
+    'an image built, allowlisted and carrying the runtime contract': {
+      first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[1] }),
+      setUp: async (ctx) => {
+        await keepActiveRuntimeImage(ctx.pool);
+        return { image: RUNTIME_IMAGES[1] };
+      },
+      entity: () => 'platform_settings',
+      moves: platformSettingsVersionNow,
+      restore: restoreActiveRuntimeImage,
+    },
+  },
+  rollback_runtime_image: {
+    // Each call switches back to the last different image: the second call undoes the first
+    // (one, two, one, two…).
+    'after the active image was set to one, then two': {
+      first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[0] }),
+      setUp: async (ctx) => {
+        await keepActiveRuntimeImage(ctx.pool);
+        await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[0] });
+        await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[1] });
+        return {};
+      },
+      entity: () => 'platform_settings',
+      moves: activeRuntimeImage,
+      restore: restoreActiveRuntimeImage,
+    },
+  },
+  roll_entry_containers: {
+    // Stops the resident that needs a rebuild, once: the same call again finds it gone, stops
+    // nothing and writes nothing but its audit row.
+    "the case owner's resident, built from an older image": {
+      first: {
+        outcomes: [expect.objectContaining({ action: 'stopped' })],
+        stoppedCount: 1,
+      },
+      second: {
+        outcomes: [expect.objectContaining({ action: 'skipped_not_found' })],
+        stoppedCount: 0,
+      },
+      setUp: async (ctx) => {
+        RESIDENTS.push({
+          agentKind: 'entry',
+          principalId: ctx.seed.ownerId,
+          workspaceId: ctx.seed.workspaceId,
+          containerId: `repeat-${randomUUID()}`,
+          running: true,
+          status: 'running',
+          image: 'repeat-runtime:old',
+          imageId: 'sha256:repeat-old',
+          startedAt: undefined,
+          lastTouchedAt: undefined,
+        });
+        return { principalIds: [ctx.seed.ownerId] };
+      },
+    },
+  },
+  revoke_external_runtime: {
+    // Revoked by the first call, so the same call again finds no active session (404
+    // runtime_not_found), nothing written.
+    "a service Principal's session in the case's workspace": {
+      first: expect.objectContaining({ revoked: true }),
+      setUp: async (ctx) => {
+        const owner = {
+          ...ctx,
+          caller: humanCaller(ctx.seed.workspaceId, ctx.seed.ownerId, 'owner'),
+        };
+        const made = await as<{ principal: { id: string } }>(owner, 'create_principal', {
+          role: 'member',
+          displayName: 'repeat runtime',
+        });
+        const issued = await as<{ sessionId: string }>(owner, 'issue_service_handle', {
+          principalId: made.principal.id,
+          scope: ['find_procedures'],
+        });
+        return { workspaceId: ctx.seed.workspaceId, sessionId: issued.sessionId };
+      },
+    },
+  },
   reject_platform_segment: {
     // Rejected by the first call, so the same call again finds it decided (409
     // admin_proposal_segment_not_open), nothing written.
@@ -2793,6 +2920,10 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'withdraw_admin_proposal',
   'propose_admin_proposal',
   'agent_withdraw_admin_proposal',
+  'set_active_runtime_image',
+  'rollback_runtime_image',
+  'roll_entry_containers',
+  'revoke_external_runtime',
   'reject_platform_segment',
   'apply_platform_segment',
   'roll_back_platform_change_segment',
@@ -3002,6 +3133,24 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
           terminate: async () => false,
           status: async () => undefined,
+          listImages: async () => ({
+            defaultImage: RUNTIME_IMAGES[0],
+            images: RUNTIME_IMAGES.map((tag, index) => ({
+              id: `sha256:repeat-${index}`,
+              tags: [tag],
+              created: '2026-11-01T00:00:00Z',
+              labels: { 'ai.nexttime.runtime-contract': RUNTIME_CONTRACT },
+            })),
+            allowedImages: [...RUNTIME_IMAGES],
+            runtimeContract: RUNTIME_CONTRACT,
+          }),
+          listResidents: async () => [...RESIDENTS],
+          stopResident: async (principalId) => {
+            const at = RESIDENTS.findIndex((resident) => resident.principalId === principalId);
+            if (at === -1) return false;
+            RESIDENTS.splice(at, 1);
+            return true;
+          },
         },
       });
       // The connection rows issue a secret from the gate token (a test one here) and describe a
@@ -3132,6 +3281,11 @@ describe.runIf(DATABASE_URL !== undefined)(
             ? humanCaller(workspace.workspaceId, ownerId, 'owner')
             : platformCaller(admin);
         const chosen = recipe === undefined ? undefined : RECIPES[capability.name]?.[recipe];
+        // A case's `by` never reads the admin agent an earlier case made (per #493 on batch 29).
+        caseAdminAgent = undefined;
+        RESIDENTS.length = 0;
+        const restore = chosen?.restore;
+        if (restore !== undefined) onTestFinished(() => restore(pool));
         const params =
           chosen === undefined
             ? paramsFor(capability.paramsSchema, seed)
