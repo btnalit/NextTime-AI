@@ -3141,6 +3141,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可；控制台回到解析消息的路径，显示不变。
 - 无主机动作。
 
+### 3.186 门实例的审计行写明凭据模式（#1243，遗留 606，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：`create_gate_instance` 的审计行在参数副本之外多记三项解析后的定义：`connector`、`transportKind`、`credentialMode`（`shared` / `connected_account`）。用连接器预设建的实例也能看出预设给的是哪种模式。控制台平台审计页对顶层的 `credentialMode` 不再遮挡，前提是值恰好是这两种之一；参数副本里的 `credentialMode` 照旧遮挡。
+- **已有记录**：升级前写下的审计行没有这三项，不回填。
+- **回滚**：回退代码即可。新写的行多出的三项会留在库里，它们是枚举值和连接器名，不含凭据；回退后控制台照旧把 `credentialMode` 显示成 `[redacted]`。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
