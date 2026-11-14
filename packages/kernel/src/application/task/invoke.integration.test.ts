@@ -26,6 +26,7 @@ import {
 } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { fixtureApiKeyHash } from '../gateway/traversal-fixture.js';
 import { composeSystemPrompt, updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { invokeWorker } from './invoke.js';
@@ -273,7 +274,11 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         {
           principalId: personId,
           channel: 'human',
-          credential: { kind: 'api_key', principalId: personId },
+          credential: {
+            kind: 'api_key',
+            principalId: personId,
+            apiKeyHash: fixtureApiKeyHash(personId),
+          },
         },
         { definitionId: workerDefinitionId, version: 1, input: { foo: 'bar' }, wait: false },
         deps(supervisorClient),
@@ -294,11 +299,11 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(refused.rows).toEqual([{ status: 'failed', failure_reason: 'spawn_failed' }]);
 
     await withAdminClient(pool, (client) =>
-      client.query(
-        `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
-          where workspace_id = $1 and id = $2`,
-        [workspaceId, personId],
-      ),
+      client.query('update principals set api_key_hash = $3 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        personId,
+        fixtureApiKeyHash(personId),
+      ]),
     );
     const started = await call();
     expect(started.status).toBe('running');

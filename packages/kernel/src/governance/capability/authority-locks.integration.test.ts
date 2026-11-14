@@ -17,6 +17,7 @@ import {
   mergeUserHandler,
   setWorkspaceStatusHandler,
 } from '../../application/gateway/platform-handlers.js';
+import { fixtureApiKeyHash } from '../../application/gateway/traversal-fixture.js';
 import { revokeUserCredentials } from '../../application/identity/credentials.js';
 import { runInvariantChecks } from '../../substrate/audit/invariant-checks.js';
 import {
@@ -608,12 +609,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         return id;
       }
 
-      /** An API key on `at`'s Principal (a synthetic hash; the check reads only that one is set). */
-      async function giveApiKey(at: Member): Promise<void> {
+      /** An API key on `at`'s Principal — `fixtureApiKeyHash`, the hash {@link viaApiKey}
+       *  presents, or, `rotated`, another one (the key replaced after the call presented it). */
+      async function giveApiKey(at: Member, rotated = false): Promise<void> {
         await asOwner(at.workspaceId, (client) =>
           client.query(
             'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
-            [at.workspaceId, at.principalId, randomUUID().replaceAll('-', '').repeat(2)],
+            [
+              at.workspaceId,
+              at.principalId,
+              fixtureApiKeyHash(rotated ? `rotated:${at.principalId}` : at.principalId),
+            ],
           ),
         );
       }
@@ -626,7 +632,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       const viaApiKey = (at: Member): IssuanceBasis => ({
         kind: 'role',
         role: at.role,
-        credential: { kind: 'api_key', principalId: at.principalId },
+        credential: {
+          kind: 'api_key',
+          principalId: at.principalId,
+          apiKeyHash: fixtureApiKeyHash(at.principalId),
+        },
       });
 
       /** Issues in one transaction on a session it opens itself first — as `issue_handle` and
@@ -667,7 +677,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
-      it('issues while the Principal has an API key, and refuses once it is cleared (credential_revoked); a system issuer names no credential and is not asked', async () => {
+      it('issues while the Principal’s API key is still the one presented, and refuses once it is cleared or replaced (credential_revoked); a system issuer names no credential and is not asked', async () => {
         const at = await member();
         await giveApiKey(at);
         const issued = await issueOnNewSession(at, viaApiKey(at));
@@ -682,6 +692,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         const thrown = await refusal(() => issueOnNewSession(at, viaApiKey(at)));
         expect(refusalCode(thrown)).toBe('credential_revoked');
         expect((thrown as Error).message).not.toContain(at.principalId);
+
+        // Replaced (`rotate_api_key`) after the call presented the old one (#1180 review).
+        await giveApiKey(at, true);
+        const rotated = await refusal(() => issueOnNewSession(at, viaApiKey(at)));
+        expect(refusalCode(rotated)).toBe('credential_revoked');
 
         const system = await issueOnNewSession(at, {
           kind: 'role',

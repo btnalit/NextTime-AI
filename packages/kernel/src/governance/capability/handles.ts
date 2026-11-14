@@ -77,11 +77,12 @@ export type { CapabilityScope, HandleClaims };
  *
  * The caller's credential (legacy 712): a role basis issued for a person's own request names the
  * credential that request was authenticated with ({@link PresentedCredential} — their console
- * session, or their API key), and `issueHandle` checks it is still live under the same locks. A
- * password reset, a disable or a removal revokes credentials under the user's lock exclusive
- * (`revokeUserCredentials`), so it either waits for the Handle and revokes it, or commits first
- * and the issue is refused (`credential_revoked`) — never a Handle issued on a credential revoked
- * before it.
+ * session, or the API key they presented), and `issueHandle` checks it is still live under the
+ * same locks. A password reset, a disable or a removal revokes credentials under the user's lock
+ * exclusive (`revokeUserCredentials`), so it either waits for the Handle and revokes it, or
+ * commits first and the issue is refused (`credential_revoked`) — never a Handle issued on a
+ * credential revoked before it. A key replaced by `rotate_api_key` before the check is refused
+ * the same way.
  *
  * Lock order (legacy 702, #1150 review). Whoever issues or revokes takes its locks in one global
  * order, so two of them never wait on each other in a cycle (Postgres would end one with 40P01):
@@ -877,10 +878,13 @@ export type IssuanceBasis =
 /**
  * Legacy 712: the human-channel credential a request was authenticated with
  * (application/gateway/resolve-caller.ts) — a console session (`user_sessions`, the cookie's) or,
- * with no console login behind it, the API key of the calling Principal (`principals.api_key_hash`;
- * the caller does not carry the key, so "live" is "the Principal still has one", as `/ws`'s
- * per-call re-check reads it — a reset, a disable or a password change clears it). Checked under
- * the issuance locks ({@link IssuanceBasis}).
+ * with no console login behind it, the API key the calling Principal presented, by the
+ * `principals.api_key_hash` it hashed to (the hash, never the key). Checked under the issuance
+ * locks ({@link IssuanceBasis}): the session must still be live, and the key still the
+ * Principal's — a reset, a disable or a password change clears it, `rotate_api_key` replaces it
+ * (#1180 review). Neither a sign-out nor a rotation takes the authority locks, so one that commits
+ * after the check leaves the Handle issued, as it leaves every Handle issued before it; whether a
+ * rotation should revoke those is a question of its own, not this check's.
  */
 export type PresentedCredential =
   | {
@@ -888,7 +892,7 @@ export type PresentedCredential =
       readonly userId: string;
       readonly consoleSessionId: string;
     }
-  | { readonly kind: 'api_key'; readonly principalId: string };
+  | { readonly kind: 'api_key'; readonly principalId: string; readonly apiKeyHash: string };
 
 export interface IssueHandleParams extends OperatorIssueHandleParams {
   /** What the Handle is issued under ({@link IssuanceBasis}). */
@@ -1108,8 +1112,9 @@ async function assertIssuingAuthority(
 
 /** Legacy 712: refuses a credential revoked or expired since the request was authenticated — a
  *  console session by `console_session_is_live` (governance 0045: the application role reads no
- *  `user_sessions` in a workspace transaction), an API key by the calling Principal still having
- *  one. A missing row is not live. The message names no id: it goes back to the caller. */
+ *  `user_sessions` in a workspace transaction), an API key by the calling Principal's key still
+ *  being the one presented (cleared or replaced is not). A missing row is not live. The message
+ *  names no id: it goes back to the caller. */
 async function assertPresentedCredentialLive(
   client: PoolClient,
   workspaceId: string,
@@ -1122,15 +1127,15 @@ async function assertPresentedCredentialLive(
           credential.consoleSessionId,
         ])
       : await client.query<{ live: boolean }>(
-          `select api_key_hash is not null as live from principals
+          `select coalesce(api_key_hash = $3, false) as live from principals
             where workspace_id = $1 and id = $2`,
-          [workspaceId, credential.principalId],
+          [workspaceId, credential.principalId, credential.apiKeyHash],
         );
   if (result.rows[0]?.live !== true) {
     throw new HandleIssuanceError(
       credential.kind === 'console_session'
         ? 'the console session this call was made with was signed out, revoked or expired while it ran; sign in again'
-        : 'the API key this call was made with was revoked while it ran',
+        : 'the API key this call was made with was revoked or replaced while it ran',
       'credential_revoked',
     );
   }

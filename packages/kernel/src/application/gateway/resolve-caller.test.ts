@@ -156,6 +156,9 @@ describe('resolveCaller — human channel (API key)', () => {
     expect(caller.principal.id).toBe('p1');
     expect(caller.principal.role).toBe('member');
     expect(caller.session.onBehalfOf).toBe('p1');
+    // Legacy 712: the hash the key matched, for the Handle-issuing re-check — never the key.
+    expect(caller.apiKeyHash).toBe(hashApiKey(apiKey));
+    expect(JSON.stringify(caller)).not.toContain(apiKey);
   });
 });
 

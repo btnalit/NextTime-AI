@@ -135,7 +135,12 @@ export async function resolveCaller(
 
   const human = await authenticateHuman(deps.pool, token);
   if (human) {
-    return { channel: 'human', principal: human.principal, session: human.session };
+    return {
+      channel: 'human',
+      principal: human.principal,
+      session: human.session,
+      apiKeyHash: human.apiKeyHash,
+    };
   }
 
   try {

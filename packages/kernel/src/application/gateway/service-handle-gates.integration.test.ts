@@ -34,6 +34,7 @@ import { dispatchCapability } from './dispatch.js';
 import { authenticateHandle } from './handle-auth.js';
 import { ActionRequestDeniedError, setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/service-handle-gates.integration.test: legacy 690 (DB-gated, real Postgres).
@@ -122,6 +123,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function ownerCaller(): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(ownerId),
         principal: { workspaceId, id: ownerId, kind: 'human', role: 'owner', displayName: null },
         session: {
           workspaceId,
@@ -261,11 +263,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           'legacy-690-workspace',
         ]);
         // Legacy 712: `ownerCaller` has no console login behind it — an API-key call, whose
-        // Handle is issued only while the owner still has a key (a synthetic hash here).
+        // Handle is issued only while the owner's key is still the one it presents.
         await client.query(
           `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
-           values ($1, $2, 'human', 'owner', 'legacy-690 owner', md5(random()::text) || md5(random()::text))`,
-          [workspaceId, ownerId],
+           values ($1, $2, 'human', 'owner', 'legacy-690 owner', $3)`,
+          [workspaceId, ownerId, fixtureApiKeyHash(ownerId)],
         );
       });
       gatekeeperId = await registerGate('legacy-690-gate');

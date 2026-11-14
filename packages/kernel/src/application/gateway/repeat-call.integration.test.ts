@@ -63,6 +63,7 @@ import {
 } from './resolve-caller.js';
 import {
   type Seeded,
+  fixtureApiKeyHash,
   humanCaller,
   newWorkspace,
   paramsFor,
@@ -882,9 +883,8 @@ async function memberWithSession(ctx: RecipeContext): Promise<string> {
   // Legacy 712: `humanCaller` is an API-key call, and a Handle is issued only while the Principal
   // has a key (a synthetic hash; a person created by create_user has none).
   await ctx.pool.query(
-    `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
-      where workspace_id = $1 and id = $2`,
-    [ctx.seed.workspaceId, principalId],
+    'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+    [ctx.seed.workspaceId, principalId, fixtureApiKeyHash(principalId)],
   );
   await dispatchCapability(
     { pool: ctx.pool },

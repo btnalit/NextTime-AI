@@ -23,6 +23,7 @@ import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/invoke-worker-handler.integration.test: DB-gated (real Postgres; auto-skip
@@ -191,6 +192,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(principalId),
         principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
         session: {
           workspaceId,
@@ -537,9 +539,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         { workspaceId, principalId: personId },
         (client) =>
           client.query(
-            `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
-              where workspace_id = $1 and id = $2`,
-            [workspaceId, personId],
+            'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+            [workspaceId, personId, fixtureApiKeyHash(personId)],
           ),
         { skipRoleSwitch: true },
       );

@@ -30,6 +30,7 @@ import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { authenticateHandle } from './handle-auth.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/issue-handle-handler.integration.test: DB-gated (real Postgres; auto-skip
@@ -61,14 +62,11 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-/** A stand-in for `principals.api_key_hash` (64 hex characters, like the sha256 it stores). */
-function syntheticApiKeyHash(): string {
-  return randomUUID().replaceAll('-', '').repeat(2);
-}
-
+/** An API-key caller (no console login behind it) presenting the Principal's fixture key hash. */
 function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
     channel: 'human',
+    apiKeyHash: fixtureApiKeyHash(principalId),
     principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
     session: {
       workspaceId,
@@ -112,11 +110,12 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
       { workspaceId, principalId: id },
       async (client) => {
         // Legacy 712: `humanCaller` has no console login behind it, so it reads as an API-key
-        // call, and a Handle is issued only while the Principal still has a key (a synthetic hash).
+        // call, and a Handle is issued only while the Principal's key is still the one it
+        // presents (`fixtureApiKeyHash`).
         await client.query(
           `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
            values ($1, $2, 'human', $3, $4, $5)`,
-          [workspaceId, id, role, displayName, syntheticApiKeyHash()],
+          [workspaceId, id, role, displayName, fixtureApiKeyHash(id)],
         );
       },
       { skipRoleSwitch: true },
@@ -422,11 +421,32 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
 
     // The same Principal with no console login behind the call, and no API key (a reset cleared
     // it, or it never had one).
-    await expect(
-      dispatchCapability({ pool }, humanCaller(workspaceId, principalId, 'owner'), 'issue_handle', {
-        sessionKind: 'interactive',
-      }),
-    ).rejects.toMatchObject({ name: 'HandleIssuanceError', code: 'credential_revoked' });
+    const viaApiKey = humanCaller(workspaceId, principalId, 'owner');
+    const issueViaApiKey = () =>
+      dispatchCapability({ pool }, viaApiKey, 'issue_handle', { sessionKind: 'interactive' });
+    await expect(issueViaApiKey()).rejects.toMatchObject({
+      name: 'HandleIssuanceError',
+      code: 'credential_revoked',
+    });
     expect(await handlesOf()).toBe(1);
+
+    // With the key the call presents, it issues; once that key is replaced (`rotate_api_key`
+    // after the call was authenticated — #1180 review), the same call is refused.
+    const setKeyHash = (hash: string) =>
+      asOwnerRole((client) =>
+        client.query(
+          'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+          [workspaceId, principalId, hash],
+        ),
+      );
+    await setKeyHash(fixtureApiKeyHash(principalId));
+    await issueViaApiKey();
+    expect(await handlesOf()).toBe(2);
+    await setKeyHash(fixtureApiKeyHash(`rotated:${principalId}`));
+    await expect(issueViaApiKey()).rejects.toMatchObject({
+      name: 'HandleIssuanceError',
+      code: 'credential_revoked',
+    });
+    expect(await handlesOf()).toBe(2);
   });
 });

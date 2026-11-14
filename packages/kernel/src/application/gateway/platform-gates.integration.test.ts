@@ -105,6 +105,7 @@ import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/platform-gates.integration.test: DB-gated coverage of P-B1 (docs/platform-
@@ -230,6 +231,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(principalId),
         principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
         session: {
           workspaceId,
@@ -348,9 +350,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // (`issue_handle`, `issue_service_handle`) is issued only while the owner has a key.
       await withAdminClient(pool, (client) =>
         client.query(
-          `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
-            where workspace_id = $1 and id = $2`,
-          [workspaceId, ownerPrincipalId],
+          'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+          [workspaceId, ownerPrincipalId, fixtureApiKeyHash(ownerPrincipalId)],
         ),
       );
     }, 180_000);
