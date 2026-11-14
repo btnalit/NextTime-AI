@@ -1382,6 +1382,9 @@ const heldAdminAgent = async (): Promise<HeldHandle> => {
 /** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
 const ENTRY_JTI = new Map<string, string>();
 
+/** The owner's entry Handle the `set_agent_profile` recipe issued, by workspace (for its `holds`). */
+const PROFILE_ENTRY_JTI = new Map<string, string>();
+
 /** A connector row as it stands: what `set_connector_mode` writes the same of again. */
 async function connectorNow(
   ctx: RecipeContext,
@@ -1591,10 +1594,22 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       repeat: 'conflict: draft_pending',
     },
   },
-  // Legacy 679: saving the same profile again rewrites updated_at / updated_by
-  // and revokes the person's entry Handles. It should be idempotent; until it is, `repeats`.
+  // Legacy 679: saving the profile the person already has writes nothing (`updated_at` is the
+  // entry agent's profile version key) and revokes nothing — by either call, so the entry Handle
+  // issued after it was set is still live after both.
   set_agent_profile: {
-    "the owner's own": { setUp: async () => ({ promptAddendum: 'Be brief.' }) },
+    "the owner's own, as it already is, with a live entry Handle": {
+      first: expect.objectContaining({ promptAddendum: 'Be brief.' }),
+      setUp: async (ctx) => {
+        await as(ctx, 'set_agent_profile', { promptAddendum: 'Be brief.' });
+        PROFILE_ENTRY_JTI.set(ctx.seed.workspaceId, await entryHandle(ctx));
+        return { promptAddendum: 'Be brief.' };
+      },
+      holds: async (ctx) => {
+        const jti = PROFILE_ENTRY_JTI.get(ctx.seed.workspaceId) as string;
+        expect(await handleRevokedAt(ctx, jti), 'the entry Handle is not revoked').toBeNull();
+      },
+    },
   },
   propose_worker_definition: {
     'a new family': {

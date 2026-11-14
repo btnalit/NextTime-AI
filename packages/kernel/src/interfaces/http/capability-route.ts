@@ -768,8 +768,9 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
     // S3.3 `submit_observations`: sourceId names no Source visible to this caller.
     err instanceof SourceNotFoundError ||
     // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"):
-    //  - S3.1 `publish_ontology_version`: no `draft` ontology_versions row for the given
-    //    (id, version) — already published/deprecated, or never proposed.
+    //  - S3.1 `publish_ontology_version`: no `draft` ontology_versions row of the caller's for the
+    //    given (id, version) — never proposed, or someone else's draft (one already published or
+    //    deprecated is `IllegalTransition` instead, legacy 686).
     //  - S3.2 `resolve_conflict`/`list_conflicts`: unknown conflictId, or one RLS hides from this
     //    caller (`conflicts_visibility`'s `using` clause — same "not visible = not found"
     //    fail-closed shape `links_visibility` already has for Facts, ConflictNotFoundError's own

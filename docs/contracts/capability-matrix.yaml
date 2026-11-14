@@ -93,7 +93,7 @@ capabilities:
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: repeats  # the same Fact; each call records an Activity of its own (legacy 685)
+    repeat: idempotent  # the same Fact; a call that changes nothing keeps no Activity (legacy 685)
   attest_fact:
     console: required
     agents: []
@@ -718,7 +718,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "conflict: not_found"  # a published version no longer reads as a draft; the other publish rows answer illegal_transition (legacy 686)
+    repeat: "conflict: illegal_transition"  # as every other publish row (legacy 686)
   publish_operation:
     console: required
     agents: []
@@ -772,7 +772,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper (legacy 689)
+    repeat: idempotent  # nothing left to refresh: no write, no Activity (legacy 689)
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
@@ -958,12 +958,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats  # a second write of the same value rewrites the row's updated_at
+    repeat: idempotent  # the same values again: nothing written, as set_agent_profile (legacy 679)
   set_agent_profile:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats
+    repeat: idempotent  # the same values again: nothing written, no entry Handle revoked (legacy 679)
   set_allowed_models:
     console: required
     agents: []

@@ -67,7 +67,8 @@ import { readModelCatalog } from './models-catalog-handler.js';
  * Handles (`revokeEntrySessionHandles`, the exact same path Grant changes already use —
  * `governance/capability/grants.ts`'s own doc comment) inside the same transaction as the profile
  * write, so a concurrent read of the (now-stale) Handle can never outlive the write that
- * invalidated it. `application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` mints a
+ * invalidated it. A save that changes nothing writes nothing and revokes nothing (legacy 679):
+ * the Handle it would revoke is still exactly what the profile allows. `application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` mints a
  * fresh Handle on the target's very next Turn, which `worker-supervisor`'s existing jti-rotation
  * recreate logic (`resident-service.ts`) picks up automatically — no second, bespoke propagation
  * mechanism for this task to invent. `set_agent_policy` does the same for every member's entry
@@ -367,10 +368,16 @@ export const setAgentProfileHandler: CapabilityHandler = async (
     promptAddendum: params.promptAddendum,
     autoApproveLow: params.autoApproveLow,
   };
-  const updated = await setAgentProfile(client, workspaceId, target, ctx.principal.id, fields);
+  const { profile: updated, changed } = await setAgentProfile(
+    client,
+    workspaceId,
+    target,
+    ctx.principal.id,
+    fields,
+  );
 
   // S3.13 change propagation — see this file's own module doc comment.
-  await revokeEntrySessionHandles(client, workspaceId, target);
+  if (changed) await revokeEntrySessionHandles(client, workspaceId, target);
 
   const available = await resolveAvailableResources(client, workspaceId, target);
   const effective = resolveEffectiveAgentProfile(updated, policy, available);

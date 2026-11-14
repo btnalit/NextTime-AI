@@ -566,6 +566,9 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     droppedByGate = new Set();
   }
   // Legacy K: the revision drafts a changed definition gets are written under this Activity.
+  // Legacy 689: undone when the call refreshed nothing and opened no draft — it would trace
+  // nothing, and the call is already in the audit.
+  await client.query('savepoint refresh_operation_governance_activity');
   const activity = await startActivity(client, workspaceId, {
     kind: 'governance.refresh_operation_governance',
     principalId: ctx.principal.id,
@@ -583,7 +586,12 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     // own description, what it loosens also waits for a publish (review #493 on #612).
     source: link ? 'platform' : 'gate',
   });
-  await endActivity(client, workspaceId, activity.id, 'completed');
+  if (outcome.refreshed.length === 0 && outcome.revisionDrafts.length === 0) {
+    await client.query('rollback to savepoint refresh_operation_governance_activity');
+  } else {
+    await endActivity(client, workspaceId, activity.id, 'completed');
+  }
+  await client.query('release savepoint refresh_operation_governance_activity');
 
   for (const draft of outcome.revisionDrafts) {
     await writeAudit(client, {

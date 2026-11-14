@@ -91,6 +91,13 @@ function toJsonbList(value: readonly string[]): string {
   return JSON.stringify([...new Set(value)]);
 }
 
+/** What `setAgentProfile` did: the row as it now stands, and whether this call wrote it. */
+export interface SetAgentProfileOutcome {
+  readonly profile: AgentProfileRow;
+  /** `false`: the merged values are the row's own — nothing was written (legacy 679). */
+  readonly changed: boolean;
+}
+
 /**
  * Merges `fields` (partial update semantics — see `SetAgentProfileFields`'s own doc comment) onto
  * `principalId`'s existing AgentProfile row (or the all-`null` baseline, for a principal with none
@@ -98,6 +105,12 @@ function toJsonbList(value: readonly string[]): string {
  * auto-approve-low policy gate — exclusion lists need none, they can only narrow) is the caller's own job
  * (`application/gateway/agent-profile-handlers.ts`) — this function only ever persists whatever it
  * is given.
+ *
+ * Legacy 679: when the merged values are exactly the existing row's (each list as it would be
+ * stored), nothing is written and the row comes back as it was (`changed: false`) — its
+ * `updated_at` is the entry agent's profile version key (`agent-host-runtime.ts`), and
+ * `updated_by` says who last changed something, so a save that changes nothing must move neither.
+ * A principal with no row yet always gets one written.
  */
 export async function setAgentProfile(
   client: PoolClient,
@@ -105,7 +118,7 @@ export async function setAgentProfile(
   principalId: string,
   updatedBy: string,
   fields: SetAgentProfileFields,
-): Promise<AgentProfileRow> {
+): Promise<SetAgentProfileOutcome> {
   const existing = await readAgentProfile(client, workspaceId, principalId);
 
   const merged = {
@@ -123,6 +136,19 @@ export async function setAgentProfile(
         ? fields.autoApproveLow
         : (existing?.autoApproveLow ?? null),
   };
+
+  if (
+    existing &&
+    merged.model === existing.model &&
+    toJsonbList(merged.excludedSkills) === JSON.stringify(existing.excludedSkills) &&
+    toJsonbList(merged.excludedGatekeepers) === JSON.stringify(existing.excludedGatekeepers) &&
+    toJsonbList(merged.excludedWorkerDefinitions) ===
+      JSON.stringify(existing.excludedWorkerDefinitions) &&
+    merged.promptAddendum === existing.promptAddendum &&
+    merged.autoApproveLow === existing.autoApproveLow
+  ) {
+    return { profile: existing, changed: false };
+  }
 
   const result = await client.query<AgentProfileDbRow>(
     `insert into agent_profiles (
@@ -154,7 +180,7 @@ export async function setAgentProfile(
   const row = result.rows[0];
   if (!row)
     throw new Error('setAgentProfile: INSERT ... ON CONFLICT ... RETURNING produced no row');
-  return mapAgentProfileRow(row);
+  return { profile: mapAgentProfileRow(row), changed: true };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -240,6 +266,10 @@ export interface SetAgentPolicyFields {
   readonly allowMemberAutoApproveLow?: boolean;
 }
 
+/** Merges `fields` onto the workspace's AgentPolicy (or the compiled-in defaults) and upserts the
+ *  result. As `setAgentProfile` (legacy 679): when a row exists and the merged values are exactly
+ *  its own, nothing is written and the row comes back as it was — its `updated_at` is part of
+ *  every member's entry profile version key (`agent-host-runtime.ts`). */
 export async function setAgentPolicy(
   client: PoolClient,
   workspaceId: string,
@@ -258,6 +288,19 @@ export async function setAgentPolicy(
     allowMemberAutoApproveLow:
       fields.allowMemberAutoApproveLow ?? existing.allowMemberAutoApproveLow,
   };
+
+  if (
+    existing.updatedAt !== null &&
+    JSON.stringify(merged.allowedModels) === JSON.stringify(existing.allowedModels) &&
+    merged.defaultModel === existing.defaultModel &&
+    merged.memberCanEditProfile === existing.memberCanEditProfile &&
+    merged.maxPromptAddendumChars === existing.maxPromptAddendumChars &&
+    JSON.stringify(merged.allowedSkills) === JSON.stringify(existing.allowedSkills) &&
+    JSON.stringify(merged.allowedGatekeepers) === JSON.stringify(existing.allowedGatekeepers) &&
+    merged.allowMemberAutoApproveLow === existing.allowMemberAutoApproveLow
+  ) {
+    return existing;
+  }
 
   const result = await client.query<AgentPolicyDbRow>(
     `insert into agent_policies (
