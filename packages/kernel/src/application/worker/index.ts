@@ -27,6 +27,7 @@ export {
   WorkerDefinitionKindMismatchError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
+  WorkerDefinitionSupersededError,
   WorkerDefinitionValidationError,
 } from './definitions.js';
 export {

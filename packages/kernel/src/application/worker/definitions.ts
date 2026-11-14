@@ -164,6 +164,28 @@ export class WorkerDefinitionKindMismatchError extends Error {
   }
 }
 
+/** Legacy 742: `publish_worker_definition` named a draft below the family's published head (its
+ *  latest published version, `loadPublishedWorkerDefinitionHead`). Published, it would come after a
+ *  newer version, and the family's version order would no longer be its publish order. The draft
+ *  is older than what the family has now: its content goes in again as the next version
+ *  (`propose_worker_definition` with `replacesDraft`) or the draft is discarded. Nothing was
+ *  published. */
+export class WorkerDefinitionSupersededError extends Error {
+  readonly code = 'draft_superseded' as const;
+  readonly familyId: string;
+  readonly draftVersion: number;
+  readonly publishedVersion: number;
+  constructor(familyId: string, draftVersion: number, publishedVersion: number) {
+    super(
+      `WorkerDefinition ${familyId}@${draftVersion} is a draft below the family's published v${publishedVersion} — published, it would come after a newer version. Nothing was published; its proposer proposes its content again as the next version (propose_worker_definition with replacesDraft: ${draftVersion}), or discards it`,
+    );
+    this.name = 'WorkerDefinitionSupersededError';
+    this.familyId = familyId;
+    this.draftVersion = draftVersion;
+    this.publishedVersion = publishedVersion;
+  }
+}
+
 // -------------------------------------------------------------------------------------------
 // Content validation (publish-time only — see this module's doc comment: propose is intentionally
 // permissive, publish is the gate).
@@ -457,7 +479,12 @@ function requireWorkerDefinitionAuthority(
  *  Legacy 302: what the version names must be there — every reference that is not refuses the
  *  publish at once (`WorkerDefinitionReferenceError`, `definition-references.ts`). `references`
  *  carries what that check reads beyond the workspace's rows (the model catalog, for a person's
- *  publish). */
+ *  publish).
+ *
+ *  Legacy 742: a version below the family's published head is refused
+ *  (`WorkerDefinitionSupersededError`); a deprecated version is not the head, so a draft above the
+ *  versions still published goes in. Internal callers propose the next version under the same lock
+ *  and publish it at once, so theirs is always above the head. */
 export async function publishWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -470,6 +497,12 @@ export async function publishWorkerDefinition(
   const row = await getForUpdate(client, workspaceId, ref);
   requireWorkerDefinitionAuthority('publish_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish'); // throws IllegalTransition if illegal
+  // Legacy 742: a version below the family's head would be published after a newer one. Before
+  // the authority question: nobody may publish this version, whoever asks.
+  const head = await loadPublishedWorkerDefinitionHead(client, workspaceId, row.id);
+  if (head !== null && head.version > row.version) {
+    throw new WorkerDefinitionSupersededError(row.id, row.version, head.version);
+  }
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'worker_definitions',
     action: 'publish_worker_definition',
@@ -559,7 +592,9 @@ export async function deprecateWorkerDefinition(
 
 /** The family's head: its latest published version, or `null` when none is published. Earlier
  *  published versions stay invocable (`listWorkerDefinitions` lists every published row); the head
- *  is what a pack's state compares (`application/packs/state.ts`). */
+ *  is what a pack's state compares (`application/packs/state.ts`), and for an entry family the
+ *  version the entry agent runs with (`getPublishedEntryDefinition`). Legacy 742: no version below
+ *  it is published (`publishWorkerDefinition`). */
 export async function loadPublishedWorkerDefinitionHead(
   client: PoolClient,
   workspaceId: string,
@@ -643,12 +678,19 @@ export async function requirePublishedWorkerDefinition(
   return row;
 }
 
-/** The workspace's current published `kind='entry'` WorkerDefinition (the most recently published
- *  one, across every entry-kind `id` in the workspace — see this module's doc comment: there is
- *  no `principal_id` column on `worker_definitions`, so the entry WorkerDefinition is workspace-
- *  wide, shared by every user's entry container in that workspace, not per-user), or `null` if
- *  none has ever been published. `AgentHostRuntime.startTurn` (S2.6 deliverable 5) calls this to
- *  resolve the container's `systemPrompt`/`model`. */
+/** The workspace's current published `kind='entry'` WorkerDefinition: of the entry family
+ *  published to most recently (across every entry-kind `id` in the workspace — see this module's
+ *  doc comment: there is no `principal_id` column on `worker_definitions`, so the entry
+ *  WorkerDefinition is workspace-wide, shared by every user's entry container in that workspace,
+ *  not per-user), its head — the same version `loadPublishedWorkerDefinitionHead` names for that
+ *  family; or `null` if none has ever been published. `AgentHostRuntime.startTurn` (S2.6
+ *  deliverable 5) calls this to resolve the container's `systemPrompt`/`model`.
+ *
+ *  Legacy 742: within the family the version decides, not the publish time. A publish refuses a
+ *  version below the head, but `published_at` is the publishing transaction's start, so two
+ *  publishes of one family a moment apart can be stamped against their lock order, and rows
+ *  published before that refusal may be out of order too; read this way the two reads never name
+ *  different versions. */
 export async function getPublishedEntryDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -656,7 +698,12 @@ export async function getPublishedEntryDefinition(
   const result = await client.query<WorkerDefinitionDbRow>(
     `select ${SELECT_COLUMNS} from worker_definitions
      where workspace_id = $1 and kind = 'entry' and status = 'published'
-     order by published_at desc, id desc, version desc
+       and id = (select family.id from worker_definitions family
+                  where family.workspace_id = $1 and family.kind = 'entry'
+                    and family.status = 'published'
+                  order by family.published_at desc, family.id desc
+                  limit 1)
+     order by version desc
      limit 1`,
     [workspaceId],
   );

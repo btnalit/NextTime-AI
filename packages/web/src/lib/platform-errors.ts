@@ -223,6 +223,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这份草稿在你查看之后被修改过，本次没有写入任何内容。请先看它现在的内容，再决定是否操作',
     en: 'This draft was changed after you looked at it — nothing was written. Look at what it says now before acting on it',
   },
+  // Legacy 742: `publish_worker_definition` on a draft below the family's published version — it
+  // would come after a newer one. Nothing was published; the page reloads and says so on the draft.
+  draft_superseded: {
+    zh: '这个定义已经发布了比这份草稿更新的版本，再发布它，旧内容会排到新版本后面，所以本次没有发布。要用这份内容，修改这份草稿并保存，它会成为下一版；不需要就丢弃它',
+    en: 'This definition already has a published version newer than this draft; published now, the older content would come after it, so nothing was published. To use this content, edit the draft and save it — it becomes the next version; otherwise discard it',
+  },
   // Legacy 300: a publish / install named the version the person looked at, and what it would
   // write now is a newer one (another draft under the same Skill or Procedure, a newer module
   // index). Nothing was written; the page reloads it.

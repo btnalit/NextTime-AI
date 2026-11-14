@@ -273,29 +273,43 @@ export function versionOptionText(
 }
 
 /** Legacy 481: the published entry version the entry agent runs with — the kernel's
- *  `getPublishedEntryDefinition` order (the most recently published entry row, then id, then
- *  version, each descending) over `rows`. Every published entry row stays `published` when a later
- *  one is published, so the status alone does not say which one is in use. `null` when no
- *  published entry row carries its publish time. */
+ *  `getPublishedEntryDefinition` rule over `rows`: the entry family published to most recently
+ *  (the latest publish time, then id, descending), at its newest published version (legacy 742:
+ *  the version decides within the family, not the publish time). Every published entry row stays
+ *  `published` when a later one is published, so the status alone does not say which one is in
+ *  use. `null` when no published entry row carries its publish time. */
 export function inUseEntryVersion(
   rows: readonly WorkerDefinitionSummary[],
 ): { readonly definitionId: string; readonly version: number } | null {
-  let best: WorkerDefinitionSummary | undefined;
-  let bestAt = Number.NEGATIVE_INFINITY;
+  let family: string | undefined;
+  let familyAt = Number.NEGATIVE_INFINITY;
   for (const row of rows) {
     if (row.kind !== 'entry' || row.status !== 'published' || !row.publishedAt) continue;
     const at = Date.parse(row.publishedAt);
     if (Number.isNaN(at)) continue;
-    const later =
-      best === undefined ||
-      at > bestAt ||
-      (at === bestAt && (row.id > best.id || (row.id === best.id && row.version > best.version)));
-    if (later) {
-      best = row;
-      bestAt = at;
+    if (family === undefined || at > familyAt || (at === familyAt && row.id > family)) {
+      family = row.id;
+      familyAt = at;
     }
   }
-  return best ? { definitionId: best.id, version: best.version } : null;
+  if (family === undefined) return null;
+  const version = latestPublishedVersion(rows, family);
+  return version === undefined ? null : { definitionId: family, version };
+}
+
+/** Legacy 742: the newest published version of the family `id` among `rows` — the kernel's family
+ *  head (`loadPublishedWorkerDefinitionHead`) — or `undefined` when none of them is published. A
+ *  draft below it is not published any more (409 `draft_superseded`). */
+export function latestPublishedVersion(
+  rows: readonly WorkerDefinitionSummary[],
+  id: string,
+): number | undefined {
+  let latest: number | undefined;
+  for (const row of rows) {
+    if (row.id !== id || row.status !== 'published') continue;
+    if (latest === undefined || row.version > latest) latest = row.version;
+  }
+  return latest;
 }
 
 /** Legacy 481: for each Worker definition with more than one published version listed, its newest

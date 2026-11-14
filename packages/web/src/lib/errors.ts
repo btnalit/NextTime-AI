@@ -1338,6 +1338,12 @@ export function isDraftChangedError(err: unknown): boolean {
   return describeError(err).code === 'draft_changed';
 }
 
+/** Legacy 742: `publish_worker_definition` named a draft below the family's published head
+ *  (`draft_superseded`) — nothing was published, and the page needs the newer published version. */
+export function isDraftSupersededError(err: unknown): boolean {
+  return describeError(err).code === 'draft_superseded';
+}
+
 /** Legacy 300: a publish / install named the version the reader reviewed, and a newer one is there
  *  now (`version_changed`) — nothing was written, and the reader needs the current one. */
 export function isVersionChangedError(err: unknown): boolean {
