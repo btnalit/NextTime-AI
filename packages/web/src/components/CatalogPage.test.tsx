@@ -5784,4 +5784,91 @@ describe('CatalogPage — a draft whose definition went starts a new one (legacy
     const proposals = http.calls.filter((c) => c.name === 'propose_worker_definition');
     expect(proposals[1]?.params).not.toHaveProperty('definitionId');
   });
+
+  // Legacy 748: the two guards on that title.
+  const draftRow = (id: string, version: number, name: string) => ({
+    id,
+    version,
+    kind: 'worker',
+    status: 'draft',
+    proposedBy: 'p-me',
+    definition: { name, systemPrompt: 'P' },
+  });
+
+  it('a draft saved again under its own definition (legacy 744) keeps 「修改草稿」', async () => {
+    let first = true;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+          ? [draftRow('wd-9', 2, 'Kept')]
+          : [],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          return Promise.reject(
+            new HttpError('capability_error', 'kernel text', 'draft_changed', {
+              familyId: 'wd-9',
+              draftVersion: 2,
+            }),
+          );
+        }
+        return { id: 'wd-9', version: 3, status: 'draft' };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-edit'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    fireEvent.click(await within(drawer).findByTestId('worker-propose-after-changed'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe(`修改草稿 v${2}`);
+  });
+
+  it('closed after a new definition, the editor opened on another draft says 「修改草稿」 again', async () => {
+    let first = true;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+          ? [draftRow('wd-9', 1, 'Gone'), draftRow('wd-8', 2, 'Other')]
+          : [],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          return Promise.reject(
+            new HttpError('capability_error', 'WorkerDefinition not found', 'not_found'),
+          );
+        }
+        return { id: 'wd-new', version: 1, status: 'draft' };
+      },
+    });
+    renderPage(http, 'workers');
+    const rowOf = async (name: string) => {
+      const section = await screen.findByTestId('workers-my-drafts-section');
+      const row = within(section)
+        .getAllByTestId('workers-my-draft-row')
+        .find((el) => el.textContent?.includes(name));
+      if (!row) throw new Error(`no draft row ${name}`);
+      return row;
+    };
+    let detail = await selectRow(await rowOf('Gone'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-edit'));
+    let drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    fireEvent.click(await within(drawer).findByTestId('worker-propose-as-new-definition'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe('新建的 Worker 定义');
+    fireEvent.click(within(drawer).getByTestId('draft-done'));
+    await waitFor(() => expect(screen.queryByTestId('worker-editor-drawer')).toBeNull());
+
+    detail = await selectRow(await rowOf('Other'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-edit'));
+    drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe(`修改草稿 v${2}`);
+  });
 });
