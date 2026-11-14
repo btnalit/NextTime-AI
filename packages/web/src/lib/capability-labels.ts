@@ -2581,8 +2581,17 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   'workspace.created': {
     zh: '工作区已创建',
     en: 'Workspace created',
-    zhHint: '记录新工作区及其默认安装的模块。',
-    enHint: 'Records a new workspace and the modules it installs by default.',
+    zhHint:
+      '记录新工作区及其默认安装的模块；同一 id 之后若有一条「工作区创建失败」，这个工作区没有建成。',
+    enHint:
+      'Records a new workspace and the modules it installs by default; a later “Workspace creation failed” row with the same id means it was never made.',
+  },
+  'workspace.create_failed': {
+    zh: '工作区创建失败',
+    en: 'Workspace creation failed',
+    zhHint: '创建工作区的第二步（建出工作区本身）失败了，什么也没有建；记下调用者收到的错误码。',
+    enHint:
+      'The second step of creating a workspace (making the workspace itself) failed and nothing was made; records the error code the caller got.',
   },
   'user.identity_claimed': {
     zh: '账号已认领',

@@ -483,6 +483,8 @@ export function resourceIdSource(resourceType: string, t: Translate): PickerSour
  */
 export const PLATFORM_LIFECYCLE_ACTIONS = [
   'workspace.created',
+  // Legacy 735: the bootstrap after `create_workspace`'s first step failed; nothing was made.
+  'workspace.create_failed',
   'platform.user_purged',
   'platform.workspace_purged',
   'platform.llm_admin_token_issued',
