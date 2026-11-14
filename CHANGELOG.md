@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.69.0](https://github.com/btnalit/NextTime-AI/compare/v0.68.0...v0.69.0) (2026-11-14)
+
+
+### Features
+
+* **gates:** move a self-connected gate to a new address through a platform-approved proposal (legacy 701, kernel) ([#1156](https://github.com/btnalit/NextTime-AI/issues/1156)) ([ddc35d5](https://github.com/btnalit/NextTime-AI/commit/ddc35d5f90cc6d85b96a2a7b8ddaa7c071fb9c07))
+* **kernel:** an owner reads how a gate's last address change ended (legacy 715) ([#1166](https://github.com/btnalit/NextTime-AI/issues/1166)) ([7989193](https://github.com/btnalit/NextTime-AI/commit/7989193412b764de5e509221ab57da90f577b655))
+* **web:** an owner sees how a gate's last address change ended (legacy 715) ([#1168](https://github.com/btnalit/NextTime-AI/issues/1168)) ([3d0265f](https://github.com/btnalit/NextTime-AI/commit/3d0265f6b68c74edb2df9368414bb01b755f4ca6))
+* **web:** an owner's gate card says when its move to a new address awaits approval (legacy 716) ([#1187](https://github.com/btnalit/NextTime-AI/issues/1187)) ([a48f403](https://github.com/btnalit/NextTime-AI/commit/a48f403e26306488083af6e68d4148d23ded7b50))
+* **web:** move a self-connected gate to a new address from the console, decided by a platform administrator (legacy 701) ([#1158](https://github.com/btnalit/NextTime-AI/issues/1158)) ([e73487b](https://github.com/btnalit/NextTime-AI/commit/e73487bc3735e54e3cd5745f20ba3e3d3247a93d))
+* **web:** the platform sees the moves to a new address that ended, beside the open ones (legacy 717) ([#1191](https://github.com/btnalit/NextTime-AI/issues/1191)) ([fff093d](https://github.com/btnalit/NextTime-AI/commit/fff093d94285dba4a55e333fe83356ed0268ab01))
+
+
+### Bug Fixes
+
+* **deps:** lift hono to 4.13.16 and @hono/node-server to 2.1.6 (pre-release audit) ([#1192](https://github.com/btnalit/NextTime-AI/issues/1192)) ([db2220b](https://github.com/btnalit/NextTime-AI/commit/db2220b419a782486d5ee52d1650720d9e4bc6b7))
+* **gateway:** say a gate's address is not an allowed target as 424 target_refused (legacy 700) ([#1131](https://github.com/btnalit/NextTime-AI/issues/1131)) ([a8fe301](https://github.com/btnalit/NextTime-AI/commit/a8fe3019a92fcb6b2a5356a485c9f6fbef15a45d))
+* **goal:** hold a goal's reviewer to its wall clock and tokens and to read-only pi tools (S11 GO18a P3) ([#1123](https://github.com/btnalit/NextTime-AI/issues/1123)) ([3e2790a](https://github.com/btnalit/NextTime-AI/commit/3e2790aedaed8a7757289d060c42e0d05235b4ee))
+* **goal:** read a fact check's Objects for its requester, hiding Operation drafts they may not see (legacy 704) ([#1146](https://github.com/btnalit/NextTime-AI/issues/1146)) ([8ebb882](https://github.com/btnalit/NextTime-AI/commit/8ebb882c976eb72b1fd1f73ce9c11612edb482c4))
+* **goal:** refuse a fact check whose identity cannot match any Object (legacy 466) ([#1139](https://github.com/btnalit/NextTime-AI/issues/1139)) ([d083290](https://github.com/btnalit/NextTime-AI/commit/d08329069dfa9c367f7b67bc2ddd6ea0c1d0de79))
+* **goal:** start a goal planner with read-only pi tools, as a reviewer (legacy 697) ([#1148](https://github.com/btnalit/NextTime-AI/issues/1148)) ([67f1f0e](https://github.com/btnalit/NextTime-AI/commit/67f1f0e4e62321820e579a390d22c65ae4187105))
+* **kernel:** a connection secret binds one gate, within 24 hours (legacy 711) ([#1176](https://github.com/btnalit/NextTime-AI/issues/1176)) ([f056515](https://github.com/btnalit/NextTime-AI/commit/f056515f8ed844e7b852440b62cb51f94008c34c))
+* **kernel:** a pack's LinkType ends name only the families it requires; ontology families get a lasting name (legacy 705, 706) ([#1154](https://github.com/btnalit/NextTime-AI/issues/1154)) ([dc36bee](https://github.com/btnalit/NextTime-AI/commit/dc36beeb7a5f0a86eb1aa8ba2c79ac8947351c07))
+* **kernel:** a person's own call gets a Handle only while its console session or API key is live (legacy 712) ([#1180](https://github.com/btnalit/NextTime-AI/issues/1180)) ([9652eb2](https://github.com/btnalit/NextTime-AI/commit/9652eb24d077471acb32af579a7f568cb370917c))
+* **kernel:** a removed membership no longer blocks merging two users (legacy 723, 724) ([#1189](https://github.com/btnalit/NextTime-AI/issues/1189)) ([a937c72](https://github.com/btnalit/NextTime-AI/commit/a937c7261f7b94fe392f3beac6358391ec89d4ae))
+* **kernel:** a revoked session has no valid Handle, and a role change ends only what it must (legacy 699, 707) ([#1150](https://github.com/btnalit/NextTime-AI/issues/1150)) ([59b7979](https://github.com/btnalit/NextTime-AI/commit/59b797949187c5d877d134fd4790080a4beeefd9))
+* **kernel:** Handle governance P3s — authority_changed is a 409, merge_user refuses a disabled target, Worker tree revoke reaches late children (legacy 708, 713, 714) ([#1172](https://github.com/btnalit/NextTime-AI/issues/1172)) ([8db3ec0](https://github.com/btnalit/NextTime-AI/commit/8db3ec093c97dec8b91ed811dc98bfe224b45d67))
+* **kernel:** I6 reads one transaction's transitions in lifecycle order; tests on a filled database read only their own rows (legacy 720, 721) ([#1182](https://github.com/btnalit/NextTime-AI/issues/1182)) ([b60d616](https://github.com/btnalit/NextTime-AI/commit/b60d616919ec4f9efa1ad890cc8e6796fde69833))
+* **kernel:** issuing a Handle and changing its authority serialise; a disabled authority has no valid Handle (legacy 702) ([#1152](https://github.com/btnalit/NextTime-AI/issues/1152)) ([450a96c](https://github.com/btnalit/NextTime-AI/commit/450a96c56144218135ead72bad270fe81e58dcc9))
+* **kernel:** merging a disabled user into an active one records each membership it makes usable again (legacy 719) ([#1185](https://github.com/btnalit/NextTime-AI/issues/1185)) ([b4985a6](https://github.com/btnalit/NextTime-AI/commit/b4985a6efaf8ca6be61c5f3e27a72dad5288aefc))
+* **kernel:** refuse LinkType ends that name no declared ObjectType (legacy 303) ([#1141](https://github.com/btnalit/NextTime-AI/issues/1141)) ([b5c2619](https://github.com/btnalit/NextTime-AI/commit/b5c26190e44057a916a20e6663f5435d6e446922))
+* **kernel:** require the previewed manifestDigest to enable a gate instance (legacy 311) ([#1143](https://github.com/btnalit/NextTime-AI/issues/1143)) ([546c63e](https://github.com/btnalit/NextTime-AI/commit/546c63eb3a06f9a5ac5417fb1e5bcc978e6457eb))
+* **kernel:** set_membership_role to the role a member already has changes nothing (legacy 696) ([#1126](https://github.com/btnalit/NextTime-AI/issues/1126)) ([707de72](https://github.com/btnalit/NextTime-AI/commit/707de72d3b78554331bcf62aef34b2ca5e0e3103))
+* refuse plain http:// to a public gate address and scan JSON keys for credentials (legacies 413, 444) ([#1129](https://github.com/btnalit/NextTime-AI/issues/1129)) ([13ecde8](https://github.com/btnalit/NextTime-AI/commit/13ecde8a9631d0f1d78fba9ceee8303c7292bbcb))
+* **task:** a crash retry holds only what its person may hold now (legacy 289/290/292) ([#1135](https://github.com/btnalit/NextTime-AI/issues/1135)) ([3bd14b5](https://github.com/btnalit/NextTime-AI/commit/3bd14b5709ef799f5f92651eebd293a3b965c4e1))
+* **task:** end a live WorkerRun left under a decided Task (legacy 206) ([#1133](https://github.com/btnalit/NextTime-AI/issues/1133)) ([dfd472e](https://github.com/btnalit/NextTime-AI/commit/dfd472ef92895bec2ce8db06db406add5a53230d))
+* **worker-runtime:** install a pinned fd so pi's find tool works offline (legacy 698) ([#1137](https://github.com/btnalit/NextTime-AI/issues/1137)) ([df6d76d](https://github.com/btnalit/NextTime-AI/commit/df6d76d74ace213e5a463c4526ae3de7d48f823b))
+
 ## [0.68.0](https://github.com/btnalit/NextTime-AI/compare/v0.67.0...v0.68.0) (2026-11-12)
 
 
