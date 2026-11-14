@@ -78,9 +78,9 @@ import {
   resumeGoalRun,
   reviseGoalRun,
 } from '../../application/goal/index.js';
-import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index.js';
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
+import { callingTurnId } from './calling-turn.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { servesPerson } from './credential-presence.js';
 import { readModelCatalogIds } from './models-catalog-handler.js';
@@ -679,9 +679,8 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
             : { plan: input.plan }),
           budget: input.budget,
         });
-  const turn = ctx?.principal
-    ? undefined
-    : await findAttributableTurn(client, { workspaceId, principalId: requesterId, at: new Date() });
+  // Legacy 443: only a call through the agent's own session comes from its Turn.
+  const originatedInTurnId = await callingTurnId(client, workspaceId, requesterId, ctx);
   const proposed = await createGoalRun(client, workspaceId, {
     requesterId,
     proposedBy: requesterId,
@@ -697,7 +696,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     // Legacy 513: an agent proposing through its Handle never learns who connected which account.
     checkAccounts: servesPerson(ctx),
     modelCatalog,
-    ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
+    ...(originatedInTurnId !== undefined ? { originatedInTurnId } : {}),
   });
   const result: ProposeGoalResultWire = {
     goalRunId: proposed.goalRunId,

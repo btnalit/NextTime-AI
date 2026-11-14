@@ -209,6 +209,19 @@ describe.runIf(DATABASE_URL !== undefined)(
     const entryAgent = (obo: string, role: Role = 'member') =>
       handleCaller(workspaceId, obo, entryScope({}, { role }));
 
+    /** Legacy 443: a Handle of a real session of `kind` for `obo` — what says whose Turn a call
+     *  can come from. */
+    const sessionAgent = async (obo: string, kind: 'entry' | 'mcp_session') => {
+      const [session] = await raw<{ id: string }>(
+        `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+         values ($1, $2, $3, $2, 'active') returning id`,
+        [workspaceId, obo, kind],
+      );
+      const caller = entryAgent(obo);
+      if (caller.channel !== 'handle' || !session) throw new Error('no session');
+      return { ...caller, claims: { ...caller.claims, sid: session.id } };
+    };
+
     const goalCount = async () => {
       const [row] = await raw<{ count: number }>(
         'select count(*)::int as count from goal_runs where workspace_id = $1',
@@ -296,7 +309,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           return turn.rows[0]?.id as string;
         });
         try {
-          const agent = entryAgent(requesterId);
+          const agent = await sessionAgent(requesterId, 'entry');
           const proposed = await propose(agent, proposalOf('tidy the release notes'));
           expect(proposed).toMatchObject({ status: 'proposed', changed: true });
           expect(hintCodes(proposed.hints)).toEqual(['requester_confirm_only']);
@@ -328,6 +341,20 @@ describe.runIf(DATABASE_URL !== undefined)(
             originated_in_turn_id: null,
             idempotency_key: expect.stringMatching(new RegExp(`^auto:${requesterId}:`)),
           });
+          // Legacy 443: nor does a client the person issued a Handle to (`mcp_session`) propose
+          // from their agent's Turn — it is the requester's, from no Turn. A Handle of no session
+          // this workspace knows comes from no Turn either.
+          for (const [statement, caller] of [
+            ['from my own client', await sessionAgent(requesterId, 'mcp_session')],
+            ['from no session', entryAgent(requesterId)],
+          ] as const) {
+            const fromClient = await propose(caller, proposalOf(statement));
+            expect(await goalRow(fromClient.goalRunId)).toMatchObject({
+              status: 'proposed',
+              on_behalf_of: requesterId,
+              originated_in_turn_id: null,
+            });
+          }
         } finally {
           await raw(
             `update activities set status = 'completed', ended_at = now()

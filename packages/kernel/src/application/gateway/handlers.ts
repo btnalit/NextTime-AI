@@ -213,6 +213,7 @@ import {
 } from './attribution-handlers.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { ForbiddenError } from './authorize.js';
+import { callingTurnId } from './calling-turn.js';
 import {
   type CapabilityHandler,
   type CapabilityHandlerContext,
@@ -2189,7 +2190,8 @@ const listQuotasHandler: CapabilityHandler = async (client, workspaceId) => {
 
 /**
  * §5.2 `Turn --generated--> Task` (docs/development-tasks.md S2.11 deliverable 4): resolves the
- * caller's currently-*running* Turn, if any, using `_client` — the one transaction
+ * caller's currently-*running* Turn, if any — only through the agent's own session (legacy 443,
+ * `calling-turn.ts`) — using `_client` — the one transaction
  * `dispatchCapability` (dispatch.ts) already has open for this whole handler call. Only
  * `wasRunning === true` counts — `findAttributableTurn`'s 5-minute recency fallback exists for
  * egress/llm-usage attribution (where "which Turn was this probably part of" is the right
@@ -2265,18 +2267,11 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
     principalId,
   });
   // The Task belongs to the Turn that started it: an admin agent's own Turn under its session
-  // (S11 AA4c), never an entry Turn of the same person running beside it. So the Task's progress,
-  // and the approvals its Worker raises, land in the Chat they were asked from
-  // (application/linkage/chat-targets.ts `resolveTaskChat`).
-  const attributedTurn = principalId
-    ? await findAttributableTurn(_client, {
-        workspaceId,
-        principalId,
-        at: new Date(),
-        ...(adminAgentSessionId === undefined ? {} : { adminSessionId: adminAgentSessionId }),
-      })
-    : undefined;
-  const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
+  // (S11 AA4c), never an entry Turn of the same person running beside it; and only a call through
+  // the agent's own session comes from a Turn at all (legacy 443 — not the person's own call, nor
+  // a client they issued a Handle to). So the Task's progress, and the approvals its Worker raises,
+  // land in the Chat they were asked from (application/linkage/chat-targets.ts `resolveTaskChat`).
+  const turnId = await callingTurnId(_client, workspaceId, principalId, ctx, adminAgentSessionId);
   const input = params as InvokeWorkerInput;
 
   // R-54 (D-12): the stored key — an explicit `idempotencyKey` scoped to (on_behalf_of, sid) the
