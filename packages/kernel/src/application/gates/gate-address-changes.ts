@@ -189,6 +189,20 @@ export async function findOpenGateAddressChange(
   return row ? mapRow(row) : null;
 }
 
+/** Legacy 716: the workspace's gates with an open proposal that is not past its expiry (by the
+ *  database's clock, as `isExpired`) — `list_gatekeepers`' marker, one query for every gate. */
+export async function gatekeepersWithOpenGateAddressChange(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlySet<string>> {
+  const result = await client.query<{ gatekeeper_object_id: string }>(
+    `select c.gatekeeper_object_id from gate_address_changes c
+      where c.workspace_id = $1 and c.status = 'proposed' and now() < c.expires_at`,
+    [workspaceId],
+  );
+  return new Set(result.rows.map((row) => row.gatekeeper_object_id));
+}
+
 /** Legacy 715: the gate's latest proposal that is no longer open — final, or `proposed` and past
  *  `expires_at` by the database's clock (`lapsed`, not recorded as `expired` yet). One proposal is
  *  open at a time and a new one records a lapsed one first (I-A2, `expireStaleGateAddressChange`),

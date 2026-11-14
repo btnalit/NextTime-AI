@@ -459,6 +459,14 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
       toEndpoint: MOVED,
     });
 
+    // Legacy 716: the gate's card says a move waits, without opening anything.
+    const card = page.getByTestId('gatekeeper-card').filter({ hasText: TARGET });
+    const mark = card.getByTestId('gatekeeper-address-change-pending');
+    await expect(mark.getByTestId('gatekeeper-address-change-pending-label')).toHaveText(
+      '换地址待审批',
+      { timeout: 15_000 },
+    );
+
     // --- 在门那边：放回现在的密钥（CI 里新旧地址背后是同一个门，见文件头） ------------------------
     giveGateSecret(connectionSecret);
     // Until a platform administrator decides, the gate works where it is; 健康与操作 says where
@@ -479,6 +487,8 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await expect(detail.getByTestId('gatekeeper-endpoint')).toHaveText(ENDPOINT);
     await expect(pending).toHaveCount(0);
     await closeDialog(page, '健康与操作');
+    // Legacy 716: and the card no longer says a move waits.
+    await expect(mark).toHaveCount(0, { timeout: 15_000 });
     const withdrawn = await ownerGatekeeper(page);
     expect(withdrawn.pendingAddressChange).toBeUndefined();
     expect(withdrawn.endpoint).toBe(ENDPOINT);

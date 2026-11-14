@@ -904,6 +904,70 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(forMember.lastAddressChangeOutcome).toBeUndefined();
     });
 
+    it('legacy 716: an owner’s list marks each self-connected gate whose move awaits a decision — open and not past its expiry — and a member’s list, or a gate with no self connection, carries no mark', async () => {
+      const a = await connectedGate();
+      const b = await connectedGate();
+      const unlinked = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: `gac-unlinked-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'gac-unlinked',
+            endpoint: address('unlinked'),
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          return registered.gatekeeperId;
+        },
+      );
+      type Listed = { id: string; addressChangePending?: boolean };
+      const marks = async (as: typeof asOwner) => {
+        const { items } = await as<{ items: Listed[] }>('list_gatekeepers', {});
+        const byId = new Map(items.map((item) => [item.id, item]));
+        return [a.gatekeeperId, b.gatekeeperId, unlinked].map((id) => {
+          const item = byId.get(id);
+          if (item === undefined) throw new Error(`gate ${id} is not listed`);
+          return 'addressChangePending' in item ? item.addressChangePending : 'absent';
+        });
+      };
+
+      expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+
+      // Open: marked, on that gate only; a member sees no mark on any gate.
+      const first = await previewAndPropose(a.gatekeeperId);
+      expect(await marks(asOwner)).toEqual([true, false, 'absent']);
+      expect(await marks(asMember)).toEqual(['absent', 'absent', 'absent']);
+
+      // Past its expiry, though nothing recorded it expired yet: no longer awaiting anyone.
+      await lapse(first.proposal.id);
+      expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+
+      // Withdrawn, rejected, applied: each ends the mark.
+      const second = await previewAndPropose(a.gatekeeperId);
+      expect(await marks(asOwner)).toEqual([true, false, 'absent']);
+      await asOwner('withdraw_gate_address_change', { id: second.proposal.id });
+      expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+
+      const third = await previewAndPropose(b.gatekeeperId);
+      expect(await marks(asOwner)).toEqual([false, true, 'absent']);
+      await asAdmin('reject_gate_address_change', { workspaceId, id: third.proposal.id });
+      expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+
+      const fourth = await previewAndPropose(b.gatekeeperId);
+      await asAdmin('approve_gate_address_change', {
+        workspaceId,
+        id: fourth.proposal.id,
+        previewDigest: (await listed(fourth.proposal.id)).previewDigest,
+      });
+      expect(await marks(asOwner)).toEqual([false, false, 'absent']);
+    });
+
     it('legacy 718: a gate never shows another gate’s outcome, and a new address stored with a credential is shown without it, open or ended', async () => {
       const a = await connectedGate();
       const b = await connectedGate();

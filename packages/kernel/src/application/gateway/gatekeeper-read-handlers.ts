@@ -29,7 +29,9 @@ import { shownFreeText } from '../../governance/redaction/index.js';
 import type { GatekeeperPlatformPolicy } from '../gates/index.js';
 import {
   findSelfConnection,
+  gatekeepersWithOpenGateAddressChange,
   operationPlatformStatus,
+  readGatekeeperPlatformPolicies,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
@@ -302,13 +304,25 @@ export const listGatekeepersHandler: CapabilityHandler = async (
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const entries = await listGatekeepers(client, workspaceId);
   const operationCounts = await countOperationsByGatekeeper(client, workspaceId, viewer);
+  // Legacy 716: an owner's card marks a self-connected gate whose move awaits a platform
+  // administrator — the same owner and gates `get_gatekeeper` gives `pendingAddressChange` to.
+  const moves =
+    viewer.role === 'owner'
+      ? {
+          policies: await readGatekeeperPlatformPolicies(client, workspaceId),
+          open: await gatekeepersWithOpenGateAddressChange(client, workspaceId),
+        }
+      : null;
   return {
     result: {
       items: entries
         .filter((entry) => matchesQuery(entry.name, q))
-        .map((entry) =>
-          toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
-        ),
+        .map((entry) => ({
+          ...toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
+          ...(moves && moves.policies.get(entry.gatekeeperId)?.origin === 'self'
+            ? { addressChangePending: moves.open.has(entry.gatekeeperId) }
+            : {}),
+        })),
     },
   };
 };

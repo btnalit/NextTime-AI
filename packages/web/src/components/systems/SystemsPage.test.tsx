@@ -92,6 +92,8 @@ function scriptedHttp(
     },
     list_principals: () => ({ items: [] }),
     list_grants: () => ({ items: [] }),
+    // Legacy 716: an owner's page reads it for the 换地址待审批 marks.
+    list_gatekeepers: () => ({ items: [] }),
     execution_readiness: () => readiness({ principalId: 'p-self' }),
     resolve_refs: () => ({ items: [] }),
     ...handlers,
@@ -113,6 +115,18 @@ function renderPage(http: CapabilityCaller, platformAdmin = false, trialWorkspac
       <SystemsPage http={http} platformAdmin={platformAdmin} trialWorkspace={trialWorkspace} />
     </PermissionsProvider>,
   );
+}
+
+/** A Gatekeeper as `list_gatekeepers` lists it (legacy 716 adds the owner's mark to it). */
+function listedGate(id: string, name: string) {
+  return {
+    id,
+    name,
+    kind: 'http',
+    status: 'active',
+    operationCount: 3,
+    createdAt: '2026-11-01T00:00:00.000Z',
+  };
 }
 
 /** A connection request row as `list_connection_requests` returns it. */
@@ -1179,6 +1193,120 @@ describe('SystemsPage', () => {
     );
     // Nothing is proposed by opening it: the secret is minted, nothing else is written.
     expect(http.calls.some((c) => c.name.endsWith('_gate_address_change'))).toBe(false);
+  });
+
+  it('legacy 716: an owner’s card marks a gate whose move awaits approval, opens the move sheet from the mark, and reads the marks again once it closes', async () => {
+    const pendingMove = {
+      id: 'gac-1',
+      gatekeeperId: 'gk-1',
+      fromEndpoint: 'http://gate-a:8090',
+      toEndpoint: 'https://gate-b.example.com',
+      status: 'proposed',
+      impact: {
+        publishedOperationCount: 3,
+        grantCount: 1,
+        autoApprovedOperations: [],
+        workerDefinitionCount: 1,
+        inFlightActionRequestCount: 0,
+      },
+      previewDigest: 'p'.repeat(64),
+      proposedBy: 'p-self',
+      createdAt: '2026-11-13T00:00:00.000Z',
+      expiresAt: '2026-11-14T00:00:00.000Z',
+      decidedAt: null,
+      rejectionReason: null,
+    };
+    let pending = true;
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [gate(), gate({ gateId: 'gk-2', name: 'CRM' })],
+        }),
+      list_gatekeepers: () => ({
+        items: [
+          { ...listedGate('gk-1', 'Docker prod'), addressChangePending: pending },
+          { ...listedGate('gk-2', 'CRM'), addressChangePending: false },
+        ],
+      }),
+      get_gatekeeper: () => ({
+        id: 'gk-1',
+        name: 'Docker prod',
+        endpoint: 'http://gate-a:8090',
+        operations: [],
+        ...(pending ? { pendingAddressChange: pendingMove } : {}),
+      }),
+    });
+    renderPage(http);
+    const cards = await screen.findAllByTestId('gatekeeper-card');
+    const card = (id: string) =>
+      cards.find((element) => element.dataset.gatekeeperId === id) as HTMLElement;
+    const mark = await within(card('gk-1')).findByTestId('gatekeeper-address-change-pending');
+    expect(within(mark).getByTestId('gatekeeper-address-change-pending-label').textContent).toBe(
+      '换地址待审批',
+    );
+    // #1187 UX P3: it says it opens, as a touch screen shows no title.
+    expect(mark.textContent).toContain('查看');
+    expect(within(card('gk-2')).queryByTestId('gatekeeper-address-change-pending')).toBeNull();
+
+    // The mark opens the move sheet, where the proposal stands with 撤回.
+    fireEvent.click(mark);
+    const sheet = await screen.findByTestId('gate-address-change');
+    expect((await within(sheet).findByTestId('gate-address-change-pending')).textContent).toContain(
+      'https://gate-b.example.com',
+    );
+
+    // Decided meanwhile; the sheet closes, the marks are read again.
+    pending = false;
+    const reads = http.calls.filter((c) => c.name === 'list_gatekeepers').length;
+    fireEvent.keyDown(sheet, { key: 'Escape' });
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_gatekeepers').length).toBe(reads + 1),
+    );
+    await waitFor(() =>
+      expect(within(card('gk-1')).queryByTestId('gatekeeper-address-change-pending')).toBeNull(),
+    );
+  });
+
+  it('legacy 716: closing 「健康与操作」 reads the marks again (a proposal may have been withdrawn there)', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: () => ({ id: 'gk-1', name: 'Docker prod', operations: [], health: 'ok' }),
+    });
+    const onSelectGatekeeper = vi.fn();
+    render(
+      <PermissionsProvider>
+        <SystemsPage
+          http={http}
+          platformAdmin={false}
+          trialWorkspace={false}
+          selectedGatekeeperId="gk-1"
+          onSelectGatekeeper={onSelectGatekeeper}
+        />
+      </PermissionsProvider>,
+    );
+    const drawer = await screen.findByTestId('gatekeeper-detail-drawer');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'list_gatekeepers')).toBe(true));
+    const reads = http.calls.filter((c) => c.name === 'list_gatekeepers').length;
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+    expect(onSelectGatekeeper).toHaveBeenCalledWith(null);
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_gatekeepers').length).toBe(reads + 1),
+    );
+  });
+
+  it('legacy 716: a member’s page does not read the marks, and a card shows none', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_gatekeepers: () => {
+        throw new Error('a member’s page reads no marks');
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    expect(within(card).queryByTestId('gatekeeper-address-change-pending')).toBeNull();
+    expect(http.calls.some((c) => c.name === 'list_gatekeepers')).toBe(false);
   });
 
   it('「发布清单」 publishes the drafts this page read; a draft changed since reads them again (review #493 on #592)', async () => {

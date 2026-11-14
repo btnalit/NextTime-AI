@@ -610,6 +610,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(afterList.items[0]?.gatekeeperId).toBe(gatekeeperId);
 
+        // Legacy 716 (#501 P3-1): a catalog link has a platform policy too, but no move to a new
+        // address to await, so even its owner's list carries no `addressChangePending` for it.
+        const gates = await callAsOwner<ListEnvelope<{ id: string }>>('list_gatekeepers', {});
+        const listed = gates.items.find((item) => item.id === gatekeeperId);
+        expect(listed).toBeDefined();
+        expect(listed).not.toHaveProperty('addressChangePending');
+
         const instance = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
           gateId: GATE_ID,
         });

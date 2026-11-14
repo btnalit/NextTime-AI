@@ -133,6 +133,13 @@ export interface SystemAccessCardProps {
   /** UX acceptance of #620 (P2-3): the card a refused duplicate connection pointed at
    *  (「在列表里找到它」), marked the way a current row is (`aria-current`). */
   readonly current?: boolean;
+  /** Legacy 716: this gate's move to a new address awaits a platform administrator
+   *  (`list_gatekeepers`' `addressChangePending`, owners only) — the card says so, and opens the
+   *  move sheet, where the proposal stands with 撤回. */
+  readonly addressChangePending?: boolean;
+  /** Legacy 716: the move sheet closed — a proposal may have been made or withdrawn in it, so the
+   *  page reads the marks again. */
+  readonly onAddressChangeClosed?: () => void;
 }
 
 /** Console redesign P3-3 (V5): one line per grantee, up to two names — the full roster (with
@@ -325,6 +332,8 @@ export function SystemAccessCard({
   selfPrincipalId,
   platformAdmin = false,
   current = false,
+  addressChangePending = false,
+  onAddressChangeClosed,
 }: SystemAccessCardProps) {
   const t = useT();
   const reader = useReadinessReader(http);
@@ -544,6 +553,28 @@ export function SystemAccessCard({
         </Button>
         <MyReachability gate={gate} />
         <RefusedOperationsChip gate={gate} />
+        {canRotateSecret && addressChangePending ? (
+          <Button
+            variant="ghost"
+            size="s"
+            onClick={() => setAddressChangeOpen(true)}
+            title={t(
+              '这个门有一个等平台管理员批准的更换地址申请：点开查看它，或撤回',
+              'A move of this gate to a new address awaits a platform administrator: open it to see where it stands, or withdraw it',
+            )}
+            data-testid="gatekeeper-address-change-pending"
+          >
+            <span
+              className="chip chip-info chip-s"
+              data-testid="gatekeeper-address-change-pending-label"
+            >
+              {t('换地址待审批', 'Move awaiting approval')}
+            </span>
+            {/* #1187 UX P3: the chip alone reads as a status like the ones beside it, and a touch
+                screen shows no title — say it opens. */}
+            <span aria-hidden="true">{t('查看 ›', 'View ›')}</span>
+          </Button>
+        ) : null}
         {canManage ? (
           <Button
             variant="primary"
@@ -658,7 +689,10 @@ export function SystemAccessCard({
         <GateAddressChangeSheet
           http={http}
           open={addressChangeOpen}
-          onOpenChange={setAddressChangeOpen}
+          onOpenChange={(open) => {
+            setAddressChangeOpen(open);
+            if (!open) onAddressChangeClosed?.();
+          }}
           gatekeeperId={gate.gateId}
           gateName={gate.name}
         />
