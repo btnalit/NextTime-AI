@@ -44,7 +44,7 @@ import {
 } from '../platform/settings.js';
 import { applyRoleChange } from '../task/role-change.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
-import { createWorkspaceWithOwner } from '../workspace/create.js';
+import { WorkspaceOwnerUnavailableError, createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { isLastActiveHumanOwner } from './auth.js';
@@ -1475,6 +1475,15 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,
         purpose: input.purpose ?? 'standard',
+      }).catch((err: unknown) => {
+        // Legacy 726: the owner was deleted or disabled after the read above (the bootstrap reads
+        // it again under the user's lock) — the same refusals that read gives.
+        if (err instanceof WorkspaceOwnerUnavailableError) {
+          throw err.reason === 'not_found'
+            ? new PlatformAdminError('user_not_found', 'the owner user no longer exists')
+            : new PlatformAdminError('user_disabled', 'the owner must be an active user');
+        }
+        throw err;
       });
       // P2 hotfix (post-v0.16.0 review, "default modules drift"): only known once the bootstrap
       // above has actually run its install loop — too late for the phase-1 `workspace.created` row

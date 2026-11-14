@@ -110,6 +110,7 @@ export type IdentityErrorKind =
   | 'user_not_found'
   | 'already_claimed'
   | 'already_member'
+  | 'bind_contended'
   | 'invalid_api_key'
   | 'last_admin';
 
@@ -389,7 +390,9 @@ export interface BindPrincipalInput {
  * account, and a workspace key must never absorb a platform account) or when the caller already
  * has an active membership in that workspace (`already_member`, the `(workspace_id, user_id)`
  * unique index); a removed one of the caller's there is let go instead (legacy 725). Binding a
- * Principal that is already the caller's own is a no-op.
+ * Principal that is already the caller's own is a no-op. A key that another bind or merge kept
+ * moving while this waited for its locks is refused with `bind_contended` after
+ * {@link BIND_ATTEMPTS} tries, nothing written (legacy 727).
  */
 export async function bindPrincipalToUser(
   pool: PoolLike,
@@ -404,10 +407,12 @@ export async function bindPrincipalToUser(
       return;
     } catch (err) {
       if (!(err instanceof FormerUserMoved)) throw err;
+      // Legacy 727: its own code, not `already_claimed` — nothing says the account it moved to
+      // has a password, only that something else kept moving the key while this waited.
       if (attempt >= BIND_ATTEMPTS) {
         throw new IdentityError(
-          'already_claimed',
-          'that API key kept moving to another account while it was being bound; try again',
+          'bind_contended',
+          'that API key kept moving to another account while it was being bound; nothing was changed — try again',
         );
       }
     }

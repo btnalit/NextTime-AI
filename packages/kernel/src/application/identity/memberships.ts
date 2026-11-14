@@ -11,11 +11,13 @@
  * under its id), and a fresh Principal takes the slot. The person does not get back the drafts
  * and goals of the removed membership.
  *
- * Every path that gives a user a membership (`add_membership`, `create_user`, the workspace's
- * `add_member`, binding an API key) holds the user's authority lock before it calls this, so no
- * other of those, nor `merge_user`, changes the user's memberships meanwhile: what can still
- * happen concurrently is a removal (an active membership becomes removed), which only frees the
- * slot.
+ * Every path that gives a user a membership in a workspace that exists (`add_membership`,
+ * `create_user`, the workspace's `add_member`, binding an API key) holds the user's authority lock
+ * before it calls this, so no other of those, nor `merge_user`, changes the user's memberships
+ * meanwhile: what can still happen concurrently is a removal (an active membership becomes
+ * removed), which only frees the slot. Making a new workspace's owner (`create_workspace`,
+ * `application/workspace/create.ts`) holds the lock too (legacy 726), but does not call this: no
+ * membership can be in a workspace that does not exist yet.
  */
 import type { PoolClient } from 'pg';
 import { lockAuthoritiesForChange } from '../../governance/capability/index.js';

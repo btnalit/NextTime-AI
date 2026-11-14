@@ -2433,12 +2433,11 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         return entryTemplateRead(ctx);
       },
     },
-    // Legacy 691: with no published entry (basedOn: null) a second call is a second entry family,
-    // not the caller's identical draft — the lookup reads the published family's drafts only.
-    // As it is: `creates`; once aligned, `idempotent`.
+    // Legacy 691: with no published entry (basedOn: null) the second call finds the caller's own
+    // identical first draft of a new entry family too, instead of starting a second family.
     'no published entry': {
-      repeat: 'creates',
       first: expect.objectContaining({ created: true, basedOn: null }),
+      second: expect.objectContaining({ created: false, basedOn: null }),
       entity: (result) => (result as { draft: { id: string } }).draft.id,
       setUp: (ctx) => entryTemplateRead(ctx),
     },
