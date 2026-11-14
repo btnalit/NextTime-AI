@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { SkillEditor } from './SkillEditor.js';
 
 afterEach(cleanup);
@@ -446,5 +447,22 @@ describe('SkillEditor draft across an unmount (legacy 662)', () => {
     fireEvent.click(screen.getByTestId('skill-submit'));
     await screen.findByTestId('draft-proposed');
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('legacy 745: the English field labels are words, not schema keys', () => {
+    try {
+      localStorage.setItem('nexttime.lang', 'en');
+      const { caller } = http({});
+      render(
+        <LangProvider>
+          <SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />
+        </LangProvider>,
+      );
+      expect(screen.getByLabelText(/^Name/)).toBeTruthy();
+      expect(screen.getByLabelText(/^Description/)).toBeTruthy();
+      expect(screen.queryByLabelText(/^(name|description)/)).toBeNull();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });

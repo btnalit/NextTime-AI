@@ -20,6 +20,8 @@ const OTHER_AUDIT_ACTIONS = [
   'draft.expired',
   'agent_profile.lists_reset_to_follow_grants',
   'policy.auto_approve_rescoped',
+  'policy.auto_approve_definition_bound',
+  'policy.auto_approve_definition_unproven',
   'agent_policy.auto_approve_low_default_applied',
   'principal.auditor_handles_revoked',
   'principal.container_handles_revoked',

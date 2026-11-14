@@ -157,7 +157,7 @@ export function CapabilityPickerField({
   return (
     <div className="field" data-testid={testId}>
       <span className="field-label">
-        {label ?? t('能力', 'capabilities')}
+        {label ?? t('能力', 'Capabilities')}
         {required ? (
           <span className="field-required" aria-hidden>
             *

@@ -44,6 +44,7 @@ import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
 import {
+  workerDraftChangedOf,
   workerDraftChangedText,
   workerDraftPendingOf,
   workerDraftPendingText,
@@ -358,6 +359,9 @@ export function WorkerDefinitionEditor({
   }
 
   const pendingDraft = workerDraftPendingOf(error);
+  // Legacy 744: the draft being edited went (published, discarded or expired) — what was written
+  // can still be proposed, as the family's next version with nothing to replace.
+  const changedDraft = newVersionOf ? workerDraftChangedOf(error) : null;
 
   if (proposed) {
     return (
@@ -501,7 +505,7 @@ export function WorkerDefinitionEditor({
           <div className="row-wrap">
             <Field
               id="wd-kind"
-              label={t('类型', 'kind')}
+              label={t('类型', 'Kind')}
               hint={t(
                 '入口定义 = 用户的入口智能体（能力有上限）；Worker 定义 = 被委派执行任务的 Worker。新建只能是 Worker 定义，入口定义只能由已有的入口定义续写下一版本。',
                 "Entry definition = the user's entry agent (capability ceiling); Worker definition = a Worker tasks are delegated to. A new draft can only be a Worker definition — an entry definition only continues as the next version of an existing one.",
@@ -521,7 +525,7 @@ export function WorkerDefinitionEditor({
                 ))}
               </Select>
             </Field>
-            <Field id="wd-name" label={t('名称', 'name')} error={fieldError('name')}>
+            <Field id="wd-name" label={t('名称', 'Name')} error={fieldError('name')}>
               <Input
                 id="wd-name"
                 value={form.name}
@@ -532,7 +536,7 @@ export function WorkerDefinitionEditor({
             </Field>
             <Field
               id="wd-model"
-              label={t('模型', 'model')}
+              label={t('模型', 'Model')}
               hint={t(
                 '可选模型来自工作区的模型清单。',
                 "Options come from the workspace's model list.",
@@ -571,7 +575,7 @@ export function WorkerDefinitionEditor({
           </div>
           <Field
             id="wd-description"
-            label={t('描述', 'description')}
+            label={t('描述', 'Description')}
             error={fieldError('description')}
           >
             <Input
@@ -584,7 +588,7 @@ export function WorkerDefinitionEditor({
           </Field>
           <Field
             id="wd-system-prompt"
-            label={t('系统提示词', 'systemPrompt')}
+            label={t('系统提示词', 'System prompt')}
             required
             error={fieldError('systemPrompt')}
           >
@@ -626,7 +630,7 @@ export function WorkerDefinitionEditor({
             />
             <Field
               id="wd-egress-deny"
-              label={t('出网拒绝', 'egressDeny')}
+              label={t('出网拒绝', 'Egress deny list')}
               hint={
                 <>
                   {t(
@@ -722,7 +726,7 @@ export function WorkerDefinitionEditor({
           {isWorker ? (
             <div className="row-wrap">
               <CheckboxListField
-                legend={t('可作用的门', 'gates')}
+                legend={t('可作用的门', 'Gates')}
                 hint={t(
                   '工作区已注册的系统；未勾选 = 不授予任何门。',
                   "The workspace's registered systems; none checked = no gates granted.",
@@ -759,7 +763,7 @@ export function WorkerDefinitionEditor({
                 </Notice>
               ) : null}
               <CheckboxListField
-                legend={t('使用的 Skill', 'skills')}
+                legend={t('使用的 Skill', 'Skills')}
                 hint={t(
                   '已发布的 Skill；未勾选 = 不装载任何 Skill。',
                   'Published Skills; none checked = no Skill mounted.',
@@ -786,7 +790,11 @@ export function WorkerDefinitionEditor({
         <div ref={submitErrorRef} tabIndex={-1}>
           <ErrorBanner
             error={error}
-            title={t('无法创建草稿', 'Could not propose the draft')}
+            title={
+              replacing !== undefined
+                ? t('无法保存草稿', 'Could not save the draft')
+                : t('无法创建草稿', 'Could not propose the draft')
+            }
             overrides={{
               draft_pending: workerDraftPendingText(error, t),
               draft_changed: workerDraftChangedText(error, t),
@@ -818,6 +826,16 @@ export function WorkerDefinitionEditor({
                     )}
                   </Button>
                 </span>
+              ) : changedDraft ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  loading={busy}
+                  onClick={() => void submit(undefined)}
+                  data-testid="worker-propose-after-changed"
+                >
+                  {t('用这次的内容新建草稿', 'Save this as a new draft')}
+                </Button>
               ) : undefined
             }
             testId="worker-editor-error"
@@ -826,7 +844,16 @@ export function WorkerDefinitionEditor({
       ) : null}
 
       <div className="row overlay-actions">
-        <Button type="submit" variant="primary" loading={busy} data-testid="worker-submit">
+        {/* UX acceptance of #1220 (P3): after `draft_changed` a save would replace the same gone
+         *  draft and be refused again — the banner's 「用这次的内容新建草稿」 is the way on. */}
+        {/* ux-lint-allow-disabled: the refusal banner above says why and offers the way on. */}
+        <Button
+          type="submit"
+          variant="primary"
+          loading={busy}
+          disabled={changedDraft !== null}
+          data-testid="worker-submit"
+        >
           {t('保存草稿', 'Save draft')}
         </Button>
         <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
