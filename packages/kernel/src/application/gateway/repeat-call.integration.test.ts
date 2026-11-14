@@ -39,6 +39,7 @@ import {
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { issueAdminAgentHandle } from '../admin-agent/identity.js';
+import { manifestDigest, upsertAnnouncement } from '../gates/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
@@ -52,6 +53,7 @@ import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
+import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import {
   type ResolveCallerDeps,
@@ -148,27 +150,39 @@ const RUNTIME_CONTRACT = 'repeat-contract';
 const RUNTIME_IMAGES = ['repeat-runtime:one', 'repeat-runtime:two'] as const;
 /** The resident entry containers the supervisor stub lists; `stopResident` stops (drops) one. */
 const RESIDENTS: ResidentInventoryEntry[] = [];
-/** The active runtime image before a case changed it (`restoreActiveRuntimeImage`). */
-let activeRuntimeImageBefore: unknown;
+/** A platform setting as it was before a case changed it (`restoreSetting`): its key, and its
+ *  JSON value — absent when the settings had no such key. */
+let settingKept:
+  | { readonly key: string; readonly present: boolean; readonly value: unknown }
+  | undefined;
 
-async function keepActiveRuntimeImage(pool: Pool): Promise<void> {
-  const result = await pool.query<{ image: unknown }>(
-    "select settings -> 'activeRuntimeImage' as image from platform_settings where singleton",
+async function keepSetting(pool: Pool, key: string): Promise<void> {
+  const result = await pool.query<{ present: boolean; value: unknown }>(
+    'select settings ? $1 as present, settings -> $1 as value from platform_settings where singleton',
+    [key],
   );
-  activeRuntimeImageBefore = result.rows[0]?.image ?? null;
+  const row = result.rows[0];
+  settingKept = { key, present: row?.present === true, value: row?.value ?? null };
 }
 
-/** Test-only, outside any capability (as platform-runtime.integration.test.ts resets it): the
- *  setting as it was, so the files after this one spawn from what they always did. */
-async function restoreActiveRuntimeImage(pool: Pool): Promise<void> {
-  await pool.query(
-    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
-      ? "update platform_settings set settings = settings - 'activeRuntimeImage' where singleton"
-      : "update platform_settings set settings = jsonb_set(settings, '{activeRuntimeImage}', $1::jsonb) where singleton",
-    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
-      ? []
-      : [JSON.stringify(activeRuntimeImageBefore)],
-  );
+/** Test-only, outside any capability (as platform-runtime.integration.test.ts resets the active
+ *  runtime image): the setting as it was, so the files after this one see what they always did —
+ *  the image they spawn from, the model a new workspace takes. */
+async function restoreSetting(pool: Pool): Promise<void> {
+  const kept = settingKept;
+  settingKept = undefined;
+  if (kept === undefined) return;
+  if (kept.present) {
+    await pool.query(
+      'update platform_settings set settings = jsonb_set(settings, array[$1], $2::jsonb) where singleton',
+      [kept.key, JSON.stringify(kept.value)],
+    );
+  } else {
+    await pool.query(
+      'update platform_settings set settings = settings - $1::text where singleton',
+      [kept.key],
+    );
+  }
 }
 
 const activeRuntimeImage = async (ctx: RecipeContext): Promise<unknown> =>
@@ -1004,6 +1018,53 @@ async function linkedConnector(ctx: RecipeContext): Promise<{ name: string; jti:
   );
   return { name, jti: await entryHandle(ctx) };
 }
+
+/** A platform gate instance of its own that announced `operations` (as a packaged gate does),
+ *  under a connector of its own the announce creates; `decideGate` marks it enabled platform-wide, so a later announce
+ *  that changes its manifest is held as pending (R-18). */
+async function announcedGate(
+  ctx: RecipeContext,
+  operations: readonly Operation[] = [GATE_OP],
+  gateId = `repeat-announced-${randomUUID().slice(0, 8)}`,
+): Promise<string> {
+  const client = await ctx.pool.connect();
+  try {
+    await client.query('begin');
+    const outcome = await upsertAnnouncement(
+      client,
+      {
+        gateId,
+        connector: `${gateId}-system`,
+        transportKind: 'http',
+        endpoint: `https://${gateId}.example.invalid`,
+        operations: [...operations],
+      },
+      'gate',
+    );
+    if ('connectorRefused' in outcome || 'rejected' in outcome || 'credentialRefused' in outcome) {
+      throw new Error(`announcedGate: ${JSON.stringify(outcome)}`);
+    }
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return gateId;
+}
+
+async function decideGate(ctx: RecipeContext, gateId: string): Promise<void> {
+  await ctx.pool.query("update gate_instances set status = 'enabled' where gate_id = $1", [gateId]);
+}
+
+const gateCheckedAt = async (ctx: RecipeContext, params: Record<string, unknown>) =>
+  (
+    await ctx.pool.query<{ checked: Date | null }>(
+      'select last_checked_at as checked from gate_instances where gate_id = $1',
+      [params.gateId],
+    )
+  ).rows[0]?.checked?.toISOString();
 
 /** A user with no password yet (one an API key made, before anyone logged in as them), in no
  *  workspace: what `purge_user` purges, and what `merge_user` may merge away. */
@@ -2588,6 +2649,29 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       by: heldAdminAgent,
     },
   },
+  propose_pack_install: {
+    // Each call is another proposal (a new id) to install the same pack in the same workspace.
+    "a shipped pack at its latest version, for the case's workspace": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ authority: 'workspace', status: 'proposed' })],
+      }),
+      setUp: async (ctx) => {
+        caseAdminAgent = await adminAgent(ctx);
+        await withPlatformMeta(ctx);
+        const preview = await as<{ targetVersion: number }>(ctx, 'preview_pack_install', {
+          name: 'ops-assets',
+        });
+        return {
+          pack: 'ops-assets',
+          version: preview.targetVersion,
+          targetWorkspaceIds: [ctx.seed.workspaceId],
+          title: 'Track assets',
+          description: 'The trial workspace settled on it.',
+        };
+      },
+      by: heldAdminAgent,
+    },
+  },
   agent_withdraw_admin_proposal: {
     // Withdrawn by the first call, so the same call again finds nothing still proposed (409
     // admin_proposal_not_open), nothing written.
@@ -2609,12 +2693,12 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'an image built, allowlisted and carrying the runtime contract': {
       first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[1] }),
       setUp: async (ctx) => {
-        await keepActiveRuntimeImage(ctx.pool);
+        await keepSetting(ctx.pool, 'activeRuntimeImage');
         return { image: RUNTIME_IMAGES[1] };
       },
       entity: () => 'platform_settings',
       moves: platformSettingsVersionNow,
-      restore: restoreActiveRuntimeImage,
+      restore: restoreSetting,
     },
   },
   rollback_runtime_image: {
@@ -2623,14 +2707,14 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'after the active image was set to one, then two': {
       first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[0] }),
       setUp: async (ctx) => {
-        await keepActiveRuntimeImage(ctx.pool);
+        await keepSetting(ctx.pool, 'activeRuntimeImage');
         await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[0] });
         await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[1] });
         return {};
       },
       entity: () => 'platform_settings',
       moves: activeRuntimeImage,
-      restore: restoreActiveRuntimeImage,
+      restore: restoreSetting,
     },
   },
   roll_entry_containers: {
@@ -2660,6 +2744,63 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         });
         return { principalIds: [ctx.seed.ownerId] };
       },
+    },
+  },
+  test_gate_instance: {
+    // Each call probes the instance again and records when: the same instance, a later check.
+    'an instance a gate announced': {
+      first: expect.objectContaining({ health: 'unreachable', describedOperationCount: null }),
+      setUp: async (ctx) => ({ gateId: await announcedGate(ctx) }),
+      entity: (_result, params) => String(params.gateId),
+      moves: gateCheckedAt,
+    },
+  },
+  confirm_gate_manifest: {
+    // The first call adopts the pending manifest, so the same call again finds nothing pending
+    // (409 no_pending_manifest), nothing written.
+    'an enabled instance whose gate announced one more Operation': {
+      first: expect.objectContaining({ pendingManifest: null }),
+      setUp: async (ctx) => {
+        const gateId = await announcedGate(ctx);
+        await decideGate(ctx, gateId);
+        await announcedGate(ctx, [GATE_OP, OBSERVE_OP], gateId);
+        const pending = await ctx.pool.query<{ pending: unknown }>(
+          'select pending_operations as pending from gate_instances where gate_id = $1',
+          [gateId],
+        );
+        return { gateId, digest: manifestDigest(pending.rows[0]?.pending) };
+      },
+    },
+  },
+  enable_gate_instance: {
+    // An instance enabled here already returns its link whatever the digest: the same call again
+    // writes nothing but its own audit row.
+    'an instance enabled platform-wide, as its preview showed it': {
+      first: expect.objectContaining({ gateId: expect.any(String) }),
+      setUp: async (ctx) => {
+        const gateId = await announcedGate(ctx);
+        await decideGate(ctx, gateId);
+        const preview = await as<{ manifestDigest: string }>(ctx, 'preview_gate_instance_enable', {
+          gateId,
+        });
+        return { gateId, manifestDigest: preview.manifestDigest };
+      },
+      // The result names both the gate and its link; the link is what the repeat must not change.
+      entity: (result) => (result as { gatekeeperId?: string }).gatekeeperId,
+    },
+  },
+  set_platform_default_model: {
+    // The settings are one row: each call keeps the version it replaces in the history and takes
+    // the next, the same model again. null (pi's own default) needs no llm-proxy catalog.
+    "pi's own default": {
+      first: expect.objectContaining({ defaultEntryModel: null }),
+      setUp: async (ctx) => {
+        await keepSetting(ctx.pool, 'defaultEntryModel');
+        return { model: null };
+      },
+      entity: () => 'platform_settings',
+      moves: platformSettingsVersionNow,
+      restore: restoreSetting,
     },
   },
   revoke_external_runtime: {
@@ -2930,9 +3071,14 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'withdraw_admin_proposal',
   'propose_admin_proposal',
   'agent_withdraw_admin_proposal',
+  'propose_pack_install',
+  'set_platform_default_model',
   'set_active_runtime_image',
   'rollback_runtime_image',
   'roll_entry_containers',
+  'enable_gate_instance',
+  'test_gate_instance',
+  'confirm_gate_manifest',
   'revoke_external_runtime',
   'reject_platform_segment',
   'apply_platform_segment',
@@ -3166,6 +3312,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The connection rows issue a secret from the gate token (a test one here) and describe a
       // gate through FAKE_GATE; nothing leaves the process.
       const gateToken = `repeat-gate-token-${randomUUID()}`;
+      // test_gate_instance probes a platform instance through the read handlers' client: the
+      // fake one, so no gate address is dialled (its health refuses: unreachable).
+      setGatekeeperReadHandlerDeps({ gatekeeperClient: FAKE_GATE });
       setConnectionHandlerDeps({
         gatekeeperClient: FAKE_GATE,
         connectionSecrets: createGateConnectionSecrets(gateToken),
@@ -3187,6 +3336,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     afterAll(async () => {
+      setGatekeeperReadHandlerDeps({});
       // Leave no run for a later file's kernel to advance.
       for (const workspaceId of GOAL_WORKSPACES) {
         const client = await pool.connect();
