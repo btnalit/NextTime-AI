@@ -3054,6 +3054,37 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：上一版本的代码可以直接跑在这个 schema 上（见 §6 那一行），回退代码即可。要连迁移一起撤，按迁移注释的四步：`drop trigger principals_disabled_clears_api_key on principals`，`drop function principals_disabled_clears_api_key()`，`alter table principals drop constraint principals_disabled_no_api_key`，再 `delete from schema_migrations where module = 'core' and version = 59`。被清掉的 key 不会恢复：库里只存了 hash，而且它们都认证不了。
 - 下一次主机升级的提示要带上本节。
 
+### 3.180 WorkerDefinition 低于已发布 head 的草稿不能发布，入口当前版本按族 head 读（#1221，遗留 742，0.69.1 之后的下一版）
+
+没有迁移。
+
+- **行为变化**：
+  - `publish_worker_definition` 发布低于族里已发布 head 的版本时回 409 `draft_superseded`（`details.familyId` / `draftVersion` / `publishedVersion`），内容可用 `replacesDraft` 提成下一版；弃用的版本不算 head。控制台草稿详情在落后时说明原因并去掉「发布」。
+  - 入口的当前版本（`getPublishedEntryDefinition`）改为取最近发布过的入口族的 head（族内按版本号），和族 head 同一读法，不再按 `published_at` 取最后发布的一行。
+- **升级影响一：入口当前版本的读法变了**。升级前可以只读查一下主机上有没有顺序反过来的入口版本（结果记 `docs/private/`）：
+  ```sql
+  select a.workspace_id, a.id, a.version as stamped_later, b.version as higher
+    from worker_definitions a
+    join worker_definitions b
+      on b.workspace_id = a.workspace_id and b.id = a.id
+     and a.kind = 'entry' and a.status = 'published' and b.status = 'published'
+     and a.version < b.version and a.published_at > b.published_at;
+  ```
+  没有行就没有影响。有行的工作区，升级后入口 agent 会改用那个族里版本更高的一版（`higher`），而不是后发布的低版本（`stamped_later`）。想继续用低版本的内容，由所有者把它的内容提议成下一版再发布，或弃用更高的那一版。
+- **升级影响二：低于已发布 head 的待审草稿不能再发布**（409 `draft_superseded`，控制台详情里说明原因和怎么办）。升级前可以只读查有多少：
+  ```sql
+  select d.workspace_id, d.id, d.version as draft, max(p.version) as published_head
+    from worker_definitions d
+    join worker_definitions p
+      on p.workspace_id = d.workspace_id and p.id = d.id and p.status = 'published'
+   where d.status = 'draft'
+   group by d.workspace_id, d.id, d.version
+  having max(p.version) > d.version;
+  ```
+  有行不需要处理：提议人在控制台点「修改这份草稿」保存成下一版，或丢弃。
+- **回滚**：回退代码即可，回滚即恢复原来的读法。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
