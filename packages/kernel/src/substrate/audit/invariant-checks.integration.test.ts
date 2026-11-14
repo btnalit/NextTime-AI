@@ -33,12 +33,55 @@ import { INVARIANT_CHECK_IDS, runInvariantChecks } from './invariant-checks.js';
  * is append-only (no UPDATE/DELETE grant, 0004_audit.sql's own trigger) — there is nothing to clean
  * up or restore afterward; the fabricated rows simply become part of this database's permanent
  * history, same as any other AuditRecord.
+ *
+ * **Its own database.** A check reports at most five sample rows, newest (or longest stuck)
+ * first. In the shared database, after a full run, the rows other files left — a Task they left
+ * `queued`, an audit trail they wrote — came before this file's own, so "the sample names this
+ * file's row" failed by order alone. The file now runs on a database of its own, created and
+ * dropped around it; the baseline-and-delta shape above stays, so a check another file's rows
+ * would move still could not read as this file's.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+async function waitForNoConnections(cluster: Pool, name: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const { rows } = await cluster.query<{ n: string }>(
+      'select count(*)::text as n from pg_stat_activity where datname = $1',
+      [name],
+    );
+    if (rows[0]?.n === '0') return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** A database of this file's own (as llm-admin.integration.test.ts makes one), dropped after it. */
+async function createIsolatedDatabase(): Promise<{ pool: Pool; drop: () => Promise<void> }> {
+  if (DATABASE_URL === undefined) throw new Error('createIsolatedDatabase needs DATABASE_URL');
+  const cluster = createPool();
+  const name = `nexttime_invariant_checks_${randomUUID().replace(/-/g, '')}`;
+  try {
+    await cluster.query(`create database "${name}"`);
+  } catch (err) {
+    await cluster.end();
+    throw err;
+  }
+  const url = new URL(DATABASE_URL);
+  url.pathname = `/${name}`;
+  const pool = createPool({ connectionString: url.toString() });
+  return {
+    pool,
+    drop: async () => {
+      await pool.end();
+      await waitForNoConnections(cluster, name);
+      await cluster.query(`drop database if exists "${name}" with (force)`);
+      await cluster.end();
+    },
+  };
+}
 
 describe.runIf(DATABASE_URL !== undefined)(
   'substrate/audit/invariant-checks (integration, real Postgres)',
@@ -47,9 +90,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     let workspaceId: string;
     let ownerId: string;
     let sessionId: string;
+    let dropDatabase: (() => Promise<void>) | undefined;
 
     beforeAll(async () => {
-      pool = createPool();
+      const isolated = await createIsolatedDatabase();
+      pool = isolated.pool;
+      dropDatabase = isolated.drop;
       await runMigrations(pool, MIGRATIONS_DIR);
 
       workspaceId = randomUUID();
@@ -78,8 +124,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     afterAll(async () => {
-      await pool.end();
-    });
+      await dropDatabase?.();
+    }, 60_000);
 
     /** Inserts one `audit_records` row with an explicit `created_at` — raw SQL, not `writeAudit`
      *  (substrate/audit/writer.ts), so this test controls ordering deterministically rather than
@@ -94,12 +140,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       /** Omitted for an annotation of the request (no status change, no `resultingStatus`). */
       resultingStatus?: string;
       createdAt: Date;
+      /** The row's own id, when a case orders rows sharing a `created_at` against their ids. */
+      id?: string;
     }): Promise<void> {
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         client.query(
           `insert into audit_records
-             (workspace_id, actor_principal_id, action, resource_type, resource_id, payload, created_at)
-           values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+             (workspace_id, actor_principal_id, action, resource_type, resource_id, payload,
+              created_at, id)
+           values ($1, $2, $3, $4, $5, $6::jsonb, $7, coalesce($8, gen_random_uuid()))`,
           [
             workspaceId,
             ownerId,
@@ -112,6 +161,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 : { resultingStatus: params.resultingStatus },
             ),
             params.createdAt,
+            params.id ?? null,
           ],
         ),
       );
@@ -197,6 +247,66 @@ describe.runIf(DATABASE_URL !== undefined)(
         const before = baseline.find((b) => b.invariant === result.invariant);
         expect(result.violations).toBe(before?.violations ?? 0);
       }
+    });
+
+    it('I6: transitions one transaction wrote (one created_at) are compared in lifecycle order, not by their ids — an edge they skip is still a violation', async () => {
+      const togetherId = randomUUID();
+      const skippedId = randomUUID();
+      const at = new Date(Date.now() - 20_000);
+      const baseline = await runInvariantChecks(pool);
+      const baselineI6 = baseline.find((result) => result.invariant === 'I6');
+
+      // Approved, started and failed in one transaction: one `created_at`, and ids that sort the
+      // other way round (failed first), as gen_random_uuid() may well hand out.
+      const trail = [
+        { action: 'action_request.approve', resultingStatus: 'approved', id: 'ffffffff' },
+        { action: 'action_request.start_execution', resultingStatus: 'executing', id: '88888888' },
+        { action: 'action_request.fail', resultingStatus: 'failed', id: '00000000' },
+      ];
+      await insertAuditRecord({
+        action: 'action_request.request',
+        resourceType: 'action_request',
+        resourceId: togetherId,
+        resultingStatus: 'pending_approval',
+        createdAt: new Date(at.getTime() - 10_000),
+      });
+      for (const row of trail) {
+        await insertAuditRecord({
+          action: row.action,
+          resourceType: 'action_request',
+          resourceId: togetherId,
+          resultingStatus: row.resultingStatus,
+          createdAt: at,
+          id: `${row.id}-${randomUUID().slice(9)}`,
+        });
+      }
+      // In one transaction as well, but approved -> executed skips `executing`: no order of the
+      // two makes that a legal edge.
+      await insertAuditRecord({
+        action: 'action_request.request',
+        resourceType: 'action_request',
+        resourceId: skippedId,
+        resultingStatus: 'pending_approval',
+        createdAt: new Date(at.getTime() - 10_000),
+      });
+      for (const [status, id] of [
+        ['approved', 'ffffffff'],
+        ['executed', '00000000'],
+      ] as const) {
+        await insertAuditRecord({
+          action: status === 'approved' ? 'action_request.approve' : 'action_request.complete',
+          resourceType: 'action_request',
+          resourceId: skippedId,
+          resultingStatus: status,
+          createdAt: at,
+          id: `${id}-${randomUUID().slice(9)}`,
+        });
+      }
+
+      const i6 = (await runInvariantChecks(pool)).find((result) => result.invariant === 'I6');
+      expect(i6?.sample.filter((row) => row.includes(togetherId))).toEqual([]);
+      expect(i6?.sample).toContain(`${workspaceId}:${skippedId} approved->executed`);
+      expect(i6?.violations).toBe((baselineI6?.violations ?? 0) + 1);
     });
 
     it('I6: an annotation of a request (no resultingStatus, or one restating its status) is not a transition — it is neither a violation nor hides one', async () => {
