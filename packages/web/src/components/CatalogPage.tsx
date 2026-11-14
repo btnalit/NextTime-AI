@@ -2,6 +2,7 @@ import type {
   DraftOrigin,
   EntryTemplateStatusWire,
   GateOwnedParamWire,
+  OperationDeprecateResultWire,
   PublishEvaluationReview,
   SkillDetailWire,
   WorkerDefinitionDerivationWire,
@@ -1579,7 +1580,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     const key = catalogOperationKey(row);
     setBusy(key);
     try {
-      await http.call(action, {
+      const result = await http.call<Partial<OperationDeprecateResultWire> | undefined>(action, {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(action === 'publish_operation' ? credentialReview.params() : {}),
@@ -1588,8 +1589,20 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         ...(action === 'publish_operation' && row.draftDigest !== undefined
           ? { draftDigest: row.draftDigest }
           : {}),
+        // Legacy 423 (review #493 on #1223): the version this detail shows — when another one was
+        // published since, the kernel refuses `version_changed` and deprecates nothing.
+        ...(action === 'deprecate_operation' && row.version !== undefined
+          ? { version: row.version }
+          : {}),
       });
+      // Legacy 423: the result names the version the kernel deprecated.
+      const deprecatedVersion =
+        action === 'deprecate_operation' ? (result?.version ?? row.version) : undefined;
       const shown = actionKindTagToastText(row.name);
+      const deprecatedTitle =
+        deprecatedVersion === undefined
+          ? t(`${shown} 已弃用`, `${shown} deprecated`)
+          : t(`${shown} 已弃用 v${deprecatedVersion}`, `${shown} v${deprecatedVersion} deprecated`);
       toast.push({
         tone: 'ok',
         title:
@@ -1597,7 +1610,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             ? row.version !== undefined
               ? t(`${shown} 已发布 v${row.version}`, `${shown} v${row.version} published`)
               : t(`${shown} 已发布`, `${shown} published`)
-            : t(`${shown} 已弃用`, `${shown} deprecated`),
+            : deprecatedTitle,
       });
       // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
       // 「未找到」 after publishing) — follow it to the version now in effect.
@@ -1606,8 +1619,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       }
       // Likewise a deprecated version is keyed by its version from now on (UX acceptance of #776:
       // the detail read 「未找到」 after deprecating) — follow it there.
-      if (action === 'deprecate_operation' && itemId === key && row.version !== undefined) {
-        onSelectItem(`${operationKey(row)}@v${row.version}`);
+      if (action === 'deprecate_operation' && itemId === key && deprecatedVersion !== undefined) {
+        onSelectItem(`${operationKey(row)}@v${deprecatedVersion}`);
       }
       refresh();
     } catch (err) {
@@ -1616,8 +1629,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // S11 「门确认不存在」 B-a: the kernel's question about declared "not there" answers, likewise.
       if (action === 'publish_operation' && absentReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
-      // The toast says it was reloaded: show what is there now.
-      if (isDraftChangedError(err)) refresh();
+      // The toast says it was reloaded: show what is there now — for a deprecate refused
+      // `version_changed`, the version published since (legacy 423).
+      if (isDraftChangedError(err) || isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',

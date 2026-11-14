@@ -8,6 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -248,15 +249,55 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(listed.items.find((op) => op.name === name)?.status).toBe('published');
       });
 
-      it('the proposer deprecates their own Operation', async () => {
+      it('the proposer deprecates their own Operation; the result and the audit record name the version deprecated (legacy 423)', async () => {
         const name = await publishedOperationOfBuilder();
-        const deprecated = await call<{ status: string }>(
+        const deprecated = await call<{ status: string; version: number }>(
           builderId,
           'builder',
           'deprecate_operation',
           { gatekeeperId, name },
         );
-        expect(deprecated.status).toBe('deprecated');
+        expect(deprecated).toEqual({ gatekeeperId, name, version: 1, status: 'deprecated' });
+        const audited = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, { action: 'deprecate_operation' }),
+        );
+        const row = audited.find(
+          (entry) => (entry.payload as { params?: { name?: string } }).params?.name === name,
+        );
+        expect(row?.actorPrincipalId).toBe(builderId);
+        expect(row?.payload).toMatchObject({
+          params: { gatekeeperId, name },
+          operationObjectId: expect.any(String),
+          version: 1,
+        });
+      });
+
+      it('naming the version it looked at: another version live is 409 version_changed and nothing is deprecated; the version live is deprecated (review #493 on #1223)', async () => {
+        const name = await publishedOperationOfBuilder();
+        const refused = await call(builderId, 'builder', 'deprecate_operation', {
+          gatekeeperId,
+          name,
+          version: 2,
+        }).catch((err: unknown) => err);
+        expect(refused).toMatchObject({
+          code: 'version_changed',
+          reviewedVersion: 2,
+          currentVersion: 1,
+        });
+        expect(mapCapabilityError(refused)).toMatchObject({ status: 409, code: 'version_changed' });
+        const listed = await call<{ items: { name: string; status: string }[] }>(
+          builderId,
+          'builder',
+          'list_operations',
+          { gatekeeperId },
+        );
+        expect(listed.items.find((op) => op.name === name)?.status).toBe('published');
+        const deprecated = await call(builderId, 'builder', 'deprecate_operation', {
+          gatekeeperId,
+          name,
+          version: 1,
+        });
+        expect(deprecated).toEqual({ gatekeeperId, name, version: 1, status: 'deprecated' });
       });
 
       it('the owner deprecates a builder’s Operation', async () => {

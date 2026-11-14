@@ -4467,6 +4467,78 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     );
   });
 
+  it('legacy 423 (review #493 on #1223): Deprecate names the version shown; one published since is refused version_changed — nothing deprecated, the toast says so and the catalog reloads it', async () => {
+    let listed = 0;
+    const http = scriptedHttp({
+      list_operations: () => {
+        listed += 1;
+        // v2 was published after the page read the catalog.
+        return {
+          items: [
+            {
+              gatekeeperId: 'gk-1',
+              name: 'docker.restart',
+              status: 'published',
+              version: listed === 1 ? 1 : 2,
+            },
+          ],
+        };
+      },
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'deprecate_operation: Operation docker.restart on gatekeeper gk-1 is at v2 now, not the v1 that was reviewed',
+            'version_changed',
+          ),
+        ),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toMatch(/无法弃用 docker\.restart/);
+    expect(toast.textContent).toContain('在你查看之后它有了新版本，本次没有写入任何内容');
+    expect(http.calls.find((c) => c.name === 'deprecate_operation')?.params).toEqual({
+      gatekeeperId: 'gk-1',
+      name: 'docker.restart',
+      version: 1,
+    });
+    await waitFor(() => expect(listed).toBe(2));
+    // Still on the live Operation, now v2 — not sent to a deprecated v1.
+    expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
+      'gk-1::docker.restart',
+    );
+  });
+
+  it('legacy 423: a deprecate of the version shown names that version in the toast', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', version: 3 }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: () => ({
+        gatekeeperId: 'gk-1',
+        name: 'docker.restart',
+        version: 3,
+        status: 'deprecated',
+      }),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toMatch(/docker\.restart 已弃用 v3/);
+    expect(http.calls.find((c) => c.name === 'deprecate_operation')?.params).toMatchObject({
+      version: 3,
+    });
+  });
+
   it('deprecating a Skill no longer listed closes its detail, focus on the Skills tab', async () => {
     let deprecated = false;
     const http = scriptedHttp({
