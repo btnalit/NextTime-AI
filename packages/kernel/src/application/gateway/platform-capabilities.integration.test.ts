@@ -1351,6 +1351,78 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
+      it('set_membership_role and remove_membership name the membership the caller read (legacy 732): the user removed and added back since then is refused (membership_replaced), the new one untouched; the current one, or none named, acts as before', async () => {
+        const user = await createUser(pool, {
+          login: `replaced-before-${randomUUID().slice(0, 8)}`,
+          displayName: 'Replaced Before',
+          password: PASSWORD,
+        });
+        const read = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        // Both committed before the calls below: the page that read `read` never saw the new one.
+        await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+        const current = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        expect(current.principalId).not.toBe(read.principalId);
+
+        for (const role of ['builder', 'member'] as const) {
+          await expectPlatformError(
+            () =>
+              callAsAdmin('set_membership_role', {
+                userId: user.id,
+                workspaceId,
+                role,
+                principalId: read.principalId,
+              }),
+            'membership_replaced',
+          );
+        }
+        await expectPlatformError(
+          () =>
+            callAsAdmin('remove_membership', {
+              userId: user.id,
+              workspaceId,
+              principalId: read.principalId,
+            }),
+          'membership_replaced',
+        );
+        const untouched = await withAdminClient(pool, (client) =>
+          client.query<{ role: string; disabled: boolean }>(
+            `select role, disabled_at is not null as disabled from principals
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, current.principalId],
+          ),
+        );
+        expect(untouched.rows).toEqual([{ role: 'member', disabled: false }]);
+        const refusedAudit = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where resource_id = $1 and action = any($2::text[])
+                and coalesce(payload->>'outcome', '') <> 'refused'`,
+            [current.principalId, ['set_membership_role', 'remove_membership']],
+          ),
+        );
+        expect(refusedAudit.rowCount).toBe(0);
+
+        // The membership the caller read is the current one: the call acts.
+        const promoted = await callAsAdmin<UserMembershipWire>('set_membership_role', {
+          userId: user.id,
+          workspaceId,
+          role: 'builder',
+          principalId: current.principalId,
+        });
+        expect(promoted).toMatchObject({ principalId: current.principalId, role: 'builder' });
+        // None named: the user's current membership there, as before.
+        const removed = await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+        expect(removed).toEqual({ userId: user.id, workspaceId, removed: true });
+      });
+
       it('R-12 (D-25): remove_membership revokes that membership’s Handles and API key only — the user’s other membership and console session stay', async () => {
         const otherWorkspaceId = randomUUID();
         await withAdminClient(pool, (client) =>

@@ -362,6 +362,33 @@ describe('UserMembershipsPanel', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  // Legacy 732: a user removed and added back since the drawer read them is refused, not changed.
+  it('a role change and a removal name the membership the row shows', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+      set_membership_role: () => ({}),
+      remove_membership: () => ({ userId: 'u-1', workspaceId: 'ws-1', removed: true }),
+    });
+    const { onChanged } = renderPanel(http, memberOfAcme());
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'builder' } });
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(row).getByRole('button', { name: '移出' }));
+    fireEvent.click(within(row).getByRole('button', { name: '确认移出' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    const writes = http.calls.filter((call) => call.name !== 'list_workspaces');
+    expect(writes).toEqual([
+      {
+        name: 'set_membership_role',
+        params: { userId: 'u-1', workspaceId: 'ws-1', role: 'builder', principalId: 'p-1' },
+      },
+      {
+        name: 'remove_membership',
+        params: { userId: 'u-1', workspaceId: 'ws-1', principalId: 'p-1' },
+      },
+    ]);
+  });
+
   it('removing a membership says the person can be added back, as a new membership', async () => {
     const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
     const what = '草稿和目标';
