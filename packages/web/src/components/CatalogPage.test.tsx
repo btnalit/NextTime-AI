@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdminProposalCountProvider } from '../hooks/useAdminProposalCount.js';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { LangProvider } from '../lib/i18n.js';
-import type { CatalogTab } from '../lib/router.js';
+import { type CatalogTab, hrefs, navigate, routeFromHash } from '../lib/router.js';
 import { CatalogPage } from './CatalogPage.js';
 import { governanceFields } from './connect/governance-fixtures.test-helpers.js';
 import { ToastProvider } from './ui/Toast.js';
@@ -67,6 +67,28 @@ function Harness({
       }}
       itemId={itemId}
       onSelectItem={(id) => setItemId(id ?? undefined)}
+    />
+  );
+}
+
+/** Legacy 754: the page routed by the real hash — `onSelectItem` navigates, a `hashchange` (an
+ *  in-page link's click among them) re-reads the route — so a test can follow a link in the page. */
+function HashHarness({ http }: { readonly http: CapabilityCaller }) {
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  const route = routeFromHash(hash);
+  if (route.kind !== 'catalog') return null;
+  return (
+    <CatalogPage
+      http={http}
+      tab={route.tab}
+      onTabChange={(next) => navigate(hrefs.catalog(next))}
+      itemId={route.itemId}
+      onSelectItem={(id) => navigate(hrefs.catalog(route.tab, id ?? undefined))}
     />
   );
 }
@@ -4562,6 +4584,52 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     expect(within(stop).getByTestId('operation-deprecated-live-link').getAttribute('href')).toBe(
       '#/govern/catalog/operations/gk-1%3A%3Adocker.stop',
     );
+  });
+
+  it('legacy 754: the version linked from a deprecated note opens that version, and back returns', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'deprecated', version: 1 },
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', version: 2 },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    window.location.hash = hrefs.catalog('operations', 'gk-1::docker.restart@v1');
+    try {
+      render(
+        <PermissionsProvider>
+          <ToastProvider>
+            <AdminProposalCountProvider value={null}>
+              <HashHarness http={http} />
+            </AdminProposalCountProvider>
+          </ToastProvider>
+        </PermissionsProvider>,
+      );
+      const detail = await screen.findByTestId('catalog-detail');
+      await waitFor(() =>
+        expect(within(detail).getByTestId('operation-detail-version').textContent).toBe('v1'),
+      );
+      fireEvent.click(within(detail).getByTestId('operation-deprecated-live-link'));
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId('catalog-detail')).getByTestId('operation-detail-version')
+            .textContent,
+        ).toBe('v2'),
+      );
+      expect(window.location.hash).toBe(hrefs.catalog('operations', 'gk-1::docker.restart'));
+      expect(screen.queryByTestId('operation-deprecated-note')).toBeNull();
+      // Back is the hash going back to v1's — the deprecated version opens again.
+      window.location.hash = hrefs.catalog('operations', 'gk-1::docker.restart@v1');
+      await waitFor(() => expect(screen.getByTestId('operation-deprecated-note')).toBeTruthy());
+      expect(
+        within(screen.getByTestId('catalog-detail')).getByTestId('operation-detail-version')
+          .textContent,
+      ).toBe('v1');
+    } finally {
+      window.location.hash = '';
+    }
   });
 
   it('legacy 423: a deprecate of the version shown names that version in the toast', async () => {
