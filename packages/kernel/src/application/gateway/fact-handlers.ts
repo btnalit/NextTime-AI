@@ -111,6 +111,12 @@ export const assertFactHandler: CapabilityHandler = async (client, workspaceId, 
     params.targetObjectId,
   ]);
 
+  // Legacy 685: the Activity this call starts for itself is undone when the write turns out to be
+  // the Fact already standing (`unchanged`) — it would trace nothing, and the call is already in
+  // the audit. Started first all the same: the store reads it to tell whose write this is. A
+  // caller's own `activityId` is theirs to manage and is never touched.
+  const ownsActivity = params.activityId === undefined;
+  if (ownsActivity) await client.query('savepoint assert_fact_own_activity');
   const { activityId, ownActivityId } = await resolveWriteActivity(
     client,
     workspaceId,
@@ -136,7 +142,12 @@ export const assertFactHandler: CapabilityHandler = async (client, workspaceId, 
     },
   );
 
-  if (ownActivityId) await endActivity(client, workspaceId, ownActivityId, 'completed');
+  if (ownActivityId && fact.unchanged) {
+    await client.query('rollback to savepoint assert_fact_own_activity');
+  } else if (ownActivityId) {
+    await endActivity(client, workspaceId, ownActivityId, 'completed');
+  }
+  if (ownsActivity) await client.query('release savepoint assert_fact_own_activity');
 
   return { result: toWireFact(fact), resourceType: 'fact', resourceId: fact.id };
 };

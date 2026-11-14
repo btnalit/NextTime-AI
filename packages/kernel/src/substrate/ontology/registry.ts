@@ -1,5 +1,11 @@
 import type { DraftOrigin, PrincipalKind } from '@nexttime/shared';
-import { boundedEcho, quotedName } from '@nexttime/shared';
+import {
+  PUBLISHABLE_TRANSITIONS,
+  type PublishableStatus,
+  boundedEcho,
+  quotedName,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   ONTOLOGY_VERSION_COLUMNS,
@@ -146,7 +152,7 @@ export class OntologyDraftNotFoundError extends Error {
   readonly version: number;
   constructor(ontologyId: string, version: number) {
     super(
-      `no draft ontology_versions row (id=${ontologyId}, version=${version}) of yours — already published/deprecated, never proposed, or proposed by someone else`,
+      `no draft ontology_versions row (id=${ontologyId}, version=${version}) of yours — never proposed, or proposed by someone else`,
     );
     this.name = 'OntologyDraftNotFoundError';
     this.ontologyId = ontologyId;
@@ -238,7 +244,20 @@ export async function publishOntologyDraft(
     [workspaceId, input.id, input.version, input.publishedBy],
   );
   const draftRow = draft.rows[0];
-  if (!draftRow) throw new OntologyDraftNotFoundError(input.id, input.version);
+  if (!draftRow) {
+    // Legacy 686: a version already published (or deprecated) is visible to everyone, so saying it
+    // does not exist would hide nothing and make a retry after a successful publish read as a
+    // wrong id. It is refused as every other `publish_*` refuses it (`illegal_transition`); a draft
+    // that is someone else's, or nothing at all, stays not found.
+    const settled = await client.query<{ status: PublishableStatus }>(
+      `select status from ontology_versions
+       where workspace_id = $1 and id = $2 and version = $3 and status <> 'draft'`,
+      [workspaceId, input.id, input.version],
+    );
+    const settledRow = settled.rows[0];
+    if (settledRow) transition(PUBLISHABLE_TRANSITIONS, settledRow.status, 'publish');
+    throw new OntologyDraftNotFoundError(input.id, input.version);
+  }
   const head = await loadPublishedHeadVersion(client, workspaceId, input.id);
   if (head !== draftRow.base_version) {
     throw new OntologyBaseMovedError(input.id, input.version, draftRow.base_version, head);

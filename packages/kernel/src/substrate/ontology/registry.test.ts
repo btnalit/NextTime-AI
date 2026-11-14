@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { IllegalTransition } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  deprecatePublishedOntologyVersion,
   deriveOntologyPackId,
+  lockOntologyFamily,
   publishOntologyDomainPack,
   publishOntologyVersion,
 } from './loader.js';
@@ -290,7 +293,9 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       );
     });
 
-    it('publishOntologyDraft throws OntologyDraftNotFoundError for an already-published row', async () => {
+    // Legacy 686: a published version is visible to everyone, so a second publish is refused as
+    // every other publish refuses it (IllegalTransition), not hidden as not found.
+    it('publishOntologyDraft throws IllegalTransition for an already-published row', async () => {
       const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
@@ -315,7 +320,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
             publishedBy: alice,
           }),
         ),
-      ).rejects.toThrow(OntologyDraftNotFoundError);
+      ).rejects.toThrow(IllegalTransition);
     });
 
     // STATUS leftover 100: only the proposer may publish. Bob never saw Alice's draft (I16's read
@@ -355,6 +360,50 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
         }),
       );
       expect(published.status).toBe('published');
+
+      // Legacy 686: once published, the version is everyone's to see — Bob's retry is refused as
+      // a published row, no longer as a row that does not exist.
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+          publishOntologyDraft(client, workspaceId, {
+            id: draft.id,
+            version: draft.version,
+            publishedBy: bob,
+          }),
+        ),
+      ).rejects.toThrow(IllegalTransition);
+    });
+
+    it('publishOntologyDraft throws IllegalTransition for a deprecated row (legacy 686)', async () => {
+      const fixture = minimalDefinition();
+      const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
+          change: fixture.definition,
+          proposedBy: alice,
+        }),
+      );
+      await withWorkspace(pool, { workspaceId, principalId: alice }, async (client) => {
+        await publishOntologyDraft(client, workspaceId, {
+          id: draft.id,
+          version: draft.version,
+          publishedBy: alice,
+        });
+        await lockOntologyFamily(client, workspaceId, draft.id);
+        expect(
+          await deprecatePublishedOntologyVersion(client, workspaceId, draft.id, draft.version),
+        ).toBe(true);
+      });
+
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+          publishOntologyDraft(client, workspaceId, {
+            id: draft.id,
+            version: draft.version,
+            publishedBy: alice,
+          }),
+        ),
+      ).rejects.toThrow(IllegalTransition);
     });
 
     it('proposeOntologyChange rejects a structurally invalid change', async () => {
