@@ -3617,7 +3617,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.UserMembershipWireSchema,
     description:
-      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11). The role it already has changes nothing. 409 membership_removed for a removed membership, which keeps the role it was removed with: add the user to the workspace again for a new membership.',
+      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11). The role it already has changes nothing. 409 membership_removed for a removed membership, which keeps the role it was removed with: add the user to the workspace again for a new membership. 409 membership_replaced when the membership was removed and the user added back while the call waited: nothing changed, and the new membership is read again before acting on it.',
   },
   {
     name: 'remove_membership',
@@ -3628,7 +3628,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ userId: platformUserId, workspaceId: z.string().min(1) }).strict(),
     resultSchema: wire.RemoveMembershipResultWireSchema,
     description:
-      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner). A membership already removed is left as it is: nothing is revoked again and the audit row says the call changed nothing.',
+      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner). A membership already removed is left as it is: nothing is revoked again and the audit row says the call changed nothing. 409 membership_replaced when it was removed and the user added back while the call waited: the new membership is not touched.',
   },
   {
     name: 'merge_user',

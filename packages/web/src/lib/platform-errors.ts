@@ -34,6 +34,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这条成员资格已停用（被移出），角色不能再改，什么也没有改。要让这位用户回到这个工作区，在「加入工作区」里重新加入，会新建一条成员资格。',
     en: 'This membership is disabled (removed), so its role cannot change, and nothing changed. To bring the user back to this workspace, add them under “Add to a workspace”, which makes a new membership.',
   },
+  // #1198 review: removed and the user added back while the call waited — the user is a member
+  // there again, as another membership the caller has not seen yet.
+  membership_replaced: {
+    zh: '你操作的时候，这条成员资格被移出了，这位用户又被重新加入了这个工作区，现在是一条新的成员资格。什么也没有改；列表已重新读取，如果还要改，请对新的那条再操作一次。',
+    en: 'While you were doing this, the membership was removed and the user added back to this workspace, as a new membership. Nothing changed; the list has been read again, so act on the new one if you still need to.',
+  },
   login_taken: { zh: '这个登录名已被占用', en: 'That login is already taken' },
   already_member: { zh: '已经是该工作区的成员', en: 'Already a member of that workspace' },
   already_claimed: {
@@ -406,6 +412,18 @@ export function endpointAlreadyConnectedMessage(name: string | null, t: Translat
   return t(
     `这个地址已经接入为「${name}」，没有再接一次，什么也没保存——这里生成的连接密钥也没有保存，「${name}」用的仍是它原来的密钥。在「系统与授权」里找到「${name}」：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，门会连不上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上`,
     `This address is already connected as “${name}”, so nothing was saved — not the connection secret generated here either; “${name}” still uses its own. Find “${name}” in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, it will not connect — use ⋯ → “Issue a new connection secret” and put that one on the gate instead`,
+  );
+}
+
+/** #1198 UX P2: the membership acted on is not the one on screen any more — removed meanwhile
+ *  (`membership_removed`) or removed and the user added back (`membership_replaced`). The caller
+ *  reads the user again, so the row turns read-only (or becomes the new one) and the workspace is
+ *  back in 加入工作区 — what the message points at. */
+export function isStaleMembershipError(err: unknown): boolean {
+  return (
+    err instanceof HttpError &&
+    err.kind === 'capability_error' &&
+    (err.code === 'membership_removed' || err.code === 'membership_replaced')
   );
 }
 

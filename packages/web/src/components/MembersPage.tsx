@@ -161,6 +161,12 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
       ? (activeHumanOwners[0]?.id ?? null)
       : null;
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
+  // #1198 UX P2: the open drawer follows the list once it is read again (after a refusal that
+  // says the member changed meanwhile), not only the row it was opened with.
+  const detailPrincipal =
+    drawer.kind === 'detail'
+      ? (allPrincipals.find((row) => row.id === drawer.principal.id) ?? drawer.principal)
+      : null;
 
   const renderRow = (row: PrincipalRow) => (
     <ListRow
@@ -456,16 +462,17 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               {drawer.kind === 'detail' ? drawer.principal.displayName : t('成员', 'Member')}
             </SheetTitle>
           </SheetHeader>
-          {drawer.kind === 'detail' ? (
+          {detailPrincipal ? (
             <PrincipalDetail
-              key={drawer.principal.id}
+              key={detailPrincipal.id}
               http={http}
-              principal={drawer.principal}
+              principal={detailPrincipal}
               canManage={canManage}
-              isSelf={ownPrincipalId !== null && drawer.principal.id === ownPrincipalId}
-              lastActiveOwner={lastActiveOwnerId === drawer.principal.id}
+              isSelf={ownPrincipalId !== null && detailPrincipal.id === ownPrincipalId}
+              lastActiveOwner={lastActiveOwnerId === detailPrincipal.id}
               onChanged={handlePrincipalChanged}
               onForbidden={permissions.markDenied}
+              onStale={refreshList}
             />
           ) : null}
         </SheetContent>

@@ -3,6 +3,7 @@ import type { PlatformWorkspaceWire, UserWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { UserMembershipsPanel } from './UserMembershipsPanel.js';
 
 afterEach(cleanup);
@@ -267,6 +268,98 @@ describe('UserMembershipsPanel', () => {
     expect(note.textContent).toContain('在下面「加入工作区」里重新加入，会新建一条成员资格');
     await screen.findByTestId('user-memberships-workspace-empty');
     expect(http.calls.map((call) => call.name)).toEqual(['list_workspaces']);
+  });
+
+  // #1198 UX P2: removed after the drawer read it — the refusal reads the user again, so the row
+  // turns read-only and the workspace is back in the picker; the refusal stays on the row.
+  it('a role change refused as membership_removed reads the user again; the refusal stays on the now read-only row', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [workspace()] }),
+      set_membership_role: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'membership is removed', 'membership_removed'),
+        ),
+    });
+    const onChanged = vi.fn();
+    const { rerender } = render(
+      <UserMembershipsPanel
+        http={http}
+        user={memberOfAcme()}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'builder' } });
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(within(row).getByText(/角色不能再改/)).toBeTruthy();
+
+    // What the re-read gives: the membership removed.
+    rerender(
+      <UserMembershipsPanel http={http} user={user()} onChanged={onChanged} onBack={vi.fn()} />,
+    );
+    const after = screen.getByTestId('user-membership-row');
+    expect(within(after).queryByRole('combobox')).toBeNull();
+    expect(within(after).getByTestId('user-membership-removed')).toBeTruthy();
+    expect(within(after).getByText(/角色不能再改，什么也没有改/)).toBeTruthy();
+  });
+
+  it('a removal refused as membership_replaced reads the user again and shows the new membership with its own role', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+      remove_membership: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'removed and added back', 'membership_replaced'),
+        ),
+    });
+    const onChanged = vi.fn();
+    const { rerender } = render(
+      <UserMembershipsPanel
+        http={http}
+        user={memberOfAcme()}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.click(within(row).getByRole('button', { name: '移出' }));
+    fireEvent.click(within(row).getByRole('button', { name: '确认移出' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(within(row).queryByRole('button', { name: '确认移出' })).toBeNull();
+    expect(within(row).getByText(/又被重新加入了这个工作区/)).toBeTruthy();
+
+    const replaced = memberOfAcme();
+    rerender(
+      <UserMembershipsPanel
+        http={http}
+        user={{
+          ...replaced,
+          memberships: replaced.memberships.map((membership) => ({
+            ...membership,
+            principalId: 'p-new',
+            role: 'auditor',
+          })),
+        }}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const after = screen.getByTestId('user-membership-row');
+    expect((within(after).getByRole('combobox') as HTMLSelectElement).value).toBe('auditor');
+    expect(within(after).getByText(/又被重新加入了这个工作区/)).toBeTruthy();
+  });
+
+  it('other refusals do not read the user again', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+      set_membership_role: () =>
+        Promise.reject(new HttpError('capability_error', 'last owner', 'last_owner')),
+    });
+    const { onChanged } = renderPanel(http, memberOfAcme());
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'builder' } });
+    await screen.findByText(/最后一位有效的所有者/);
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   it('removing a membership says the person can be added back, as a new membership', async () => {

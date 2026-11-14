@@ -1,8 +1,9 @@
 import { ROLE_VALUES, type Role, type UserMembershipWire, type UserWire } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { roleDescription, roleLabel } from '../../lib/labels.js';
+import { isStaleMembershipError } from '../../lib/platform-errors.js';
 import {
   WorkspacePicker,
   soleOwnedWorkspaces,
@@ -42,7 +43,11 @@ export interface UserMembershipsPanelProps {
  * Legacy 730 (687): a removed membership is history. Its row says 已停用 and the role it was
  * removed with, read-only — `set_membership_role` refuses it (`membership_removed`) and removing it
  * again changes nothing — and points at 加入工作区 below, the one way back. Active memberships come
- * first.
+ * first. A row removed (or removed and the user added back, `membership_replaced`) after this
+ * drawer read it gets that refusal when acted on, and the drawer reads the user again (#1198 UX
+ * P2): the row turns read-only, or is the new membership, and the workspace is back in the picker.
+ * Rows are keyed by workspace — one membership per workspace in `list_users` — so the refusal
+ * stays on screen across that read.
  */
 export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMembershipsPanelProps) {
   const t = useT();
@@ -208,6 +213,11 @@ function MembershipRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // The row can become another membership (or the same one with another role) when the user is
+  // read again; the picker follows what was read.
+  useEffect(() => {
+    setRole(membership.role);
+  }, [membership.role]);
 
   async function saveRole(next: Role): Promise<void> {
     setRole(next);
@@ -223,6 +233,7 @@ function MembershipRow({
     } catch (err) {
       setRole(membership.role);
       setError(err);
+      if (isStaleMembershipError(err)) onChanged();
     } finally {
       setSaving(false);
     }
@@ -237,6 +248,10 @@ function MembershipRow({
       onChanged();
     } catch (err) {
       setError(err);
+      if (isStaleMembershipError(err)) {
+        setConfirmingRemove(false);
+        onChanged();
+      }
     } finally {
       setRemoving(false);
     }

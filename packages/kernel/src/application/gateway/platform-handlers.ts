@@ -75,6 +75,7 @@ export type PlatformErrorCode =
   /** Legacy 730: a role change on a removed membership — its role no longer means anything; the
    *  person comes back by being added again, as a new membership (legacy 725). */
   | 'membership_removed'
+  | 'membership_replaced'
   | 'login_taken'
   | 'already_member'
   | 'already_claimed'
@@ -816,8 +817,9 @@ function assertMembershipNotRemoved(membership: UserMembershipWire, workspaceId:
 }
 
 /** The membership read under the locks is the one locked: between the two reads it could only
- *  have been replaced by being removed and the user added back (legacy 725), which is a removal
- *  of the one the caller saw. */
+ *  have been replaced by being removed and the user added back (legacy 725). The new one is not
+ *  locked here and the caller has not seen it, so nothing is done to it (#1198 review): its own
+ *  code, since the user is a member there again. */
 function assertSameMembership(
   seen: UserMembershipWire,
   locked: UserMembershipWire,
@@ -825,8 +827,8 @@ function assertSameMembership(
 ): void {
   if (locked.principalId !== seen.principalId) {
     throw new PlatformAdminError(
-      'membership_removed',
-      `the user's membership in workspace ${workspaceId} was removed and the user added back while this waited — read it again`,
+      'membership_replaced',
+      `the user's membership in workspace ${workspaceId} was removed and the user added back while this waited, as a new membership — nothing changed; read it again`,
     );
   }
 }
@@ -841,9 +843,12 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
     principalIds: [seen.principalId],
   });
   // Legacy 729: read again under the locks, and a membership already removed — here or by the
-  // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is: it
-  // has nothing left to revoke (its sessions, their Handles and any API key went when it was
-  // removed), so nothing is written and the audit row says the call changed nothing (legacy 696).
+  // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is,
+  // nothing written and the audit row saying the call changed nothing (legacy 696). Nothing left
+  // works for it: its sessions and their Handles ended when it was disabled (governance 0043's
+  // trigger, 0042), and none can be issued for it again. A legacy API key the workspace-side
+  // disable left on the row stays there (`has_api_key` still says so) but no longer authenticates:
+  // key lookups skip a disabled Principal (`lookupPrincipalByApiKeyHash`).
   const membership = await loadMembership(client, input.userId, input.workspaceId);
   assertSameMembership(seen, membership, input.workspaceId);
   const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };

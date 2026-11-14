@@ -137,9 +137,11 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
     zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
     en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
   },
+  // How to come back depends on the kind of member, so the drawer says that part
+  // (`PrincipalDetail`, which reads the member again on this refusal) — #1198 UX P3.
   disabled: {
-    zh: '这个成员已停用，角色不能再改，什么也没有改。要让这个人回到这个工作区，按登录名重新添加成员，会新建一条成员资格；服务账号则新建一个。',
-    en: 'This member is disabled, so their role cannot change, and nothing changed. To bring a person back to this workspace, add them again by login, which makes a new membership; for a service account, create a new one.',
+    zh: '这个成员已停用，角色不能再改，什么也没有改。',
+    en: 'This member is disabled, so their role cannot change, and nothing changed.',
   },
 };
 
@@ -1320,6 +1322,13 @@ export function describeError(err: unknown): ErrorDescription {
  *  rather than keep offering a button that can only fail. */
 export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
+}
+
+/** #1198 UX P2: a member-management refusal with this `details.reason` (`principalRefusalCode`). */
+export function isPrincipalRefusal(err: unknown, reason: PrincipalRefusalReason): boolean {
+  return err instanceof HttpError && err.kind === 'capability_error'
+    ? principalRefusalCode(err) === reason
+    : false;
 }
 
 /** Review #493 on #583: the Operation draft acted on was revised in place since it was read
