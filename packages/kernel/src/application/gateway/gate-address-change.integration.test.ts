@@ -279,6 +279,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     }
 
+    /** Stores `endpoint` as a proposal's new address as a row written before the address check
+     *  would have (`credentials_in_connection_params`) — triggers off, as `lapse` moves expiry. */
+    async function storeToEndpoint(id: string, endpoint: string): Promise<void> {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('set local session_replication_role = replica');
+        await client.query(
+          'update gate_address_changes set to_endpoint = $3 where workspace_id = $1 and id = $2',
+          [workspaceId, id, endpoint],
+        );
+        await client.query('commit');
+      } finally {
+        client.release();
+      }
+    }
+
     /** A request of `gatekeeperId` still in flight, made before requests were bound to an address
      *  (governance 0044 left it NULL). */
     async function unboundRequest(gatekeeperId: string): Promise<string> {
@@ -882,6 +899,51 @@ describe.runIf(DATABASE_URL !== undefined)(
       // A member reads none of it.
       const forMember = await asMember<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
       expect(forMember.lastAddressChangeOutcome).toBeUndefined();
+    });
+
+    it('legacy 718: a gate never shows another gate’s outcome, and a new address stored with a credential is shown without it, open or ended', async () => {
+      const a = await connectedGate();
+      const b = await connectedGate();
+      const detail = (gatekeeperId: string) =>
+        asOwner<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
+
+      // A's proposal ends; B, which never had one, shows none.
+      const ofA = await previewAndPropose(a.gatekeeperId);
+      await asOwner('withdraw_gate_address_change', { id: ofA.proposal.id });
+      expect((await detail(a.gatekeeperId)).lastAddressChangeOutcome?.id).toBe(ofA.proposal.id);
+      expect((await detail(b.gatekeeperId)).lastAddressChangeOutcome).toBeUndefined();
+
+      // B's ends later: each gate shows its own, the later one never on A.
+      const ofB = await previewAndPropose(b.gatekeeperId);
+      await asAdmin('reject_gate_address_change', {
+        workspaceId,
+        id: ofB.proposal.id,
+        reason: 'Not this host.',
+      });
+      expect((await detail(b.gatekeeperId)).lastAddressChangeOutcome).toMatchObject({
+        id: ofB.proposal.id,
+        gatekeeperId: b.gatekeeperId,
+        status: 'rejected',
+      });
+      expect((await detail(a.gatekeeperId)).lastAddressChangeOutcome).toMatchObject({
+        id: ofA.proposal.id,
+        gatekeeperId: a.gatekeeperId,
+        status: 'withdrawn',
+      });
+
+      // A new address stored with a user and password (as a row from before the check would
+      // carry): the owner reads it without them, while the proposal is open and once it ended.
+      const third = await previewAndPropose(a.gatekeeperId);
+      await storeToEndpoint(third.proposal.id, 'http://someone:pass@gac-creds.invalid:8080/gate');
+      const shown = 'http://gac-creds.invalid:8080/gate';
+      expect((await detail(a.gatekeeperId)).pendingAddressChange?.toEndpoint).toBe(shown);
+      await asOwner('withdraw_gate_address_change', { id: third.proposal.id });
+      const ended = await detail(a.gatekeeperId);
+      expect(ended.lastAddressChangeOutcome).toMatchObject({
+        id: third.proposal.id,
+        toEndpoint: shown,
+      });
+      expect(JSON.stringify(ended)).not.toContain('pass@');
     });
 
     it('I-A3: a request made at the old address is refused at the new one, and the reaper asks no host about it', async () => {
