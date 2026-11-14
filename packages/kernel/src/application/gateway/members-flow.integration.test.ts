@@ -638,6 +638,68 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await authenticateHuman(pool, internalKey))?.principal.id).toBe(internalId);
     });
 
+    it('a disabled Principal stays as it was (legacy 729 / 730): a second disable_principal writes nothing, revokes and kicks nothing, and its audit row says unchanged; set_principal_role is refused (disabled), the same role too', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Disabled Twice');
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const first = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+        principalId: targetId,
+      })) as { id: string; disabledAt: string | null };
+      expect(first.disabledAt).not.toBeNull();
+      /** The Principal row's version: any write to it, even one that sets a column to the value it
+       *  has, changes it. */
+      const rowVersion = () =>
+        withAdminClient(pool, async (client) => {
+          const result = await client.query<{ xmin: string }>(
+            'select xmin::text from principals where workspace_id = $1 and id = $2',
+            [workspaceId, targetId],
+          );
+          return result.rows[0]?.xmin;
+        });
+      const before = await rowVersion();
+
+      const kicks: SessionKick[] = [];
+      const unsubscribe = subscribeToSessionKicks((kick) => {
+        kicks.push(kick);
+      });
+      try {
+        const second = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+          principalId: targetId,
+        })) as { id: string; disabledAt: string | null };
+        expect(second).toMatchObject({ id: targetId, disabledAt: first.disabledAt });
+      } finally {
+        unsubscribe();
+      }
+      expect(kicks.some((kick) => kick.principalIds?.includes(targetId))).toBe(false);
+
+      for (const role of ['builder', 'member'] as const) {
+        await expectRefused(
+          () =>
+            dispatchCapability({ pool }, owner, 'set_principal_role', {
+              principalId: targetId,
+              role,
+            }),
+          'disabled',
+        );
+      }
+      expect(await rowVersion()).toBe(before);
+      expect((await readPrincipalState(workspaceId, targetId)).role).toBe('member');
+
+      const audits = await withAdminClient(pool, (client) =>
+        client.query<{ action: string; unchanged: boolean | null }>(
+          `select action, (payload->>'unchanged')::boolean as unchanged from audit_records
+            where workspace_id = $1 and resource_id = $2
+              and action in ('disable_principal', 'set_principal_role')
+              and coalesce(payload->>'outcome', '') <> 'refused'
+            order by created_at, id`,
+          [workspaceId, targetId],
+        ),
+      );
+      expect(audits.rows).toEqual([
+        { action: 'disable_principal', unchanged: null },
+        { action: 'disable_principal', unchanged: true },
+      ]);
+    });
+
     it('create_principal refuses the reserved internal `__…__` display name (R-06)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await expectRefused(

@@ -1120,6 +1120,237 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      it('a removed membership stays as it was (legacy 729 / 730): removing it again writes nothing and its audit row says unchanged; a role change is refused (membership_removed), the same role too', async () => {
+        const user = await createUser(pool, {
+          login: `removed-twice-${randomUUID().slice(0, 8)}`,
+          displayName: 'Removed Twice',
+          password: PASSWORD,
+        });
+        const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+        /** The Principal row's version: any write to it, even one that sets a column to the value
+         *  it has, changes it. */
+        const rowVersion = () =>
+          withAdminClient(pool, async (client) => {
+            const result = await client.query<{ xmin: string; role: string }>(
+              'select xmin::text, role from principals where workspace_id = $1 and id = $2',
+              [workspaceId, membership.principalId],
+            );
+            return result.rows[0];
+          });
+        const before = await rowVersion();
+        expect(before?.role).toBe('member');
+
+        const again = await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+        expect(again).toEqual({ userId: user.id, workspaceId, removed: true });
+        for (const role of ['builder', 'member'] as const) {
+          await expectPlatformError(
+            () => callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role }),
+            'membership_removed',
+          );
+        }
+        expect(await rowVersion()).toEqual(before);
+
+        const audits = await withAdminClient(pool, (client) =>
+          client.query<{ action: string; unchanged: boolean | null }>(
+            `select action, (payload->>'unchanged')::boolean as unchanged from audit_records
+              where resource_id = $1 and action in ('remove_membership', 'set_membership_role')
+                and coalesce(payload->>'outcome', '') <> 'refused'
+              order by created_at, id`,
+            [membership.principalId],
+          ),
+        );
+        expect(audits.rows).toEqual([
+          { action: 'remove_membership', unchanged: null },
+          { action: 'remove_membership', unchanged: true },
+        ]);
+      });
+
+      it('set_membership_role and remove_membership read the membership again under its lock (legacy 730 / 729): one removed while they waited is refused, or left as it is', async () => {
+        const user = await createUser(pool, {
+          login: `removed-meanwhile-${randomUUID().slice(0, 8)}`,
+          displayName: 'Removed Meanwhile',
+          password: PASSWORD,
+        });
+        for (const call of ['set_membership_role', 'remove_membership'] as const) {
+          const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+            userId: user.id,
+            workspaceId,
+            role: 'member',
+          });
+          let go!: () => void;
+          const going = new Promise<void>((resolve) => {
+            go = resolve;
+          });
+          let locked!: () => void;
+          const holding = new Promise<void>((resolve) => {
+            locked = resolve;
+          });
+          // The workspace's own `disable_principal` (or another `remove_membership`), holding the
+          // Principal's lock while it removes the membership.
+          const writer = withAdminClient(pool, async (client) => {
+            await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+              [],
+              [],
+              [membership.principalId],
+            ]);
+            locked();
+            await going;
+            await client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [workspaceId, membership.principalId],
+            );
+          });
+          await holding;
+          const pending =
+            call === 'set_membership_role'
+              ? callAsAdmin(call, { userId: user.id, workspaceId, role: 'builder' })
+              : callAsAdmin(call, { userId: user.id, workspaceId });
+          // Not left unhandled while the poll below runs.
+          const outcome = pending.then(
+            (result) => ({ result }),
+            (err: unknown) => ({ err }),
+          );
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ waiting: number }>(
+              `select count(*)::int as waiting from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            if ((rows[0]?.waiting ?? 0) > 0) break;
+            if (attempt > 200) throw new Error(`${call} never waited on the Principal’s lock`);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          go();
+          await writer;
+          const settled = await outcome;
+          if (call === 'set_membership_role') {
+            await expectPlatformError(async () => {
+              if ('err' in settled) throw settled.err;
+            }, 'membership_removed');
+          } else {
+            expect(settled).toEqual({ result: { userId: user.id, workspaceId, removed: true } });
+            const audit = await withAdminClient(pool, (client) =>
+              client.query<{ unchanged: boolean | null }>(
+                `select (payload->>'unchanged')::boolean as unchanged from audit_records
+                  where resource_id = $1 and action = 'remove_membership'`,
+                [membership.principalId],
+              ),
+            );
+            expect(audit.rows).toEqual([{ unchanged: true }]);
+          }
+          const role = await withAdminClient(pool, (client) =>
+            client.query<{ role: string }>(
+              'select role from principals where workspace_id = $1 and id = $2',
+              [workspaceId, membership.principalId],
+            ),
+          );
+          expect(role.rows[0]?.role).toBe('member');
+        }
+      });
+
+      // #1198 review (#493 P3-1, #501 optional 1): removed and the user added back while the call
+      // waited — the membership read under the lock is the new one, whose lock the call does not
+      // hold, and which the caller never saw. Refused with its own code; the new one is untouched.
+      it('set_membership_role and remove_membership: a membership removed and the user added back while they waited is refused (membership_replaced), the new one untouched', async () => {
+        const user = await createUser(pool, {
+          login: `replaced-meanwhile-${randomUUID().slice(0, 8)}`,
+          displayName: 'Replaced Meanwhile',
+          password: PASSWORD,
+        });
+        for (const call of ['set_membership_role', 'remove_membership'] as const) {
+          const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+            userId: user.id,
+            workspaceId,
+            role: 'member',
+          });
+          let go!: () => void;
+          const going = new Promise<void>((resolve) => {
+            go = resolve;
+          });
+          let locked!: () => void;
+          const holding = new Promise<void>((resolve) => {
+            locked = resolve;
+          });
+          // Holding the seen membership's lock: removes it, lets it go (as adding the user back
+          // does, identity/memberships.ts), and gives the user a new membership there.
+          const writer = withAdminClient(pool, async (client) => {
+            await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+              [],
+              [],
+              [membership.principalId],
+            ]);
+            locked();
+            await going;
+            await client.query(
+              `update principals set disabled_at = now(), user_id = null
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, membership.principalId],
+            );
+            const inserted = await client.query<{ id: string }>(
+              `insert into principals (workspace_id, kind, role, display_name, user_id)
+               values ($1, 'human', 'member', 'Replaced Meanwhile', $2) returning id`,
+              [workspaceId, user.id],
+            );
+            return inserted.rows[0]?.id;
+          });
+          await holding;
+          const pending =
+            call === 'set_membership_role'
+              ? callAsAdmin(call, { userId: user.id, workspaceId, role: 'builder' })
+              : callAsAdmin(call, { userId: user.id, workspaceId });
+          const outcome = pending.then(
+            (result) => ({ result }),
+            (err: unknown) => ({ err }),
+          );
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ waiting: number }>(
+              `select count(*)::int as waiting from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            if ((rows[0]?.waiting ?? 0) > 0) break;
+            if (attempt > 200) throw new Error(`${call} never waited on the Principal’s lock`);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          go();
+          const replacement = await writer;
+          if (!replacement) throw new Error('no membership inserted');
+          const settled = await outcome;
+          await expectPlatformError(async () => {
+            if ('err' in settled) throw settled.err;
+          }, 'membership_replaced');
+          const rows = await withAdminClient(pool, (client) =>
+            client.query<{ id: string; role: string; disabled: boolean }>(
+              `select id, role, disabled_at is not null as disabled from principals
+                where workspace_id = $1 and id = any($2::uuid[]) order by created_at`,
+              [workspaceId, [membership.principalId, replacement]],
+            ),
+          );
+          expect(rows.rows).toEqual([
+            { id: membership.principalId, role: 'member', disabled: true },
+            { id: replacement, role: 'member', disabled: false },
+          ]);
+          const audit = await withAdminClient(pool, (client) =>
+            client.query(
+              `select 1 from audit_records
+                where resource_id = any($1::uuid[]) and action = any($2::text[])`,
+              [
+                [membership.principalId, replacement],
+                ['set_membership_role', 'remove_membership'],
+              ],
+            ),
+          );
+          expect(audit.rowCount).toBe(0);
+          // The next round adds the user again over this one.
+          await callAsAdmin('remove_membership', { userId: user.id, workspaceId });
+        }
+      });
+
       it('R-12 (D-25): remove_membership revokes that membership’s Handles and API key only — the user’s other membership and console session stay', async () => {
         const otherWorkspaceId = randomUUID();
         await withAdminClient(pool, (client) =>

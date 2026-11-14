@@ -100,6 +100,7 @@ const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>>
   platform_managed: 'Managed by the platform',
   human_api_key: 'People sign in with a password',
   reserved_name: 'Name reserved',
+  disabled: 'Disabled',
 };
 
 const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
@@ -108,6 +109,7 @@ const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, strin
   platform_managed: '由平台管理',
   human_api_key: '人类用户用密码登录',
   reserved_name: '名称被保留',
+  disabled: '已停用',
 };
 
 /** The platform plane's own `last_owner` / `self_disable` keep their `lib/platform-errors.ts` copy,
@@ -134,6 +136,12 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
   reserved_name: {
     zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
     en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
+  },
+  // How to come back depends on the kind of member, so the drawer says that part
+  // (`PrincipalDetail`, which reads the member again on this refusal) — #1198 UX P3.
+  disabled: {
+    zh: '这个成员已停用，角色不能再改，什么也没有改。',
+    en: 'This member is disabled, so their role cannot change, and nothing changed.',
   },
 };
 
@@ -1314,6 +1322,13 @@ export function describeError(err: unknown): ErrorDescription {
  *  rather than keep offering a button that can only fail. */
 export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
+}
+
+/** #1198 UX P2: a member-management refusal with this `details.reason` (`principalRefusalCode`). */
+export function isPrincipalRefusal(err: unknown, reason: PrincipalRefusalReason): boolean {
+  return err instanceof HttpError && err.kind === 'capability_error'
+    ? principalRefusalCode(err) === reason
+    : false;
 }
 
 /** Review #493 on #583: the Operation draft acted on was revised in place since it was read

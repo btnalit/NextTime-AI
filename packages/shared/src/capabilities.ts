@@ -3284,7 +3284,7 @@ const membersCapabilities = [
     paramsSchema: z.object({ principalId: id, role: RoleSchema }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Change a human or service Principal’s role. Refuses to demote the workspace’s last active human owner (a service owner never counts) and refuses an agent or internal Principal.',
+      'Change a human or service Principal’s role. Refuses to demote the workspace’s last active human owner (a service owner never counts), refuses an agent or internal Principal, and refuses a disabled one (409 conflict, reason disabled): a removed membership keeps the role it was removed with, and a person who should be back is added again as a new membership.',
   },
   {
     name: 'rotate_api_key',
@@ -3311,7 +3311,7 @@ const membersCapabilities = [
     paramsSchema: z.object({ principalId: id }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Disable a human or service Principal: its API key and every Handle issued on its behalf stop working immediately. Refuses the workspace’s last active human owner, an agent or internal Principal, and disabling oneself.',
+      'Disable a human or service Principal: its API key and every Handle issued on its behalf stop working immediately. Refuses the workspace’s last active human owner, an agent or internal Principal, and disabling oneself. A Principal already disabled is left as it is: nothing is revoked again and the audit row says the call changed nothing.',
   },
   {
     name: 'get_workspace',
@@ -3617,7 +3617,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.UserMembershipWireSchema,
     description:
-      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11).',
+      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11). The role it already has changes nothing. 409 membership_removed for a removed membership, which keeps the role it was removed with: add the user to the workspace again for a new membership. 409 membership_replaced when the membership was removed and the user added back while the call waited: nothing changed, and the new membership is read again before acting on it.',
   },
   {
     name: 'remove_membership',
@@ -3628,7 +3628,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ userId: platformUserId, workspaceId: z.string().min(1) }).strict(),
     resultSchema: wire.RemoveMembershipResultWireSchema,
     description:
-      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner).',
+      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner). A membership already removed is left as it is: nothing is revoked again and the audit row says the call changed nothing. 409 membership_replaced when it was removed and the user added back while the call waited: the new membership is not touched.',
   },
   {
     name: 'merge_user',

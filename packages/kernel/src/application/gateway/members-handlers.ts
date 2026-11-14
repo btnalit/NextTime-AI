@@ -470,6 +470,17 @@ export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspa
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'set_principal_role');
+  // Legacy 730 (687): a disabled Principal — for a person, a removed membership — keeps the role it
+  // was disabled with. Its role grants nothing while it is disabled, nothing re-enables it, and a
+  // person who should be back is added again as a new membership (legacy 725), so a role change
+  // here would only rewrite history. Read under the Principal's lock, which `disable_principal`
+  // and the platform's `remove_membership` take too.
+  if (target.disabledAt !== null) {
+    throw new PrincipalOperationRefusedError(
+      'disabled',
+      `set_principal_role: principal ${principalId} is disabled — its role cannot change; add the person again for a new membership`,
+    );
+  }
 
   if (target.role === 'owner' && role !== 'owner') {
     await assertNotLastActiveHumanOwner(client, workspaceId, target);
@@ -579,6 +590,18 @@ export const disablePrincipalHandler: CapabilityHandler = async (
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'disable_principal');
+  // Legacy 729: disabled already — here or by the platform's `remove_membership`, which takes this
+  // Principal's lock too — so it has nothing left to revoke (its key, sessions and Handles went
+  // when it was disabled): nothing is written, no socket is kicked, and the audit row says the call
+  // changed nothing (legacy 696).
+  if (target.disabledAt !== null) {
+    return {
+      result: toWirePrincipal(target),
+      resourceType: 'principal',
+      resourceId: principalId,
+      auditPayload: { unchanged: true },
+    };
+  }
   await assertNotLastActiveHumanOwner(client, workspaceId, target);
 
   const disabled = await client.query<{ disabled_at: Date }>(

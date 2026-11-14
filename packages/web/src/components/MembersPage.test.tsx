@@ -469,6 +469,45 @@ describe('MembersPage', () => {
     );
   });
 
+  // Legacy 729 (#1193 UX P3): someone added back after a removal has a new membership; the old,
+  // disabled one would read as a duplicate of it, so the disabled ones fold away below.
+  it('disabled members fold into a closed 「已停用的成员（N）」 section below the active ones, still openable', async () => {
+    const bobNow = principal({ id: 'p-2', displayName: 'Bob' });
+    const bobBefore = principal({
+      id: 'p-1',
+      displayName: 'Bob',
+      disabledAt: '2026-09-02T00:00:00.000Z',
+    });
+    const carol = principal({ id: 'p-3', role: 'owner', displayName: 'Carol' });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [bobBefore, carol, bobNow] }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('members-list');
+    expect(
+      within(list)
+        .getAllByTestId('member-row')
+        .map((row) => row.textContent),
+    ).toEqual([expect.stringContaining('Carol'), expect.stringContaining('Bob')]);
+    expect(within(list).queryByText('已停用')).toBeNull();
+
+    const folded = screen.getByTestId('members-disabled') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.querySelector('summary')?.textContent).toBe('已停用的成员（1）');
+    const old = within(folded).getByTestId('member-row');
+    expect(old.textContent).toContain('Bob');
+    expect(within(old).getByText('已停用')).toBeTruthy();
+    fireEvent.click(old);
+    expect(await screen.findByTestId('principal-detail')).toBeTruthy();
+  });
+
+  it('with no disabled member, there is no folded section', async () => {
+    const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+    expect(screen.queryByTestId('members-disabled')).toBeNull();
+  });
+
   it('console sweep: with more pages still unloaded, the last-owner rule is not claimed', async () => {
     const carol = principal({ id: 'p-2', role: 'owner', displayName: 'Carol' });
     const http = scriptedHttp({
@@ -527,6 +566,76 @@ describe('MembersPage', () => {
       expect(http.calls.some((call) => call.name === 'set_principal_role')).toBe(true),
     );
     expect(screen.queryByTestId('principal-owner-confirm')).toBeNull();
+  });
+
+  // #1198 UX P2: disabled after the drawer read it — the refusal reads the members again, so the
+  // drawer says 已停用, offers no role change or disable, and keeps the refusal on screen.
+  it('a role change refused as disabled reads the members again; the drawer turns read-only and keeps the refusal', async () => {
+    const bob = principal();
+    let disabledNow = false;
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [disabledNow ? { ...bob, disabledAt: '2026-09-08T00:00:00.000Z' } : bob],
+      }),
+      set_principal_role: () => {
+        disabledNow = true;
+        return Promise.reject(
+          new HttpError('capability_error', 'principal is disabled', 'conflict', {
+            reason: 'disabled',
+          }),
+        );
+      },
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+    expect(within(drawer).getByTestId('principal-status').textContent).toBe('活跃');
+
+    fireEvent.change(within(drawer).getByLabelText(/角色/), { target: { value: 'builder' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(within(drawer).getByTestId('principal-status').textContent).toBe('已停用'),
+    );
+    expect(http.calls.filter((call) => call.name === 'list_principals')).toHaveLength(2);
+    expect(within(drawer).queryByLabelText(/角色/)).toBeNull();
+    expect(within(drawer).queryByRole('button', { name: '停用成员' })).toBeNull();
+    expect(within(drawer).getByTestId('principal-disabled-readonly').textContent).toContain(
+      '按登录名重新添加成员',
+    );
+    expect(within(drawer).getByText(/角色不能再改，什么也没有改/)).toBeTruthy();
+  });
+
+  it('a disabled member’s drawer says why the role cannot change, and the way back for its kind', async () => {
+    const person = principal({ disabledAt: '2026-09-02T00:00:00.000Z' });
+    const service = principal({
+      id: 'p-svc',
+      kind: 'service',
+      displayName: 'CI',
+      disabledAt: '2026-09-02T00:00:00.000Z',
+    });
+    const http = scriptedHttp({ list_principals: () => ({ items: [person, service] }) });
+    renderPage(http);
+    const folded = await screen.findByTestId('members-disabled');
+    const [personRow, serviceRow] = within(folded).getAllByTestId('member-row') as [
+      HTMLElement,
+      HTMLElement,
+    ];
+
+    fireEvent.click(personRow);
+    let note = await screen.findByTestId('principal-disabled-readonly');
+    expect(note.textContent).toContain('按登录名重新添加成员，会新建一条成员资格');
+    expect(note.textContent).not.toContain('服务账号');
+    expect(screen.queryByLabelText(/角色/)).toBeNull();
+
+    fireEvent.click(serviceRow);
+    await waitFor(() =>
+      expect(screen.getByTestId('principal-disabled-readonly').textContent).toContain(
+        '新建一个服务账号',
+      ),
+    );
+    note = screen.getByTestId('principal-disabled-readonly');
+    expect(note.textContent).not.toContain('登录名');
   });
 
   it('R-06: an agent Principal’s drawer shows no role / rotate / disable controls', async () => {
