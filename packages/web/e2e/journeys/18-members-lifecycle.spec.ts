@@ -161,6 +161,10 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
     await expect(membershipRow.getByText('已停用', { exact: true })).toBeVisible({
       timeout: 15_000,
     });
+    // A removed membership is history (legacy 687): read-only, no role picker and nothing to remove.
+    await expect(membershipRow.getByTestId('user-membership-removed')).toBeVisible();
+    await expect(membershipRow.getByRole('combobox', { name: '角色', exact: true })).toHaveCount(0);
+    await expect(membershipRow.getByRole('button', { name: '移出', exact: true })).toHaveCount(0);
     expect(await membershipIn(page, user.id, workspaceName)).toMatchObject({
       role: 'operator',
       disabled: true,
@@ -227,6 +231,9 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
       'disabled',
       { timeout: 15_000 },
     );
+    // A disabled credential's role is history too: no role picker, a line saying why.
+    await expect(drawer.getByTestId('principal-disabled-readonly')).toBeVisible();
+    await expect(drawer.getByRole('combobox', { name: '角色', exact: true })).toHaveCount(0);
     const disabled = await listedPrincipal(page, service.principal.id);
     expect(disabled?.disabledAt ?? null).not.toBeNull();
     // What disabling guarantees: the credential no longer works. The key that worked in step 5 is
