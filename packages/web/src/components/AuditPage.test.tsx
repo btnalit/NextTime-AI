@@ -608,6 +608,17 @@ describe('AuditPage entry points', () => {
             action: 'set_principal_role',
             payload: { by: 'the host operator' },
           }),
+          // #1220 review P3-1: governance 0020 records the rule's writer, the row being about the policy.
+          auditRow({
+            id: 'audit-migration-policy',
+            action: 'policy.auto_approve_definition_unproven',
+            resourceType: 'policy',
+            resourceId: 'pol-1',
+            payload: {
+              by: 'migration governance/0020_auto_approve_definition',
+              definitionId: 'wd-1',
+            },
+          }),
         ],
       }),
       list_principals: principalsPage,
@@ -642,6 +653,20 @@ describe('AuditPage entry points', () => {
     expect(subject?.querySelector('.ref-chip-name')?.textContent).toBe(
       `成员 ${principal.displayName}`,
     );
+
+    // It acted on that member, so no 「记在 …」 repeats them.
+    expect(within(migration).queryByTestId('audit-by-migration-recorded-under')).toBeNull();
+
+    // A row about something else keeps whose rule it was, as 「记在 [member]」 — not as its actor.
+    const policyRow = meta(rowOf('policy.auto_approve_definition_unproven'));
+    expect(within(policyRow).getByTestId('audit-by-migration').textContent).toBe('升级时写入');
+    expect(within(policyRow).queryByTestId('audit-acting-through')).toBeNull();
+    const recordedUnder = within(policyRow).getByTestId('audit-by-migration-recorded-under');
+    expect(recordedUnder.textContent).toContain('记在');
+    expect(
+      recordedUnder.querySelector('[data-ref-kind="principal"][data-ref-id="p-1"]'),
+    ).not.toBeNull();
+    expect(policyRow.querySelectorAll('[data-ref-kind="principal"]')).toHaveLength(1);
 
     for (const action of ['disable_principal', 'set_principal_role']) {
       const person = meta(rowOf(action));

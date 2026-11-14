@@ -439,7 +439,19 @@ export function AuditLogSection({
                     </time>
                   </div>
                   <div className="data-row-meta">
-                    <AuditMigrationActor payload={row.payload}>
+                    <AuditMigrationActor
+                      payload={row.payload}
+                      recordedUnder={
+                        row.resourceId === row.actorPrincipalId ? undefined : (
+                          <RefChip
+                            kind="principal"
+                            id={row.actorPrincipalId}
+                            name={nameOf(principalNames, row.actorPrincipalId)}
+                            size="s"
+                          />
+                        )
+                      }
+                    >
                       <RefChip
                         kind="principal"
                         id={row.actorPrincipalId}
