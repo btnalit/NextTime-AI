@@ -3132,6 +3132,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.185 `invalid_step_reference` 带结构化 `details`（#1240，遗留 502，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：`propose_procedure` / `publish_procedure` 回的 400 `invalid_step_reference` 多带 `details`：`stepIndex`（从 0 数，流程没有步骤时为 `null`）、`reason`（`no_steps`、`operation_not_published`、`worker_not_published`、`not_worker_kind`、`no_graph_projection` 之一）和这一步引用的对象（operation 步骤为 `gatekeeperId` + `operationName`，worker 步骤为 `definitionId` + `version`，种类不对时还有 `definitionKind`）。消息文字不变，`details` 是加法；控制台显示不变。
+- **错误码变化**：worker 步骤查定义时的查询失败（包括语句超时）以前被包成 400「没有发布」，现在按原错误报 500。升级后如果发布流程时看到 500，查内核日志里那次查询为什么失败。
+- **回滚**：回退代码即可；控制台回到解析消息的路径，显示不变。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
