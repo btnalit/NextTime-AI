@@ -3150,6 +3150,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。新写的行多出的三项会留在库里，它们是枚举值和连接器名，不含凭据；回退后控制台照旧把 `credentialMode` 显示成 `[redacted]`。
 - 无主机动作。
 
+### 3.187 只有 agent 自己的会话发来的提议目标、启动 Worker 才算来自它的那一轮（#1245，遗留 443，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：`propose_goal` 和 `invoke_worker` 记来源轮次时看调用是从哪个会话来的。入口 agent 的会话照旧记这个人正在跑的入口轮次，管理员 agent 的会话照旧记它自己的轮次。人自己的调用、成员客户端的 Handle、服务 Handle 发来的不再记来源轮次：目标的 `originated_in_turn_id` 为空，Task 的 `created_by_activity_id` 不再指向入口 agent 当前那一轮，进度和审批也不再落到那一轮的对话里。Worker 嵌套调用照旧按根 Task 的轮次记。
+- **已有记录**：已经写下的来源字段不改。
+- **不变**：`record_decision` / `record_procedure_followed` 照旧按调用者找正在跑的轮次（遗留 758）。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
