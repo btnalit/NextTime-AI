@@ -818,8 +818,8 @@ export const mergeUserHandler: CapabilityHandler = async (
   // target's lock also makes a concurrent disable of the target wait, so its revocation sees the
   // moved memberships.
   await lockAuthoritiesForChange(client, { userIds: [input.sourceUserId, input.targetUserId] });
-  const source = await loadUser(client, input.sourceUserId);
-  const target = await loadUser(client, input.targetUserId);
+  let source = await loadUser(client, input.sourceUserId);
+  let target = await loadUser(client, input.targetUserId);
   if (source.hasPassword) {
     throw new PlatformAdminError(
       'already_claimed',
@@ -835,6 +835,30 @@ export const mergeUserHandler: CapabilityHandler = async (
       'user_disabled',
       'the target user is disabled: the moved memberships would act for a disabled user — enable it first, or merge into another user',
     );
+  }
+  // Legacy 702 (governance 0043): every Principal this may change — each of the source's, which
+  // move or are detached, and each of the target's in a workspace the source is in, which may be
+  // detached — locked after the users', and the memberships read again under those locks before
+  // anything is decided on them (#1189 #501 P3-1): a workspace-side `disable_principal` takes
+  // only the Principal's lock, so a membership read before it would still count as not removed
+  // (a clash where there is none, a detach of the wrong one, a false `membership_restored`).
+  // A membership added since the read before (`add_membership` takes no user lock) is in play but
+  // not locked yet: lock it too and read again, until a read brings none — in practice the first
+  // read under the locks.
+  const locked = new Set<string>();
+  for (;;) {
+    const sourceWorkspaces = new Set(source.memberships.map((m) => m.workspaceId));
+    const unlocked = [
+      ...source.memberships,
+      ...target.memberships.filter((m) => sourceWorkspaces.has(m.workspaceId)),
+    ]
+      .map((m) => m.principalId)
+      .filter((principalId) => !locked.has(principalId));
+    if (unlocked.length === 0) break;
+    await lockAuthoritiesForChange(client, { principalIds: unlocked });
+    for (const principalId of unlocked) locked.add(principalId);
+    source = await loadUser(client, source.id);
+    target = await loadUser(client, target.id);
   }
   // A user holds one membership per workspace (`principals_workspace_user_key`). Where both hold
   // one, only two that are not removed clash; otherwise the removed one is detached
@@ -867,17 +891,9 @@ export const mergeUserHandler: CapabilityHandler = async (
       userId: gone.userId,
     });
   }
-  // Legacy 702 (governance 0043): every Principal this changes — the source's, which move or are
-  // detached, and the target's detached ones — in one ordered call, after the users' locks.
-  await lockAuthoritiesForChange(client, {
-    principalIds: [
-      ...source.memberships.map((membership) => membership.principalId),
-      ...detached.filter((gone) => gone.userId === target.id).map((gone) => gone.principalId),
-    ],
-  });
   for (const gone of detached) {
-    // Only a removed one, still that user's. Under both users' locks nothing can change that
-    // (nothing re-enables a removed membership), so a miss is a broken invariant: fail loudly.
+    // Only a removed one, still that user's. Under both users' locks and its own nothing can
+    // change that (nothing re-enables a removed membership), so a miss is a broken invariant.
     const result = await client.query(
       `update principals set user_id = null
         where workspace_id = $1 and id = $2 and user_id = $3 and kind = 'human'

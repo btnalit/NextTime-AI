@@ -1489,6 +1489,102 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(mergeRow.rows[0]?.payload.detachedPrincipals).toHaveLength(3);
       });
+
+      // #1189 #501 P3-1: a workspace-side disable takes only the Principal's lock. The merge reads
+      // the memberships again once it holds the Principals' locks, so one removed while it waited
+      // counts as removed: no clash, and no `membership_restored` for it.
+      it('a membership removed while the merge waits for its lock counts as removed: it clashes with nothing and is not restored', async () => {
+        const [shared, own] = await mergeWorkspaces(2);
+        const source = await createUser(pool, {
+          login: `merge-race-src-${randomUUID().slice(0, 8)}`,
+          displayName: 'Race Source',
+        });
+        const target = await createUser(pool, {
+          login: `merge-race-dst-${randomUUID().slice(0, 8)}`,
+          displayName: 'Race Target',
+          password: PASSWORD,
+        });
+        const add = (userId: string, workspace: string | undefined) =>
+          callAsAdmin<UserMembershipWire>('add_membership', {
+            userId,
+            workspaceId: workspace,
+            role: 'member',
+          });
+        // Both hold one in `shared` (a clash, until the source's is removed); the source alone in
+        // `own` (restored by the merge, until it is removed).
+        const sharedSource = await add(source.id, shared);
+        const sharedTarget = await add(target.id, shared);
+        const ownSource = await add(source.id, own);
+        await callAsAdmin<UserWire>('set_user_status', { userId: source.id, status: 'disabled' });
+
+        // A writer that removes both of the source's memberships the way `disable_principal` does
+        // (its trigger takes each Principal's lock), and holds its transaction open.
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let removing!: () => void;
+        const removed = new Promise<void>((resolve) => {
+          removing = resolve;
+        });
+        const writer = withAdminClient(pool, async (client) => {
+          for (const [ws, principalId] of [
+            [shared, sharedSource.principalId],
+            [own, ownSource.principalId],
+          ] as const) {
+            await client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [ws, principalId],
+            );
+          }
+          removing();
+          await released;
+        });
+        await removed;
+
+        const merge = callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        for (let attempt = 0; ; attempt += 1) {
+          const { rows } = await pool.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'
+                and position('lock_authorities' in query) > 0`,
+          );
+          if ((rows[0]?.waiting ?? 0) > 0) break;
+          if (attempt > 200) throw new Error('the merge never waited on the Principals’ locks');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        release();
+        await writer;
+        const merged = await merge;
+
+        // The source's removed one in `shared` is detached, the target's stays; `own` moves, removed.
+        expect(
+          merged.memberships
+            .map((m) => ({ principalId: m.principalId, disabled: m.disabled }))
+            .sort((a, b) => a.principalId.localeCompare(b.principalId)),
+        ).toEqual(
+          [
+            { principalId: sharedTarget.principalId, disabled: false },
+            { principalId: ownSource.principalId, disabled: true },
+          ].sort((a, b) => a.principalId.localeCompare(b.principalId)),
+        );
+        expect(await principalUser(shared as string, sharedSource.principalId)).toEqual({
+          user_id: null,
+          disabled: true,
+        });
+        const restoredRows = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where action = 'platform.membership_restored'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(restoredRows.rowCount).toBe(0);
+      });
     });
 
     // ---- platform settings -------------------------------------------------------------------------
