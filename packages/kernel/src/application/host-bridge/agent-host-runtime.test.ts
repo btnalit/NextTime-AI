@@ -115,9 +115,17 @@ function createFakePool(
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
+  /** Legacy 434: SQL prefixes that fail, each after that many of its queries answer normally. */
+  const failing = new Map<string, { remaining: number }>();
 
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
+
+    for (const [prefix, state] of failing) {
+      if (!sql.startsWith(prefix)) continue;
+      if (state.remaining > 0) state.remaining -= 1;
+      else throw new Error('canceling statement due to statement timeout');
+    }
 
     if (sql.startsWith('BEGIN') || sql.startsWith('COMMIT') || sql.startsWith('ROLLBACK')) {
       return { rows: [], rowCount: 0 };
@@ -333,10 +341,9 @@ function createFakePool(
     }
 
     // S7-E: application/platform/settings.ts's readPlatformSettings, called by
-    // resolveActiveRuntimeImage below (and by resolveInstanceInstructions, already exercised by
-    // every existing test here — an unmatched query previously made both degrade to their
-    // documented "unreadable, continue without" fallback, which is why this handler's absence
-    // never broke a pre-S7-E test).
+    // resolveInstanceInstructions and resolveActiveRuntimeImage (legacy 434: a read that fails —
+    // an unmatched query here included — ends the Turn, so every read a Turn is prepared from is
+    // answered by this fake).
     if (sql.startsWith('select settings, version, updated_at from platform_settings')) {
       return {
         rows: [
@@ -396,7 +403,15 @@ function createFakePool(
   const client = { query, release: vi.fn() } as unknown as PoolClient;
   const pool: PoolLike = { connect: vi.fn(async () => client) };
 
-  return { pool, handleCount, sessionCount: () => sessionsByPrincipal.size };
+  return {
+    pool,
+    handleCount,
+    sessionCount: () => sessionsByPrincipal.size,
+    /** Legacy 434: queries starting with `sqlPrefix` fail from the `after + 1`th on. */
+    failQueries: (sqlPrefix: string, after = 0) => {
+      failing.set(sqlPrefix, { remaining: after });
+    },
+  };
 }
 
 function createFakeSink() {
@@ -1181,6 +1196,158 @@ describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefi
 
     const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
     expect(command.egressDeny).toBeUndefined();
+  });
+});
+
+// Legacy 434: a read the Turn is prepared from that fails is not "there is none" — the Turn ends
+// here, sending nothing, instead of launching without that part (worker-supervisor would read each
+// absence as the workspace's choice: drop the written prompt, apply an empty egress list, mount no
+// Skills, use its default image).
+describe('AgentHostRuntime — legacy 434 a read that fails ends the entry Turn, sending nothing', () => {
+  const ENTRY_DEFINITION = 'select workspace_id, id, version, kind, status, definition';
+  const AGENT_PROFILE = 'select workspace_id, principal_id, model, excluded_skills';
+  const AGENT_POLICY = 'select workspace_id, allowed_models';
+  const GRANTS = 'select distinct resource_id';
+  const SKILLS = 'select distinct on (id)';
+  const PLATFORM_SETTINGS = 'select settings, version, updated_at from platform_settings';
+
+  async function harness() {
+    const input = startTurnInput();
+    const fake = createFakePool(
+      new Map([
+        [
+          input.workspaceId,
+          { systemPrompt: 'you are the entry agent', egressDeny: ['blocked.example.com'] },
+        ],
+      ]),
+      new Map([[input.principalId, ['gk-a', 'gk-b']]]),
+      new Map([[input.principalId, { excludedGatekeepers: ['gk-b'] }]]),
+      undefined,
+      [{ id: 'skill-1', name: 'triage' }],
+      undefined,
+      undefined,
+      { instanceInstructions: 'never touch production', activeRuntimeImage: 'runtime:v2' },
+    );
+    const { sink, events } = createFakeSink();
+    const lines: string[] = [];
+    const runtime = new AgentHostRuntime({
+      pool: fake.pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: (line) => lines.push(line),
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    return { input, fake, runtime, events, sent, lines };
+  }
+
+  function turnEnded(input: StartTurnInput, status: 'failed' | 'interrupted') {
+    return {
+      type: 'turnEnded',
+      status,
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      turnId: input.turnId,
+      principalId: input.principalId,
+    };
+  }
+
+  it('with every read answering, the frame carries each part (the baseline the cases below take away)', async () => {
+    const { input, runtime, events, sent } = await harness();
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.systemPrompt).toContain('you are the entry agent');
+    expect(command.systemPrompt).toContain('never touch production');
+    expect(command.egressDeny).toEqual(['blocked.example.com']);
+    expect(command.skillsInline?.map((skill) => skill.name)).toEqual(['triage']);
+    expect(command.image).toBe('runtime:v2');
+    expect(events).toEqual([]);
+  });
+
+  it.each([
+    {
+      read: 'the AgentProfile',
+      prefix: AGENT_PROFILE,
+      after: 0,
+      step: 'the AgentProfile/AgentPolicy',
+    },
+    {
+      read: 'the AgentPolicy',
+      prefix: AGENT_POLICY,
+      after: 0,
+      step: 'the AgentProfile/AgentPolicy',
+    },
+    {
+      read: 'the gate Grants the profile narrows',
+      prefix: GRANTS,
+      after: 0,
+      step: 'the AgentProfile/AgentPolicy',
+    },
+    {
+      read: 'the published entry WorkerDefinition',
+      prefix: ENTRY_DEFINITION,
+      after: 0,
+      step: 'the published entry WorkerDefinition',
+    },
+    { read: 'the enabled Skills', prefix: SKILLS, after: 0, step: 'the enabled Skills' },
+    {
+      read: 'the platform instructions',
+      prefix: PLATFORM_SETTINGS,
+      after: 0,
+      step: 'the platform instructions',
+    },
+    {
+      read: 'the active runtime image (the second platform settings read)',
+      prefix: PLATFORM_SETTINGS,
+      after: 1,
+      step: 'the active runtime image',
+    },
+  ])(
+    '$read cannot be read: the Turn ends failed and nothing is sent',
+    async ({ prefix, after, step }) => {
+      const { input, fake, runtime, events, sent, lines } = await harness();
+      fake.failQueries(prefix, after);
+
+      await runtime.startTurn(input);
+
+      expect(sent).toEqual([]);
+      expect(events).toEqual([turnEnded(input, 'failed')]);
+      const logged = lines.map((line) => JSON.parse(line) as { level: string; msg: string });
+      expect(logged).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          msg: `agent-host-runtime: could not read ${step} — the entry turn was not started`,
+        }),
+      );
+      // No longer tracked here: its end has gone through the sink.
+      expect(runtime.ownsTurnEnd(input.turnId)).toBe(false);
+    },
+  );
+
+  it('an unreadable profile mints no Handle — never one with every Grant-derived gate instead of the profile’s', async () => {
+    const { input, fake, runtime } = await harness();
+    fake.failQueries(AGENT_PROFILE);
+
+    await runtime.startTurn(input);
+
+    expect(fake.handleCount.get(input.principalId) ?? 0).toBe(0);
+  });
+
+  it('a Turn stopped while preparing, whose read then fails, ends interrupted', async () => {
+    const { input, fake, runtime, events, sent } = await harness();
+    fake.failQueries(ENTRY_DEFINITION);
+
+    const startPromise = runtime.startTurn(input); // suspended at its first read
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    await startPromise;
+
+    expect(sent).toEqual([]);
+    expect(events).toEqual([turnEnded(input, 'interrupted')]);
   });
 });
 

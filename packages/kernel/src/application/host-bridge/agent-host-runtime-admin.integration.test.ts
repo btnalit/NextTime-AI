@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import type { KernelToAgentHostFrame } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import { decodeJwt } from 'jose';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import { grantCapability, revokeCapabilityGrant } from '../../governance/capability/grants.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
@@ -24,7 +24,7 @@ import type { AgentRuntimeEvent } from './agent-runtime.js';
  * carries the admin agent's own prompt and a Handle issued under the session the Turn was recorded
  * under — no Skills, no egress list; the Handle is reused while that session lives; and the Turn
  * fails, sending nothing, when the authority is gone (I-A3), the session ended (`stop_admin_agent`)
- * or the prompt cannot be read. S11 AA5a-1: the Handle carries the person's gate Grants in the
+ * or the prompt (or, legacy 434, any other read it is prepared from) cannot be read. S11 AA5a-1: the Handle carries the person's gate Grants in the
  * trial workspace (never one from another workspace), narrowed as the entry Handle's are (AgentPolicy
  * cap, My Agent exclusions), and a Grant, policy or exclusion changed since is picked up on the next
  * Turn under the same session. Real database because the authority, the session and
@@ -77,11 +77,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
-    function newRuntime(adminAgentSystemPrompt: () => Promise<string> = async () => ADMIN_PROMPT) {
+    function newRuntime(
+      adminAgentSystemPrompt: () => Promise<string> = async () => ADMIN_PROMPT,
+      runtimePool: PoolLike = pool,
+    ) {
       const events: AgentRuntimeEvent[] = [];
       const sent: KernelToAgentHostFrame[] = [];
       const runtime = new AgentHostRuntime({
-        pool,
+        pool: runtimePool,
         sink: {
           handle(event) {
             events.push(event);
@@ -123,6 +126,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         (frame): frame is Extract<KernelToAgentHostFrame, { type: 'startTurn' }> =>
           frame.type === 'startTurn',
       );
+    }
+
+    /** Legacy 434: `pool`, except that once a Handle has been issued through it, the query
+     *  starting with `sqlPrefix` fails — the first such query after the Handle, or the one after
+     *  `skip` more — so what fails is one read made after the Handle. */
+    function poolFailingAfterHandle(sqlPrefix: string, skip = 0): PoolLike {
+      let armed = false;
+      let toSkip = skip;
+      let failed = false;
+      return {
+        async connect() {
+          const client = await pool.connect();
+          const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+          const wrapped = Object.create(client) as PoolClient;
+          wrapped.query = (async (text: unknown, ...rest: unknown[]) => {
+            const sql = typeof text === 'string' ? text.trim() : '';
+            if (armed && !failed && sql.startsWith(sqlPrefix)) {
+              if (toSkip > 0) toSkip -= 1;
+              else {
+                failed = true;
+                throw new Error('canceling statement due to statement timeout');
+              }
+            }
+            const result = await query(text, ...rest);
+            if (sql.startsWith('insert into capability_handles')) armed = true;
+            return result;
+          }) as PoolClient['query'];
+          return wrapped;
+        },
+      };
     }
 
     async function handleCount(member: Member): Promise<number> {
@@ -456,6 +489,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expectFailedWithoutFrame(harness, await startAdminTurn(harness, member, sessionId));
       expect(await handleCount(member)).toBe(0);
+    });
+
+    it('legacy 434: fails, sending nothing, when a read after its Handle fails — never without the platform instructions or on another model', async () => {
+      const PLATFORM_SETTINGS = 'select settings, version, updated_at from platform_settings';
+      for (const [sqlPrefix, skip] of [
+        // the person's AgentProfile, whose model the admin agent uses
+        ['select workspace_id, principal_id, model, excluded_skills', 0],
+        // the published entry WorkerDefinition, whose model it uses when the profile sets none
+        ['select workspace_id, id, version, kind, status, definition', 0],
+        // the platform instructions, then the active runtime image
+        [PLATFORM_SETTINGS, 0],
+        [PLATFORM_SETTINGS, 1],
+      ] as const) {
+        const member = await newTrialMember();
+        const sessionId = await sessionOf(member);
+        const harness = newRuntime(undefined, poolFailingAfterHandle(sqlPrefix, skip));
+        expectFailedWithoutFrame(harness, await startAdminTurn(harness, member, sessionId));
+        expect(await handleCount(member)).toBe(1);
+      }
     });
   },
 );
