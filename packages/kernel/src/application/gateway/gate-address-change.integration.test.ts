@@ -1090,6 +1090,55 @@ describe.runIf(DATABASE_URL !== undefined)(
         { workspaceId, limit: 1, cursor: Buffer.from('not|a|cursor').toString('base64url') },
       );
       expect(top.items.map((item) => item.id)).toEqual([first?.id]);
+      // #493 on #1191: nor does one whose time Postgres could never have written — "x 1" passed
+      // `Date.parse` and reached the query as a cast it could not make (22007), not the top.
+      const position = `${workspaceId}|${first?.id ?? workspaceId}`;
+      for (const forged of [
+        'x 1',
+        '1',
+        '0',
+        '2026-11-14T07:00:00Z',
+        '2026-02-30 00:00:00+00',
+        '2026-11-14 24:00:00+00',
+        '2026-11-14 07:00:00.1234567+00',
+        '2026-11-14 07:00:00+16',
+      ]) {
+        const fromTop = await asAdmin<{ items: PlatformGateAddressChangeWire[] }>(
+          'list_gate_address_changes',
+          {
+            workspaceId,
+            limit: 1,
+            cursor: Buffer.from(`${forged}|${position}`).toString('base64url'),
+          },
+        );
+        expect(
+          fromTop.items.map((item) => item.id),
+          forged,
+        ).toEqual([first?.id]);
+      }
+      // …while every offset form Postgres writes is still a position: past the first row.
+      const [, second] = (await allListed({ workspaceId }, 200)).items;
+      const shown = await pool.query<{ at: string }>(
+        `select created_at::text as at from gate_address_changes
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, first?.id],
+      );
+      const at = shown.rows[0]?.at ?? '';
+      for (const offset of ['', ':00', ':00:00']) {
+        const written = /[+-]\d{2}$/.test(at) ? `${at}${offset}` : at;
+        const next = await asAdmin<{ items: PlatformGateAddressChangeWire[] }>(
+          'list_gate_address_changes',
+          {
+            workspaceId,
+            limit: 1,
+            cursor: Buffer.from(`${written}|${position}`).toString('base64url'),
+          },
+        );
+        expect(
+          next.items.map((item) => item.id),
+          written,
+        ).toEqual([second?.id]);
+      }
       const last = await asAdmin<{ items: PlatformGateAddressChangeWire[]; nextCursor?: string }>(
         'list_gate_address_changes',
         { workspaceId, limit: 200 },

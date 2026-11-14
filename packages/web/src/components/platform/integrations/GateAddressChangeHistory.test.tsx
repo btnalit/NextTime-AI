@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { PlatformGateAddressChangeWire } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { HttpError } from '../../../lib/http-client.js';
