@@ -3671,6 +3671,25 @@ function definitionItems(row: WorkerDefinitionSummary, t: Translate): KeyValueIt
  * version of a Worker with a newer published one: that it is earlier — still invocable by its
  * version — and which one is newest.
  */
+/** Legacy 746: on a 「我的草稿」 row, a draft below its family's newest published version — it is
+ *  not published any more (legacy 742); the detail's note says what to do with it. */
+function SupersededDraftMark({ head }: { readonly head: number | undefined }) {
+  const t = useT();
+  if (head === undefined) return null;
+  return (
+    <span
+      className="chip chip-warn chip-s"
+      data-testid="workers-my-draft-superseded"
+      title={t(
+        `这个定义已经发布了更新的 v${head}，这份草稿不能再发布。打开它看怎么处理。`,
+        `This definition already has a newer published version, v${head}, so this draft can no longer be published. Open it to see what to do.`,
+      )}
+    >
+      {t(`已有更新的 v${head}`, `Newer v${head} published`)}
+    </span>
+  );
+}
+
 function WorkerVersionNote({
   row,
   inUseEntry,
@@ -4110,6 +4129,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
+  // UX acceptance of #1225 (P3): the draft the open editor proposed. Legacy 747's 「用这次的内容
+  // 新建一个定义」 proposes a new definition from a draft's editor — the title then says so.
+  const [proposedFrom, setProposedFrom] = useState<{
+    readonly editor: WorkerEditorState;
+    readonly id: string;
+  } | null>(null);
   // Legacy 302: the last publish refused for naming what is not there, by `workerKey`.
   const [publishRefusal, setPublishRefusal] = useState<{
     readonly key: string;
@@ -4242,13 +4267,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const editorPane = editor ? (
     <div className="stack">
       <h2 className="catalog-detail-title">
-        {editor.kind === 'copy' && editor.row.status === 'draft'
-          ? t(`修改草稿 v${editor.row.version}`, `Edit draft v${editor.row.version}`)
-          : editor.kind === 'copy'
-            ? t('提议新版本', 'Propose a new version')
-            : editor.kind === 'template'
-              ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
-              : t('新建 Worker 定义草稿', 'New Worker definition draft')}
+        {editor.kind === 'copy' &&
+        proposedFrom?.editor === editor &&
+        proposedFrom.id !== editor.row.id
+          ? t('新建的 Worker 定义', 'A new Worker definition')
+          : editor.kind === 'copy' && editor.row.status === 'draft'
+            ? t(`修改草稿 v${editor.row.version}`, `Edit draft v${editor.row.version}`)
+            : editor.kind === 'copy'
+              ? t('提议新版本', 'Propose a new version')
+              : editor.kind === 'template'
+                ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
+                : t('新建 Worker 定义草稿', 'New Worker definition draft')}
       </h2>
       <p className="text-3 text-small">
         {t(
@@ -4280,7 +4309,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         capabilityNames={
           capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
         }
-        onProposed={() => {
+        onProposed={(draft) => {
+          setProposedFrom({ editor, id: draft.id });
           void workers.reload();
           void myDrafts.reload();
           announceReadinessChange(http);
@@ -4368,15 +4398,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const familyHeads = publishedFamilyHeads(everyRow);
   // Legacy 742: a draft below its family's newest published version is not published any more —
   // the kernel refuses it (409 draft_superseded); the detail says so instead of offering Publish.
-  const selectedPublishedHead = selected
-    ? latestPublishedVersion(everyRow, selected.id)
-    : undefined;
-  const selectedSupersededBy =
-    selected?.status === 'draft' &&
-    selectedPublishedHead !== undefined &&
-    selectedPublishedHead > selected.version
-      ? selectedPublishedHead
-      : undefined;
+  // Legacy 746: the 「我的草稿」 row says so too.
+  function supersededByOf(row: WorkerDefinitionSummary | undefined): number | undefined {
+    if (row?.status !== 'draft') return undefined;
+    const head = latestPublishedVersion(everyRow, row.id);
+    return head !== undefined && head > row.version ? head : undefined;
+  }
+  const selectedSupersededBy = supersededByOf(selected);
   // S11 GO16b: a family by id — its newest version the reader has read (published first, then
   // their own draft), as a name and a detail link.
   function familyOf(id: string): WorkerFamilyRef | null {
@@ -4461,6 +4489,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                     <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                     <AgentDraftMark origin={row.origin} status={row.status} />
+                    <SupersededDraftMark head={supersededByOf(row)} />
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>

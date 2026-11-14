@@ -67,3 +67,19 @@ export function workerDraftChangedText(err: unknown, t: Translate): string {
     `The draft${en} you are editing is no longer pending (published, discarded or expired), so nothing was saved or discarded. What you wrote is still here: save it as a new draft (the definition's next version), or close the editor and look at the definition as it is now before editing again.`,
   );
 }
+
+/** Legacy 747: saving a draft found no version of its definition — the draft was discarded or
+ *  expired, and nothing of the definition was ever published (`not_found`). What was written is
+ *  still in the editor; a `worker` definition can start a new definition with it (an `entry` one
+ *  is never started from the editor, J7). */
+export function workerDefinitionGoneText(kind: string, t: Translate): string {
+  return kind === 'worker'
+    ? t(
+        '这个定义已经没有可用的版本了：你在改的草稿被丢弃或过期了，它也没有发布过。这次写的内容还在编辑器里，可以用它新建一个定义。',
+        'This definition has no version left: the draft you were editing was discarded or expired, and it was never published. What you wrote is still in the editor, and can start a new definition.',
+      )
+    : t(
+        '这个定义已经没有可用的版本了：你在改的草稿被丢弃或过期了，它也没有发布过。入口定义不能在这里新建，请从入口模板重新生成。',
+        'This definition has no version left: the draft you were editing was discarded or expired, and it was never published. An entry definition is not started here; make one from the entry template again.',
+      );
+}

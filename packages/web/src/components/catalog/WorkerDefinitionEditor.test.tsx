@@ -738,6 +738,98 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     expect(calls[1]?.params).not.toHaveProperty('replacesDraft');
   });
 
+  it('legacy 747: the draft being edited went and its definition has no version left — what was written starts a new definition on request', async () => {
+    let first = true;
+    const { caller, calls } = http({
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          throw new HttpError('capability_error', 'WorkerDefinition not found', 'not_found');
+        }
+        return { id: 'wd-new', version: 1, status: 'draft' };
+      },
+    });
+    const onProposed = vi.fn();
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 1,
+          kind: 'worker',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={onProposed}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Written here' } });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/无法保存草稿/);
+    expect(banner.textContent).toMatch(/这个定义已经没有可用的版本了/);
+    expect(within(banner).queryByTestId('worker-propose-after-changed')).toBeNull();
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(true);
+    const asNew = within(banner).getByTestId('worker-propose-as-new-definition');
+    expect(asNew.textContent).toBe('用这次的内容新建一个定义');
+    fireEvent.click(asNew);
+    await waitFor(() => expect(onProposed).toHaveBeenCalledTimes(1));
+    expect(calls[0]?.params).toMatchObject({ definitionId: 'wd-d', replacesDraft: 1 });
+    expect(calls[1]?.params).toMatchObject({
+      kind: 'worker',
+      definition: expect.objectContaining({ systemPrompt: 'Written here' }),
+    });
+    expect(calls[1]?.params).not.toHaveProperty('definitionId');
+    expect(calls[1]?.params).not.toHaveProperty('replacesDraft');
+  });
+
+  it('legacy 747: a not-found on a new version (not a draft being edited) keeps the plain banner; an entry draft gets no new-definition button', async () => {
+    const notFound = () => {
+      throw new HttpError('capability_error', 'WorkerDefinition not found', 'not_found');
+    };
+    const { caller } = http({ propose_worker_definition: notFound });
+    const { unmount } = render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-p',
+          version: 2,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).not.toMatch(/没有可用的版本/);
+    expect(within(banner).queryByTestId('worker-propose-as-new-definition')).toBeNull();
+    expect((screen.getByTestId('worker-submit') as HTMLButtonElement).disabled).toBe(false);
+    unmount();
+
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-e',
+          version: 1,
+          kind: 'entry',
+          status: 'draft',
+          definition: { systemPrompt: 'P' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const entryBanner = await screen.findByTestId('worker-editor-error');
+    expect(entryBanner.textContent).toMatch(/入口定义不能在这里新建/);
+    expect(within(entryBanner).queryByTestId('worker-propose-as-new-definition')).toBeNull();
+  });
+
   it('legacy 680: without a family (a new draft) no draft is offered', async () => {
     const { caller } = http({
       propose_worker_definition: () => {

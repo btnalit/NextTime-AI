@@ -5,6 +5,7 @@ import type { DefinitionReferenceRefusal } from '../../lib/definition-reference.
 import type { CapabilityNameRow, ModelRow, SkillRow } from '../../lib/governance.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
+import type { ProposedDraft } from './DraftProposed.js';
 import { WorkerDefinitionEditor } from './WorkerDefinitionEditor.js';
 
 /** Loads the picker directories (`list_models`, `list_gatekeepers`, `list_skills`) only while the
@@ -35,7 +36,7 @@ export function WorkerEditorHost({
   /** Legacy 680: as `WorkerDefinitionEditor`'s. */
   readonly onShowPendingDraft?: (draft: { readonly id: string; readonly version: number }) => void;
   readonly capabilityNames?: readonly CapabilityNameRow[];
-  readonly onProposed: () => void;
+  readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
   readonly onPublished?: () => void;
 }) {
