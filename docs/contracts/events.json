@@ -301,6 +301,31 @@
     {
       "additionalProperties": false,
       "properties": {
+        "gateAddressChangeId": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "GatekeeperAddressChanged",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "gatekeeperId",
+        "gateAddressChangeId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "epistemicStatus": {
           "enum": [
             "observed",

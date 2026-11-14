@@ -1,4 +1,5 @@
 import {
+  type CapabilityScope,
   IllegalTransition,
   TASK_TRANSITIONS,
   type TaskEvent,
@@ -11,13 +12,15 @@ import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorStatus } from '../../adapters/supervisor-client/index.js';
 import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import { revokeSessions } from '../../governance/capability/index.js';
+import { readExecuteAccess } from '../gates/execute-access.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { getWorkerDefinition } from '../worker/index.js';
+import { RetryAuthorityLostError, principalDisabled, retryScopeNow } from './acting-authority.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
@@ -67,28 +70,84 @@ export async function readWorkerRunRow(
   return row ? mapWorkerRunRow(row) : null;
 }
 
+/** How many times {@link revokeWorkerRunAndDescendants} takes the whole tree again after it grew
+ *  during the wait, before it goes on in rounds. Each retry needs a spawn under the tree that
+ *  committed while the last attempt waited. */
+export const WORKER_TREE_REVOKE_ATTEMPTS = 3;
+
 /** Revokes `workerRunId`'s own Handle (its session's Handle(s), `governance/capability`'s
- *  `revokeSession`) and recursively every descendant WorkerRun's Handle (the `par` chain, walked
- *  via `worker_runs.parent_worker_run_id` — bounded by I18's depth ≤ 3, so this recursion is
- *  always shallow). Idempotent: revoking an already-revoked Handle is a no-op
- *  (`governance/capability/handles.ts`'s `revokeHandle`/`revokeSession` doc comments). */
+ *  `revokeSessions`) and every descendant WorkerRun's Handle (the `par` chain, walked via
+ *  `worker_runs.parent_worker_run_id` — bounded by I18's depth ≤ 3, so this recursion is always
+ *  shallow). The whole tree's sessions are gathered first and taken in one statement ordered by id
+ *  (the lock order, governance/capability/handles.ts). Idempotent: revoking an already-revoked
+ *  Handle is a no-op (`governance/capability/handles.ts`'s `revokeHandle`/`revokeSession` doc
+ *  comments).
+ *
+ *  Legacy 713: a Worker spawning a child (`spawn.ts`) holds its own Handle `for share` while it
+ *  writes the child's run, session and Handle; revoking that Handle waits for the spawn to commit,
+ *  and the child was not in the tree gathered before the wait. So the tree is gathered again after
+ *  the revocation (a new statement, READ COMMITTED: it sees the child). If it grew, the revocation
+ *  rolls back to a savepoint, which lets go of the session rows it took, and takes the whole tree
+ *  again in one statement. Taking only the new sessions in a later statement would break the lock
+ *  order: a second revoker of the same tree that began after the spawn may already hold the child's
+ *  session (its id can sort first) and wait on one this revocation holds — 40P01 (#1172 review).
+ *
+ *  A tree that grows again during each of {@link WORKER_TREE_REVOKE_ATTEMPTS} attempts is then
+ *  revoked in rounds, each later round taking the sessions new to it in a statement of its own. A
+ *  spawn on the authority of a Handle revoked here that comes later waits for this transaction and
+ *  is then refused (`parent_revoked`), so each round only finds what was spawned while the last one
+ *  waited — at most one round per level of the tree. Against a second revoker of the same tree such
+ *  a round can end in a deadlock error (40P01): one of the two transactions rolls back whole and its
+ *  caller sees the error; neither commits with a Handle of its tree left valid. */
 export async function revokeWorkerRunAndDescendants(
   client: PoolClient,
   workspaceId: string,
   workerRunId: string,
 ): Promise<void> {
+  for (let attempt = 0; attempt < WORKER_TREE_REVOKE_ATTEMPTS; attempt += 1) {
+    const tree = await workerRunTreeSessionIds(client, workspaceId, workerRunId);
+    if (tree.length === 0) return;
+    await client.query('savepoint worker_tree_revoke');
+    await revokeSessions(client, tree);
+    const taken = new Set(tree);
+    const grown = (await workerRunTreeSessionIds(client, workspaceId, workerRunId)).some(
+      (sessionId) => !taken.has(sessionId),
+    );
+    if (!grown) {
+      await client.query('release savepoint worker_tree_revoke');
+      return;
+    }
+    await client.query('rollback to savepoint worker_tree_revoke');
+    await client.query('release savepoint worker_tree_revoke');
+  }
+  const revoked = new Set<string>();
+  for (;;) {
+    const sessionIds = (await workerRunTreeSessionIds(client, workspaceId, workerRunId)).filter(
+      (sessionId) => !revoked.has(sessionId),
+    );
+    if (sessionIds.length === 0) return;
+    await revokeSessions(client, sessionIds);
+    for (const sessionId of sessionIds) revoked.add(sessionId);
+  }
+}
+
+/** The session of `workerRunId` and of every descendant WorkerRun (descendants first). */
+async function workerRunTreeSessionIds(
+  client: PoolClient,
+  workspaceId: string,
+  workerRunId: string,
+): Promise<string[]> {
   const children = await client.query<{ id: string }>(
     'select id from worker_runs where workspace_id = $1 and parent_worker_run_id = $2',
     [workspaceId, workerRunId],
   );
+  const sessionIds: string[] = [];
   for (const child of children.rows) {
-    await revokeWorkerRunAndDescendants(client, workspaceId, child.id);
+    sessionIds.push(...(await workerRunTreeSessionIds(client, workspaceId, child.id)));
   }
-
   const row = await readWorkerRunRow(client, workspaceId, workerRunId);
-  if (row?.sessionId) {
-    await revokeSession(client, row.sessionId);
-  }
+  if (row?.sessionId) sessionIds.push(row.sessionId);
+  return sessionIds;
 }
 
 /** Transitions a WorkerRun to `terminated` (if it is not already there — a no-op, not an error,
@@ -485,8 +544,9 @@ export async function reactToSupervisorStatus(
   if (status.status === 'exited') {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
       // R-58: only the call that terminated the run decides the Task (see the `failed` branch).
-      // A run another writer terminated meanwhile (a cancel, the reaper) has its Task decided by
-      // that writer; failing it here from the stale `task` read above would overwrite a cancel.
+      // A run another writer terminated meanwhile has its Task decided by that writer — or, when
+      // that writer was a crash reaction that claimed the retry, left `running` for the retry:
+      // failing it here would fail a Task whose retry is running (legacy 206 pins this).
       const moved = await terminateWorkerRunRow(
         client,
         workspaceId,
@@ -603,7 +663,10 @@ export async function reactToSupervisorStatus(
  * Reads the just-failed WorkerRun's own Handle scope (`capability_handles`, keyed by its session)
  * and re-spawns under the same Task, attenuating from that already-granted scope — a requeue asks
  * for nothing new, so there is no caller-side "declared needs" to re-resolve, and no risk of the
- * retry silently gaining privilege the original invocation did not have.
+ * retry silently gaining privilege the original invocation did not have. Legacy 289: that scope
+ * as its person may hold it now (`acting-authority.ts`'s `retryScopeNow`: capabilities their role
+ * still allows, gates they may still act on), and no retry at all for a person who is disabled or
+ * can no longer start Workers — the Task fails `worker_failed` as when the retry cannot spawn.
  *
  * **P2-10 fix (review job 652a4abc: "requeue omits skillsInline and model")**: `model`/`skillsInline`
  * (and, since feat/egress-definition-lists, `egressDeny` too — same rationale, same treatment)
@@ -631,7 +694,7 @@ async function spawnWorkerRunForRetry(
   // Handle lookup or in the definition/Skill resolution would otherwise leave the claimed Task
   // `running` with no live WorkerRun, and later reactions return early on the terminated run.
   try {
-    const handleRow = await withWorkspace(
+    const found = await withWorkspace(
       deps.pool,
       { workspaceId, principalId: onBehalfOf },
       async (client) => {
@@ -640,18 +703,32 @@ async function spawnWorkerRunForRetry(
           'select jti, expires_at, scope from capability_handles where workspace_id = $1 and session_id = $2 limit 1',
           [workspaceId, failedWorkerRun.sessionId],
         );
-        return result.rows[0] ?? null;
+        const row = result.rows[0];
+        if (!row) return null;
+        return {
+          handleRow: row,
+          // Legacy 289: who the Task acts for, as they are now — read with the Handle.
+          disabled: await principalDisabled(client, workspaceId, onBehalfOf),
+          access: await readExecuteAccess(client, workspaceId, onBehalfOf),
+        };
       },
     );
     // Nothing to attenuate from: never guess a scope. The retry is already claimed (Task `running`,
     // `retry_count = 1`, the crashed run terminated), so returning here would leave the Task
     // `running` with no live WorkerRun forever; fail it through the catch below instead.
-    if (!handleRow) throw new Error('no Handle to attenuate the retry from');
-
-    const scope = handleRow.scope as {
-      capabilities: string[];
-      resources: Record<string, string[]>;
-    };
+    if (!found) throw new Error('no Handle to attenuate the retry from');
+    const { handleRow } = found;
+    // Legacy 289: a disabled person gets no retry (the same catch fails the Task), and the retry
+    // holds the failed run's scope only as far as its person may hold it now — `retryScopeNow`.
+    if (found.disabled)
+      throw new RetryAuthorityLostError('the principal the Task acts for is disabled');
+    const scope = retryScopeNow(handleRow.scope as CapabilityScope, found.access);
+    // Legacy 702: the retry's Handle is issued only while the person's role is still the one
+    // `retryScopeNow` read (a change since fails the retry, as a disable does).
+    const retryRole = found.access.role;
+    if (retryRole === undefined) {
+      throw new RetryAuthorityLostError('the principal the Task acts for no longer exists');
+    }
 
     const { model, skillsInline, loadedSkills, definitionName, egressDeny, systemPrompt, image } =
       await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
@@ -721,6 +798,8 @@ async function spawnWorkerRunForRetry(
         jti: handleRow.jti,
         exp: Math.floor(new Date(handleRow.expires_at).getTime() / 1000),
       },
+      // Legacy 712: the platform retries on the person's authority now — no credential.
+      issuanceBasis: { kind: 'role', role: retryRole, credential: null },
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
       model,

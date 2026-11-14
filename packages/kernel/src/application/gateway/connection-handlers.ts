@@ -45,9 +45,15 @@ import {
 } from '../admin-agent/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import {
+  type ConnectionSecretIssuanceState,
   assertEndpointFreeForSelfConnection,
+  connectionSecretIssuanceState,
+  consumeConnectionSecret,
+  gateAddressChangeSaltUsed,
   landGatekeeper,
   readConnectorMode,
+  recordMintedConnectionSecret,
+  recordRotatedConnectionSecret,
 } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -172,6 +178,23 @@ function requireDeps(): ConnectionHandlerDeps {
   return deps;
 }
 
+/** Legacy 701: what an address change of a self-connected gate checks and calls with — the same
+ *  secrets, gate client and owner-supplied-URL predicate `create_connection` uses, so the new
+ *  address passes exactly the checks a new connection would
+ *  (application/gateway/gate-address-change-handlers.ts). */
+export function connectionAddressDeps(): {
+  readonly gatekeeperClient: GatekeeperClient;
+  readonly connectionSecrets: GateConnectionSecrets;
+  readonly outboundTargetGuard: OutboundTargetGuard;
+} {
+  const current = requireDeps();
+  return {
+    gatekeeperClient: current.gatekeeperClient,
+    connectionSecrets: current.connectionSecrets,
+    outboundTargetGuard: outboundTargetGuard(current),
+  };
+}
+
 /** Legacy 214: the same gate client `create_connection` describes a self-connected gate with —
  *  `preview_gatekeeper_resync` / `refresh_operation_governance` (gate-instance-handlers.ts) read
  *  that gate's `describe_operations` again through it. */
@@ -239,12 +262,12 @@ export class ConnectionCredentialRequiredError extends Error {
 export class ConnectionEndpointIsPlatformGateError extends Error {
   readonly code = 'endpoint_is_platform_gate' as const;
   readonly gateId: string;
-  constructor(endpoint: string, gateId: string) {
+  constructor(endpoint: string, gateId: string, capability = 'create_connection') {
     const remedy =
       'a workspace cannot connect a platform-catalog gate itself; enable it from the catalog ' +
       '(enable_gate_instance) or ask the administrator';
     super(
-      `create_connection: endpoint "${endpoint}" is the address of platform gate instance "${gateId}" — ${remedy}`,
+      `${capability}: endpoint "${endpoint}" is the address of platform gate instance "${gateId}" — ${remedy}`,
     );
     this.name = 'ConnectionEndpointIsPlatformGateError';
     this.gateId = gateId;
@@ -254,19 +277,46 @@ export class ConnectionEndpointIsPlatformGateError extends Error {
 /** `create_connection` without a usable `connectionSecret` (R-01): missing, or not minted by this
  *  kernel for this workspace. Mapped to 400 `invalid_params`. */
 export class ConnectionSecretInvalidError extends Error {
-  constructor(missing: boolean) {
+  constructor(missing: boolean, capability = 'create_connection') {
     super(
       missing
-        ? 'create_connection: connectionSecret is required — get one with mint_connection_secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE (restart the gate), then connect it'
-        : 'create_connection: connectionSecret was not issued for this workspace — get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE',
+        ? `${capability}: connectionSecret is required — get one with mint_connection_secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE (restart the gate), then connect it`
+        : `${capability}: connectionSecret was not issued for this workspace — get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE`,
     );
     this.name = 'ConnectionSecretInvalidError';
   }
 }
 
-/** A connection secret that cannot apply here (R-01): already used by another Gatekeeper in this
- *  workspace, or `rotate_connection_secret` on a platform-catalog gate (the kernel authenticates to
- *  those with the platform credential). Mapped to 409 `conflict`. */
+/** A connection secret that is already spoken for (R-01): another Gatekeeper in this workspace
+ *  holds it (one secret per connection, so rotating one gate never breaks another), or (legacy 701)
+ *  it already served a proposal to move a gate. Mapped to 409 `connection_secret_in_use` — one code
+ *  for the one condition, `create_connection` and the address change alike, so the console can say
+ *  "generate a new secret". */
+export class ConnectionSecretInUseError extends Error {
+  readonly code = 'connection_secret_in_use' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConnectionSecretInUseError';
+  }
+}
+
+/** Legacy 711: a connection secret that is no longer fresh — minted more than 24 hours ago and not
+ *  used, or minted before the platform kept a ledger of the secrets it issues (core 0058). The
+ *  secret checks out (`saltOf`), but no issued salt says it may be bound now. Mapped to 409
+ *  `connection_secret_expired`; the remedy is the in-use one's, a new secret. */
+export class ConnectionSecretExpiredError extends Error {
+  readonly code = 'connection_secret_expired' as const;
+  constructor(capability: string) {
+    super(
+      `${capability}: this connectionSecret has expired — a secret from mint_connection_secret serves one connection or one move, within 24 hours (one minted before the platform's last upgrade does not either); get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE`,
+    );
+    this.name = 'ConnectionSecretExpiredError';
+  }
+}
+
+/** A connection secret that cannot apply here (R-01): `rotate_connection_secret` on a
+ *  platform-catalog gate (the kernel authenticates to those with the platform credential). Mapped
+ *  to 409 `conflict`. */
 export class ConnectionSecretConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -364,12 +414,15 @@ async function auditTrialSelfConnect(
  * reaches the same container by another name (an IP, a network alias) is not detected here; the
  * outbound-target predicate below refuses every address inside the platform's subnets.
  */
-async function assertEndpointIsNotAPlatformGate(
+export async function assertEndpointIsNotAPlatformGate(
   client: PoolClient,
   endpoint: string,
+  capability = 'create_connection',
 ): Promise<void> {
   const gateId = await platformGateIdForEndpoint(client, endpoint);
-  if (gateId !== null) throw new ConnectionEndpointIsPlatformGateError(endpoint, gateId);
+  if (gateId !== null) {
+    throw new ConnectionEndpointIsPlatformGateError(endpoint, gateId, capability);
+  }
 }
 
 /** `request_connection(kind, target)` — Handle channel, any member (design doc §7.5). */
@@ -509,19 +562,82 @@ async function resolveManifestOperations(
   return described.operations;
 }
 
-/** Throws `ConnectionSecretConflictError` when another Gatekeeper in this workspace already holds
- *  `salt` — one secret per connection, so rotating one gate never breaks another. */
-async function assertConnectionSecretUnused(
+/** Throws `ConnectionSecretInUseError` when a Gatekeeper in this workspace already holds `salt` —
+ *  one secret per connection, so rotating one gate never breaks another (legacy 701 review: and an
+ *  address change never sends one gate's secret to another gate's new host). */
+export async function assertConnectionSecretUnused(
   client: PoolClient,
   workspaceId: string,
   salt: string,
+  capability = 'create_connection',
 ): Promise<void> {
   const holder = await findGatekeeperIdByConnectionSecretSalt(client, workspaceId, salt);
   if (holder !== null) {
-    throw new ConnectionSecretConflictError(
-      `create_connection: this connectionSecret already belongs to Gatekeeper "${holder}" — every connection gets its own; get a new one with mint_connection_secret`,
+    throw new ConnectionSecretInUseError(
+      `${capability}: this connectionSecret already belongs to Gatekeeper "${holder}" — every connection gets its own; get a new one with mint_connection_secret`,
     );
   }
+}
+
+/** Throws `ConnectionSecretInUseError` when `salt` ever served a proposal to move a gate (legacy
+ *  701, `gate_address_changes.new_salt`, whatever became of it): the kernel sent that secret to the
+ *  proposed host as a bearer when it asked it to describe its Operations, so it never names another
+ *  connection — not the gate moved, not a new one connected (#1156 review P2-1). */
+export async function assertConnectionSecretNeverProposed(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+  capability = 'create_connection',
+): Promise<void> {
+  if (await gateAddressChangeSaltUsed(client, workspaceId, salt)) {
+    throw connectionSecretServedAProposal(capability);
+  }
+}
+
+/** The refusal for a salt the ledger (legacy 711) does not hold as usable. */
+function connectionSecretNotUsable(
+  capability: string,
+  issuance: Exclude<ConnectionSecretIssuanceState, { state: 'usable' }>,
+): Error {
+  if (issuance.state === 'expired') return new ConnectionSecretExpiredError(capability);
+  return issuance.consumedBy === 'propose_gate_address_change'
+    ? connectionSecretServedAProposal(capability)
+    : new ConnectionSecretInUseError(
+        `${capability}: this connectionSecret was already used (${issuance.consumedBy}) — every connection and every move gets its own; get a new one with mint_connection_secret`,
+      );
+}
+
+/** Legacy 711: throws unless `salt` is an issued salt not yet used and not expired — a check that
+ *  changes nothing (`preview_gate_address_change`, before it sends the secret to the new host). */
+export async function assertConnectionSecretIssuable(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+  capability: string,
+): Promise<void> {
+  const issuance = await connectionSecretIssuanceState(client, workspaceId, salt);
+  if (issuance.state !== 'usable') throw connectionSecretNotUsable(capability, issuance);
+}
+
+/** Legacy 711: binds `salt` for `capability` in the caller's transaction (a failure after this rolls
+ *  the consumption back with the rest), or throws where it stands instead — of two calls presenting
+ *  one secret at once, exactly one gets past this. */
+export async function consumeIssuedConnectionSecret(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+  capability: 'create_connection' | 'propose_gate_address_change',
+): Promise<void> {
+  const issuance = await consumeConnectionSecret(client, workspaceId, salt, capability);
+  if (issuance.state !== 'usable') throw connectionSecretNotUsable(capability, issuance);
+}
+
+/** The one refusal for a secret that served an address-change proposal — the check above, and a
+ *  concurrent proposal's unique violation (`propose_gate_address_change`). */
+export function connectionSecretServedAProposal(capability: string): ConnectionSecretInUseError {
+  return new ConnectionSecretInUseError(
+    `${capability}: this connectionSecret already served a proposal to move a gate — every connection and every change gets its own; get a new one with mint_connection_secret`,
+  );
 }
 
 export const createConnectionHandler: CapabilityHandler = async (
@@ -570,6 +686,10 @@ export const createConnectionHandler: CapabilityHandler = async (
   const salt = connectionSecrets.saltOf(workspaceId, params.connectionSecret);
   if (salt === null) throw new ConnectionSecretInvalidError(false);
   await assertConnectionSecretUnused(client, workspaceId, salt);
+  await assertConnectionSecretNeverProposed(client, workspaceId, salt);
+  // Legacy 711: and fresh — issued by mint_connection_secret, unused, within 24 hours. Consumed here,
+  // before the endpoint is first called with it; the rest of this call rolling back gives it back.
+  await consumeIssuedConnectionSecret(client, workspaceId, salt, 'create_connection');
 
   // R-27: both owner-supplied URLs, before any fetch of either.
   const guard = outboundTargetGuard(current);
@@ -647,10 +767,17 @@ export const createConnectionHandler: CapabilityHandler = async (
 // -------------------------------------------------------------------------------------------
 
 /** `mint_connection_secret()` — human, owner: a fresh secret for a gate about to be connected with
- *  `create_connection`. Stores nothing: the secret carries its own salt, and only a
- *  `create_connection` that presents it records that salt. */
-export const mintConnectionSecretHandler: CapabilityHandler = async (_client, workspaceId) => {
-  const { secret } = requireDeps().connectionSecrets.mint(workspaceId);
+ *  `create_connection` (or moved with `propose_gate_address_change`). The secret is never stored;
+ *  its salt is recorded as issued (legacy 711), usable once within 24 hours. */
+export const mintConnectionSecretHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  _params,
+  ctx,
+) => {
+  const { secret, salt } = requireDeps().connectionSecrets.mint(workspaceId);
+  const issuedBy = ctx?.principalId || (await currentPrincipalId(client));
+  await recordMintedConnectionSecret(client, workspaceId, salt, issuedBy);
   return { result: { connectionSecret: secret } };
 };
 
@@ -662,6 +789,7 @@ export const rotateConnectionSecretHandler: CapabilityHandler = async (
   client,
   workspaceId,
   params,
+  ctx,
 ) => {
   const { gatekeeperId } = params as { gatekeeperId: string };
   const record = await getGatekeeper(client, workspaceId, gatekeeperId);
@@ -673,6 +801,9 @@ export const rotateConnectionSecretHandler: CapabilityHandler = async (
     );
   }
   const { secret, salt } = requireDeps().connectionSecrets.mint(workspaceId);
+  // Legacy 711: issued and bound at once, so the secret never binds anything else.
+  const issuedBy = ctx?.principalId || (await currentPrincipalId(client));
+  await recordRotatedConnectionSecret(client, workspaceId, salt, issuedBy);
   await setGatekeeperConnectionSecretSalt(client, workspaceId, gatekeeperId, salt);
   return {
     result: { gatekeeperId, connectionSecret: secret },

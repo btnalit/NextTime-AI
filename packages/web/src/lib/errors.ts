@@ -4,6 +4,7 @@ import {
   EVAL_SEAL_HOLD_WINDOW_HOURS,
   PRINCIPAL_REFUSAL_REASON_VALUES,
   type PrincipalRefusalReason,
+  describeOutboundTargetRefusal,
 } from '@nexttime/shared';
 import { adminAgentRefusalMessage } from './admin-agent.js';
 import { definitionReferenceRefusalOf, definitionReferenceText } from './definition-reference.js';
@@ -11,6 +12,10 @@ import { HttpError } from './http-client.js';
 import { type Translate, sentenceGap } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
 import { LocalizedError } from './localized-error.js';
+import {
+  ontologyLinkEndpointMessage,
+  ontologyLinkEndpointOutsideRequiresMessage,
+} from './ontology-link-ends.js';
 import { ownEntry } from './own.js';
 import { platformErrorMessage } from './platform-errors.js';
 import { stepReferenceRefusalOf, stepReferenceText } from './step-reference.js';
@@ -95,6 +100,7 @@ const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>>
   platform_managed: 'Managed by the platform',
   human_api_key: 'People sign in with a password',
   reserved_name: 'Name reserved',
+  disabled: 'Disabled',
 };
 
 const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
@@ -103,6 +109,7 @@ const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, strin
   platform_managed: '由平台管理',
   human_api_key: '人类用户用密码登录',
   reserved_name: '名称被保留',
+  disabled: '已停用',
 };
 
 /** The platform plane's own `last_owner` / `self_disable` keep their `lib/platform-errors.ts` copy,
@@ -130,6 +137,12 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
     zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
     en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
   },
+  // How to come back depends on the kind of member, so the drawer says that part
+  // (`PrincipalDetail`, which reads the member again on this refusal) — #1198 UX P3.
+  disabled: {
+    zh: '这个成员已停用，角色不能再改，什么也没有改。',
+    en: 'This member is disabled, so their role cannot change, and nothing changed.',
+  },
 };
 
 /** JSON-RPC error code → the same stable name the HTTP transport uses for the equivalent failure
@@ -149,8 +162,9 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
   // `UPSTREAM_ERROR` stands for HTTP's `gatekeeper_error` / `gatekeeper_timeout` /
-  // `manifest_fetch_failed` together; `upstreamCodeName` tells them apart by the kernel's message,
-  // and this is its fallback (the one whose copy fits all three).
+  // `manifest_fetch_failed` (and, legacy 700, 424 `target_refused`) together; `upstreamCodeName`
+  // tells them apart by the kernel's message, and this is its fallback (the one whose copy fits
+  // all of them).
   [-32014]: 'gatekeeper_error',
   [-32015]: 'service_unavailable',
   [-32016]: 'worker_definition_not_enabled',
@@ -178,6 +192,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   idempotency_key_reused: 'Not the message first sent',
   gatekeeper_timeout: 'Gate timed out',
   gatekeeper_error: 'Gate returned an error',
+  target_refused: 'Gate address not allowed',
   manifest_fetch_failed: 'Manifest fetch failed',
   meta_ontology_write_forbidden: 'Not permitted',
   attenuation_denied: 'Not permitted',
@@ -241,6 +256,20 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   connection_target_refused: 'Address not allowed',
   endpoint_already_connected: 'Already connected',
   self_connection_suspended: 'Suspended by the platform',
+  // Legacy 701: moving a self-connected gate to a new address.
+  connection_secret_in_use: 'Connection secret already used',
+  // Legacy 711: a secret serves one connection or one move, within 24 hours of minting it.
+  connection_secret_expired: 'Connection secret expired',
+  gate_address_unchanged: 'Same address',
+  gatekeeper_not_self_connected: 'Not a self-connected gate',
+  gate_address_preview_changed: 'Preview out of date',
+  gate_address_manifest_mismatch: 'New host runs something else',
+  gate_address_change_pending: 'A change is already proposed',
+  gate_address_change_decided: 'Already decided',
+  gate_address_change_expired: 'Proposal expired',
+  gate_address_change_blocked: 'Requests still in flight',
+  gate_address_change_not_found: 'Proposal not found',
+  gate_address_changed: 'The gate moved',
   credentials_in_observe_params: 'Credentials in the parameters',
   credentials_in_text: 'Credentials in the text',
   redacted_text_submitted: 'Masked text sent back',
@@ -303,6 +332,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   idempotency_key_reused: '和第一次发出的消息不一样',
   gatekeeper_timeout: '门响应超时',
   gatekeeper_error: '门返回了错误',
+  target_refused: '门的地址不允许调用',
   manifest_fetch_failed: '拉取清单失败',
   meta_ontology_write_forbidden: '没有权限',
   attenuation_denied: '没有权限',
@@ -358,6 +388,20 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   connection_target_refused: '这个地址不允许接入',
   endpoint_already_connected: '这个地址已经接入',
   self_connection_suspended: '已被平台暂停',
+  // Legacy 701: moving a self-connected gate to a new address.
+  connection_secret_in_use: '连接密钥已经用过',
+  // Legacy 711: a secret serves one connection or one move, within 24 hours of minting it.
+  connection_secret_expired: '连接密钥已经过期',
+  gate_address_unchanged: '地址没有变',
+  gatekeeper_not_self_connected: '不是工作区自己接入的门',
+  gate_address_preview_changed: '预览已经过时',
+  gate_address_manifest_mismatch: '新主机的接口清单不一致',
+  gate_address_change_pending: '已有待批准的更换申请',
+  gate_address_change_decided: '申请已经有结果',
+  gate_address_change_expired: '申请已过期',
+  gate_address_change_blocked: '还有请求没有结束',
+  gate_address_change_not_found: '找不到这个申请',
+  gate_address_changed: '门已经换了地址',
   credentials_in_observe_params: '参数里带了凭据',
   credentials_in_text: '文字里带了凭据',
   redacted_text_submitted: '文字里还留着遮蔽标记',
@@ -591,6 +635,14 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '目标系统返回了错误。展开「技术细节」查看原因；反复出现时，请检查这个门实例的状态。',
     en: 'The target system returned an error. See the technical details; if it keeps happening, check this gate instance.',
   },
+  // Legacy 700: a call not sent because the gate's own endpoint is not an allowed target. The usual
+  // case since legacy 413 — `http://` to the public internet — has its own copy
+  // (`targetRefusedMessage`); this is every other rule's.
+  // Never "ask for the allow list": it skips every check and matches by suffix (review #501).
+  target_refused: {
+    zh: '这个门的地址不是平台允许调用的目标（指向平台自己的网络或本机，或者无法解析），调用没有发出。工作区所有者要在「系统与授权」用门可达的地址重新接入它；门只能跑在平台网络上时，请平台管理员把它做成平台提供的门。',
+    en: 'This gate’s address is not a target the platform calls (it points into the platform’s own networks or the local host, or does not resolve), so nothing was sent. A workspace owner connects the gate again at a reachable address under Systems & access; if the gate can only run on the platform’s network, ask a platform admin to make it a platform-provided gate.',
+  },
   manifest_fetch_failed: {
     zh: '拿不到接口清单。确认清单地址能访问，再重新导入。',
     en: 'The interface manifest could not be fetched. Check the manifest address is reachable, then import again.',
@@ -600,8 +652,59 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The gate refused this call: headers, credential query parameters and cookies are set by the gate, not passed as parameters. Remove the parameter from the manifest and import it again.',
   },
   connection_target_refused: {
-    zh: '这个地址指向平台内部网络，不能作为外部系统接入。换成外部系统的最终地址（不经过跳转）。',
-    en: 'This address points into the platform network and cannot be connected. Use the external system’s final address (no redirect).',
+    zh: '这个地址不能接入：它指向平台内部网络，或是用 http:// 连公网地址。换成外部系统的最终地址（不经过跳转），公网地址用 https://。',
+    en: 'This address cannot be connected: it points into the platform network, or uses http:// to a public internet address. Use the external system’s final address (no redirect), and https:// for a public one.',
+  },
+  // Legacy 701: moving a self-connected gate to a new address (`*_gate_address_change`), and a
+  // request refused because its gate moved since it was made (`gate_address_changed`, I-A3).
+  connection_secret_in_use: {
+    zh: '这个连接密钥已经用过：接入过一个门（哪怕那个门后来换了密钥），或已经用于一次更换地址的申请。每个连接、每次更换都用自己的密钥：「直接注册门」里点「生成新的连接密钥」，换地址时关掉「更换地址」再打开，就有一把新的；把它放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
+    en: 'This connection secret was already used: it connected a gate (even one that has had its secret replaced since), or served a proposal to move a gate. Every connection and every move gets its own: in “Register a gate directly” select “Generate a new connection secret”, or close “Move to a new address” and open it again, for a new one; put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
+  },
+  // Legacy 711.
+  connection_secret_expired: {
+    zh: '这个连接密钥已经过期：生成后 24 小时内没有用来接入（或是在平台升级之前生成的）。「直接注册门」里点「生成新的连接密钥」，换地址时关掉「更换地址」再打开，就有一把新的；把它放进门的 GATE_KERNEL_TOKEN_FILE 并重启门，再试。',
+    en: 'This connection secret has expired: it was not used within 24 hours of minting it (or was minted before the platform’s upgrade). In “Register a gate directly” select “Generate a new connection secret”, or close “Move to a new address” and open it again, for a new one; put it in the gate’s GATE_KERNEL_TOKEN_FILE, restart the gate, and try again.',
+  },
+  gate_address_unchanged: {
+    zh: '门已经在这个地址上了。要换地址，填一个新的地址。',
+    en: 'The gate is already at this address. Enter a new address to move it.',
+  },
+  gatekeeper_not_self_connected: {
+    zh: '这个门是平台提供的，地址由平台管理员在「集成」里维护，工作区不能自己更换。',
+    en: 'This gate is provided by the platform; a platform admin maintains its address under Integrations, not the workspace.',
+  },
+  gate_address_preview_changed: {
+    zh: '门的地址、新主机的接口清单或这个申请在你看过之后变了。重新预览（或重新打开申请）再决定。',
+    en: 'The gate’s address, the new host’s manifest or the proposal changed since you looked. Preview again (or reopen the proposal), then decide.',
+  },
+  gate_address_manifest_mismatch: {
+    zh: '新地址上的门描述的 Operation 和这个工作区已发布的不完全一样。在新主机上运行同一个门（或先重新读取这个门的清单并发布），再预览。审批时遇到：驳回申请，由工作区所有者重新申请。',
+    en: 'The gate at the new address does not describe exactly the Operations this workspace published. Run the same gate on the new host (or re-read and publish this gate’s manifest first), then preview again. When approving: reject it, and the workspace owner proposes again.',
+  },
+  gate_address_change_pending: {
+    zh: '这个门已经有一个等平台管理员批准的更换申请。先撤回它，再提新的。',
+    en: 'This gate already has a proposal awaiting the platform administrator. Withdraw it to propose another.',
+  },
+  gate_address_change_decided: {
+    zh: '这个申请已经被批准、驳回、撤回或已过期，不能再操作。刷新看看它现在的状态。',
+    en: 'This proposal has already been approved, rejected, withdrawn or has expired. Refresh to see where it stands.',
+  },
+  gate_address_change_expired: {
+    zh: '申请超过 24 小时没有被决定，已经过期。工作区所有者可以用新的连接密钥重新申请。',
+    en: 'The proposal was not decided within 24 hours and has expired. The workspace owner can propose again with a new connection secret.',
+  },
+  gate_address_change_blocked: {
+    zh: '这个门还有升级前发起、没有结束的请求，它们没有记录发起时的地址。等它们结束（或处理掉）后再批准。',
+    en: 'The gate still has requests made before the upgrade that have not finished, and they do not record the address they were made for. Approve once they have finished or been dealt with.',
+  },
+  gate_address_change_not_found: {
+    zh: '找不到这个申请。刷新列表再试。',
+    en: 'This proposal was not found. Refresh the list and try again.',
+  },
+  gate_address_changed: {
+    zh: '这个请求发起之后，门换到了新地址；请求只在发起时的地址执行，所以没有发出。还需要的话重新发起。',
+    en: 'The gate moved to a new address after this request was made; a request runs only at the address it was made for, so nothing was sent. Request it again if it is still needed.',
   },
   credentials_in_observe_params: {
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
@@ -876,12 +979,15 @@ export function presentError(
   const curated =
     (overrides ? ownEntry(overrides, described.code) : undefined) ??
     (err instanceof LocalizedError ? err.message : null) ??
+    ontologyLinkEndpointMessage(err, t) ??
+    ontologyLinkEndpointOutsideRequiresMessage(err, t) ??
     platformErrorMessage(err, t) ??
     adminAgentRefusalMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
     stepReferenceMessage(err, t) ??
     definitionReferenceMessage(err, t) ??
+    targetRefusedMessage(err, described, t) ??
     (described.code === 'unstorable_text'
       ? unstorableTextNextStep(described.message, t)
       : step
@@ -916,6 +1022,41 @@ function definitionReferenceMessage(err: unknown, t: Translate): string | null {
   return refusal === null ? null : definitionReferenceText(refusal, t);
 }
 
+/** Legacy 700: the gate's endpoint uses `http://` to the public internet — refused since legacy
+ *  413, so a gate connected before it is refused on every call until it is connected again. */
+const PLAINTEXT_PUBLIC_TARGET = describeOutboundTargetRefusal('plaintext-public');
+
+/** Legacy 700: whether a gate refusal's text (an error's message, a tool call's failure reason)
+ *  is the plain-`http://` rule — the kernel's message carries the rule's sentence. */
+function isPlaintextPublicRefusal(text: string): boolean {
+  return text.includes(PLAINTEXT_PUBLIC_TARGET);
+}
+
+/** Legacy 700: what to do when the gate's endpoint is `http://` to the public internet. */
+function plaintextPublicTargetStep(t: Translate): string {
+  return t(
+    '这个门的地址用 http:// 连公网，调用没有发出：连接密钥和凭证会明文经过互联网，平台不再这样调用。工作区所有者要在「系统与授权」用门的 https:// 地址重新接入它；门在内网时，用它的内网地址接入，可以继续用 http://。',
+    'This gate’s address uses http:// to the public internet, so nothing was sent: the connection secret and credentials would cross the internet unencrypted, and the platform no longer calls it that way. A workspace owner connects the gate again at its https:// address under Systems & access — or, for a gate inside your network, at its in-network address, where http:// is still fine.',
+  );
+}
+
+/** Legacy 700: a `target_refused` said for its rule — `details.reason` over HTTP; over WS, which
+ *  has no details, the rule's sentence in the message. `null` for any other rule (the general
+ *  copy in `ERROR_NEXT_STEPS`) or code. */
+function targetRefusedMessage(
+  err: unknown,
+  described: ErrorDescription,
+  t: Translate,
+): string | null {
+  if (described.code !== 'target_refused') return null;
+  const reason = err instanceof HttpError ? err.details?.reason : undefined;
+  const plaintext =
+    reason === undefined
+      ? isPlaintextPublicRefusal(described.message)
+      : reason === 'plaintext-public';
+  return plaintext ? plaintextPublicTargetStep(t) : null;
+}
+
 /** One line for a toast, which has no room for the 「技术细节」 disclosure: the readable body,
  *  else the kernel's own text, with the code in brackets so a report still names it. */
 export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOverrides): string {
@@ -939,6 +1080,10 @@ const GATE_REASON_CODES = [
   'gate_unreachable',
   'apply_not_received',
   'outcome_unknown',
+  // Legacy 700: not sent — the gate's own endpoint is not an allowed target.
+  'target_refused',
+  // Legacy 701 (I-A3): not sent — the gate moved to a new address after the request was made.
+  'gate_address_changed',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 /** One of those codes as the value of a `reason` or `code` field — `{"status":"failed","reason":
@@ -1012,7 +1157,9 @@ export function gateReasonNextStep(
       ? outcomeUnknownStep(t, target, system)
       : code === 'unstorable_text'
         ? unstorableTextNextStep(text, t)
-        : t(step.zh, step.en);
+        : code === 'target_refused' && isPlaintextPublicRefusal(text)
+          ? plaintextPublicTargetStep(t)
+          : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
@@ -1083,17 +1230,24 @@ export function transportErrorMessage(err: unknown, t: Translate): string | null
   return null;
 }
 
-/** Legacy 336 (review #493, recorded in #605): which of HTTP's three codes a WS `UPSTREAM_ERROR`
+/** Legacy 336 (review #493, recorded in #605): which of HTTP's codes a WS `UPSTREAM_ERROR`
  *  (-32014) stands for, read off the kernel's message (`interfaces/ws/rpc.ts`): a manifest fetch
  *  says `<capability>: failed to fetch manifestSource …` (`ConnectionManifestFetchError`), a gate
  *  timeout `gatekeeper client: <path> timed out after <n>ms` (`GatekeeperTimeoutError`), and a gate
- *  error starts with the gate's own code instead. Anything else keeps the copy that fits all three. */
+ *  error starts with the gate's own code instead. Legacy 700: the client's own 424
+ *  `target_refused` starts with that code and the client's `not sent` prefix. Over HTTP a gate's
+ *  answer coded `target_refused` stays a 502 `gatekeeper_error` (`gateRefusalOf`); over WS both are
+ *  -32014, so a gate whose message copies the client's wording reads as the client's refusal —
+ *  only this copy changes (the raw text stays in the technical details, nothing acts on it).
+ *  Anything else keeps the copy that fits all. */
 const MANIFEST_FETCH_FAILED_MESSAGE = /^[^\s:]+: failed to fetch manifestSource\b/;
 const GATEKEEPER_TIMEOUT_MESSAGE = /^gatekeeper client: \S+ timed out after \d+ ?ms\b/;
+const TARGET_REFUSED_MESSAGE = /^target_refused: gatekeeper client: \S+ not sent — /;
 
 function upstreamCodeName(message: string): string {
   if (MANIFEST_FETCH_FAILED_MESSAGE.test(message)) return 'manifest_fetch_failed';
   if (GATEKEEPER_TIMEOUT_MESSAGE.test(message)) return 'gatekeeper_timeout';
+  if (TARGET_REFUSED_MESSAGE.test(message)) return 'target_refused';
   return 'gatekeeper_error';
 }
 
@@ -1168,6 +1322,13 @@ export function describeError(err: unknown): ErrorDescription {
  *  rather than keep offering a button that can only fail. */
 export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
+}
+
+/** #1198 UX P2: a member-management refusal with this `details.reason` (`principalRefusalCode`). */
+export function isPrincipalRefusal(err: unknown, reason: PrincipalRefusalReason): boolean {
+  return err instanceof HttpError && err.kind === 'capability_error'
+    ? principalRefusalCode(err) === reason
+    : false;
 }
 
 /** Review #493 on #583: the Operation draft acted on was revised in place since it was read

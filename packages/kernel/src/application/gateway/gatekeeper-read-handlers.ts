@@ -7,6 +7,7 @@ import {
 import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { getOperationStats } from '../../governance/approval/index.js';
 import type { OperationStatsRow } from '../../governance/approval/index.js';
+import { redactConnectionAddress } from '../../governance/connections/index.js';
 import {
   type GatekeeperListEntry,
   GatekeeperNotFoundError,
@@ -28,10 +29,16 @@ import { shownFreeText } from '../../governance/redaction/index.js';
 import type { GatekeeperPlatformPolicy } from '../gates/index.js';
 import {
   findSelfConnection,
+  gatekeepersWithOpenGateAddressChange,
   operationPlatformStatus,
+  readGatekeeperPlatformPolicies,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import {
+  lastGateAddressChangeOutcomeWire,
+  pendingGateAddressChangeWire,
+} from './gate-address-change-handlers.js';
 import { resolveGateTarget } from './gate-target.js';
 
 /**
@@ -297,13 +304,25 @@ export const listGatekeepersHandler: CapabilityHandler = async (
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const entries = await listGatekeepers(client, workspaceId);
   const operationCounts = await countOperationsByGatekeeper(client, workspaceId, viewer);
+  // Legacy 716: an owner's card marks a self-connected gate whose move awaits a platform
+  // administrator — the same owner and gates `get_gatekeeper` gives `pendingAddressChange` to.
+  const moves =
+    viewer.role === 'owner'
+      ? {
+          policies: await readGatekeeperPlatformPolicies(client, workspaceId),
+          open: await gatekeepersWithOpenGateAddressChange(client, workspaceId),
+        }
+      : null;
   return {
     result: {
       items: entries
         .filter((entry) => matchesQuery(entry.name, q))
-        .map((entry) =>
-          toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
-        ),
+        .map((entry) => ({
+          ...toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
+          ...(moves && moves.policies.get(entry.gatekeeperId)?.origin === 'self'
+            ? { addressChangePending: moves.open.has(entry.gatekeeperId) }
+            : {}),
+        })),
     },
   };
 };
@@ -326,6 +345,17 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
     platformPolicy?.origin === 'self' && platformPolicy.suspended
       ? await findSelfConnection(client, workspaceId, gatekeeperId)
       : null;
+  // Legacy 701: a self-connected gate's address, and its open proposal to move, for an owner — the
+  // one who may propose a change (`propose_gate_address_change`).
+  const ownerOfSelfConnection = platformPolicy?.origin === 'self' && viewer.role === 'owner';
+  const pendingAddressChange = ownerOfSelfConnection
+    ? await pendingGateAddressChangeWire(client, workspaceId, gatekeeperId)
+    : null;
+  // Legacy 715: and how its latest proposal that is no longer open ended (the platform
+  // administrator's decision and reason, or its expiry), which the owner otherwise never learns.
+  const lastAddressChangeOutcome = ownerOfSelfConnection
+    ? await lastGateAddressChangeOutcomeWire(client, workspaceId, gatekeeperId)
+    : null;
   const health = await healthProbe;
   const operations = allOperations.filter((op) => {
     if (!operationVisibleTo(viewer, op)) return false;
@@ -349,6 +379,11 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
       ...summary,
       operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
       health,
+      ...(ownerOfSelfConnection
+        ? { endpoint: redactConnectionAddress('endpoint', record.endpoint) }
+        : {}),
+      ...(pendingAddressChange ? { pendingAddressChange } : {}),
+      ...(lastAddressChangeOutcome ? { lastAddressChangeOutcome } : {}),
       ...(suspension?.suspendedAt
         ? {
             platformSuspension: {

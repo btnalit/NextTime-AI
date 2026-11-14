@@ -275,7 +275,18 @@ setup_one_gate() {
   i_connector=$2
   i_display=$3
 
-  out=$(cap "$OWNER_KEY" enable_gate_instance "{\"gateId\":\"$(json_escape "$i_gate_id")\"}" \
+  # Legacy 311: an enable names the manifest digest its preview showed (R-18).
+  out=$(cap "$OWNER_KEY" preview_gate_instance_enable "{\"gateId\":\"$(json_escape "$i_gate_id")\"}" "d.result.manifestDigest")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  i_manifest_digest=$(parse_kv "$out" EXTRACTED)
+  if [ "$status" != "200" ] || [ -z "$i_manifest_digest" ]; then
+    warn_fail "enable-gate-instance:$i_gate_id" "could not preview enabling this platform gate instance in the workspace: HTTP $status $(diag_of "$out")"
+    GATE_FAIL=$((GATE_FAIL + 1))
+    print_verdict "$i_display" "$i_connector" "-" "-" "-" "-" "FAIL"
+    return 1
+  fi
+
+  out=$(cap "$OWNER_KEY" enable_gate_instance "{\"gateId\":\"$(json_escape "$i_gate_id")\",\"manifestDigest\":\"$(json_escape "$i_manifest_digest")\"}" \
     "[d.result.gatekeeperId, d.result.linkedExisting, (d.result.publishedOperationNames||[]).length, (d.result.skippedOperationNames||[]).length].join('\u001f')")
   status=$(parse_kv "$out" HTTP_STATUS)
   if [ "$status" != "200" ]; then

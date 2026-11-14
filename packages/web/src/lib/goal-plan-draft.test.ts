@@ -8,15 +8,22 @@ import {
 import {
   type PlanDraft,
   budgetOf,
+  canAddReview,
   draftFromDetail,
   draftProblems,
   emptyStep,
   fieldOfProblem,
   fieldOfRefusal,
+  hasRequesterConfirm,
+  newReviewCriterion,
   planContractNotes,
   planOf,
   removalsOf,
   requesterConfirmDraft,
+  reviewChanged,
+  reviewCheckDraft,
+  shownOnly,
+  showsMask,
   skillRefUse,
   specChanged,
   specDraftOf,
@@ -198,6 +205,37 @@ describe('lib/goal-plan-draft', () => {
     draft = withStep(draft, 'bad key', { key: 'apply', dependsOn: ['fetch'] });
     draft = withStep(draft, 'fetch', { dependsOn: ['apply'] });
     expect([...draftProblems(draft, detail, zh).values()].join()).toMatch(/依赖成环/);
+  });
+
+  it('legacy 444: a key the read masked is the mark too — left as read it is sent as it is, changed it is flagged', () => {
+    const detail = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { headers: { 'Bearer [redacted]': true } },
+            },
+            { key: 'apply', worker: { definitionId: WORKER_ID, version: 2 } },
+          ],
+        },
+      },
+    });
+    expect(showsMask({ headers: { 'Bearer [redacted]': true } })).toBe(true);
+    expect(shownOnly({ headers: { 'Bearer [redacted]': true } })).toBe('mask');
+    // Escapes are spelled out in values only: a key that looks like one is not taken for one.
+    expect(shownOnly({ '\\u{200D}': 'x' })).toBeNull();
+    let draft = draftFromDetail(detail);
+    const uid = (key: string) => draft.steps.find((step) => step.key === key)?.uid ?? '';
+    expect(draftProblems(draft, detail, zh).get(`step:${uid('fetch')}:input`)).toBeUndefined();
+    draft = withStep(draft, 'fetch', {
+      inputText: '{"headers": {"Bearer [redacted]": true}, "hosts": 3}',
+    });
+    expect(draftProblems(draft, detail, zh).get(`step:${uid('fetch')}:input`)).toMatch(
+      /此处原文已遮蔽，请重新填写/,
+    );
   });
 
   it('an ended step whose input reads masked is kept as it is', () => {
@@ -649,5 +687,243 @@ describe('lib/goal-plan-draft', () => {
     // Not listed (its versions deprecated, or gone): a step naming it does not start.
     expect(skillRefUse(rows, 'legacy')).toBe('unusable');
     expect(skillRefUse([{ id: 'f-4', name: 'old', status: 'deprecated' }], 'old')).toBe('unusable');
+  });
+});
+
+describe('lib/goal-plan-draft: an independent review (S11 GO18b)', () => {
+  const REVIEW = {
+    kind: 'review' as const,
+    key: 'quality',
+    subjects: ['fetch', 'apply'],
+    criteria: [
+      { key: 'complete', description: 'Every host is listed', weight: 3 },
+      { key: 'clear', description: 'Each line says why', weight: 1 },
+    ],
+    passAt: 75,
+    model: 'model-b',
+  };
+  const reviewed = (review: Record<string, unknown> = REVIEW) => {
+    const base = goalDetail().planRevision;
+    return paused({
+      planRevision: {
+        ...base,
+        plan: { ...base.plan, acceptance: [...(base.plan.acceptance ?? []), review as never] },
+      },
+    });
+  };
+  const reviewOf = (draft: PlanDraft) => {
+    const check = draft.acceptance.find((item) => item.review !== null);
+    if (check?.review == null) throw new Error('no review in the draft');
+    return { check, review: check.review };
+  };
+  const withReview = (
+    draft: PlanDraft,
+    patch: (
+      review: NonNullable<PlanDraft['acceptance'][number]['review']>,
+    ) => Partial<NonNullable<PlanDraft['acceptance'][number]['review']>>,
+  ): PlanDraft => ({
+    ...draft,
+    acceptance: draft.acceptance.map((check) =>
+      check.review === null
+        ? check
+        : { ...check, review: { ...check.review, ...patch(check.review) } },
+    ),
+  });
+
+  it('a review left alone goes back as the plan’s own check, whatever was ticked off and on', () => {
+    const detail = reviewed();
+    const draft = draftFromDetail(detail);
+    const { check, review } = reviewOf(draft);
+    expect(review).toMatchObject({ subjects: ['fetch', 'apply'], passAt: '75', model: 'model-b' });
+    expect(review.criteria.map((criterion) => [criterion.key, criterion.weight])).toEqual([
+      ['complete', '3'],
+      ['clear', '1'],
+    ]);
+    expect(reviewChanged(check)).toBe(false);
+    // Unticked and ticked again: another order, the same steps — still the plan's own check.
+    const again = withReview(draft, () => ({ subjects: ['apply', 'fetch'] }));
+    expect(planOf(again)?.acceptance?.[1]).toBe(detail.planRevision.plan.acceptance?.[1]);
+    expect(reviewChanged(reviewOf(again).check)).toBe(false);
+    expect(draftProblems(again, detail, zh).size).toBe(0);
+  });
+
+  it('a changed review is sent as the editor holds it: weights and the line as numbers, no model for the requester’s', () => {
+    const detail = reviewed();
+    const draft = withReview(draftFromDetail(detail), (review) => ({
+      criteria: review.criteria.map((criterion) =>
+        criterion.key === 'clear' ? { ...criterion, weight: '2' } : criterion,
+      ),
+      passAt: '80',
+      model: '',
+    }));
+    expect(reviewChanged(reviewOf(draft).check)).toBe(true);
+    expect(planOf(draft)?.acceptance?.[1]).toEqual({
+      kind: 'review',
+      key: 'quality',
+      subjects: ['fetch', 'apply'],
+      criteria: [
+        { key: 'complete', description: 'Every host is listed', weight: 3 },
+        { key: 'clear', description: 'Each line says why', weight: 2 },
+      ],
+      passAt: 80,
+    });
+    expect(
+      planDiff(detail.planRevision.plan, planOf(draft) ?? { steps: [] }).acceptanceChanged,
+    ).toBe(true);
+  });
+
+  it('a new review reviews what the plan ends with, one criterion to write, 75%, the requester’s model; keys are made up, never typed', () => {
+    const detail = paused();
+    const draft = draftFromDetail(detail);
+    const added = reviewCheckDraft(draft);
+    // `apply` comes after `fetch`: the plan ends with `apply`.
+    expect(added).toMatchObject({ original: null, key: 'review', removed: false });
+    expect(added.review).toMatchObject({ subjects: ['apply'], passAt: '75', model: '' });
+    expect(added.review?.criteria.map((criterion) => [criterion.key, criterion.weight])).toEqual([
+      ['c1', '1'],
+    ]);
+    const two = { ...draft, acceptance: [...draft.acceptance, added] };
+    expect(reviewCheckDraft(two).key).toBe('review-2');
+    // Not a confirmation: 加一条请求人确认 stays offered.
+    expect(hasRequesterConfirm(two)).toBe(false);
+    // A criterion added never takes a key the review has or had.
+    const plan = reviewed();
+    const kept = draftFromDetail(plan);
+    const { check, review } = reviewOf(kept);
+    const fewer = { ...review, criteria: review.criteria.filter((item) => item.key !== 'clear') };
+    expect(newReviewCriterion(fewer, check.original).key).toBe('c1');
+    expect(
+      newReviewCriterion(
+        {
+          ...review,
+          criteria: [...review.criteria, { ...newReviewCriterion(review, null), key: 'c1' }],
+        },
+        check.original,
+      ).key,
+    ).toBe('c2');
+    expect(
+      newReviewCriterion(fewer, {
+        ...REVIEW,
+        criteria: [...REVIEW.criteria, { key: 'c1', description: 'x', weight: 1 }],
+      }).key,
+    ).toBe('c2');
+  });
+
+  it('holds before sending what the kernel would refuse, each on its own field', () => {
+    const detail = reviewed();
+    const draft = draftFromDetail(detail);
+    const { check, review } = reviewOf(draft);
+    const [first, second] = review.criteria;
+    if (!first || !second) throw new Error('two criteria');
+    const none = withReview(draft, () => ({ subjects: [] }));
+    expect(draftProblems(none, detail, zh).get(`check:${check.uid}:subjects`)).toBe(
+      '勾选要评审的步骤，至少一步。',
+    );
+    const gone = withStep(
+      withReview(draft, () => ({})),
+      'fetch',
+      { removed: true },
+    );
+    // `apply` depended on `fetch` too; the review's own problem is on its steps.
+    expect(draftProblems(gone, detail, zh).get(`check:${check.uid}:subjects`)).toMatch(
+      /^要评审的步骤不在计划里了：fetch。/,
+    );
+    const blank = withReview(draft, (current) => ({
+      criteria: current.criteria.map((item) =>
+        item.uid === second.uid ? { ...item, description: '  ' } : item,
+      ),
+    }));
+    expect(
+      draftProblems(blank, detail, zh).get(`check:${check.uid}:criterion:${second.uid}`),
+    ).toMatch(/^写上这条标准/);
+    const long = withReview(draft, (current) => ({
+      criteria: current.criteria.map((item) =>
+        item.uid === first.uid ? { ...item, description: 'x'.repeat(1001) } : item,
+      ),
+    }));
+    expect(draftProblems(long, detail, zh).get(`check:${check.uid}:criterion:${first.uid}`)).toBe(
+      '最多 1000 个字符。',
+    );
+  });
+
+  it('a criterion a read shows with an unseen character goes back as stored while the review is left alone, and must be written again once it changes', () => {
+    const shown = {
+      ...REVIEW,
+      criteria: [
+        { key: 'complete', description: 'Every\\u{200B}host', weight: 3 },
+        REVIEW.criteria[1],
+      ],
+    };
+    const detail = reviewed(shown);
+    const draft = draftFromDetail(detail);
+    const { check, review } = reviewOf(draft);
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    const changed = withReview(draft, () => ({ passAt: '90' }));
+    const first = review.criteria[0];
+    expect(
+      draftProblems(changed, detail, zh).get(`check:${check.uid}:criterion:${first?.uid}`),
+    ).toMatch(/\\u\{…\}/);
+  });
+
+  it('puts the kernel’s word about a review on the field it names', () => {
+    const detail = reviewed();
+    const draft = draftFromDetail(detail);
+    const { check, review } = reviewOf(draft);
+    const second = review.criteria[1];
+    expect(fieldOfRefusal('plan.acceptance.1.criteria.1.description', draft)).toBe(
+      `check:${check.uid}:criterion:${second?.uid}`,
+    );
+    expect(fieldOfRefusal('plan.acceptance.1.subjects.0', draft)).toBe(
+      `check:${check.uid}:subjects`,
+    );
+    expect(fieldOfRefusal('plan.acceptance.1.passAt', draft)).toBe(`check:${check.uid}:passAt`);
+    expect(fieldOfRefusal('plan.acceptance.1.model', draft)).toBe(`check:${check.uid}:model`);
+    expect(
+      fieldOfProblem(
+        'acceptance[1] "quality": criteria[1] "clear": the description looks like it carries a credential (1 suspected) — a plan does not carry credentials',
+        draft,
+      ),
+    ).toBe(`check:${check.uid}:criterion:${second?.uid}`);
+    expect(
+      fieldOfProblem(
+        'acceptance[1] "quality": reviews step "gone", which is not in the plan',
+        draft,
+      ),
+    ).toBe(`check:${check.uid}:subjects`);
+    expect(
+      fieldOfProblem(
+        'acceptance[1] "quality": model — one this workspace does not allow: "model-b"',
+        draft,
+      ),
+    ).toBe(`check:${check.uid}:model`);
+    expect(
+      fieldOfProblem('acceptance[1] "quality": a plan has at most 4 review checks', draft),
+    ).toBe(`check:${check.uid}`);
+    // Another kind of check stays the check.
+    const certs = draft.acceptance[0];
+    expect(fieldOfProblem('acceptance[0] "certs": model — not a word a predicate has', draft)).toBe(
+      `check:${certs?.uid}`,
+    );
+  });
+
+  it('offers another review only under the plan’s limits', () => {
+    let draft = draftFromDetail(paused());
+    for (let n = 0; n < 4; n += 1) {
+      expect(canAddReview(draft)).toBe(true);
+      draft = { ...draft, acceptance: [...draft.acceptance, reviewCheckDraft(draft)] };
+    }
+    expect(canAddReview(draft)).toBe(false);
+    // Four is allowed: all that is left to do is to write each one's first criterion.
+    expect([...draftProblems(draft, paused(), zh).keys()]).toEqual(
+      draft.acceptance
+        .filter((check) => check.review !== null)
+        .map((check) => `check:${check.uid}:criterion:${check.review?.criteria[0]?.uid}`),
+    );
+    // A removed one of the plan's, restored past the limit, is held on that check.
+    const fifth = { ...reviewCheckDraft(draft), original: REVIEW, removed: false };
+    const over = { ...draft, acceptance: [...draft.acceptance, fifth] };
+    expect(draftProblems(over, paused(), zh).get(`check:${fifth.uid}`)).toMatch(
+      /最多 4 条独立评审/,
+    );
   });
 });

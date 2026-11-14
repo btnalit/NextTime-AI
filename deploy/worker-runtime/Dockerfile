@@ -109,10 +109,44 @@ FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.
+# `ripgrep` is also what pi's own `grep` tool runs (`rg`); `fd`, which its `find` tool runs, comes
+# from the next layer.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git curl ca-certificates python3 python3-pip python3-venv build-essential ripgrep \
  && rm -rf /var/lib/apt/lists/*
+
+# fd for pi's `find` tool (STATUS leftover 698). pi looks for a copy under its agent directory,
+# then for `fd` / `fdfind` on PATH, and otherwise downloads one from GitHub — which PI_OFFLINE=1
+# (below) switches off, so with no fd every `find` call failed. Not Debian's `fd-find`: bookworm
+# ships fd 8.6.0, and outside a git repository pi passes `--no-require-git`, which fd added in
+# 8.7.0 — 8.6 rejects it, so `find` would still fail in every Worker directory that is not a
+# clone. Instead fd's own static (musl) release build at a pinned version, checked against the
+# SHA-256 recorded here; amd64 and arm64 only, any other architecture stops the build. Bumping fd
+# means changing the version and both digests together (docs/runbooks/pi-upgrade.md 2.2); no bot
+# watches this pin, so it is checked in each dependency wave. fd's two license files (MIT / Apache
+# 2.0) go to /usr/local/share/doc/fd beside it. The self-check after `ENV PI_OFFLINE=1` runs pi's
+# `find` and `grep`, so a binary pi cannot use fails the build.
+RUN set -eu; \
+    fd_version=10.5.2; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) fd_target=x86_64-unknown-linux-musl; \
+             fd_sha256=7e2d07fa2b8807642aaec67b7e2972a9fbe4db26fcb340a7372392db42b26694 ;; \
+      arm64) fd_target=aarch64-unknown-linux-musl; \
+             fd_sha256=63ea52cb31586e6d98efa2f06d73d542f16c7d0c4af0f07b579aaf9714cf907a ;; \
+      *) echo "no pinned fd build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    fd_name="fd-v${fd_version}-${fd_target}"; \
+    curl -fsSL --retry 3 -o /tmp/fd.tar.gz \
+      "https://github.com/sharkdp/fd/releases/download/v${fd_version}/${fd_name}.tar.gz"; \
+    echo "${fd_sha256}  /tmp/fd.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/fd.tar.gz -C /tmp \
+      "${fd_name}/fd" "${fd_name}/LICENSE-MIT" "${fd_name}/LICENSE-APACHE"; \
+    install -m 0755 "/tmp/${fd_name}/fd" /usr/local/bin/fd; \
+    install -d /usr/local/share/doc/fd; \
+    install -m 0644 "/tmp/${fd_name}/LICENSE-MIT" "/tmp/${fd_name}/LICENSE-APACHE" \
+      /usr/local/share/doc/fd/; \
+    rm -rf /tmp/fd.tar.gz "/tmp/${fd_name}"
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
 # agent@<pi.version>", currently 1.1.0). --ignore-scripts matches pi's own containerization.md
@@ -167,11 +201,13 @@ RUN groupadd --system --gid 10001 nexttime \
 COPY --from=build --chown=nexttime:nexttime /out/platform-extension /opt/nexttime/platform-extension
 COPY --chmod=755 deploy/worker-runtime/entrypoint.sh /opt/nexttime/entrypoint.sh
 # Whitelist start (entrypoint.sh header, STATUS leftover 422): pi's settings and the default system
-# prompt are image content, root-owned and read-only like the rest of /opt/nexttime. The two
+# prompt are image content, root-owned and read-only like the rest of /opt/nexttime — and so is
+# the settings variant of a Worker limited to reading files (`pi-settings-read-only.json`, S11 GO18a
+# P3: a goal reviewer; entrypoint.sh picks it by NEXTTIME_BUILTIN_TOOLS). The two
 # mount points worker-supervisor binds read-only (host-paths.ts) exist in the image, so neither
 # Docker nor gVisor has to create one on the read-only root filesystem: `platform/` (the
 # published system prompt and Skills) and `models.json`.
-COPY --chmod=644 deploy/worker-runtime/pi-settings.json deploy/worker-runtime/default-system-prompt.md /opt/nexttime/
+COPY --chmod=644 deploy/worker-runtime/pi-settings.json deploy/worker-runtime/pi-settings-read-only.json deploy/worker-runtime/default-system-prompt.md /opt/nexttime/
 RUN mkdir -p /opt/nexttime/platform && touch /opt/nexttime/models.json
 
 # pip installs as the non-root user under the read-only root filesystem (design doc §7.3 "只读根
@@ -198,6 +234,13 @@ ENV HOME=/workspace
 # container's outbound traffic should be the agent's own, not the runtime's. Image-level ENV: it
 # does not depend on worker-supervisor's env allowlist, which deliberately passes nothing else.
 ENV PI_OFFLINE=1
+
+# Self-check (STATUS leftover 698): pi's own `find` and `grep` tools, from the pi installed above,
+# run as this image's user, offline, against a scratch directory under /tmp (removed afterwards). A
+# tool that cannot run fails the build here instead of failing every Worker call. The script says
+# why running the tools beats checking the binaries; it is bind-mounted, not copied into the image.
+RUN --mount=type=bind,source=deploy/worker-runtime/selfcheck-search-tools.mjs,target=/tmp/selfcheck-search-tools.mjs \
+    node /tmp/selfcheck-search-tools.mjs
 
 # S7-E (docs/platform-admin-design.md §6.5 "镜像 label"; docs/development-tasks.md §5d S7-E):
 # `worker-supervisor`'s `GET /images` (packages/worker-supervisor/src/docker-client.ts
@@ -232,8 +275,9 @@ LABEL ai.nexttime.pi-version="${PI_VERSION}" \
 # The mount layout this image's entrypoint.sh expects from worker-supervisor, which refuses to
 # start an image without the version it speaks (packages/worker-supervisor/src/runtime-contract.ts).
 # 2 = the whitelist start (STATUS leftover 422): platform directory and models.json under
-# /opt/nexttime, nothing of pi's under /workspace. A literal, not a build arg: it describes this
-# file's entrypoint, so every build from it carries it. Bump both together.
-LABEL ai.nexttime.runtime-contract="2"
+# /opt/nexttime, nothing of pi's under /workspace. 3 = NEXTTIME_BUILTIN_TOOLS (S11 GO18a P3):
+# `read_only` starts pi with only the built-in tools that read files. A literal, not a build arg:
+# it describes this file's entrypoint, so every build from it carries it. Bump both together.
+LABEL ai.nexttime.runtime-contract="3"
 
 ENTRYPOINT ["/opt/nexttime/entrypoint.sh"]

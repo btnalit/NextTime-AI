@@ -36,12 +36,12 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 | `packages/platform-extension/src/tool-schema.ts` | 假设 pi 的 `ToolDefinition.parameters`（typebox `TSchema`）在运行时只是被当 JSON-Schema 形状的普通对象读（`.type`/`.properties`/`.required`），从不针对 typebox 的 `Kind` symbol 做校验；0.86.0 起注册时额外要求 `parameters` 是非 null、非数组的对象（`core/extensions/loader.js` `registerTool`，否则抛错）——`toToolParameters`/`gateToolParameters` 恒产出 object schema | pi 若开始严格校验 typebox schema，每一个用 `zod-to-json-schema` 转换出来、cast 成 `TSchema` 的工具（`report_result` 等）会在注册时报错 | 间接由 `entry.sdk.test.ts`/`worker.sdk.test.ts` 覆盖（真实工具注册+调用会触发真实校验路径） |
 | `packages/platform-extension/src/{entry,worker}.sdk.test.ts` | 直接 import pi SDK 面：`createAgentSession`、`DefaultResourceLoader`、`ModelRuntime`（含 `.create`/`.registerProvider`）、`SessionManager`、`SettingsManager`、`additionalExtensionPaths`/`noExtensions` 选项、`session.subscribe`/`.prompt`/`.messages`/`.agent.state.tools`/`.dispose`、`AgentSessionEvent`（`tool_execution_end` 的 `isError`/`result`/`toolName`）；`@earendil-works/pi-ai` 的 `InMemoryCredentialStore`、`Context` 类型、`pi-ai/compat` 的 `registerFauxProvider`/`fauxAssistantMessage`/`fauxToolCall` | 这两个文件本身**就是**"pi 有没有变"的探针——任何一个具名导出被改名/删除，这两个测试直接编译或运行失败，不会静默通过 | 就是它们自己（`pnpm --filter @nexttime/platform-extension test`，也是 `pi-drift.yml` 每晚对 `@latest` 跑的那两个文件） |
 | `worker.sdk.test.ts` 里记录的一个真实坑 | `createAgentSession()` 本身不触发 pi 的 `session_start` 事件——那是 `AgentSession.bindExtensions(bindings)` 内部才 `emit` 的；worker 模式的自驱动机制（`pi.sendUserMessage` 在 `session_start` 里调用）必须显式 `await session.bindExtensions({mode:'rpc'})` 才会真的跑起来（`docs/development-tasks.md` 行~691 已记录） | pi 若改变 `bindExtensions` 的签名或触发时机，worker 模式在真实 RPC 进程里可能仍然工作（因为真实 CLI 会调 `bindExtensions`），但这个测试可能测不出问题——升级时需要手工确认这条注释是否还成立 | `worker.sdk.test.ts`（部分——见左侧说明，测试本身依赖这个行为，不是独立校验它） |
-| `deploy/worker-runtime/Dockerfile` + `deploy/worker-runtime/pi/` | 安装：`deploy/worker-runtime/pi/{package.json,package-lock.json}` 经 `npm ci --omit=dev --ignore-scripts` 装进 `/opt/pi`，`/usr/local/bin/pi` 软链（1.1.0 起；此前是 `npm install -g`，靠 pi 自带的 shrinkwrap 钉传递依赖，1.0.1 去掉了 shrinkwrap，见 2.5）；CLI flags `--mode rpc`/`--session-dir <dir>`/`-e <path>`/`--system-prompt <path-or-text>`（**没有** `--system-prompt-file`，靠 `resolvePromptInput` 在路径存在时按文件内容读取）；`getAgentDir()`/`PI_CODING_AGENT_DIR`/`getModelsPath()` = `<agentDir>/models.json`；白名单启动用的 `--no-context-files`/`--no-extensions`/`--no-skills`/`--no-prompt-templates`/`--no-themes`/`--no-mcp`/`--no-approve`/`--append-system-prompt ""` 与 `--skill <dir>`（2.6）；内置工具集 bash/edit/find/grep/ls/powershell/read/write，没传任何 `--tools`/`--no-tools`/`--no-builtin-tools`/`--exclude-tools` 时 pi 的默认*激活*集是 `read`/`bash`/`edit`/`write`（`core/sdk.js` `defaultActiveToolNames`，0.84.4 与 0.87.1 相同；0.99.2 移到 `core/settings-manager.js` `DEFAULT_TOOL_NAMES`，值不变；find/grep/ls 经 bash 使用——本表此前写"全开"不准确，0.87.1 核对时更正）；0.99 起 CLI 默认加载内置扩展 `codemode`/`tool-search`/`mcp`，它们注册的 `codemode`/`tool_search` 工具 `defaultActive: false`，不写进 `defaultTools` 就不激活（见 2.4） | pi 改任一 flag 名、去掉 `--system-prompt` 的"路径存在则读文件"回退、改 agent-dir 解析、改默认工具集——容器启动失败或工具集意外变化；新增一种自动发现的资源而 entrypoint 没有关掉它——平台之外的指令、扩展或工具混进智能体 | **人工**：`docs/runbooks/host-worker-runtime.md`（`docker run --rm nexttime-ai-worker-runtime pi --version`、容器内工具可用性）；镜像本身无自动化测试（需要真实 Docker，仅主机验收覆盖）。flag 与资源发现由 `runtime-whitelist.test.ts` 覆盖（真实 `entrypoint.sh` + 锁定版本的真实 pi CLI，2.6；`pi-drift.yml` 每晚也对 `@latest` 跑） |
+| `deploy/worker-runtime/Dockerfile` + `deploy/worker-runtime/pi/` | 安装：`deploy/worker-runtime/pi/{package.json,package-lock.json}` 经 `npm ci --omit=dev --ignore-scripts` 装进 `/opt/pi`，`/usr/local/bin/pi` 软链（1.1.0 起；此前是 `npm install -g`，靠 pi 自带的 shrinkwrap 钉传递依赖，1.0.1 去掉了 shrinkwrap，见 2.5）；CLI flags `--mode rpc`/`--session-dir <dir>`/`-e <path>`/`--system-prompt <path-or-text>`（**没有** `--system-prompt-file`，靠 `resolvePromptInput` 在路径存在时按文件内容读取）；`getAgentDir()`/`PI_CODING_AGENT_DIR`/`getModelsPath()` = `<agentDir>/models.json`；白名单启动用的 `--no-context-files`/`--no-extensions`/`--no-skills`/`--no-prompt-templates`/`--no-themes`/`--no-mcp`/`--no-approve`/`--append-system-prompt ""` 与 `--skill <dir>`（2.6）；内置工具集 bash/edit/find/grep/ls/powershell/read/write，没传任何 `--tools`/`--no-tools`/`--no-builtin-tools`/`--exclude-tools` 时 pi 的默认*激活*集是 `read`/`bash`/`edit`/`write`（`core/sdk.js` `defaultActiveToolNames`，0.84.4 与 0.87.1 相同；0.99.2 移到 `core/settings-manager.js` `DEFAULT_TOOL_NAMES`，值不变；find/grep/ls 经 bash 使用——本表此前写"全开"不准确，0.87.1 核对时更正）；0.99 起 CLI 默认加载内置扩展 `codemode`/`tool-search`/`mcp`，它们注册的 `codemode`/`tool_search` 工具 `defaultActive: false`，不写进 `defaultTools` 就不激活（见 2.4） | pi 改任一 flag 名、去掉 `--system-prompt` 的"路径存在则读文件"回退、改 agent-dir 解析、改默认工具集——容器启动失败或工具集意外变化；新增一种自动发现的资源而 entrypoint 没有关掉它——平台之外的指令、扩展或工具混进智能体 | **人工**：`docs/runbooks/host-worker-runtime.md`（`docker run --rm nexttime-ai-worker-runtime pi --version`、容器内工具可用性）；镜像构建时自检 pi 的 `find` / `grep` 能离线跑（`deploy/worker-runtime/selfcheck-search-tools.mjs`，见 2.2），其余镜像内行为无自动化测试（需要真实 Docker，仅主机验收覆盖）。flag 与资源发现由 `runtime-whitelist.test.ts` 覆盖（真实 `entrypoint.sh` + 锁定版本的真实 pi CLI，2.6；`pi-drift.yml` 每晚也对 `@latest` 跑） |
 | `deploy/worker-runtime/entrypoint.sh` | 同上 CLI flags；每次启动在 `/tmp/pi-agent` 重建 pi 的配置目录（`settings.json` 整份拷自镜像 `pi-settings.json`，`models.json` 软链到只读挂载），平台扩展在每次 `session_shutdown` 把它恢复原样（`src/pi-agent-dir.ts`，2.6）；额外假设 pi 在 RPC 模式下把事件写到 stdout、别的诊断信息不混进同一个流（否则 `container-io.ts` 的 JSONL 逐行解析会读到非 JSON 行） | flag 改名同上；stdout 混入非 JSONL 内容会让 `agent-host` 的行解析静默丢弃（`JSON.parse` 失败即 `return`，不报错） | **人工**：同上；`runtime-whitelist.test.ts` 真实跑这个脚本（`NEXTTIME_RUNTIME_ROOT` 测试前缀，入口 / Worker 模式设了它就拒绝启动），覆盖 flag、配置目录重建与换会话时的恢复：已知资源类型与开关由种资源的用例兜住，新类型靠文件访问用例与第 4 节第 5 步，核对后在测试里种一份；`scripts/*.sh` 的 shell 语法/权限由 `pnpm ci:guards` 校验 |
 | `packages/agent-host/src/bridge.ts` | 对照 pi 0.84.4 源码验证、0.87.1 用真实 RPC 进程复核过的 RPC 事件词表：`message_update`（`assistantMessageEvent.type==='text_delta'`）、`tool_execution_start`/`tool_execution_end`（`toolCallId`/`toolName`/`args`/`result`）、`message_end`（`message.role==='assistant'`，`content` 数组的 `text` 段）、`agent_settled`；RPC 命令 `{"type":"prompt","id":<turnId>,"message":...}` 及响应 `{"type":"response","command":"prompt","id":...,"success":bool,"error"?}`；`{"type":"abort"}` | pi 改事件名/字段——`translatePiEvent` 把无法识别的类型**静默**降级为 `{kind:'none'}`（不抛错），后果是对话在平台侧看起来"卡住不动"而不是报错，属于最隐蔽的一类耦合失效 | `bridge.test.ts`（针对字面量 JSON fixture 的单元测试，fixture 是手写的、按 pi 0.84.4 文档/源码构造的，**不是**跑真实 pi 进程产出的——升级时这些 fixture 本身也需要对照新版本复核，见下节步骤 4；0.87.1 已对照真实 `pi --mode rpc` 捕获复核，见 2.1；0.99.2 同样复核，见 2.4；1.1.0 在开发机与镜像内复核，见 2.5） |
 | `packages/agent-host/src/host.ts` | 同一份 prompt/response 关联契约（`record.type==='response' && record.command==='prompt' && record.id===turn.turnId`）；`extension_error` 事件形状（`extensionPath`/`event`/`error`） | 同上，关联失败会导致 `turnAccepted`/`turnRejected` 永远等不到，Turn 挂起直到超时 | `host.test.ts`（同样基于手写 fixture，非真实 pi 进程） |
 | `packages/agent-host/src/container-io.ts` | 假设 pi 的 RPC stdout 是严格 JSONL：LF 分隔、每行一个 JSON 对象、不会因为遇到 U+2028/U+2029 而拆行（`docs/rpc.md` framing 契约，本模块特意不用 `node:readline` 就是因为它不满足这条） | pi 若改变 framing（比如 stdout 混入非 JSONL 诊断行），手写的 buffer+`indexOf('\n')` 分帧逻辑可能拆出坏行，静默被 `JSON.parse` 失败吞掉 | 无专门针对 pi framing 变化的测试；仅有通用的分行单元覆盖 |
-| `packages/worker-supervisor/src/{spawn-spec,task-spawn-spec}.ts` | 入口/Worker 容器 env 契约：`KERNEL_URL`/`KERNEL_LLM_URL`/`CAPABILITY_HANDLE`（固定标记 `source-bound`，Handle 按容器地址绑定）/`WORKSPACE_ID`/`NEXTTIME_MODE`/`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`（+小写镜像）；常驻模式额外要 `HOME`；挂载 `/workspace`（读写）、平台目录 `/opt/nexttime/platform`（只读：系统提示与已发布 Skill）、`/opt/nexttime/models.json`（只读）；`PI_CODING_AGENT_DIR` 不由 spawn spec 给，由 `entrypoint.sh` 指向 `/tmp/pi-agent`（2.6）；这套布局与镜像 label `ai.nexttime.runtime-contract` 绑定（`runtime-contract.ts`） | pi 改 env var 名字（比如 `PI_CODING_AGENT_DIR`）或 `getAgentDir()`/`getModelsPath()` 解析逻辑，会让容器读不到 `models.json`，模型路由整体失效 | `spawn-spec.test.ts`/`task-spawn-spec.test.ts`（纯 builder 单元测试，断言 env 与挂载，不跑真实 pi 进程）；`resident-service.test.ts`/`task-service.test.ts`（契约 label 不符时拒绝）；`runtime-whitelist.test.ts`（真实 pi 从软链的 `models.json` 选中模型） |
+| `packages/worker-supervisor/src/{spawn-spec,task-spawn-spec}.ts` | 入口/Worker 容器 env 契约：`KERNEL_URL`/`KERNEL_LLM_URL`/`CAPABILITY_HANDLE`（固定标记 `source-bound`，Handle 按容器地址绑定）/`WORKSPACE_ID`/`NEXTTIME_MODE`/`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`（+小写镜像）；常驻模式额外要 `HOME`；目标评审 Task 和目标规划 Task 额外带 `NEXTTIME_BUILTIN_TOOLS=read_only`（2.2）；挂载 `/workspace`（读写）、平台目录 `/opt/nexttime/platform`（只读：系统提示与已发布 Skill）、`/opt/nexttime/models.json`（只读）；`PI_CODING_AGENT_DIR` 不由 spawn spec 给，由 `entrypoint.sh` 指向 `/tmp/pi-agent`（2.6）；这套布局与镜像 label `ai.nexttime.runtime-contract` 绑定（`runtime-contract.ts`） | pi 改 env var 名字（比如 `PI_CODING_AGENT_DIR`）或 `getAgentDir()`/`getModelsPath()` 解析逻辑，会让容器读不到 `models.json`，模型路由整体失效 | `spawn-spec.test.ts`/`task-spawn-spec.test.ts`（纯 builder 单元测试，断言 env 与挂载，不跑真实 pi 进程）；`resident-service.test.ts`/`task-service.test.ts`（契约 label 不符时拒绝）；`runtime-whitelist.test.ts`（真实 pi 从软链的 `models.json` 选中模型） |
 | `packages/llm-proxy/src/gen-models-json.ts` | 生成 pi 的 `models.json`，对照 pi 0.84.4（0.87.1、0.99.2、1.1.0 复核未变）的 `ModelsConfigSchema`/`ProviderConfigSchema`：`{providers:{<id>:{baseUrl,apiKey,api,models:[{id,cost?}]}}}`；`api` 取值 `openai-completions`/`openai-responses`/`anthropic-messages`；`apiKey` 的 `$VAR`/`${VAR}` 模板由 pi 自己的 `resolveConfigValue` 在容器内解析 | pi 改这个 schema（新增必填字段、改 `api` 枚举值、去掉 `$VAR` 模板支持）会让每个 agent 容器拿到内核，但模型请求全部失败 | `gen-models-json.test.ts`（对照固定 fixture 的 schema 形状单元测试，不跑真实 pi 解析 `models.json`） |
 | `packages/shared/src/skill.ts` | Skill 名称/描述校验规则镜像自 pi 0.84.4（0.87.1、0.99.2、1.1.0 复核未变）`core/skills.ts` 的 `validateName`/`validateDescription`（1–64 位小写字母数字+单连字符；描述 ≤1024 字符） | pi 改校验规则，本仓库这边校验通过的 Skill 挂载到真实 pi 容器时可能被拒绝（或反过来，pi 放宽了但这边仍然拒绝合法输入） | `skill.test.ts`（镜像规则的单元测试，不对照 pi 自己的校验器跑） |
 | `deploy/accept/driver.mjs` `transcript-stats`（0.87.1 核对时补入本表） | 直接读 Worker 的 pi 会话 JSONL：`type:"message"` 条目，`message.role` 为 `assistant`（`content[]` 里的 `toolCall` 块、`model`）或 `toolResult`（`toolCallId`/`isError`） | pi 改会话条目格式，验收脚本的 `TOOL_*`/`MODEL` 统计会静默归零（验收误判，不影响运行时） | 无自动测试；升级时拿同一轮真实运行的两版会话文件各跑一次对比 |
@@ -91,12 +91,37 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 Worker 都是 `/tmp/pi-agent`，2.6；2026-10-23 之前是合并写入 `/workspace/.pi/agent/settings.json`，日志行
 `check=pi_default_tools`），日志行 `nexttime-selfcheck check=pi_resource_discovery result=off`。
 
+例外（S11 GO18a 遗留，独立复核 N6；遗留 697）：目标评审员和目标规划器读的是别人的 Worker 写的东西（步骤输出、先例），
+不该执行其中任何一样。内核给评审 Task 和规划 Task 的 spawn 都带 `builtinTools: read_only`
+（`application/task/spawn.ts`，按 Task 的 `purpose`（`review`、`planning`）定，不看定义），
+worker-supervisor 给容器设 `NEXTTIME_BUILTIN_TOOLS=read_only` 与 label `nexttime.builtin-tools=read_only`，
+`entrypoint.sh` 改用镜像里的 `pi-settings-read-only.json`（`defaultTools` = `read,grep,find,ls`，没有
+bash / edit / write），日志行 `nexttime-selfcheck check=builtin_tools result=ok set=read_only`；平台扩展换会话时
+恢复的也是这一份（`NEXTTIME_PI_SETTINGS`）。别的取值直接退出（`check=builtin_tools result=fail
+reason=unknown_value`）。镜像因此是运行时契约 3（2.6），旧镜像会忽略这个变量，worker-supervisor 不用它起容器。
+
 | 事实（0.87.1 已安装包） | 位置 |
 |---|---|
 | 内置工具全集 read/bash/powershell/edit/write/grep/find/ls；默认只激活 read/bash/edit/write | `dist/core/tools/index.js` `allToolNames`；`dist/core/sdk.js:140` `defaultActiveToolNames` |
 | 设置里的 `defaultTools` 替换默认激活清单，不形成允许清单 | `dist/core/sdk.js:141-145`；`dist/core/settings-manager.js` `getDefaultTools()` |
 | **`--tools` 是覆盖所有工具的允许清单**，扩展注册的工具不在清单里就被过滤掉——用它会关掉平台扩展的内核工具 | `dist/core/agent-session.js:2496-2504`（`isAllowedTool` 同时过滤 `getAllRegisteredTools()`） |
 | 无允许清单时扩展工具全部激活 | `dist/core/agent-session.js:176-177`（`includeAllExtensionTools: true`） |
+
+`find` 与 `grep` 各要一个镜像里的二进制（STATUS 遗留 698）：pi 先找自己 agent 目录下的副本，再找 PATH 上的
+`fd` / `fdfind`（find）与 `rg`（grep），都没有才去 GitHub 下载，而镜像设了 `PI_OFFLINE=1`，下载被关掉。遗留 698
+之前镜像没有 fd，每次 `find` 都报 `fd is not available and could not be downloaded`。
+
+- `rg`：apt 的 `ripgrep`（bookworm 13.0.0），pi 用到的参数它都支持。
+- `fd`：**不用** apt 的 `fd-find`。bookworm 是 fd 8.6.0，而 pi 在 git 仓库之外会加 `--no-require-git`（fd 8.7.0
+  才有），8.6 直接报参数错误，大多数 Worker 工作目录不是仓库，`find` 照样失败。镜像改装 fd 官方发布的静态
+  （musl）构建，版本和 amd64 / arm64 两个包的 SHA-256 写在 Dockerfile 里，装到 `/usr/local/bin/fd`，两份许可证
+  （MIT / Apache 2.0）放在 `/usr/local/share/doc/fd/`。升级 fd 要同时改版本和两个摘要；从源码构建镜像因此也要
+  能访问 GitHub 的 release 下载。这个钉子没有 bot 盯（Dependabot 只管 npm 安全告警，`image-pins` 只管镜像
+  digest），每个依赖波次手动核对一次 fd 的新版本与安全公告。
+
+Dockerfile 在 `ENV PI_OFFLINE=1` 之后跑 `selfcheck-search-tools.mjs`：以镜像用户、镜像环境、空的 agent 目录，
+用装进去的 pi 真跑一次 `find` 和 `grep`，跑不通就构建失败。升级 pi 时，如果它改了要找的命令名、换了二进制，
+或者开始传装着的版本不认识的参数，这一步会先失败。第一版就是这样发现 bookworm 的 fd 8.6 不够用的。
 
 `powershell` 不开：镜像里没有 pwsh，开了只会多一个用不了的工具。升级 pi 时核对上表各行仍成立
 （尤其 `defaultTools` 的键名与"`--tools` 过滤扩展工具"；上表行号是 0.87.1 的，0.99.2 的复核与新位置见
@@ -338,7 +363,8 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
   从此不再被读，主机上留着无害。
 - **挂载布局与运行时契约**：worker-supervisor 把系统提示与 Skill 写到 `${NEXTTIME_DATA}/workspaces/.platform/principals/<principalId>/`
   与 `.platform/tasks/<taskId>/`（工作区之外，id 是 UUID，不会与 `.platform` 撞名），只读挂到 `/opt/nexttime/platform`；
-  `models.json` 只读挂到 `/opt/nexttime/models.json`。这套布局与镜像 label `ai.nexttime.runtime-contract=2` 绑定：
+  `models.json` 只读挂到 `/opt/nexttime/models.json`。这套布局与镜像 label `ai.nexttime.runtime-contract` 绑定（遗留 422
+  起是 2；S11 GO18a 遗留加了 `NEXTTIME_BUILTIN_TOOLS`，2.2，升到 3）：
   worker-supervisor 起容器前读镜像 label，不符（含遗留 422 之前构建的镜像）返回 409 `runtime_image_incompatible`，不动
   正在跑的容器（`packages/worker-supervisor/src/runtime-contract.ts`）；读不到镜像信息时记一行 warn 照常起。再改布局时
   `RUNTIME_CONTRACT_VERSION` 与 Dockerfile 的 label 一起改。
@@ -447,6 +473,7 @@ override；在 bundle 里 `grep -l 'GLOBSTAR' dist/bundle/chunks/*` 确认它是
 - `packages/llm-proxy/src/gen-models-json.test.ts` —— `models.json` schema 形状
 - `packages/shared/src/skill.test.ts` —— Skill 名称/描述校验规则
 - 全仓库门禁：`pnpm -r lint`、`pnpm -r typecheck`、`pnpm -r build`、`pnpm depcruise`、`pnpm ci:guards`
+- 镜像构建：`deploy/worker-runtime/` 有改动的 PR 会触发 staging rehearsal，它从源码构建镜像，构建里的自检（2.2）离线跑 pi 的 `find` 与 `grep`
 - 人工（见第 4 节第 5 条）：目标主机上 `docker run --rm nexttime-ai-worker-runtime pi --version`
   与 `docs/runbooks/host-worker-runtime.md` 的验收步骤
 
@@ -522,6 +549,9 @@ pi 本身没有运行时"回滚"的概念（它不是一个常驻服务，是每
      `operations.md` §13）。所以从这一版起，到下一次 pi 升级之前，**只回滚运行时镜像**用不了，只能整版回滚：代码、镜像、
      worker-supervisor 一起回到同一版本。反过来只回滚 worker-supervisor、不回滚镜像也不行：旧 worker-supervisor 不挂
      `models.json`，新镜像的启动自检以 `check=models_json result=fail reason=empty_mount` 退出。
+   - S11 GO18a 遗留把契约升到 3（评审员只读内置工具，2.2）。同理，那之前构建的契约 2 镜像不能再设为活动或回滚到，只能整版
+     回滚。只回滚 worker-supervisor 也不行：旧的 worker-supervisor 拒绝契约 3 的镜像，而且它的 spawn schema 是严格的，
+     新内核给评审 Task 带的 `builtinTools` 会让它回 400。
 2. 代码侧回滚：`git revert` 升级 PR（`pi.version`、两个 package.json 字段、`pnpm-lock.yaml`
    一起回退），重新构建镜像。
 3. `.github/workflows/pi-drift.yml` 本身不涉及运行时，不需要回滚流程——它只在还没合并升级 PR 时

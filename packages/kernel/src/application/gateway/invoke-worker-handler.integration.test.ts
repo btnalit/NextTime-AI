@@ -23,6 +23,7 @@ import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/invoke-worker-handler.integration.test: DB-gated (real Postgres; auto-skip
@@ -162,9 +163,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    async function issueTestHandle(sessionId: string): Promise<IssuedHandle> {
+    async function issueTestHandle(sessionId: string, role: Role): Promise<IssuedHandle> {
       return inTx(ownerId, (client) =>
-        issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 3600, privateKey }),
+        issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 3600,
+          privateKey,
+          basis: { kind: 'role', role, credential: null },
+        }),
       );
     }
 
@@ -185,6 +192,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(principalId),
         principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
         session: {
           workspaceId,
@@ -202,9 +210,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** find_workers/invoke_worker for `principalId`, over a fresh entry session/Handle (S3.13
      *  runtime-consumer tests below) — same shape the existing "two-phase wait" test above already
      *  establishes, generalized to any principal rather than the module's own `ownerId`. */
-    async function entryHandleCallerFor(principalId: string): Promise<ResolvedCaller> {
+    async function entryHandleCallerFor(principalId: string, role: Role): Promise<ResolvedCaller> {
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId);
+      const issued = await issueTestHandle(sessionId, role);
       return { channel: 'handle', claims: claimsFromIssued(issued) };
     }
 
@@ -264,7 +272,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       configureTaskRuntime({ pool, privateKey, supervisorClient });
 
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId);
+      const issued = await issueTestHandle(sessionId, 'owner');
       const caller: ResolvedCaller = { channel: 'handle', claims: claimsFromIssued(issued) };
 
       const result = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
@@ -292,7 +300,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
         });
         const principalId = await adminInsertPrincipal('owner', 'r54-derived-owner');
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
         const call = (target: ResolvedCaller, params: Record<string, unknown>) =>
           dispatchCapability({ pool }, target, 'invoke_worker', {
             definitionId: workerDefinitionId,
@@ -312,7 +320,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const otherInput = await call(caller, { input: { job: 2 } });
         expect(otherInput.id).not.toBe(first.id);
 
-        const otherSession = await call(await entryHandleCallerFor(principalId), {
+        const otherSession = await call(await entryHandleCallerFor(principalId, 'owner'), {
           input: { job: 1 },
         });
         expect(otherSession.id).not.toBe(first.id);
@@ -325,7 +333,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
         });
         const principalId = await adminInsertPrincipal('owner', 'r54-terminal-owner');
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
         const call = (params: Record<string, unknown>) =>
           dispatchCapability({ pool }, caller, 'invoke_worker', {
             definitionId: workerDefinitionId,
@@ -355,7 +363,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
       });
       const principalId = await adminInsertPrincipal('owner', 'legacy-184-owner');
-      const caller = await entryHandleCallerFor(principalId);
+      const caller = await entryHandleCallerFor(principalId, 'owner');
       const invoke = (input: unknown) =>
         dispatchCapability({ pool }, caller, 'invoke_worker', {
           definitionId: workerDefinitionId,
@@ -398,6 +406,32 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const plain = await invoke({ job: 'plain' });
       expect(await auditOf(plain.id)).not.toHaveProperty('credentialReview');
+
+      // Legacy 444: a credential written as a key is counted and masked like one written as a
+      // value — in the audit copy and on every read of the Task — and the Task keeps it as given.
+      const token = 'abcdefghijklmnopqrstuvwxyz0123';
+      const keyed = await invoke({ job: 'keyed', headers: { [`Bearer ${token}`]: true } });
+      const keyedAudit = await auditOf(keyed.id);
+      expect(JSON.stringify(keyedAudit)).not.toContain(token);
+      expect(keyedAudit.credentialReview).toEqual({
+        suspectedSecretValues: 1,
+        suspectedSecretPaths: ['headers.Bearer [redacted]'],
+      });
+      expect(keyedAudit.params).toMatchObject({
+        input: { headers: { 'Bearer [redacted]': true } },
+      });
+      const read = (await dispatchCapability({ pool }, caller, 'get_task', {
+        taskId: keyed.id,
+      })) as { input: unknown };
+      expect(read.input).toEqual({ job: 'keyed', headers: { 'Bearer [redacted]': true } });
+      const keyedStored = await inTx(principalId, async (client) => {
+        const { rows } = await client.query<{ input: unknown }>(
+          'select input from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, keyed.id],
+        );
+        return rows[0]?.input;
+      });
+      expect(keyedStored).toEqual({ job: 'keyed', headers: { [`Bearer ${token}`]: true } });
     });
 
     describe('S3.13 runtime consumer — AgentProfile.excludedWorkerDefinitions', () => {
@@ -422,7 +456,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           excludedWorkerDefinitions: [definitionB],
         });
 
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
 
         const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
           need: 'agent-profile-narrow-worker',
@@ -464,7 +498,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'agent-profile-unset-worker-b-unique',
         );
 
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'member');
 
         const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
           need: 'agent-profile-unset-worker',
@@ -482,6 +516,35 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(invoked.status).toBe('running');
         }
       });
+    });
+
+    it('legacy 712: a person’s own invoke_worker (the human channel) carries the credential it came with to the Worker’s Handle — refused (credential_revoked) while the Principal has no API key, started once it has one', async () => {
+      const supervisorClient = new NeverFinishingSupervisorClient(pool, workspaceId);
+      configureTaskRuntime({ pool, privateKey, supervisorClient });
+      const personId = await adminInsertPrincipal('owner', 'owner-712');
+      const call = () =>
+        dispatchCapability({ pool }, humanCaller(personId, 'owner'), 'invoke_worker', {
+          definitionId: workerDefinitionId,
+          version: 1,
+          input: {},
+        });
+
+      await expect(call()).rejects.toMatchObject({
+        name: 'HandleIssuanceError',
+        code: 'credential_revoked',
+      });
+
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: personId },
+        (client) =>
+          client.query(
+            'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+            [workspaceId, personId, fixtureApiKeyHash(personId)],
+          ),
+        { skipRoleSwitch: true },
+      );
+      await expect(call()).resolves.toMatchObject({ status: 'running' });
     });
   },
 );

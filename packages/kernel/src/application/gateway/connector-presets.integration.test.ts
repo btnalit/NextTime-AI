@@ -8,6 +8,7 @@ import type {
   ConnectorWire,
   GateInstanceWire,
   Operation,
+  PreviewGateInstanceEnableResultWire,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
@@ -126,6 +127,21 @@ describe.runIf(DATABASE_URL !== undefined)(
           consoleSessionId: randomUUID(),
         },
       };
+    }
+
+    /** Legacy 311: enable the way the console does — preview, then enable with the digest of the
+     *  manifest that preview showed. */
+    async function previewThenEnable(gateId: string): Promise<unknown> {
+      const { manifestDigest } = (await dispatchCapability(
+        { pool },
+        ownerCaller(),
+        'preview_gate_instance_enable',
+        { gateId },
+      )) as PreviewGateInstanceEnableResultWire;
+      return dispatchCapability({ pool }, ownerCaller(), 'enable_gate_instance', {
+        gateId,
+        manifestDigest,
+      });
     }
 
     function ownerCaller(): ResolvedCaller {
@@ -424,9 +440,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(enabled.operationCount).toBe(4);
       expect(enabled.pendingManifest).toBeNull();
-      const linked = await dispatchCapability({ pool }, ownerCaller(), 'enable_gate_instance', {
-        gateId: 'kb-main',
-      });
+      const linked = await previewThenEnable('kb-main');
       expect(
         (linked as { publishedOperationNames: string[] }).publishedOperationNames.sort(),
       ).toEqual(['document.parse', 'kb.documents', 'kb.list', 'retrieve']);
@@ -560,12 +574,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         (await announce(presetAnnounceBody('kb-parse', earlier?.operations ?? []))).statusCode,
       ).toBe(200);
       await callAsAdmin('update_gate_instance', { gateId: 'kb-parse', status: 'enabled' });
-      const { gatekeeperId } = (await dispatchCapability(
-        { pool },
-        ownerCaller(),
-        'enable_gate_instance',
-        { gateId: 'kb-parse' },
-      )) as { gatekeeperId: string };
+      const { gatekeeperId } = (await previewThenEnable('kb-parse')) as { gatekeeperId: string };
       async function deployedParse() {
         const { items } = (await dispatchCapability({ pool }, ownerCaller(), 'list_operations', {
           gatekeeperId,

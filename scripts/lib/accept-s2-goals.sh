@@ -1,6 +1,7 @@
 # scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S2 and S4 to S12 of
 # docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, S13 — the goal planner of
-# GO9a/GO9b (legacy 549) — and S14 — files between a goal's steps (GO14) — run by scripts/accept_s2.sh in
+# GO9a/GO9b (legacy 549) — S14 — files between a goal's steps (GO14) — and S15 — a quality goal
+# judged by an independent review (GO18) — run by scripts/accept_s2.sh in
 # its fake-provider path after step 9 (which covers proposing from chat, confirming, the platform's
 # acceptance and S3's idempotent propose/confirm). Sourced by accept_s2.sh right after
 # accept-common.sh; POSIX sh, same conventions (pass/fail, cap, parse_kv, no temp file, no jq).
@@ -41,13 +42,15 @@
 # background on checks that fail on purpose — the platform retries an unmet acceptance check
 # (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
 # (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
-# about 7.5 minutes, before it pauses the run — while S1, S11, S13, S14, S5, S4, S7, S9, S10, S12 and S8 run
+# about 7.5 minutes, before it pauses the run — while S1, S11, S13, S14, S15, S5, S4, S7, S9, S10, S12 and S8 run
 # one after the other (S12 only with ACCEPT_DISRUPTIVE=1); S6 and the reverse S4 are finished
 # next, and S2 (also only with ACCEPT_DISRUPTIVE=1) runs last, alone: the
 # kernel's restarts would drop a background goal's checks and every connection to the kernel. No
 # two scenarios have a step's Worker running at the same time, and no two have a write at the http
 # gate at the same time (S7 reads the gate's queue); only S6's goal planner, once its check gives
-# up, may run beside another scenario's step — it observes nothing and has no gate.
+# up, may run beside another scenario's step — it observes nothing and has no gate. S15's goal
+# reviewer never does: S15 waits for each of its goals to settle, and a goal settles only after its
+# review does.
 #
 # With --real none of these scenarios runs, and the ledger is discarded before the http gate's
 # manifest is published (goal_ledger_discard_real / goal_ledger_withheld_check_real, called from
@@ -1569,6 +1572,88 @@ goal_s14_handoff() {
   pass "s14-handoff-owner" "worker-supervisor keeps a's directories for goal $S14_GOAL_ID and answers not_owned for goal $other"
 }
 
+# --- S15: a quality goal judged by an independent review (S11 GO18) ---------------------------
+#
+# The roadmap's acceptance for GO18: "一个质量类目标由评审判定，推导在控制台可查". One ops-runner
+# step reports an output (`GOAL_REPORT`, matching the step's outputSchema); the goal's acceptance
+# is the platform's own stock.get observation and a `review` of that step with two weighted
+# criteria. Once the observation passes, the platform starts its goal reviewer (a Task of purpose
+# `review`, observing nothing) on alice's model — fake-llm's goalReviewerScenario, which scores a
+# criterion `ACCEPT_S2_SCORE=<n>` in its description n and any other the highest, 4 — and works out
+# from the scores whether the review passed: the verdict is the platform's arithmetic, never the
+# reviewer's word.
+#   - review-achieved: complete (weight 3) scores 4, clear (weight 1) scores 2 — 14 of 16 points,
+#     at least 12 (75%) pass — and the goal completes achieved on `reviewer_assessed`, the basis a
+#     proxy indicator stands on (plan §4.6);
+#   - review-derivation: get_goal reads back each criterion's weight, score and points, the points
+#     against the line and the verdict — what the console's goal page shows — and the reviewer and
+#     the step it reviewed ran on the same model, which the assessment marks (`sameModel`);
+#   - review-closed: the reviewer's Task read the criteria but not the line (`passAt`, at no depth of
+#     its input), the line being the platform's (F5);
+#   - review-below-line: both criteria score 1 — 4 of 16 — and the goal pauses needs_decision for
+#     alice, confirmed with the planner's leave `propose` yet no planning round opens for a review
+#     that fell short (F6), and the review is not run again — its one reviewer Task stays the only
+#     one; cleanup_step cancels it.
+S15_REVIEW_EXPR="(() => { const r = d.result.acceptance.rounds; const c = r.length ? r[r.length - 1].checks.find((x) => x.checkKey === 'quality') : undefined; const v = c && c.review; const a = v && v.assessment; return c ? [c.status, a ? a.points : '-', a ? a.maxPoints : '-', a ? a.passAt : '-', a ? a.verdict : '-', a ? a.lines.map((l) => [l.criterion, l.weight, l.score, l.points, l.maxPoints].join(':')).join('+') : '-', a && v.taskId === a.reviewTaskId ? 'own-task' : 'no-task', a ? String(a.sameModel) : '-', a && a.executorModels.every((e) => e.model === a.reviewerModel) ? 'models-match' : 'models-differ'].join(',') : 'none'; })()"
+
+# goal_s15_review_json <subjects JSON> <complete's score marker> <clear's score marker>: the review
+# check of S15.
+goal_s15_review_json() {
+  printf '{"kind":"review","key":"quality","subjects":%s,"criteria":[{"key":"complete","description":"The report names the goal step it was written for%s","weight":3},{"key":"clear","description":"The report reads plainly%s","weight":1}],"passAt":75}' \
+    "$1" "$2" "$3"
+}
+
+# goal_s15_propose <name> <complete's marker> <clear's marker> [confirm members]: the S15 goal.
+goal_s15_propose() {
+  n=$(real_token)
+  schema='{"type":"object","properties":{"report":{"type":"string","minLength":1}},"required":["report"],"additionalProperties":false}'
+  step=$(goal_step_json report "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n GOAL_REPORT=$n" "\"outputSchema\":$schema")
+  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S15 $n ($1): one ops-runner step writes a report; the platform observes the stock API and an independent review scores the report.\",\"plan\":{\"steps\":[$step],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"'),$(goal_s15_review_json '["report"]' "$2" "$3")]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$n\"}" "" "${4:-}"
+}
+
+# goal_s15_reviewers <goal id>: the run's reviewer Tasks, oldest first, each as
+# purpose:status:observe scope:line:criteria — the line `line-shown` if its input names `passAt` at
+# any depth (F5), `line-closed` if not.
+goal_s15_reviewers() {
+  psql_ws "select coalesce(string_agg(purpose || ':' || status || ':' || coalesce(cardinality(observe_scope)::text, 'unscoped') || ':' || (case when jsonb_path_exists(input, 'strict \$.**.passAt') then 'line-shown' else 'line-closed' end) || ':' || coalesce(jsonb_array_length(input->'criteria'), 0), ',' order by created_at), 'none') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$1' and purpose = 'review'"
+}
+
+goal_s15_review() {
+  goal_s15_propose s15 "" " ACCEPT_S2_SCORE=2"
+  S15_GOAL_ID=$GOAL_RUN_ID
+  goal_wait "$S15_GOAL_ID" 360 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s15-review-achieved" "$S15_GOAL_ID" "goal $S15_GOAL_ID did not settle within 360s (last '$GOAL_WAIT_VALUE'); review: $(goal_get "$S15_GOAL_ID" "$S15_REVIEW_EXPR")"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,reviewer_assessed," ] || goal_fail "s15-review-achieved" "$S15_GOAL_ID" "goal $S15_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,reviewer_assessed; review: $(goal_get "$S15_GOAL_ID" "$S15_REVIEW_EXPR")"
+  pass "s15-review-achieved" "goal $S15_GOAL_ID completed achieved on reviewer_assessed: the platform's observation passed, then its independent review"
+
+  review=$(goal_get "$S15_GOAL_ID" "$S15_REVIEW_EXPR")
+  [ "$review" = "passed,14,16,75,passed,complete:3:4:12:12+clear:1:2:2:4,own-task,true,models-match" ] || goal_fail "s15-review-derivation" "$S15_GOAL_ID" "the review reads '$review', expected passed,14,16,75,passed,complete:3:4:12:12+clear:1:2:2:4,own-task,true,models-match (4×3 + 2×1 = 14 of 16 points, at least 12 at 75%; the reviewer Task the check names; reviewer and step on the same model, marked so)"
+  pass "s15-review-derivation" "get_goal reads back the derivation: complete 4/4 × 3 = 12, clear 2/4 × 1 = 2, 14 of 16 points against a line of 75% (12): passed; the same model scored the step's work, and the assessment says so"
+
+  reviewer=$(goal_s15_reviewers "$S15_GOAL_ID")
+  [ "$reviewer" = "review:completed:0:line-closed:2" ] || goal_fail "s15-review-closed" "$S15_GOAL_ID" "the run's reviewer Tasks read '$reviewer', expected one, completed, observing nothing, its input holding the two criteria and nowhere the line (review:completed:0:line-closed:2)"
+  pass "s15-review-closed" "one reviewer Task on goal $S15_GOAL_ID: purpose review, completed, observing nothing; it read the two criteria, and its input names no line at any depth"
+
+  goal_s15_propose s15-below " ACCEPT_S2_SCORE=1" " ACCEPT_S2_SCORE=1" '"planner":"propose"'
+  S15_BELOW_GOAL_ID=$GOAL_RUN_ID
+  goal_wait "$S15_BELOW_GOAL_ID" 360 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "goal $S15_BELOW_GOAL_ID did not settle within 360s (last '$GOAL_WAIT_VALUE'); review: $(goal_get "$S15_BELOW_GOAL_ID" "$S15_REVIEW_EXPR")"
+  [ "$GOAL_WAIT_VALUE" = "paused,,,needs_decision" ] || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "goal $S15_BELOW_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused needs_decision with no outcome; review: $(goal_get "$S15_BELOW_GOAL_ID" "$S15_REVIEW_EXPR")"
+  review=$(goal_get "$S15_BELOW_GOAL_ID" "$S15_REVIEW_EXPR")
+  case "$review" in
+    "failed,4,16,75,failed,complete:3:1:3:12+clear:1:1:1:4,own-task,"*) : ;;
+    *) goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "the review reads '$review', expected failed,4,16,75,failed,complete:3:1:3:12+clear:1:1:1:4,own-task,… (1×3 + 1×1 = 4 of 16, below 12)" ;;
+  esac
+  # The pause is alice's to decide: give the planner a moment it would take, then none opened.
+  sleep 10
+  rounds=$(goal_get "$S15_BELOW_GOAL_ID" "String(d.result.planningRounds.length)")
+  [ "$rounds" = "0" ] || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "goal $S15_BELOW_GOAL_ID has $rounds planning rounds, expected none for a review below its line; rounds: $(goal_get "$S15_BELOW_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
+  # Nor is the review run again until it passes: one reviewer Task, the one that scored 4.
+  reviewer=$(goal_s15_reviewers "$S15_BELOW_GOAL_ID")
+  [ "$reviewer" = "review:completed:0:line-closed:2" ] || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "the run's reviewer Tasks read '$reviewer', expected the one that scored it, and no other (review:completed:0:line-closed:2)"
+  pass "s15-review-below-line" "goal $S15_BELOW_GOAL_ID: its review scored 4 of 16, below the 12 its line asks — paused needs_decision for alice, no planning round opened, its one reviewer Task not run again"
+}
+
 # goal_scenarios_step: the scenarios, in the order the header explains; S12 and S2 only with
 # ACCEPT_DISRUPTIVE=1.
 goal_scenarios_step() {
@@ -1580,6 +1665,7 @@ goal_scenarios_step() {
   goal_s11_reject
   goal_s13_planner
   goal_s14_handoff
+  goal_s15_review
   goal_s5_approval
   goal_s4_seen
   goal_s7_cancel_drain

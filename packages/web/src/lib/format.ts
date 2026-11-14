@@ -252,6 +252,14 @@ export function formatAuditActor(
   return t('主机操作员（未署名）', 'Host operator (unattributed)');
 }
 
+/** 「挂载的 Skill 增加」, 「带来的 Skill 版本」, 「正文有改动」, 「调整了 Skill」: a space only where a
+ *  Latin word meets Chinese. */
+export function zhJoin(head: string, tail: string): string {
+  return /[A-Za-z0-9]$/.test(head) || /^[A-Za-z0-9]/.test(tail)
+    ? `${head} ${tail}`
+    : `${head}${tail}`;
+}
+
 /** Pretty JSON, or the raw string when the value is not serializable. */
 export function prettyJson(value: unknown): string {
   try {

@@ -18,6 +18,8 @@ import {
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
+  ConnectionSecretExpiredError,
+  ConnectionSecretInUseError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -25,6 +27,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
@@ -60,6 +63,7 @@ import {
   RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
+import { AUTHORITY_CHANGED_MESSAGE } from '../http/capability-route.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
 /**
@@ -78,6 +82,8 @@ describe('mapDispatchError — gate refusals (review of #532)', () => {
     ['operation_not_found', 404, WS_ERROR_CODES.NOT_FOUND],
     ['operation_definition_mismatch', 409, WS_ERROR_CODES.ILLEGAL_TRANSITION],
     ['credential_unavailable', 424, WS_ERROR_CODES.UPSTREAM_ERROR],
+    // Legacy 700: the client's own refusal (status 0) — WS has no 424, the code leads the message.
+    ['target_refused', 0, WS_ERROR_CODES.UPSTREAM_ERROR],
     ['transport_error', 502, WS_ERROR_CODES.UPSTREAM_ERROR],
     ['operation_refused', 401, WS_ERROR_CODES.UPSTREAM_ERROR],
   ])(
@@ -149,6 +155,7 @@ describe('mapDispatchError — S11 P1-B change segment rollback', () => {
           blocker: 'replaced',
           blockedBy: { segmentId: 'seg-2' },
           conflicts: [],
+          linkEnds: [],
         },
       ]),
     );
@@ -300,6 +307,33 @@ describe('mapDispatchError — review fix F10: previously-unmapped error classes
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
   });
 
+  it('legacy 699 / 702 / 712: HandleIssuanceError with a code (session or parent revoked, Principal disabled, credential revoked) maps to UNAUTHORIZED, message withheld', () => {
+    for (const code of [
+      'session_revoked',
+      'parent_revoked',
+      'acting_principal_disabled',
+      'credential_revoked',
+    ] as const) {
+      const mapped = mapDispatchError(
+        new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
+      );
+      expect(mapped).toEqual({ code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' });
+    }
+  });
+
+  it('legacy 714: authority_changed maps to HTTP’s 409 bucket (ILLEGAL_TRANSITION), naming nobody', () => {
+    const mapped = mapDispatchError(
+      new HandleIssuanceError(
+        'the Principal "p-1" belongs to another user since this issue began',
+        'authority_changed',
+      ),
+    );
+    expect(mapped).toEqual({
+      code: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: AUTHORITY_CHANGED_MESSAGE,
+    });
+  });
+
   it('TaskRuntimeNotConfiguredError (invoke_worker) maps to SERVICE_UNAVAILABLE (-32015), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new TaskRuntimeNotConfiguredError());
     expect(mapped.code).toBe(WS_ERROR_CODES.SERVICE_UNAVAILABLE);
@@ -327,6 +361,43 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('OntologyBaseMovedError (publish_ontology_version, R-60) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
     const mapped = mapDispatchError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('OntologyLinkEndpointError (legacy 303) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    const mapped = mapDispatchError(
+      new OntologyLinkEndpointError({
+        undeclared: [
+          {
+            ontologyId: 'ont-1',
+            family: null,
+            linkType: 'served_by',
+            end: 'range' as const,
+            objectType: 'Gatekeepr',
+          },
+        ],
+        orphaned: [
+          {
+            ontologyId: 'ont-2',
+            family: null,
+            linkType: 'runs_on',
+            end: 'domain' as const,
+            objectType: 'Host',
+          },
+        ],
+      }),
+    );
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  // Legacy 711 (review #501 of #1176): both refusals of a connection secret are HTTP 409s.
+  it.each([
+    new ConnectionSecretExpiredError('create_connection'),
+    new ConnectionSecretInUseError('create_connection: that connectionSecret was already used'),
+  ])('$name maps to ILLEGAL_TRANSITION, like HTTP 409, with its message as is', (err) => {
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: err.message,
+    });
   });
 
   it('SkillNameConflictError (S11 P1-D) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {

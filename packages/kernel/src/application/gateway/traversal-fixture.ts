@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Role } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import type { ZodType } from 'zod';
@@ -13,10 +13,21 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * rows. Not used by any production path.
  */
 
-/** A human console caller of `role` in `workspaceId`, as resolve-caller.ts builds one for a web session. */
+/** Legacy 712: the synthetic `principals.api_key_hash` of a fixture Principal, derived from its id
+ *  so {@link humanCaller} presents the same one — a stand-in for the sha256 of a key that exists
+ *  nowhere. A test that gives a Principal this hash can issue it Handles as an API-key caller. */
+export function fixtureApiKeyHash(principalId: string): string {
+  return createHash('sha256').update(`fixture-api-key:${principalId}`, 'utf8').digest('hex');
+}
+
+/** A human caller of `role` in `workspaceId`, as resolve-caller.ts builds one for an API key (no
+ *  console login behind it: legacy 712 re-checks, when it issues a Handle, that the Principal's
+ *  key is still the one presented — {@link fixtureApiKeyHash}, which {@link newWorkspace} gives
+ *  every Principal). */
 export function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
     channel: 'human',
+    apiKeyHash: fixtureApiKeyHash(principalId),
     principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
     session: {
       workspaceId,
@@ -31,7 +42,8 @@ export function humanCaller(workspaceId: string, principalId: string, role: Role
   };
 }
 
-/** A new workspace with one human Principal per role given (the first is its owner). */
+/** A new workspace with one human Principal per role given (the first is its owner), each with an
+ *  API key ({@link fixtureApiKeyHash}; the key itself exists nowhere). */
 export async function newWorkspace(
   pool: Pool,
   name: string,
@@ -46,8 +58,9 @@ export async function newWorkspace(
       await client.query('insert into workspaces (id, name) values ($1, $2)', [workspaceId, name]);
       for (const [role, id] of principals) {
         await client.query(
-          "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', $3, $4)",
-          [workspaceId, id, role, `${name} ${role}`],
+          `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
+           values ($1, $2, 'human', $3, $4, $5)`,
+          [workspaceId, id, role, `${name} ${role}`, fixtureApiKeyHash(id)],
         );
       }
     },

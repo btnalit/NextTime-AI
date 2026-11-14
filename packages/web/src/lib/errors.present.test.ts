@@ -1,4 +1,4 @@
-import { UnstorableTextError } from '@nexttime/shared';
+import { UnstorableTextError, describeOutboundTargetRefusal } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CODE_TITLES,
@@ -477,6 +477,99 @@ describe('legacy 336: WS UPSTREAM_ERROR told apart by its message', () => {
   });
 });
 
+// Legacy 700: a gate call not sent because the gate's own endpoint is not an allowed target —
+// 424 `target_refused` with `details.reason` over HTTP, -32014 with the code first over WS.
+describe('legacy 700: the gate address is not an allowed target', () => {
+  /** The kernel's message, as `HttpGatekeeperClient.request` words it. */
+  const kernelMessage = (rule: Parameters<typeof describeOutboundTargetRefusal>[0]) =>
+    `gatekeeper client: gate/observe not sent — gate endpoint "gate.example" is refused: ${describeOutboundTargetRefusal(rule)}`;
+  const refused = (
+    rule: Parameters<typeof describeOutboundTargetRefusal>[0],
+    details?: Readonly<Record<string, unknown>>,
+  ) => new HttpError('capability_error', kernelMessage(rule), 'target_refused', details);
+
+  it('http:// to the public internet says to connect the gate again at https://, in both languages', () => {
+    const shown = presentError(refused('plaintext-public', { reason: 'plaintext-public' }), zh);
+    expect(shown).toMatchObject({
+      code: 'target_refused',
+      title: '门的地址不允许调用',
+      curated: true,
+    });
+    expect(shown.message).toContain('用 http:// 连公网，调用没有发出');
+    expect(shown.message).toContain('用门的 https:// 地址重新接入它');
+    expect(shown.message).not.toContain('目标系统返回了错误');
+    expect(shown.raw).toBe(kernelMessage('plaintext-public'));
+    const english = presentError(refused('plaintext-public', { reason: 'plaintext-public' }), en);
+    expect(english.title).toBe('Gate address not allowed');
+    expect(english.message).toContain('connects the gate again at its https:// address');
+  });
+
+  it("another rule reads as the general copy; details.reason decides over the message's text", () => {
+    const general = ERROR_NEXT_STEPS.target_refused?.zh;
+    expect(general).toContain('指向平台自己的网络或本机');
+    // Review #501: never sends the reader to the allow list (it skips every check).
+    expect(general).not.toContain('允许列表');
+    expect(ERROR_NEXT_STEPS.target_refused?.en).not.toContain('allow list');
+    expect(general).toContain('请平台管理员把它做成平台提供的门');
+    expect(
+      presentError(refused('platform-subnet', { reason: 'platform-subnet' }), zh).message,
+    ).toBe(general);
+    // A message quoting the plain-http sentence with another rule in details is that rule.
+    expect(presentError(refused('plaintext-public', { reason: 'loopback' }), zh).message).toBe(
+      general,
+    );
+    // No details (a reply without them): the rule's sentence in the message.
+    expect(presentError(refused('plaintext-public'), zh).message).toContain(
+      '用门的 https:// 地址重新接入它',
+    );
+    expect(presentError(refused('dns-error'), zh).message).toBe(general);
+  });
+
+  it("over WS (-32014) the client's own refusal reads the same; a gate's code alone does not", () => {
+    const ws = (message: string) => presentError(new RpcError(-32014, message), zh);
+    const plaintext = ws(`target_refused: ${kernelMessage('plaintext-public')}`);
+    expect(plaintext).toMatchObject({ code: 'target_refused', title: '门的地址不允许调用' });
+    expect(plaintext.message).toContain('用门的 https:// 地址重新接入它');
+    expect(ws(`target_refused: ${kernelMessage('loopback')}`).message).toBe(
+      ERROR_NEXT_STEPS.target_refused?.zh,
+    );
+    // A gate that answered with the code `target_refused` itself is the gate's error.
+    expect(ws('target_refused: the gate says no').code).toBe('gatekeeper_error');
+  });
+
+  it("over HTTP a gate's own answer coded target_refused stays the gate's error (502)", () => {
+    const shown = presentError(
+      new HttpError(
+        'capability_error',
+        `target_refused: ${describeOutboundTargetRefusal('plaintext-public')}`,
+        'gatekeeper_error',
+      ),
+      zh,
+    );
+    expect(shown.code).toBe('gatekeeper_error');
+    expect(shown.message).toContain('目标系统返回了错误');
+  });
+
+  it("a tool call's failure reason gets the same note, with the system to open", () => {
+    const failed = (rule: Parameters<typeof describeOutboundTargetRefusal>[0]) =>
+      JSON.stringify({
+        status: 'failed',
+        reason: `target_refused: ${kernelMessage(rule).replace('gate/observe', 'gate/apply')}`,
+      });
+    const plaintext = gateReasonNextStep(failed('plaintext-public'), zh);
+    expect(plaintext).toMatchObject({
+      code: 'target_refused',
+      title: '门的地址不允许调用',
+      tone: 'warn',
+      aboutTheSystem: true,
+    });
+    expect(plaintext?.message).toContain('用门的 https:// 地址重新接入它');
+    expect(gateReasonNextStep(failed('platform-subnet'), en)?.message).toBe(
+      ERROR_NEXT_STEPS.target_refused?.en,
+    );
+  });
+});
+
 // Sweep (legacy 333 follow-up): kernel codes that reached the console as 「出错了」 and the
 // generic pointer at the technical details.
 describe('kernel codes with no console copy before', () => {
@@ -524,6 +617,7 @@ describe('member-management refusals', () => {
     ['platform_managed', '由平台管理', '平台自己管理的身份'],
     ['human_api_key', '人类用户用密码登录', '创建一个服务账号'],
     ['reserved_name', '名称被保留', '换一个名字'],
+    ['disabled', '已停用', '角色不能再改'],
   ])('%s reads as its own refusal, not a generic conflict', (reason, title, step) => {
     const err = new HttpError('capability_error', 'kernel text in English', 'conflict', {
       reason,

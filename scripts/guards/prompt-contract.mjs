@@ -200,6 +200,7 @@ async function loadModeToolSets() {
   }
   const goalUpdateWords = new Set(Object.keys(goalUpdate.shape));
   const goalChangeWords = goalChangeWordsInContext(shared.GOAL_RUN_CHANGE_VALUES);
+  const precedentPolarityWords = new Set(shared.GOAL_PRECEDENT_POLARITY_VALUES);
 
   return {
     entryTools,
@@ -211,6 +212,7 @@ async function loadModeToolSets() {
     proposeGoal: { schemaWords: proposeGoalSchemaWords, description: proposeGoal.description },
     goalUpdateWords,
     goalChangeWords,
+    precedentPolarityWords,
   };
 }
 
@@ -234,6 +236,13 @@ export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
   'fact_predicate',
   'requester_confirm',
   'idempotencyKey',
+  'precedents',
+  // S11 GO18: a review check and its fields.
+  'review',
+  'subjects',
+  'description',
+  'weight',
+  'passAt',
 ]);
 
 export const PROPOSE_GOAL_REFUSAL_CODES = new Set([
@@ -264,6 +273,20 @@ export function checkGoalChangeWords(relativePath, systemPrompt, changeWords) {
     if (systemPrompt.includes(`\`${word}\``)) continue;
     violations.push(
       `${relativePath}: a goal's milestone can carry change "${word}" (GOAL_RUN_CHANGE_VALUES), but the prompt never names it — add it, in backticks, to the milestone paragraph's list of changes`,
+    );
+  }
+  return violations;
+}
+
+/** S11 GO17: every polarity a goal precedent can carry (`GOAL_PRECEDENT_POLARITY_VALUES`) is named
+ *  in the entry prompt in backticks, so the model reads each raw value `find_goal_precedents` and
+ *  the entry context's Precedents give it. */
+export function checkPrecedentPolarityWords(relativePath, systemPrompt, polarityWords) {
+  const violations = [];
+  for (const word of polarityWords) {
+    if (systemPrompt.includes(`\`${word}\``)) continue;
+    violations.push(
+      `${relativePath}: a goal precedent can carry polarity "${word}" (GOAL_PRECEDENT_POLARITY_VALUES), but the prompt never names it — add it, in backticks, where the prompt says what the polarities mean`,
     );
   }
   return violations;
@@ -640,6 +663,18 @@ const PROMPT_FILES = [
   { path: 'ontology/ops-runner.yaml', toolSetKey: 'workerTools', includeResultContractKeys: true },
   // S11 AA4c-2: the admin agent's system prompt (only a prompt — no WorkerDefinition holds it).
   { path: 'ontology/admin-agent.yaml', toolSetKey: 'adminTools', includeResultContractKeys: false },
+  // S11 GO18 (#481 on #1102): the kernel's own Workers run in worker mode too — the goal planner
+  // and the goal reviewer name its tools, never a result-contract field they may not write.
+  {
+    path: 'ontology/goal-planner.yaml',
+    toolSetKey: 'workerTools',
+    includeResultContractKeys: false,
+  },
+  {
+    path: 'ontology/goal-reviewer.yaml',
+    toolSetKey: 'workerTools',
+    includeResultContractKeys: false,
+  },
 ];
 
 export async function main() {
@@ -653,6 +688,7 @@ export async function main() {
     proposeGoal,
     goalUpdateWords,
     goalChangeWords,
+    precedentPolarityWords,
   } = await loadModeToolSets();
   const toolSetsByKey = { entryTools, workerTools, adminTools };
   const violations = [...checkAdminToolsWithinCeiling(adminCapabilityNames, adminCeilingNames)];
@@ -681,6 +717,8 @@ export async function main() {
             ...PROPOSE_GOAL_REFUSAL_CODES,
             ...GOAL_UPDATE_FIELD_WORDS,
             ...goalChangeWords,
+            // S11 GO17: the registry's own polarity values, each required just below.
+            ...precedentPolarityWords,
           ]
         : []),
     ]);
@@ -694,6 +732,7 @@ export async function main() {
         ...checkProposeGoalWords(file.path, proposeGoal.schemaWords, proposeGoal.description),
         ...checkGoalUpdateWords(file.path, goalUpdateWords),
         ...checkGoalChangeWords(file.path, systemPrompt, goalChangeWords),
+        ...checkPrecedentPolarityWords(file.path, systemPrompt, precedentPolarityWords),
         ...checkProposeGoalDescription(
           'packages/shared/src/capabilities.ts (propose_goal description)',
           proposeGoal.description,

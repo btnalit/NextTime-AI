@@ -54,6 +54,13 @@ describe('shownFreeTextIn (legacy 420)', () => {
     });
   });
 
+  it('masks a credential written as a key, keeping the value under it (legacy 444)', () => {
+    expect(shownFreeTextIn({ [`Bearer ${FAKE}`]: { site: 'main' }, ok: 1 })).toEqual({
+      'Bearer [redacted]': { site: 'main' },
+      ok: 1,
+    });
+  });
+
   it('keeps a "__proto__" key as a field', () => {
     const shown = shownFreeTextIn(JSON.parse('{"__proto__": {"x": "y"}}')) as Record<
       string,

@@ -45,5 +45,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks: [control]
+    networks:
+      control:
+        # Legacy 701: the same gate under a second name, so journeys/13 can move the connection to
+        # a new address (`propose_gate_address_change`) and still reach a gate there. Named in
+        # env.ci.template's NEXTTIME_CONNECTION_ALLOW_HOSTS like the first.
+        aliases: [ci-self-gate-moved]
     restart: 'no'

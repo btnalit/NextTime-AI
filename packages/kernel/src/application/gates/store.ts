@@ -19,7 +19,11 @@ import {
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
-import { revokeEntrySessionHandles, revokeSession } from '../../governance/capability/index.js';
+import {
+  lockSessions,
+  revokeSession,
+  revokeWorkspaceEntrySessionHandles,
+} from '../../governance/capability/index.js';
 import {
   type ConnectionCredentialField,
   findConnectionParamsCredential,
@@ -1392,6 +1396,18 @@ export async function revokeEntryHandlesForConnector(
       where g.connector = $1`,
     [connector],
   );
+  // The lock order (governance/capability/handles.ts): every live entry session in every linked
+  // workspace, in one statement ordered by id, before any workspace's Handles are revoked.
+  const entrySessions = await client.query<{ id: string }>(
+    `select id from sessions
+      where workspace_id = any($1::uuid[]) and principal_id = on_behalf_of and kind = 'entry'
+        and status <> 'revoked'`,
+    [linked.rows.map((row) => row.workspace_id)],
+  );
+  await lockSessions(
+    client,
+    entrySessions.rows.map((row) => row.id),
+  );
   let revokedWorkspaceCount = 0;
   for (const row of linked.rows) {
     if (await revokeEntryHandlesInWorkspace(client, row.workspace_id)) revokedWorkspaceCount += 1;
@@ -1408,17 +1424,17 @@ export async function revokeEntryHandlesInWorkspace(
   client: PoolClient,
   workspaceId: string,
 ): Promise<boolean> {
-  const entryPrincipals = await client.query<{ principal_id: string }>(
-    `select distinct principal_id from sessions
-      where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+  const entry = await client.query(
+    `select 1 from sessions
+      where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry' limit 1`,
     [workspaceId],
   );
-  if (entryPrincipals.rows.length === 0) return false;
+  if (entry.rows.length === 0) return false;
   await setWorkspaceContext(client, workspaceId, PLATFORM_PLACEHOLDER_PRINCIPAL);
   try {
-    for (const principal of entryPrincipals.rows) {
-      await revokeEntrySessionHandles(client, workspaceId, principal.principal_id);
-    }
+    // Every entry Principal's at once: their sessions in one statement ordered by id (the lock
+    // order, governance/capability/handles.ts), not one Principal after another.
+    await revokeWorkspaceEntrySessionHandles(client, workspaceId);
   } finally {
     await client.query("select set_config('app.workspace_id', '', true)");
     await client.query("select set_config('app.principal_id', '', true)");

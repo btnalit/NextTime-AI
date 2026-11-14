@@ -1,5 +1,5 @@
 import type { MintConnectionSecretResultWire } from '@nexttime/shared';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -12,7 +12,7 @@ import {
   addressMasked,
   supportsManifestSource,
 } from '../lib/connections.js';
-import { describeError, presentError } from '../lib/errors.js';
+import { type ErrorOverrides, describeError, presentError } from '../lib/errors.js';
 import {
   gateEndpointDefaultScheme,
   isAbsoluteUrl,
@@ -107,13 +107,10 @@ export function parseCredentials(text: string): unknown {
   }
 }
 
-/** The 400 codes whose message names the field it is about: `invalid_params`, and R-27's
- *  `connection_target_refused` (an `endpoint` / `manifestSource` aimed at the platform). Legacy
- *  186's `credentials_in_connection_params` names its field in `details.field` instead. */
-const FIELD_ERROR_CODES: ReadonlySet<string> = new Set([
-  'invalid_params',
-  'connection_target_refused',
-]);
+/** The 400 codes whose message names the field it is about: `invalid_params`. R-27's
+ *  `connection_target_refused` and legacy 186's `credentials_in_connection_params` name their
+ *  field in `details.field` instead ({@link targetRefusalField}, {@link connectionCredentialField}). */
+const FIELD_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_params']);
 
 /** Where the credential goes instead, as this form offers it: the 凭证 box once a per-member
  *  credential is chosen, the gate's own configuration otherwise (shared mode has no box). */
@@ -134,6 +131,7 @@ export function fieldErrorExplanation(
   code: string,
   t: Translate,
   credentialKind: CredentialKind = 'shared',
+  targetRefusal?: string,
 ): string {
   if (code === 'credentials_in_connection_params') {
     if (field === 'endpoint') {
@@ -152,6 +150,18 @@ export function fieldErrorExplanation(
       '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称。',
       'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name.',
     )}${credentialPlace(credentialKind, t)}`;
+  }
+  if (code === 'connection_target_refused' && targetRefusal === 'plaintext-public') {
+    // Legacy 413: the kernel refuses http:// to an address on the public internet.
+    return field === 'manifestSource'
+      ? t(
+          '清单来源是公网地址，却用的是 http://，已拒绝，什么也没保存：明文传输时清单可能在路上被换掉。请改成 https:// 地址。',
+          'The manifest source is on the public internet but uses http:// — refused, nothing was saved: a manifest sent in clear text could be swapped on the way. Use its https:// address.',
+        )
+      : t(
+          '门端点是公网地址，却用的是 http://，已拒绝，什么也没保存：连接密钥和凭证会明文经过互联网。请改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
+          'The Gatekeeper endpoint is on the public internet but uses http:// — refused, nothing was saved: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
+        );
   }
   if (code === 'connection_target_refused') {
     return t(
@@ -183,6 +193,13 @@ export function fieldErrorExplanation(
   }
 }
 
+/** Which outbound-target rule a `connection_target_refused` 400 names (`details.reason`, legacy
+ *  413); `undefined` from a kernel that does not send it, which then gets the general text. */
+function targetRefusalOf(err: unknown): string | undefined {
+  const reason = err instanceof HttpError ? err.details?.reason : undefined;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 /** The field a `credentials_in_connection_params` 400 names (`details.field`, legacy 186) — the
  *  kernel's message mentions "credentials" too, so it is never guessed from the text. */
 function connectionCredentialField(err: unknown): keyof FieldErrors | undefined {
@@ -190,6 +207,17 @@ function connectionCredentialField(err: unknown): keyof FieldErrors | undefined 
   return field === 'target' || field === 'endpoint' || field === 'manifestSource'
     ? field
     : undefined;
+}
+
+/** The field a `connection_target_refused` 400 is about: `details.field` (only `endpoint` and
+ *  `manifestSource` are ever refused this way), else — from a kernel that does not send it — the
+ *  field its message opens with (`create_connection: endpoint "…" is refused: …`). Never guessed
+ *  from the rest of the text: the plain-http refusal mentions credentials (UX acceptance of #1129). */
+function targetRefusalField(err: unknown, message: string): keyof FieldErrors | undefined {
+  const field = err instanceof HttpError ? err.details?.field : undefined;
+  if (field === 'endpoint' || field === 'manifestSource') return field;
+  const named = /^create_connection: (endpoint|manifestSource) "/.exec(message)?.[1];
+  return named === 'endpoint' || named === 'manifestSource' ? named : undefined;
 }
 
 /** A kernel 400 shown on a field: which one, and what goes in its 「技术细节」. */
@@ -223,9 +251,11 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  *
  * R-01 (maintainer decision D-01): the gate being registered is one the workspace runs itself, so
  * the kernel calls it with that gate's own connection secret, never the platform gate token. The
- * form mints one when it opens (`mint_connection_secret` — nothing is stored until
- * `create_connection`), shows it once with a copy control, and sends it as `connectionSecret`; the
- * owner puts it in the gate's config before registering. Closing the form discards it.
+ * form mints one when it opens (`mint_connection_secret` — the kernel keeps its salt, never the
+ * secret), shows it once with a copy control, and sends it as `connectionSecret`; the
+ * owner puts it in the gate's config before registering. Closing the form discards it. Legacy 711:
+ * it serves one connection, within 24 hours — refused as expired or already used, the banner's
+ * 「生成新的连接密钥」 mints another in place, keeping what the owner typed (UX acceptance of #1176).
  */
 export function CompleteConnectionForm({
   http,
@@ -275,7 +305,11 @@ export function CompleteConnectionForm({
   const [submitting, setSubmitting] = useState(false);
   const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
   const [secretError, setSecretError] = useState<unknown | null>(null);
+  /** Bumped to mint another secret in place (`regenerateSecret`). */
+  const [mintRound, setMintRound] = useState(0);
+  const secretFieldRef = useRef<HTMLDivElement>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `mintRound` is the re-mint trigger.
   useEffect(() => {
     let current = true;
     http.call<MintConnectionSecretResultWire>('mint_connection_secret', {}).then(
@@ -289,7 +323,17 @@ export function CompleteConnectionForm({
     return () => {
       current = false;
     };
-  }, [http]);
+  }, [http, mintRound]);
+
+  /** A new secret in place of the one shown (refused, or never minted): the old one is dropped, the
+   *  banner with it, and focus goes to the secret field, where the new one appears. */
+  function regenerateSecret(): void {
+    setSubmitError(null);
+    setSecretError(null);
+    setConnectionSecret(null);
+    setMintRound((round) => round + 1);
+    secretFieldRef.current?.focus();
+  }
 
   /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
    *  deployment network — the field's own placeholder); a public domain or IP gets `https://`, so the
@@ -335,6 +379,14 @@ export function CompleteConnectionForm({
     return errors;
   }
 
+  /** Whether the form shows `field` right now: the 凭证 box only for a per-member credential, the
+   *  manifest source only for a kind that takes one. */
+  function fieldShown(field: keyof FieldErrors): boolean {
+    if (field === 'credentials') return credentialKind === 'connected_account';
+    if (field === 'manifestSource') return supportsManifestSource(kind);
+    return true;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const errors = validate();
@@ -372,14 +424,19 @@ export function CompleteConnectionForm({
     } catch (err) {
       setCredentials('');
       const described = describeError(err);
-      const field =
+      const named =
         described.code === 'credentials_in_connection_params'
           ? connectionCredentialField(err)
-          : described.code === 'endpoint_already_connected'
-            ? 'endpoint'
-            : FIELD_ERROR_CODES.has(described.code)
-              ? fieldForInvalidParams(described.message)
-              : undefined;
+          : described.code === 'connection_target_refused'
+            ? targetRefusalField(err, described.message)
+            : described.code === 'endpoint_already_connected'
+              ? 'endpoint'
+              : FIELD_ERROR_CODES.has(described.code)
+                ? fieldForInvalidParams(described.message)
+                : undefined;
+      // Only a field this form shows can carry the error; otherwise it goes above the buttons, so a
+      // refusal is never silent (UX acceptance of #1129).
+      const field = named && fieldShown(named) ? named : undefined;
       if (field) {
         // The field says what is wrong in the viewer's language; the kernel's own (English) text
         // sits in the field's collapsed 「技术细节」 (#537 convention), never in the line itself.
@@ -393,7 +450,13 @@ export function CompleteConnectionForm({
           [field]:
             described.code === 'endpoint_already_connected'
               ? endpointAlreadyConnectedMessage(existing?.name ?? null, t)
-              : fieldErrorExplanation(field, described.code, t, credentialKind),
+              : fieldErrorExplanation(
+                  field,
+                  described.code,
+                  t,
+                  credentialKind,
+                  targetRefusalOf(err),
+                ),
         });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
       } else {
@@ -570,14 +633,20 @@ export function CompleteConnectionForm({
         />
       </Field>
 
-      <div className="field" data-testid="cc-connection-secret">
+      <div className="field" data-testid="cc-connection-secret" ref={secretFieldRef} tabIndex={-1}>
         <span className="field-label">{t('门的连接密钥', 'Gate connection secret')}</span>
         {connectionSecret !== null ? (
-          <ConnectionSecretReveal secret={connectionSecret} testId="cc-connection-secret-reveal" />
+          <ConnectionSecretReveal
+            secret={connectionSecret}
+            mintedFor="connect"
+            testId="cc-connection-secret-reveal"
+          />
         ) : secretError !== null ? (
           <ErrorBanner
             error={secretError}
             title={t('无法生成连接密钥', 'Could not generate a connection secret')}
+            onRetry={regenerateSecret}
+            retryLabel={t('重新生成', 'Try again')}
           />
         ) : (
           <span className="text-3 text-small">{t('正在生成…', 'Generating…')}</span>
@@ -711,15 +780,30 @@ export function CompleteConnectionForm({
           <ErrorBanner
             error={submitError}
             title={
-              // UX P3-3 on #961: a connector mode is the platform's rule, not the gate's answer.
-              describeError(submitError).code === 'connector_not_self_serve'
+              // UX P3-3 on #961: a connector mode is the platform's rule, not the gate's answer —
+              // and so is a refused connection secret (legacy 711, UX acceptance of #1176).
+              describeError(submitError).code === 'connector_not_self_serve' ||
+              secretRefused(submitError)
                 ? t('平台没有接受这次连接', 'The platform did not accept this connection')
                 : t('门未接受这次连接', 'The gate did not accept this connection')
             }
-            overrides={
-              trialSelfConnectApplies(trialWorkspace, kind)
+            overrides={{
+              ...connectionSecretRefusals(t),
+              ...(trialSelfConnectApplies(trialWorkspace, kind)
                 ? { connector_not_self_serve: trialConnectorRefusal(platformAdmin, t) }
-                : undefined
+                : {}),
+            }}
+            action={
+              secretRefused(submitError) ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={regenerateSecret}
+                  data-testid="cc-regenerate-secret"
+                >
+                  {t('生成新的连接密钥', 'Generate a new connection secret')}
+                </Button>
+              ) : undefined
             }
           />
         </div>
@@ -741,6 +825,35 @@ export function CompleteConnectionForm({
       </div>
     </form>
   );
+}
+
+/** Codes for a connection secret the platform refused before calling the gate (legacy 711). */
+const SECRET_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'connection_secret_expired',
+  'connection_secret_in_use',
+]);
+
+function secretRefused(err: unknown): boolean {
+  return SECRET_REFUSAL_CODES.has(describeError(err).code);
+}
+
+/** What this form's refused secret means (UX acceptance of #1176): the gate was not called, and the
+ *  way out is the banner's own button — the shared copy's 「重新生成」 names no place to do it. */
+function connectionSecretRefusals(t: Translate): ErrorOverrides {
+  const next = t(
+    '点「生成新的连接密钥」换一把新的（填好的其他内容不用重填），把它写进门的 GATE_KERNEL_TOKEN_FILE 指向的文件、重启门，再点「注册门」。',
+    'Select “Generate a new connection secret” for a new one (what you filled in stays), put it in the file the gate’s GATE_KERNEL_TOKEN_FILE points at, restart the gate, and select “Register Gatekeeper” again.',
+  );
+  return {
+    connection_secret_expired: `${t(
+      '这把连接密钥已经过期（生成后 24 小时内要用它注册），平台没有调用门。',
+      'This connection secret has expired (a gate must be registered with it within 24 hours of generating it), so the platform did not call the gate. ',
+    )}${next}`,
+    connection_secret_in_use: `${t(
+      '这把连接密钥已经用过（接入过一个门，或已经用于一次更换地址的申请），平台没有调用门。',
+      'This connection secret was already used (it connected a gate, or served a proposal to move one), so the platform did not call the gate. ',
+    )}${next}`,
+  };
 }
 
 /**

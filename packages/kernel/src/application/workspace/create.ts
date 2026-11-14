@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { setAgentPolicy } from '../../governance/agent-profile/index.js';
+import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { ONTOLOGY_ENFORCEMENT_VALUES } from '../../substrate/graph/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
@@ -39,6 +40,25 @@ import {
  *  read-only, and the database refuses a change to or from `admin_trial`. */
 export const WORKSPACE_PURPOSE_VALUES = ['standard', 'ephemeral', 'admin_trial'] as const;
 export type WorkspacePurpose = (typeof WORKSPACE_PURPOSE_VALUES)[number];
+
+/** Legacy 726: the existing user named as the owner was deleted (an API key bound to another
+ *  account deletes the one it leaves, `purge_user` deletes users) or disabled before the owner
+ *  membership was made — read under the user's authority lock, which those take too. Nothing was
+ *  created. */
+export class WorkspaceOwnerUnavailableError extends Error {
+  readonly userId: string;
+  readonly reason: 'not_found' | 'disabled';
+  constructor(userId: string, reason: 'not_found' | 'disabled') {
+    super(
+      reason === 'not_found'
+        ? `the owner user ${userId} no longer exists`
+        : `the owner user ${userId} is disabled`,
+    );
+    this.name = 'WorkspaceOwnerUnavailableError';
+    this.userId = userId;
+    this.reason = reason;
+  }
+}
 
 export interface CreateWorkspaceOwner {
   /** An existing platform user who becomes the owner. Omit to create a passwordless user with a
@@ -133,6 +153,24 @@ export async function createWorkspaceWithOwner(
     pool,
     { workspaceId, principalId: ownerPrincipalId },
     async (client) => {
+      const ownerUserId = input.owner.userId;
+      if (ownerUserId) {
+        // Legacy 726: an owner membership for an existing user is one more path that gives a user
+        // a membership, so it holds the user's authority lock as the others do
+        // (`identity/memberships.ts`), and reads the user again under it: a deletion or disable
+        // that committed first is refused here instead of failing the owner insert's foreign key
+        // (a 500), and one that comes later waits for this workspace and then sees its owner.
+        await lockAuthoritiesForChange(client, { userIds: [ownerUserId] });
+        const owner = await client.query<{ status: string }>(
+          'select status from users where id = $1',
+          [ownerUserId],
+        );
+        const ownerRow = owner.rows[0];
+        if (!ownerRow) throw new WorkspaceOwnerUnavailableError(ownerUserId, 'not_found');
+        if (ownerRow.status !== 'active') {
+          throw new WorkspaceOwnerUnavailableError(ownerUserId, 'disabled');
+        }
+      }
       await client.query(
         `insert into workspaces (id, name, entry_model, ontology_enforcement, purpose, expires_at)
          values ($1, $2, $3, $4, $5, $6)`,

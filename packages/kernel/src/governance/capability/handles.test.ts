@@ -17,6 +17,7 @@ import {
   HandleInvalid,
   HandleIssuanceError,
   HandleRevoked,
+  type IssuanceBasis,
   ScopeValidationError,
   WORKER_CEILING_CAPABILITIES,
   WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
@@ -29,7 +30,6 @@ import {
   issueHandle,
   revokeEntrySessionHandles,
   revokeHandle,
-  revokeRoleScopedSessionHandles,
   revokeSession,
   verifyHandle,
 } from './handles.js';
@@ -66,6 +66,8 @@ interface FakeSessionRow {
   onBehalfOf: string;
   /** `sessions.kind` — omitted reads as `mcp_session`, a bearer Handle's kind. */
   kind?: string;
+  /** `sessions.status` — omitted reads as `active`. */
+  status?: string;
 }
 
 interface FakeHandleRow {
@@ -85,7 +87,27 @@ function createFakeCapabilityClient() {
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
 
-    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
+    // Legacy 702: issueHandle's unlocked lookup of where the session acts, before its locks.
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = sessions.get(sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    // Legacy 702 (governance 0043): the issuance locks, then the authority re-read under them —
+    // the Principal has no user here and is an enabled owner.
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      return { rows: [{ role: 'owner', user_id: null, disabled: false }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
@@ -95,11 +117,33 @@ function createFakeCapabilityClient() {
                 workspace_id: row.workspaceId,
                 on_behalf_of: row.onBehalfOf,
                 kind: row.kind ?? 'mcp_session',
+                status: row.status ?? 'active',
               },
             ]
           : [],
         rowCount: row ? 1 : 0,
       };
+    }
+
+    if (
+      sql.startsWith('select revoked_at is not null as revoked, session_id from capability_handles')
+    ) {
+      const [, jti] = params as [string, string];
+      const row = handles.get(jti);
+      return {
+        rows: row ? [{ revoked: row.revoked_at !== null, session_id: row.session_id }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (
+      sql.startsWith(
+        'select 1 from sessions where id = any($1::uuid[]) order by id for no key update',
+      )
+    ) {
+      const [sessionIds] = params as [string[]];
+      const locked = [...sessionIds].filter((id) => sessions.has(id)).sort();
+      return { rows: locked.map(() => ({ '?column?': 1 })), rowCount: locked.length };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -138,11 +182,15 @@ function createFakeCapabilityClient() {
       return { rows: [], rowCount: affected ? 1 : 0 };
     }
 
-    if (sql.startsWith('update capability_handles set revoked_at = now() where session_id')) {
-      const [sessionId] = params as [string];
+    if (
+      sql.startsWith(
+        'update capability_handles set revoked_at = now() where session_id = any($1::uuid[])',
+      )
+    ) {
+      const [sessionIds] = params as [string[]];
       let count = 0;
       for (const row of handles.values()) {
-        if (row.session_id === sessionId && row.revoked_at === null) {
+        if (sessionIds.includes(row.session_id) && row.revoked_at === null) {
           row.revoked_at = new Date().toISOString();
           count += 1;
         }
@@ -161,6 +209,11 @@ function createFakeCapabilityClient() {
 
   return { client, addSession, handles };
 }
+
+/** Legacy 702: what this file's Handles are issued under — the fake reads every Principal back as
+ *  an enabled owner; the integration block's fixture has an owner and a member. */
+const OWNER_BASIS: IssuanceBasis = { kind: 'role', role: 'owner', credential: null };
+const MEMBER_BASIS: IssuanceBasis = { kind: 'role', role: 'member', credential: null };
 
 function neverRevoked(): boolean {
   return false;
@@ -187,6 +240,7 @@ describe('issueHandle / verifyHandle', () => {
       scope,
       ttlSeconds: 300,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     expect(issued.workspaceId).toBe(workspaceId);
@@ -220,7 +274,13 @@ describe('issueHandle / verifyHandle', () => {
     ] as const) {
       const sessionId = randomUUID();
       addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID(), kind });
-      const issued = await issueHandle(client, { sessionId, scope, ttlSeconds: 60, privateKey });
+      const issued = await issueHandle(client, {
+        sessionId,
+        scope,
+        ttlSeconds: 60,
+        privateKey,
+        basis: OWNER_BASIS,
+      });
       const claims = await verifyHandle(issued.token, { publicKey, isRevoked: neverRevoked });
       expect(issued.holder, kind).toBe(holder);
       expect(handleHolderOf(claims), kind).toBe(holder);
@@ -239,6 +299,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 60,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(HandleIssuanceError);
   });
@@ -255,6 +316,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 0,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(HandleIssuanceError);
   });
@@ -271,6 +333,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: ['not_a_real_capability'], resources: {} },
         ttlSeconds: 60,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(ScopeValidationError);
   });
@@ -289,6 +352,7 @@ describe('issueHandle / verifyHandle', () => {
           scope: { capabilities: [name], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
       ).rejects.toThrow(ScopeValidationError);
     },
@@ -332,6 +396,7 @@ describe('verifyHandle — failure modes', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     // Flip the leading character of the payload segment (middle segment of the compact JWS) —
@@ -368,6 +433,7 @@ describe('verifyHandle — failure modes', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     await expect(verifyHandle(issued.token, { publicKey, isRevoked: () => true })).rejects.toThrow(
@@ -392,12 +458,14 @@ describe('revokeHandle / revokeSession / createDbRevocationCheck', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
     const second = await issueHandle(client, {
       sessionId,
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     return { client, publicKey, sessionId, first, second };
@@ -449,7 +517,13 @@ describe('attenuate', () => {
     const sessionId = randomUUID();
     addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID() });
 
-    const parent = await issueHandle(client, { sessionId, scope, ttlSeconds, privateKey });
+    const parent = await issueHandle(client, {
+      sessionId,
+      scope,
+      ttlSeconds,
+      privateKey,
+      basis: OWNER_BASIS,
+    });
     return { client, privateKey, publicKey, sessionId, parent };
   }
 
@@ -572,6 +646,7 @@ describe('attenuate', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 3600,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     // Reproduces the real race IssueHandleParams.notAfterSeconds's own doc comment describes:
@@ -688,7 +763,13 @@ describe('entryScope', () => {
     addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID() });
 
     await expect(
-      issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 60, privateKey }),
+      issueHandle(client, {
+        sessionId,
+        scope: entryScope(),
+        ttlSeconds: 60,
+        privateKey,
+        basis: OWNER_BASIS,
+      }),
     ).resolves.toBeDefined();
   });
 
@@ -995,6 +1076,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
           scope: { capabilities: ['get_object', extra], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
         extra,
       ).rejects.toThrow(HandleIssuanceError);
@@ -1004,6 +1086,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
       scope: adminAgentScope(),
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
     expect(issued.holder).toBe('container');
   });
@@ -1036,6 +1119,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
             scope: { capabilities: ['get_object', name], resources: {} },
             ttlSeconds: 60,
             privateKey,
+            basis: OWNER_BASIS,
           }),
           `${kind} ${name}`,
         ).rejects.toThrow(/only an admin agent's Handle carries/);
@@ -1047,6 +1131,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
           scope: { capabilities: ['get_object'], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
         kind,
       ).resolves.toBeDefined();
@@ -1137,7 +1222,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       expect(issued.onBehalfOf).toBe(onBehalfOf);
@@ -1177,7 +1262,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -1208,12 +1293,14 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           const b = await issueHandle(client, {
             sessionId: localSessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           return { first: a, second: b };
         },
@@ -1278,24 +1365,28 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const secondEntry = await issueHandle(client, {
             sessionId: secondEntrySessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const web = await issueHandle(client, {
             sessionId: webSessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const otherOwner = await issueHandle(client, {
             sessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           return [entry, secondEntry, web, otherOwner];
         },
@@ -1323,104 +1414,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).resolves.toBeTruthy();
     });
 
-    // W5.5 review fix: `set_principal_role` now calls this instead of `revokeEntrySessionHandles`
-    // above — a role change must reach every session kind whose ceiling depends on role, not just
-    // the resident entry agent's.
-    it('revokeRoleScopedSessionHandles revokes handles under both kind=entry and kind=mcp_session sessions, and leaves other kinds/principals untouched', async () => {
-      const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
-      const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
-
-      const targetPrincipalId = otherPrincipalId;
-      const entrySessionId = await insertSession(workspaceId, targetPrincipalId, targetPrincipalId);
-      const mcpSessionId = await withWorkspace(
-        pool,
-        { workspaceId, principalId: targetPrincipalId },
-        async (client) => {
-          const id = randomUUID();
-          await client.query(
-            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, $3, 'mcp_session', $3, 'active')`,
-            [workspaceId, id, targetPrincipalId],
-          );
-          return id;
-        },
-      );
-      // A non-role-scoped (web) session for the same principal, and an entry session for a
-      // *different* principal — neither must be touched.
-      const webSessionId = await withWorkspace(
-        pool,
-        { workspaceId, principalId: targetPrincipalId },
-        async (client) => {
-          const id = randomUUID();
-          await client.query(
-            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, $3, 'web', $3, 'active')`,
-            [workspaceId, id, targetPrincipalId],
-          );
-          return id;
-        },
-      );
-
-      const [entryIssued, mcpIssued, webIssued, otherOwnerIssued] = await withWorkspace(
-        pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          const entry = await issueHandle(client, {
-            sessionId: entrySessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const mcp = await issueHandle(client, {
-            sessionId: mcpSessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const web = await issueHandle(client, {
-            sessionId: webSessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const otherOwner = await issueHandle(client, {
-            sessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          return [entry, mcp, web, otherOwner];
-        },
-      );
-
-      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        revokeRoleScopedSessionHandles(client, workspaceId, targetPrincipalId),
-      );
-
-      const isRevoked = (jti: string): Promise<boolean> =>
-        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          createDbRevocationCheck(client)(jti),
-        );
-
-      await expect(verifyHandle(entryIssued.token, { publicKey, isRevoked })).rejects.toThrow(
-        HandleRevoked,
-      );
-      await expect(verifyHandle(mcpIssued.token, { publicKey, isRevoked })).rejects.toThrow(
-        HandleRevoked,
-      );
-      // Untouched: not an `entry`/`mcp_session` kind, or belongs to a different principal.
-      await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
-      await expect(
-        verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),
-      ).resolves.toBeTruthy();
-    });
-
     it('UPDATE of on_behalf_of fails — I13, enforced by the capability_handles trigger', async () => {
       const { privateKey } = await generateEphemeralHandleKeyPair();
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       await expect(
@@ -1496,6 +1495,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: [], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: OWNER_BASIS,
           }),
         );
 
@@ -1522,6 +1522,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: [], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: OWNER_BASIS,
           }),
         );
 

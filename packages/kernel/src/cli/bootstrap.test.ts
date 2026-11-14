@@ -23,9 +23,12 @@ import {
 } from '../application/platform/index.js';
 import {
   generateEphemeralHandleKeyPair,
+  grantCapability,
   loadHandleKeyPair,
   verifyHandle,
 } from '../governance/capability/index.js';
+import { registerGatekeeper } from '../governance/gatekeepers/index.js';
+import { startActivity } from '../substrate/epistemic/index.js';
 import { resolveOntologyDir } from '../substrate/ontology/index.js';
 import {
   BootstrapUsageError,
@@ -762,6 +765,112 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
         expect(second.principalId).toBe(first.principalId);
         expect(second.sessionId).not.toBe(first.sessionId);
         expect(second.jti).not.toBe(first.jti);
+      });
+
+      it('legacy 702: refuses a disabled service Principal of that name (I-H2) — the operator issues on no basis, never for a disabled authority', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-disabled',
+          'Alice',
+        );
+        const first = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'host-inventory-disabled-test',
+          scope: ['register_source'],
+        });
+        await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [owner.workspaceId, first.principalId],
+            ),
+        );
+
+        await expect(
+          issueServiceHandleFromCli(pool, {
+            workspaceId: owner.workspaceId,
+            name: 'host-inventory-disabled-test',
+            scope: ['register_source'],
+          }),
+        ).rejects.toMatchObject({ code: 'acting_principal_disabled' });
+        const handles = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query<{ valid: number }>(
+              `select count(*)::int as valid from capability_handles
+                where workspace_id = $1 and on_behalf_of = $2
+                  and revoked_at is null and expires_at > now()`,
+              [owner.workspaceId, first.principalId],
+            ),
+        );
+        expect(handles.rows[0]?.valid).toBe(0);
+      });
+
+      it('legacy 690: carries the service Principal’s own gate Grants when a capability acts on a gate — none for a new one', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-gates',
+          'Alice',
+        );
+        const claimsOf = async (token: string) =>
+          verifyHandle(token, {
+            publicKey: (await loadHandleKeyPair()).publicKey,
+            isRevoked: () => false,
+          });
+
+        const fresh = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'external-runtime-gates-test',
+          scope: ['request_action'],
+        });
+        expect((await claimsOf(fresh.token)).scope.resources).toEqual({});
+
+        const gatekeeperId = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          async (client) => {
+            const activity = await startActivity(client, owner.workspaceId, {
+              kind: 'test.connection',
+              principalId: owner.ownerPrincipalId,
+            });
+            const { gatekeeperId: id } = await registerGatekeeper(client, owner.workspaceId, {
+              name: 'external-runtime-gate',
+              transportKind: 'http',
+              target: 'external-runtime-system',
+              endpoint: 'http://external-runtime-gate.invalid:8080',
+              activityId: activity.id,
+              registeredBy: { id: owner.ownerPrincipalId, kind: 'human' },
+            });
+            await grantCapability(client, owner.workspaceId, {
+              principalId: fresh.principalId,
+              resourceType: 'gatekeeper',
+              resourceId: id,
+              grantedBy: owner.ownerPrincipalId,
+            });
+            return id;
+          },
+        );
+
+        const granted = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'external-runtime-gates-test',
+          scope: ['request_action'],
+        });
+        expect(granted.principalId).toBe(fresh.principalId);
+        expect((await claimsOf(granted.token)).scope.resources).toEqual({
+          gatekeeper: [gatekeeperId],
+        });
+
+        // A Handle that cannot act on a gate holds none, granted or not.
+        const reader = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'external-runtime-gates-test',
+          scope: ['register_source'],
+        });
+        expect((await claimsOf(reader.token)).scope.resources).toEqual({});
       });
 
       it('rejects an unknown capability name in --scope before minting anything', async () => {

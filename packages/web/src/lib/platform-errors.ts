@@ -28,6 +28,18 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '该用户不在这个工作区',
     en: 'That user is not a member of this workspace',
   },
+  // Legacy 730: a removed membership keeps the role it was removed with (the panel shows it read-
+  // only; this is for a page opened before it was removed).
+  membership_removed: {
+    zh: '这条成员资格已停用（被移出），角色不能再改，什么也没有改。要让这位用户回到这个工作区，在「加入工作区」里重新加入，会新建一条成员资格。',
+    en: 'This membership is disabled (removed), so its role cannot change, and nothing changed. To bring the user back to this workspace, add them under “Add to a workspace”, which makes a new membership.',
+  },
+  // #1198 review: removed and the user added back while the call waited — the user is a member
+  // there again, as another membership the caller has not seen yet.
+  membership_replaced: {
+    zh: '你操作的时候，这条成员资格被移出了，这位用户又被重新加入了这个工作区，现在是一条新的成员资格。什么也没有改；列表已重新读取，如果还要改，请对新的那条再操作一次。',
+    en: 'While you were doing this, the membership was removed and the user added back to this workspace, as a new membership. Nothing changed; the list has been read again, so act on the new one if you still need to.',
+  },
   login_taken: { zh: '这个登录名已被占用', en: 'That login is already taken' },
   already_member: { zh: '已经是该工作区的成员', en: 'Already a member of that workspace' },
   already_claimed: {
@@ -236,6 +248,20 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // Legacy 303: a link type's domain or range names an object type no published ontology family
+  // of the workspace declares — this version's own, or another family's naming a type this
+  // version drops. Nothing was published.
+  ontology_link_endpoint_undeclared: {
+    zh: '这个版本里有关系类型的 domain 或 range 写的对象类型，工作区里没有任何已发布的本体声明它，或者这个版本去掉了别的本体的关系类型还在用的对象类型；本次没有发布任何内容。「技术细节」里写着是哪个关系类型和对象类型：改正关系类型或补上对象类型；是别的本体在用的，先改那个本体',
+    en: 'A link type’s domain or range in this version names an object type no published ontology in this workspace declares, or this version drops an object type another ontology’s link type still uses — nothing was published. The technical details name the link type and object type: correct the link type or declare the object type; if another ontology uses it, change that ontology first',
+  },
+  // Legacy 705: installing a pack (or a module) whose link type ends on an object type of an
+  // ontology family outside what the pack builds on — the platform's own ontology, its own
+  // families, the packs it requires. Nothing was installed; the pack itself needs the requirement.
+  ontology_link_endpoint_outside_requires: {
+    zh: '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型；能力包只能连到平台自带的本体、它自己的本体和它依赖的能力包的本体，所以本次没有安装任何内容。「技术细节」里写着是哪个关系类型、哪个本体：这要改能力包本身（在 requires.packs 里加上那个能力包），请平台管理员处理',
+    en: 'A link type of this pack ends on an object type of an ontology it does not declare it builds on; a pack may only link to the platform’s own ontology, its own ontologies and those of the packs it requires, so nothing was installed. The technical details name the link type and the ontology: the pack itself needs changing (add that pack to its requires.packs); ask a platform administrator',
+  },
   // Legacy 145: `propose_entry_template_upgrade`. Nothing was proposed in either.
   entry_template_current: {
     zh: '当前生效的入口定义已经和平台模板一致，没有可生成的草稿',
@@ -386,6 +412,18 @@ export function endpointAlreadyConnectedMessage(name: string | null, t: Translat
   return t(
     `这个地址已经接入为「${name}」，没有再接一次，什么也没保存——这里生成的连接密钥也没有保存，「${name}」用的仍是它原来的密钥。在「系统与授权」里找到「${name}」：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，门会连不上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上`,
     `This address is already connected as “${name}”, so nothing was saved — not the connection secret generated here either; “${name}” still uses its own. Find “${name}” in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, it will not connect — use ⋯ → “Issue a new connection secret” and put that one on the gate instead`,
+  );
+}
+
+/** #1198 UX P2: the membership acted on is not the one on screen any more — removed meanwhile
+ *  (`membership_removed`) or removed and the user added back (`membership_replaced`). The caller
+ *  reads the user again, so the row turns read-only (or becomes the new one) and the workspace is
+ *  back in 加入工作区 — what the message points at. */
+export function isStaleMembershipError(err: unknown): boolean {
+  return (
+    err instanceof HttpError &&
+    err.kind === 'capability_error' &&
+    (err.code === 'membership_removed' || err.code === 'membership_replaced')
   );
 }
 

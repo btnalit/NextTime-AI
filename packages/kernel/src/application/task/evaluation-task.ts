@@ -1,4 +1,4 @@
-import type { CapabilityScope } from '@nexttime/shared';
+import type { CapabilityScope, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
 import {
@@ -144,6 +144,16 @@ export async function createEvaluationTask(
     capabilities: [...EVALUATION_HANDLE_CAPABILITIES],
     resources: {},
   };
+  // Legacy 702: the evaluation Principal's role, what its Handle is issued under (the fixed set
+  // above does not depend on it, but a Handle is never issued without a basis to re-check).
+  const principalRole = await client.query<{ role: Role }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, input.evaluationPrincipalId],
+  );
+  const evaluationRole = principalRole.rows[0]?.role;
+  if (evaluationRole === undefined) {
+    throw new Error(`createEvaluationTask: no evaluation Principal ${input.evaluationPrincipalId}`);
+  }
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
   return {
@@ -157,6 +167,8 @@ export async function createEvaluationTask(
         onBehalfOf: input.evaluationPrincipalId,
         parentAuthority: handleScope,
         parentClaimsForLineage: undefined,
+        // Legacy 712: the evaluation Principal's own Task — no person's credential.
+        issuanceBasis: { kind: 'role', role: evaluationRole, credential: null },
         declaredCapabilities: EVALUATION_HANDLE_CAPABILITIES,
         declaredGates: [],
         model,

@@ -85,6 +85,8 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
@@ -93,6 +95,7 @@ import {
   FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
+  GateAddressChangeError,
   GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -102,6 +105,8 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
   OntologyViolationError,
   PrincipalNotFoundError,
@@ -138,6 +143,8 @@ import {
   ModuleNotFoundError,
 } from '../../application/platform/modules.js';
 import {
+  CombinationNotEligibleError,
+  CombinationNotFoundError,
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
@@ -205,7 +212,10 @@ import {
   RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
-import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
+import {
+  AUTHORITY_CHANGED_MESSAGE,
+  isPgInvalidTextRepresentation,
+} from '../http/capability-route.js';
 
 /**
  * interfaces/ws/rpc: JSON-RPC 2.0 message shapes and error-code mapping for `/ws` (design doc
@@ -335,7 +345,8 @@ export const WS_ERROR_CODES = {
 } as const;
 
 /** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
- *  and 409 have one; 424 (no credential for this account) stays `UPSTREAM_ERROR`. */
+ *  and 409 have one; 424 (no credential for this account; legacy 700, the gate's endpoint not an
+ *  allowed target) stays `UPSTREAM_ERROR`, its message starting with the code. */
 const WS_CODE_FOR_GATE_REFUSAL_STATUS: Readonly<Record<number, number>> = {
   400: WS_ERROR_CODES.INVALID_PARAMS,
   403: WS_ERROR_CODES.FORBIDDEN,
@@ -442,6 +453,13 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // Review fix 2026-09 (code-review finding F10) — WS equivalents of capability-route.ts's own
   // new mappings (see that file's comment on these same two classes).
   if (err instanceof HandleIssuanceError) {
+    // Legacy 699 / 702 / 712: mirrors HTTP — a revoked session or parent, a disabled authority or
+    // a revoked caller credential is a 401, not a bad request. Legacy 714: a changed role or user is HTTP's 409, the state-conflict
+    // bucket here: call again.
+    if (err.code === 'authority_changed')
+      return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: AUTHORITY_CHANGED_MESSAGE };
+    if (err.code !== undefined)
+      return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof TaskRuntimeNotConfiguredError) {
@@ -555,6 +573,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // I-P1: mirrors HTTP 409 `ontology_namespace_conflict` (capability-route.ts).
   if (err instanceof OntologyNamespaceConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Legacy 303: mirrors HTTP 409 `ontology_link_endpoint_undeclared` (capability-route.ts).
+  // Legacy 705: mirrors HTTP 409 `ontology_link_endpoint_outside_requires`.
+  if (
+    err instanceof OntologyLinkEndpointError ||
+    err instanceof OntologyLinkEndpointOutsideRequiresError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Legacy 145: mirrors HTTP 409 `entry_template_current` / `entry_template_changed`.
@@ -729,8 +755,22 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
+  // Legacy 701 — same additions as capability-route.ts's mapCapabilityError.
+  if (err instanceof GateAddressChangeError) {
+    const code =
+      err.status === 404
+        ? WS_ERROR_CODES.NOT_FOUND
+        : err.status === 400
+          ? WS_ERROR_CODES.INVALID_PARAMS
+          : err.status === 502
+            ? WS_ERROR_CODES.UPSTREAM_ERROR
+            : WS_ERROR_CODES.ILLEGAL_TRANSITION;
+    return { code, message: err.message };
+  }
   if (
     err instanceof ConnectionSecretConflictError ||
+    err instanceof ConnectionSecretInUseError ||
+    err instanceof ConnectionSecretExpiredError ||
     err instanceof ConnectorNotSelfServeError ||
     err instanceof GatekeeperLandingRefusedError
   ) {
@@ -838,11 +878,17 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (
     err instanceof WorkerDefinitionNotFoundError ||
     err instanceof SkillNotFoundError ||
-    err instanceof ProcedureNotFoundError
+    err instanceof ProcedureNotFoundError ||
+    // S11 GO16b — same mapping as interfaces/http/capability-route.ts.
+    err instanceof CombinationNotFoundError
   ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
-  if (err instanceof WorkerDefinitionNotPublishedError) {
+  if (
+    err instanceof WorkerDefinitionNotPublishedError ||
+    // S11 GO16b: mirrors HTTP 409 `combination_not_eligible`.
+    err instanceof CombinationNotEligibleError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S8 W3 K2 (leftover 82) `discard_draft` — same mapping as interfaces/http/capability-route.ts's

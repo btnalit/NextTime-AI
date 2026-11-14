@@ -315,9 +315,11 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   if (!ctx?.principal) {
     throw new Error('enable_gate_instance: no resolved human principal in context');
   }
+  // Legacy 311: `manifestDigest` is required (paramsSchema) — what this enable publishes is always
+  // the manifest the owner previewed, never whatever happens to be in effect at call time.
   const { gateId, manifestDigest: expectedDigest } = params as {
     gateId: string;
-    manifestDigest?: string;
+    manifestDigest: string;
   };
   // Serialize concurrent enables of the same (workspace, gate) so the idempotency check below is
   // exact — the same advisory-lock shape `application/task/invoke.ts` uses (review finding).
@@ -346,8 +348,6 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   // address rule carries its target into this workspace's Gatekeeper, ConnectedSystem, Activity and
   // `ConnectionCreated` — refused until an administrator recreates it without the credential.
   assertConnectionParamsCarryNoCredentials('enable_gate_instance', { target: instance.target });
-  // Checked before anything is written; the same read supplies what is imported below.
-  const { operations } = await readManifestInEffect(client, gateId, expectedDigest);
 
   const resolution = await resolveGateLinkTarget(client, workspaceId, instance);
   if (resolution.kind === 'ambiguous') {
@@ -356,6 +356,11 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
       `gate instance "${gateId}"'s endpoint matches more than one existing Gatekeeper in this workspace (${resolution.candidateIds.join(', ')}) — resolve the duplicate before enabling`,
     );
   }
+  // Checked before anything is written; the same read supplies what is imported below. Legacy
+  // 311: after the refusals that do not depend on the manifest, in the preview's own order
+  // (`requireAvailable`, then `resolveGateLinkTarget`, then the manifest), so an enable refuses
+  // for the same reason its preview did.
+  const { operations } = await readManifestInEffect(client, gateId, expectedDigest);
 
   // P0b: the one landing path — registers (or links) the Gatekeeper, imports and publishes the
   // manifest, writes the link (the origin record) and emits `ConnectionCreated`.

@@ -136,8 +136,8 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S2, S4–S14 (S13: the goal planner of GO9a/GO9b; S14: files
-# between a goal's steps, GO14;
+# S11 GO7a: goal scenarios S1, S2, S4–S15 (S13: the goal planner of GO9a/GO9b; S14: files
+# between a goal's steps, GO14; S15: a quality goal judged by an independent review, GO18;
 # goal_scenarios_step, after step 9; S12 and S2 only with ACCEPT_DISRUPTIVE=1), the cleanup of
 # every goal they start, of the grants S9 gives bob and of the row locks, held turns and killed
 # service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
@@ -598,7 +598,13 @@ connections_step() {
   [ "$docker_gate_ready" = "true" ] || fail "connect-docker-ready" "gatekeeper-docker announced no Operations within 60s (last_seen_at / operations on its gate_instances row)"
   pass "connect-docker-ready" "gatekeeper-docker has announced its Operations"
 
-  out=$(cap "$ALICE_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\"}" "d.result.gatekeeperId")
+  # Legacy 311: an enable names the manifest digest its preview showed (R-18).
+  out=$(cap "$ALICE_KEY" preview_gate_instance_enable "{\"gateId\":\"gatekeeper-docker\"}" "d.result.manifestDigest")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-docker-enable" "preview_gate_instance_enable(gatekeeper-docker) HTTP $status: $(parse_kv "$out" BODY)"
+  docker_manifest_digest=$(parse_kv "$out" EXTRACTED)
+  [ -n "$docker_manifest_digest" ] || fail "connect-docker-enable" "no manifestDigest in the preview: $(parse_kv "$out" BODY)"
+  out=$(cap "$ALICE_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\",\"manifestDigest\":\"$docker_manifest_digest\"}" "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-docker-enable" "enable_gate_instance(gatekeeper-docker) HTTP $status: $(parse_kv "$out" BODY)"
   GATEKEEPER_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
@@ -1433,6 +1439,30 @@ step9_goal_from_chat() {
   goal_context=$(psql_ws "select coalesce(string_agg(p.kind || ':' || coalesce(p.payload->>'change', '') || case when p.chat_id = '$GOAL_CHAT_ID' then '' else '@another-chat' end, ',' order by p.created_at, p.id), '') from pending_context_items p where p.workspace_id='$WORKSPACE_ID' and p.principal_id='$ALICE_PRINCIPAL_ID' and (p.subject_id='$GOAL_ID' or p.subject_id in (select id from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$GOAL_ID'))")
   [ "$goal_context" = "goal_update:confirm,goal_update:verify,goal_update:complete" ] || fail "step9-goal-milestones" "the next turn's context items for goal $GOAL_ID read '$goal_context', expected goal_update:confirm,goal_update:verify,goal_update:complete and nothing for its step's Task"
   pass "step9-goal-milestones" "chat $GOAL_CHAT_ID shows the goal's milestones (proposed, confirmed, checking, completed: achieved) and its step's Task under 'report'; the next turn gets the three after the proposal, not the Task"
+
+  # S11 GO17b: asked in the same chat for the same kind of goal, the entry agent looks up how
+  # alice's earlier goals of that kind went (find_goal_precedents on the ops-runner family) and
+  # cites the one that went well — the goal above, achieved on the platform's own check — when it
+  # proposes. The revision records the citation and reads it back with the cited goal's outcome;
+  # the proposal is then turned down, so nothing of it runs.
+  precedent_nonce=$(real_token)
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "$GOAL_CHAT_ID" "引用先例发起目标 GOAL_NONCE=$precedent_nonce" 90000)
+  precedent_turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+  [ "$precedent_turn_status" = "completed" ] || fail "step9-goal-precedent" "asking for a goal from its precedent: the Turn $(parse_kv "$chat_out" TURN_ID) ended '${precedent_turn_status:-not settled within 90s}', not completed"
+  precedent_reply=$(parse_kv "$(run_driver get-history "$ALICE_KEY" "$GOAL_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")" EXTRACTED)
+  PRECEDENT_GOAL_ID=$(printf '%s' "$precedent_reply" | sed -n 's/.*PRECEDENT_GOAL_ID=\([0-9a-f-]*\).*/\1/p')
+  precedent_cited=$(printf '%s' "$precedent_reply" | sed -n 's/.*CITED=\([0-9a-f-]*\).*/\1/p')
+  [ -n "$PRECEDENT_GOAL_ID" ] || fail "step9-goal-precedent" "the entry agent proposed no goal from a precedent — find_goal_precedents not registered in entry mode, it listed no positive precedent, or propose_goal refused the citation (last assistant reply: '$precedent_reply')"
+  GOALS_STARTED="$GOALS_STARTED $PRECEDENT_GOAL_ID"
+  [ "$precedent_cited" = "$GOAL_ID" ] || fail "step9-goal-precedent" "the entry agent cited '$precedent_cited', expected goal $GOAL_ID, the newest goal of the kind that went well (reply: '$precedent_reply')"
+  out=$(cap "$ALICE_KEY" get_goal_revision "{\"goalRunId\":\"$PRECEDENT_GOAL_ID\",\"revision\":1}" "d.result.citedPrecedents.map((p) => [p.goalRunId, p.outcome, p.outcomeBasis, p.polarity].join(':')).join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-goal-precedent" "get_goal_revision HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "$GOAL_ID:achieved:verified_by_check:positive" ] || fail "step9-goal-precedent" "goal $PRECEDENT_GOAL_ID's revision 1 cites '$(parse_kv "$out" EXTRACTED)', expected $GOAL_ID:achieved:verified_by_check:positive"
+  out=$(cap "$ALICE_KEY" reject_goal "{\"goalRunId\":\"$PRECEDENT_GOAL_ID\",\"revision\":1}" "d.result.status")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-goal-precedent" "reject_goal HTTP $status: $(parse_kv "$out" BODY)"
+  pass "step9-goal-precedent" "asked again for the same kind of goal, the entry agent cited goal $GOAL_ID (achieved, the platform's check passed) in goal $PRECEDENT_GOAL_ID's plan; the revision reads it back; turned down, nothing ran"
 }
 
 cleanup_step() {

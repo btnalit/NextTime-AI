@@ -17,7 +17,7 @@ import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
-import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
+import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { shownAuditPayload } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
@@ -25,6 +25,7 @@ import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { ADMIN_TRIAL_WORKSPACE_PURPOSE } from '../admin-agent/index.js';
 import { revokeUserAdminAgentSessions, revokeUserCredentials } from '../identity/credentials.js';
+import { type ReleasedMembership, freeMembershipSlot } from '../identity/memberships.js';
 import { hashPassword, passwordPolicyViolation } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
@@ -41,8 +42,9 @@ import {
   toWirePlatformSettings,
   updatePlatformSettings,
 } from '../platform/settings.js';
+import { applyRoleChange } from '../task/role-change.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
-import { createWorkspaceWithOwner } from '../workspace/create.js';
+import { WorkspaceOwnerUnavailableError, createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { isLastActiveHumanOwner } from './auth.js';
@@ -70,6 +72,10 @@ export type PlatformErrorCode =
   | 'user_not_found'
   | 'workspace_not_found'
   | 'membership_not_found'
+  /** Legacy 730: a role change on a removed membership — its role no longer means anything; the
+   *  person comes back by being added again, as a new membership (legacy 725). */
+  | 'membership_removed'
+  | 'membership_replaced'
   | 'login_taken'
   | 'already_member'
   | 'already_claimed'
@@ -365,20 +371,25 @@ async function loadWorkspace(client: PoolClient, workspaceId: string): Promise<W
   return row;
 }
 
-/** Creates the membership Principal (no API key) under the workspace GUC + platform policy. */
+/**
+ * Creates the membership Principal (no API key) under the workspace GUC + platform policy.
+ * Legacy 725: only an active membership makes the user "already a member"; a removed one is let go
+ * of the user (`freeMembershipSlot`) and the new Principal takes its place — returned as
+ * `released` for the audit row. The caller holds the user's authority lock.
+ */
 async function insertMembership(
   client: PoolClient,
   input: { userId: string; workspaceId: string; role: Role; displayName: string },
-): Promise<UserMembershipWire> {
+): Promise<{ membership: UserMembershipWire; released: ReleasedMembership | null }> {
   const workspace = await loadWorkspace(client, input.workspaceId);
   if (workspace.status !== 'active') {
     throw new PlatformAdminError('workspace_disabled', 'that workspace is disabled');
   }
-  const existing = await client.query(
-    `select 1 from principals where workspace_id = $1 and user_id = $2 and kind = 'human'`,
-    [input.workspaceId, input.userId],
-  );
-  if ((existing.rowCount ?? 0) > 0) {
+  const slot = await freeMembershipSlot(client, {
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+  });
+  if (slot.state === 'held') {
     throw new PlatformAdminError(
       'already_member',
       'the user is already a member of that workspace',
@@ -393,13 +404,16 @@ async function insertMembership(
   const row = inserted.rows[0];
   if (!row) throw new Error('add_membership: INSERT ... RETURNING produced no row');
   return {
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    workspaceStatus: workspace.status,
-    workspacePurpose: workspace.purpose,
-    principalId: row.id,
-    role: input.role,
-    disabled: false,
+    membership: {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      workspaceStatus: workspace.status,
+      workspacePurpose: workspace.purpose,
+      principalId: row.id,
+      role: input.role,
+      disabled: false,
+    },
+    released: slot.released,
   };
 }
 
@@ -442,6 +456,7 @@ export const createUserHandler: CapabilityHandler = async (client, _workspaceId,
   const workspaceId =
     input.workspaceId === undefined ? settings.defaultWorkspaceId : input.workspaceId;
   if (workspaceId) {
+    // A user created just now: no membership to clash with or to let go, no one else holds its id.
     await insertMembership(client, {
       userId: created.id,
       workspaceId,
@@ -489,6 +504,10 @@ async function assertAdminCanBeReduced(client: PoolClient, user: UserWire): Prom
 
 export const updateUserHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; displayName?: string; platformRole?: 'admin' | 'user' };
+  // Legacy 702 (governance 0043): the user's authority lock before any row is read or locked.
+  if (input.platformRole !== undefined) {
+    await lockAuthoritiesForChange(client, { userIds: [input.userId] });
+  }
   const before = await loadUser(client, input.userId);
   const demoted = input.platformRole === 'user' && before.platformRole === 'admin';
   if (demoted) await assertAdminCanBeReduced(client, before);
@@ -561,6 +580,11 @@ export const setUserStatusHandler: CapabilityHandler = async (
   context,
 ) => {
   const input = params as { userId: string; status: 'active' | 'disabled' };
+  // Legacy 702 (governance 0043): the user's authority lock before any row is read or locked —
+  // `assertNotLastHumanOwnerAnywhere` takes `for update` on owners' rows, which an issuer holding
+  // this user's lock may be waiting to reference. A disable then revokes the sessions of every
+  // membership of the user in the database too (0043's trigger).
+  await lockAuthoritiesForChange(client, { userIds: [input.userId] });
   const before = await loadUser(client, input.userId);
   if (input.status === 'disabled') {
     if (before.id === actingUser(context).id) {
@@ -678,14 +702,34 @@ export const setUserBudgetHandler: CapabilityHandler = async (client, _workspace
 
 export const addMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
+  // Legacy 725 (#493 on #1189): the user's authority lock before any row is read, as every path
+  // that changes a user's memberships takes it (`merge_user`, binding an API key, the workspace's
+  // `add_member`): two adds of the same user no longer race to the unique index (a 500), and a
+  // merge never meets a membership added after it read the user's.
+  await lockAuthoritiesForChange(client, { userIds: [input.userId] });
   const user = await loadUser(client, input.userId);
-  const membership = await insertMembership(client, {
+  const { membership, released } = await insertMembership(client, {
     userId: user.id,
     workspaceId: input.workspaceId,
     role: input.role,
     displayName: user.displayName,
   });
-  return { result: membership, resourceType: 'principal', resourceId: membership.principalId };
+  return {
+    result: membership,
+    resourceType: 'principal',
+    resourceId: membership.principalId,
+    // Legacy 725: the removed membership this one replaces, as `merge_user` lists the ones it
+    // lets go — whose it was and where, so the row says it without a lookup.
+    ...(released !== null
+      ? {
+          auditPayload: {
+            detachedPrincipals: [
+              { ...released, login: user.login, workspaceName: membership.workspaceName },
+            ],
+          },
+        }
+      : {}),
+  };
 };
 
 async function loadMembership(
@@ -708,11 +752,25 @@ async function loadMembership(
 // counting toward it.
 export const setMembershipRoleHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
+  const seen = await loadMembership(client, input.userId, input.workspaceId);
+  assertMembershipNotRemoved(seen, input.workspaceId);
+  // Legacy 696: the role is already the one asked for, so the person's authority does not change
+  // and nothing else does either — no write, no session ends, no Handle is revoked. Ending the
+  // sessions here used to leave the Handles they had issued valid until ttl (`verifyHandle` reads
+  // only a Handle's own `revoked_at`): a session revoked while its Handles still worked. The audit
+  // row says the call changed nothing.
+  if (input.role === seen.role) return unchangedRole(seen);
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is locked here.
+  await lockAuthoritiesForChange(client, { principalIds: [seen.principalId] });
+  // Legacy 730: read again under the lock. A `remove_membership` or the workspace's own
+  // `disable_principal` takes this Principal's lock too, so one that committed while this waited
+  // is seen here, and a removed membership keeps the role it was removed with.
   const membership = await loadMembership(client, input.userId, input.workspaceId);
+  assertSameMembership(seen, membership, input.workspaceId);
+  assertMembershipNotRemoved(membership, input.workspaceId);
+  if (input.role === membership.role) return unchangedRole(membership);
   if (
     membership.role === 'owner' &&
-    input.role !== 'owner' &&
-    !membership.disabled &&
     (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
     throw new PlatformAdminError(
@@ -725,29 +783,85 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
     membership.principalId,
     input.role,
   ]);
-  // The entry Handle is re-minted with the new role on the next turn (S3.11); current workspace
-  // sessions of this Principal are ended so no stale-role session outlives the change.
+  // Legacy 699: one rule with the workspace-side `set_principal_role` (`applyRoleChange`). The
+  // sessions whose Handles carry the old role's scope end (entry, MCP, admin agent; their Handles
+  // with them, governance 0042) and are issued again with the new role on next use; a running
+  // Worker ends only when the new role no longer covers what it holds. The person's console is
+  // not signed out — it reads the current role on every request. This used to end every session of
+  // the Principal while revoking only the entry / MCP / admin agent Handles, so a demoted person's
+  // Workers kept the old scope until ttl.
   await setWorkspaceContext(client, input.workspaceId, membership.principalId);
-  await client.query(
-    `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-      where workspace_id = $1 and principal_id = $2 and status <> 'revoked'`,
-    [input.workspaceId, membership.principalId],
-  );
-  if (input.role !== membership.role) {
-    // Same as the workspace-side `set_principal_role` (W5.5, leftover 18): Handles minted under
-    // the old role carry its capability set until ttl unless revoked here.
-    await revokeRoleScopedSessionHandles(client, input.workspaceId, membership.principalId);
-  }
+  await applyRoleChange(client, input.workspaceId, membership.principalId);
   const after = await loadMembership(client, input.userId, input.workspaceId);
   return { result: after, resourceType: 'principal', resourceId: membership.principalId };
 };
 
+function unchangedRole(membership: UserMembershipWire) {
+  return {
+    result: membership,
+    resourceType: 'principal',
+    resourceId: membership.principalId,
+    auditPayload: { unchanged: true },
+  };
+}
+
+/** Legacy 730 (687): a removed membership is history — its role no longer grants anything, and the
+ *  person comes back by being added again, which makes a new membership (legacy 725). */
+function assertMembershipNotRemoved(membership: UserMembershipWire, workspaceId: string): void {
+  if (membership.disabled) {
+    throw new PlatformAdminError(
+      'membership_removed',
+      `the user's membership in workspace ${workspaceId} is removed: its role cannot change — add the user to the workspace again for a new membership`,
+    );
+  }
+}
+
+/** The membership read under the locks is the one locked: between the two reads it could only
+ *  have been replaced by being removed and the user added back (legacy 725). The new one is not
+ *  locked here and the caller has not seen it, so nothing is done to it (#1198 review): its own
+ *  code, since the user is a member there again. */
+function assertSameMembership(
+  seen: UserMembershipWire,
+  locked: UserMembershipWire,
+  workspaceId: string,
+): void {
+  if (locked.principalId !== seen.principalId) {
+    throw new PlatformAdminError(
+      'membership_replaced',
+      `the user's membership in workspace ${workspaceId} was removed and the user added back while this waited, as a new membership — nothing changed; read it again`,
+    );
+  }
+}
+
 export const removeMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string };
+  const seen = await loadMembership(client, input.userId, input.workspaceId);
+  // Legacy 702 (governance 0043): the user's and the Principal's authority locks, in that order,
+  // before any row is locked here (`revokeUserCredentials` takes the user's again).
+  await lockAuthoritiesForChange(client, {
+    userIds: [input.userId],
+    principalIds: [seen.principalId],
+  });
+  // Legacy 729: read again under the locks, and a membership already removed — here or by the
+  // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is,
+  // nothing written and the audit row saying the call changed nothing (legacy 696). Nothing left
+  // works for it: its sessions and their Handles ended when it was disabled (governance 0043's
+  // trigger, 0042), and none can be issued for it again. A legacy API key the workspace-side
+  // disable left on the row stays there (`has_api_key` still says so) but no longer authenticates:
+  // key lookups skip a disabled Principal (`lookupPrincipalByApiKeyHash`).
   const membership = await loadMembership(client, input.userId, input.workspaceId);
+  assertSameMembership(seen, membership, input.workspaceId);
+  const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };
+  if (membership.disabled) {
+    return {
+      result,
+      resourceType: 'principal',
+      resourceId: membership.principalId,
+      auditPayload: { unchanged: true },
+    };
+  }
   if (
     membership.role === 'owner' &&
-    !membership.disabled &&
     (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
     throw new PlatformAdminError(
@@ -763,7 +877,6 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   // R-12 (D-25): the membership's sessions, their Handles and any legacy API key go with it —
   // identity's one revocation, scoped to this workspace.
   await revokeUserCredentials(client, input.userId, { workspaceId: input.workspaceId });
-  const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };
   return {
     result,
     resourceType: 'principal',
@@ -776,26 +889,113 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   };
 };
 
-export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+export const mergeUserHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
   const input = params as { sourceUserId: string; targetUserId: string };
   if (input.sourceUserId === input.targetUserId) {
     throw new PlatformAdminError('already_claimed', 'source and target are the same user');
   }
-  const source = await loadUser(client, input.sourceUserId);
-  const target = await loadUser(client, input.targetUserId);
+  // Legacy 702 (governance 0043): both users' authority locks, then the moved memberships', before
+  // any row is locked — every membership of the source user changes user, and an issuer for one of
+  // them either commits first or re-reads the new user and refuses (`authority_changed`). The
+  // target's lock also makes a concurrent disable of the target wait, so its revocation sees the
+  // moved memberships.
+  await lockAuthoritiesForChange(client, { userIds: [input.sourceUserId, input.targetUserId] });
+  let source = await loadUser(client, input.sourceUserId);
+  let target = await loadUser(client, input.targetUserId);
   if (source.hasPassword) {
     throw new PlatformAdminError(
       'already_claimed',
       'only a user without a password can be merged — an API key must never take over a password-protected account',
     );
   }
-  const targetWorkspaces = new Set(target.memberships.map((m) => m.workspaceId));
-  const clash = source.memberships.find((m) => targetWorkspaces.has(m.workspaceId));
+  // Legacy 708: the moved memberships would act for a disabled user with their sessions and
+  // Handles still valid (I-H2) — a disable revokes only what acts for the user when it happens.
+  // Read under the target's authority lock above, so a disable of the target either committed
+  // before (refused here) or waits for the merge and then revokes the moved memberships too.
+  if (target.status === 'disabled') {
+    throw new PlatformAdminError(
+      'user_disabled',
+      'the target user is disabled: the moved memberships would act for a disabled user — enable it first, or merge into another user',
+    );
+  }
+  // Legacy 702 (governance 0043): every Principal this may change — each of the source's, which
+  // move or are detached, and each of the target's in a workspace the source is in, which may be
+  // detached — locked after the users', and the memberships read again under those locks before
+  // anything is decided on them (#1189 #501 P3-1): a workspace-side `disable_principal` takes
+  // only the Principal's lock, so a membership read before it would still count as not removed
+  // (a clash where there is none, a detach of the wrong one, a false `membership_restored`).
+  // A membership added since the read before (`add_membership` takes no user lock) is in play but
+  // not locked yet: lock it too and read again, until a read brings none — in practice the first
+  // read under the locks.
+  const locked = new Set<string>();
+  for (;;) {
+    const sourceWorkspaces = new Set(source.memberships.map((m) => m.workspaceId));
+    const unlocked = [
+      ...source.memberships,
+      ...target.memberships.filter((m) => sourceWorkspaces.has(m.workspaceId)),
+    ]
+      .map((m) => m.principalId)
+      .filter((principalId) => !locked.has(principalId));
+    if (unlocked.length === 0) break;
+    await lockAuthoritiesForChange(client, { principalIds: unlocked });
+    for (const principalId of unlocked) locked.add(principalId);
+    source = await loadUser(client, source.id);
+    target = await loadUser(client, target.id);
+  }
+  // A user holds one membership per workspace (`principals_workspace_user_key`). Where both hold
+  // one, only two that are not removed clash; otherwise the removed one is detached
+  // (`user_id = null`, as `purge_user` detaches a purged user's removed memberships: the Principal
+  // row stays for the audit lineage, and the `merge_user` row says whose it was), and the other
+  // stays or moves. Counting removed ones too made "remove one first" a dead end: a removed
+  // membership is never deleted, and every new user joins the default workspace.
+  const targetByWorkspace = new Map(target.memberships.map((m) => [m.workspaceId, m]));
+  const clash = source.memberships.find((m) => {
+    const theirs = targetByWorkspace.get(m.workspaceId);
+    return theirs !== undefined && !m.disabled && !theirs.disabled;
+  });
   if (clash) {
     throw new PlatformAdminError(
       'already_member',
-      `both users hold a membership in workspace "${clash.workspaceName}"; remove one first`,
+      `both users hold a membership in workspace "${clash.workspaceName}" that is not removed: remove one of them there first`,
     );
+  }
+  const detached: (ReleasedMembership & { login: string; workspaceName: string })[] = [];
+  for (const membership of source.memberships) {
+    const theirs = targetByWorkspace.get(membership.workspaceId);
+    if (theirs === undefined) continue;
+    // The source's when it is removed (both removed: the target keeps its own); else the target's.
+    const gone = membership.disabled
+      ? { membership, user: source }
+      : { membership: theirs, user: target };
+    // Legacy 725 (UX on #1189): the login and the workspace's name too, so the platform audit
+    // says "Y's membership in W" — the source user row is deleted below.
+    detached.push({
+      workspaceId: gone.membership.workspaceId,
+      principalId: gone.membership.principalId,
+      userId: gone.user.id,
+      login: gone.user.login,
+      workspaceName: gone.membership.workspaceName,
+    });
+  }
+  for (const gone of detached) {
+    // Only a removed one, still that user's. Under both users' locks and its own nothing can
+    // change that (nothing re-enables a removed membership), so a miss is a broken invariant.
+    const result = await client.query(
+      `update principals set user_id = null
+        where workspace_id = $1 and id = $2 and user_id = $3 and kind = 'human'
+          and disabled_at is not null`,
+      [gone.workspaceId, gone.principalId, gone.userId],
+    );
+    if ((result.rowCount ?? 0) !== 1) {
+      throw new Error(
+        `merge_user: the removed membership ${gone.principalId} to detach is no longer removed or no longer that user's`,
+      );
+    }
   }
   await client.query(`update principals set user_id = $2 where user_id = $1 and kind = 'human'`, [
     source.id,
@@ -803,7 +1003,53 @@ export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, 
   ]);
   await client.query('delete from user_sessions where user_id = $1', [source.id]);
   await client.query('delete from users where id = $1', [source.id]);
-  return { result: await loadUser(client, target.id), resourceType: 'user', resourceId: target.id };
+  // Legacy 719: disabling a user leaves its memberships as they are (it revokes their sessions,
+  // Handles and API keys); what kept them unusable was the user's status. Moved onto the active
+  // target they act again, with no credential of the source's back: each one gets its own row,
+  // like an enable would, so the platform audit says when, for whom and by whom it came back.
+  // A removed membership (a disabled Principal) moves as it is and stays removed.
+  if (source.status === 'disabled') {
+    const acting = actingUser(context);
+    for (const membership of source.memberships.filter((m) => !m.disabled)) {
+      await writeAudit(client, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        actorUserId: acting.id,
+        action: 'platform.membership_restored',
+        resourceType: 'principal',
+        resourceId: membership.principalId,
+        payload: {
+          channel: 'platform',
+          actorLogin: acting.login,
+          // `params` so `platform_audit_query` finds the row by either user and by workspace.
+          params: {
+            workspaceId: membership.workspaceId,
+            sourceUserId: source.id,
+            targetUserId: target.id,
+          },
+          // The source row is deleted above: its login is what still says who it was (as
+          // `platform.user_purged` keeps the purged user's).
+          sourceLogin: source.login,
+          targetLogin: target.login,
+          reason: 'merged_from_disabled_user',
+          role: membership.role,
+          workspaceName: membership.workspaceName,
+          workspaceStatus: membership.workspaceStatus,
+        },
+      });
+    }
+  }
+  return {
+    result: await loadUser(client, target.id),
+    resourceType: 'user',
+    resourceId: target.id,
+    // On the `merge_user` row too, for every merge: `params.sourceUserId` names a deleted user.
+    auditPayload: {
+      sourceLogin: source.login,
+      targetLogin: target.login,
+      ...(detached.length > 0 ? { detachedPrincipals: detached } : {}),
+    },
+  };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -1229,6 +1475,15 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,
         purpose: input.purpose ?? 'standard',
+      }).catch((err: unknown) => {
+        // Legacy 726: the owner was deleted or disabled after the read above (the bootstrap reads
+        // it again under the user's lock) — the same refusals that read gives.
+        if (err instanceof WorkspaceOwnerUnavailableError) {
+          throw err.reason === 'not_found'
+            ? new PlatformAdminError('user_not_found', 'the owner user no longer exists')
+            : new PlatformAdminError('user_disabled', 'the owner must be an active user');
+        }
+        throw err;
       });
       // P2 hotfix (post-v0.16.0 review, "default modules drift"): only known once the bootstrap
       // above has actually run its install loop — too late for the phase-1 `workspace.created` row
@@ -1310,6 +1565,8 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
   params,
 ) => {
   const input = params as { workspaceId: string; status: 'active' | 'disabled' };
+  // Legacy 702 (governance 0043): the workspace's authority lock before any row is read or locked.
+  await lockAuthoritiesForChange(client, { workspaceIds: [input.workspaceId] });
   await loadPlatformWorkspaceRow(client, input.workspaceId);
   let principalIds: string[] = [];
   if (input.status === 'disabled') {
@@ -1320,19 +1577,18 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
         'the platform default workspace cannot be disabled — pick another default first',
       );
     }
-    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
-    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`.
-    await client.query(
-      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-        where workspace_id = $1 and status <> 'revoked'`,
-      [input.workspaceId],
-    );
-    principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
   }
   // S6 (migration core 0030): `disabled_at` starts the 7-day purge retention clock; re-enabling
   // clears it (a later disable starts a fresh clock). `coalesce` keeps the original timestamp
   // when an already-disabled workspace is disabled again — and keeps a pre-0030 `null` null,
   // which `purge_workspace` reads as "retention elapsed" (§12 决定 3).
+  //
+  // Disabling revokes every session in the workspace — entry, Worker, MCP, service; R-12: every
+  // one not `revoked`, an entry session may still be `starting` — and through governance 0042 their
+  // Handles, so llm-proxy stops them too, not only the kernel (which refuses every call in a
+  // disabled workspace). governance 0043's `workspaces_disabled_revokes_sessions` trigger does it in
+  // this UPDATE, taking the sessions in one statement ordered by id first (the lock order,
+  // governance/capability/handles.ts); a second revocation here would only find them revoked.
   await client.query(
     `update workspaces
         set status = $2,
@@ -1340,6 +1596,9 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
       where id = $1`,
     [input.workspaceId, input.status],
   );
+  if (input.status === 'disabled') {
+    principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
+  }
   const result = await loadPlatformWorkspace(client, input.workspaceId);
   return {
     result,
@@ -1482,6 +1741,9 @@ export const purgeUserHandler: CapabilityHandler = async (
   const acting = actingUser(context);
   const outcomes: PurgeUserOutcomeWire[] = [];
   let purgedCount = 0;
+  // Legacy 702 (governance 0043): every named user's authority lock first, in one ordered call; the
+  // detached memberships' locks follow in the trigger (Principals after users, the global order).
+  await lockAuthoritiesForChange(client, { userIds: input.userIds });
   for (const userId of [...new Set(input.userIds)]) {
     const found = await client.query<PurgeUserDbRow>(
       `select u.id, u.login, u.platform_role, u.has_password,

@@ -634,6 +634,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
                 },
                 fact: null,
                 prompt: null,
+                review: null,
                 attempts: 1,
                 lastError: 'predicate_unsatisfied',
                 observationId: null,

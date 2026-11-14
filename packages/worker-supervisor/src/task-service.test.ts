@@ -253,6 +253,13 @@ describe('task-service spawn', () => {
     expect(docker.createCalls[0]?.labels['nexttime.egress-deny']).toBe('blocked.example.com');
   });
 
+  it('passes builtinTools to the container: a Worker limited to reading files (S11 GO18a P3)', async () => {
+    const { service, docker } = setup();
+    await service.spawn({ ...spawnInput, builtinTools: 'read_only' });
+    expect(docker.createCalls[0]?.env).toContain('NEXTTIME_BUILTIN_TOOLS=read_only');
+    expect(docker.createCalls[0]?.labels['nexttime.builtin-tools']).toBe('read_only');
+  });
+
   it('spawn still succeeds when the egress map store throws (best-effort registration)', async () => {
     const { config, docker } = setup();
     const throwingEgressMap: EgressMapStore = {

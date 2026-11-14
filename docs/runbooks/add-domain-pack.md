@@ -25,6 +25,10 @@ objectTypes:
     description: >-
       一个可库存的物品——示例，替换成真实概念。
     identityKey: [warehouseId, sku]      # 同类型对象按这些键去重（`objects.identity_key` 唯一索引）
+  - name: Warehouse
+    description: >-
+      一个仓库——示例。
+    identityKey: [warehouseId]
 
 linkTypes:
   - name: stored_in
@@ -37,6 +41,21 @@ linkTypes:
 - `identityKey` 声明后，`submit_observations` 会拒绝缺键的观察（`ObservationIdentityError`）。
 - 同名 LinkType 可以多条（不同 domain / range），写入时按已发布版本校验（S5.1：`reject` 模式 400
   `ontology_violation`，`warn` 模式写入 + 审计 + I-S5-1 计数）。
+- LinkType 的 `domain` / `range` 只能是 `"*"`，或者工作区里某个已发布本体声明了的 ObjectType：本包自己的，
+  或别的包 / 平台元本体（`ontology/platform-meta.yaml`，例如 `Gatekeeper`）的（遗留 303）。写了谁都没声明的
+  类型，发布时 409 `ontology_link_endpoint_undeclared`，什么也不写；引用别的包的类型，先装那个包。反过来，
+  新版本去掉一个别的本体的 LinkType 还在用的 ObjectType，同样被拒。
+- 领域包放进**能力包**（`packs/<name>/<version>/pack.yaml`）时再加一条（遗留 705）：LinkType 的端点只能是平台
+  元本体的类型、本能力包自己的本体的类型，或它在 `requires.packs` 里直接依赖的能力包的本体的类型。不按依赖传递
+  （A 依赖 B、B 依赖 C，A 不能直接连 C 的类型，要连就把 C 也写进 A 的 `requires.packs`）。同一次安装里一起装上的
+  被依赖包，按装上之后的版本算。违反时安装 409 `ontology_link_endpoint_outside_requires`，`details.ends` 写着
+  每个端点、声明该类型的本体和它所属的能力包。这是安装时的门槛：以后被依赖的包升级把类型挪走，不会回头检查。
+  注册表读能力包时先查一遍：镜像自带的包违反就是部署错误（启动报错）；附加包（`config/packs/`）在它依赖的
+  `minVersion` 那一版就违反的，整个包不读进来；只在更高版本违反的照样读进来，`extra_packs_status` 给它记一条
+  警告（平台「模块」页的「本部署附加的能力包」里显示）。
+- 本体族的名字（遗留 706）：能力包里的 `family`、`seed-domain-pack --pack-name`、管理员提案的族名，都是这个
+  本体族在工作区里的名字，写进 `ontology_families`，同名推出同一个 id，名字不可改。`platform-meta` 是平台元本体的
+  名字，三处都不能用；名字是小写单词加单个连字符，最长 64 个字符。
 - 同一个 pack 的每次 seed 是该 id 族的下一个版本；写入校验只认**最新已发布**版本。
 
 ## 3. 放文件
@@ -87,3 +106,6 @@ curl -s https://<host>:8443/api/cap/get_type -H "Authorization: Bearer ${OWNER_K
 | `seed-domain-pack` 报文件不存在 | `--dir` 缺省指向 `DOMAIN_PACK_DIR`（主机 `config/ontology/`），文件没放进去或名字不是 `<pack>.yaml` | 放文件，或 `--file-name` 指定 |
 | seed 后写入仍 400 `ontology_violation` | 工作区是 `reject`，且这条边的 domain / range 与最新已发布版本不符 | 看 `details.expected`；或按 S5.1 推出流程先把工作区切 `warn` |
 | `OntologyDefinitionParseError` | schema 之外的字段（`.strict()`），或漏了 `description` / `domain` / `range` | 对照 §2 |
+| `seed-domain-pack` 报 `ontology_family_name_invalid` | `--pack-name` 是 `platform-meta`，或不是小写单词加单个连字符、超过 64 个字符（遗留 706） | 换一个名字 |
+| 安装能力包 409 `ontology_link_endpoint_outside_requires` | 能力包的 LinkType 连到了它没有在 `requires.packs` 里直接依赖的能力包的类型（`details.ends`，遗留 705） | 改能力包：把声明该类型的能力包写进 `requires.packs`，或改掉这条 LinkType；在工作区里改不了 |
+| 发布 409 `ontology_link_endpoint_undeclared` | 某条 LinkType 的 `domain` / `range` 写的 ObjectType 工作区里没有任何已发布本体声明（`details.undeclared`），或这一版去掉了别的本体的 LinkType 还在用的类型（`details.orphaned`） | 改正拼写或补上 ObjectType；依赖别的包的类型就先装那个包；`orphaned` 的先改用到它的那个本体 |

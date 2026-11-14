@@ -16,7 +16,7 @@ import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { createUser } from '../identity/index.js';
-import { authenticateHuman, hashApiKey } from './auth.js';
+import { authenticateHuman, hashApiKey, withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
@@ -145,6 +145,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueEntryHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -163,6 +164,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -359,6 +361,179 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(AlreadyMemberError);
     });
 
+    // Legacy 725: a removed member (here removed from the workspace, `disable_principal`) is added
+    // back as a new membership; the removed one stays removed and stops belonging to them.
+    it('add_member: a removed member can be added back — a new membership, the removed one no longer theirs', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-back-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Back Fixture',
+        password: 'correct horse battery staple',
+      });
+      const first = (await dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      })) as { id: string };
+      await dispatchCapability({ pool }, owner, 'disable_principal', { principalId: first.id });
+
+      const again = (await dispatchCapability({ pool }, owner, 'add_member', {
+        login: login.toUpperCase(),
+        role: 'member',
+      })) as { id: string; kind: string; disabledAt: string | null };
+      expect(again.id).not.toBe(first.id);
+      expect(again.kind).toBe('human');
+      expect(again.disabledAt).toBeNull();
+
+      const rows = await withAdminClient(pool, (client) =>
+        client.query<{ id: string; user_id: string | null; disabled: boolean }>(
+          `select id, user_id, disabled_at is not null as disabled from principals
+            where workspace_id = $1 and id = any($2::uuid[])`,
+          [workspaceId, [first.id, again.id]],
+        ),
+      );
+      expect(rows.rows.find((row) => row.id === first.id)).toMatchObject({
+        user_id: null,
+        disabled: true,
+      });
+      expect(rows.rows.find((row) => row.id === again.id)).toMatchObject({
+        user_id: user.id,
+        disabled: false,
+      });
+      const audit = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'add_member' and resource_id = $2`,
+          [workspaceId, again.id],
+        ),
+      );
+      // The workspace's own row names the person by login, never by platform user id.
+      expect(audit.rows[0]?.payload.detachedPrincipals).toEqual([
+        { workspaceId, principalId: first.id, login },
+      ]);
+      expect(JSON.stringify(audit.rows[0]?.payload)).not.toContain(user.id);
+
+      await expect(
+        dispatchCapability({ pool }, owner, 'add_member', { login, role: 'member' }),
+      ).rejects.toThrow(AlreadyMemberError);
+    });
+
+    // Legacy 725: `add_member` holds the user's authority lock, as `add_membership`, `merge_user`
+    // and binding a key do, so a membership given to the user meanwhile is seen, not raced to the
+    // unique index.
+    it('add_member waits for the user’s lock: a membership given to the user meanwhile makes it already_member', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-race-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Race Fixture',
+        password: 'correct horse battery staple',
+      });
+      let go!: () => void;
+      const going = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const writer = withAdminClient(pool, async (client) => {
+        await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+          [],
+          [user.id],
+          [],
+        ]);
+        locked();
+        await going;
+        await client.query(
+          `insert into principals (workspace_id, kind, role, display_name, user_id)
+           values ($1, 'human', 'member', 'Add Race Fixture', $2)`,
+          [workspaceId, user.id],
+        );
+      });
+      await holding;
+
+      const outcome = dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position('lock_authorities' in query) > 0`,
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) break;
+        if (attempt > 200) throw new Error('add_member never waited on the user’s lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      go();
+      await writer;
+      expect(await outcome).toBeInstanceOf(AlreadyMemberError);
+    });
+
+    // Legacy 725: and reads the user again under that lock — a disable that held it meanwhile has
+    // committed, so the disabled user gets no membership.
+    it('add_member reads the user again under the lock: a user disabled meanwhile is refused (user not found)', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-off-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Off Fixture',
+        password: 'correct horse battery staple',
+      });
+      let go!: () => void;
+      const going = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const writer = withAdminClient(pool, async (client) => {
+        await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+          [],
+          [user.id],
+          [],
+        ]);
+        locked();
+        await going;
+        await client.query(`update users set status = 'disabled' where id = $1`, [user.id]);
+      });
+      await holding;
+
+      const outcome = dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        const { rows } = await pool.query<{ waiting: number }>(
+          `select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and position('lock_authorities' in query) > 0`,
+        );
+        if ((rows[0]?.waiting ?? 0) > 0) break;
+        if (attempt > 200) throw new Error('add_member never waited on the user’s lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      go();
+      await writer;
+      expect(await outcome).toBeInstanceOf(MemberUserNotFoundError);
+      const memberships = await withAdminClient(pool, (client) =>
+        client.query('select 1 from principals where workspace_id = $1 and user_id = $2', [
+          workspaceId,
+          user.id,
+        ]),
+      );
+      expect(memberships.rowCount).toBe(0);
+    });
+
     it('rotate_api_key never mints a key for a person (D-25): refused self-service and for an owner, the legacy key untouched', async () => {
       const oldKey = `key-${randomUUID()}`;
       const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Carol', 'human', oldKey);
@@ -463,6 +638,68 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await authenticateHuman(pool, internalKey))?.principal.id).toBe(internalId);
     });
 
+    it('a disabled Principal stays as it was (legacy 729 / 730): a second disable_principal writes nothing, revokes and kicks nothing, and its audit row says unchanged; set_principal_role is refused (disabled), the same role too', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Disabled Twice');
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const first = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+        principalId: targetId,
+      })) as { id: string; disabledAt: string | null };
+      expect(first.disabledAt).not.toBeNull();
+      /** The Principal row's version: any write to it, even one that sets a column to the value it
+       *  has, changes it. */
+      const rowVersion = () =>
+        withAdminClient(pool, async (client) => {
+          const result = await client.query<{ xmin: string }>(
+            'select xmin::text from principals where workspace_id = $1 and id = $2',
+            [workspaceId, targetId],
+          );
+          return result.rows[0]?.xmin;
+        });
+      const before = await rowVersion();
+
+      const kicks: SessionKick[] = [];
+      const unsubscribe = subscribeToSessionKicks((kick) => {
+        kicks.push(kick);
+      });
+      try {
+        const second = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+          principalId: targetId,
+        })) as { id: string; disabledAt: string | null };
+        expect(second).toMatchObject({ id: targetId, disabledAt: first.disabledAt });
+      } finally {
+        unsubscribe();
+      }
+      expect(kicks.some((kick) => kick.principalIds?.includes(targetId))).toBe(false);
+
+      for (const role of ['builder', 'member'] as const) {
+        await expectRefused(
+          () =>
+            dispatchCapability({ pool }, owner, 'set_principal_role', {
+              principalId: targetId,
+              role,
+            }),
+          'disabled',
+        );
+      }
+      expect(await rowVersion()).toBe(before);
+      expect((await readPrincipalState(workspaceId, targetId)).role).toBe('member');
+
+      const audits = await withAdminClient(pool, (client) =>
+        client.query<{ action: string; unchanged: boolean | null }>(
+          `select action, (payload->>'unchanged')::boolean as unchanged from audit_records
+            where workspace_id = $1 and resource_id = $2
+              and action in ('disable_principal', 'set_principal_role')
+              and coalesce(payload->>'outcome', '') <> 'refused'
+            order by created_at, id`,
+          [workspaceId, targetId],
+        ),
+      );
+      expect(audits.rows).toEqual([
+        { action: 'disable_principal', unchanged: null },
+        { action: 'disable_principal', unchanged: true },
+      ]);
+    });
+
     it('create_principal refuses the reserved internal `__…__` display name (R-06)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await expectRefused(
@@ -493,7 +730,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // set_principal_role: an `issue_handle` (mcp_session) Handle minted under the owner role is
       // revoked by the demotion, the same way a person's is.
-      const mcp = await issueMcpSessionHandle(workspaceId, serviceId, keyPair);
+      const mcp = await issueMcpSessionHandle(workspaceId, serviceId, 'owner', keyPair);
       const demoted = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
         principalId: serviceId,
         role: 'member',
@@ -535,6 +772,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['search'], resources: {} },
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role: 'member', credential: null },
           });
         },
         { skipRoleSwitch: true },
@@ -598,7 +836,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token, jti } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token, jti } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
 
       // Sanity: the Handle verifies before the disable.
       await expect(
@@ -634,11 +872,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     /** Mirrors `issue-handle-handler.ts`'s own `kind='mcp_session'` session + Handle issuance,
-     *  the shape `revokeRoleScopedSessionHandles` (governance/capability/handles.ts, W5.5 review
-     *  fix) must also reach — unlike `revokeEntrySessionHandles`, which is `kind='entry'` only. */
+     *  the shape a role change (`applyRoleChange`, application/task/role-change.ts) must also
+     *  reach — unlike `revokeEntrySessionHandles`, which is `kind='entry'` only. */
     async function issueMcpSessionHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -657,6 +896,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -670,6 +910,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueWorkerRunHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -688,6 +929,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -702,10 +944,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const entry = await issueEntryHandle(workspaceId, targetId, keyPair);
-      const mcp = await issueMcpSessionHandle(workspaceId, targetId, keyPair);
-      const workerRun = await issueWorkerRunHandle(workspaceId, targetId, keyPair);
-      const otherWorkerRun = await issueWorkerRunHandle(workspaceId, otherId, keyPair);
+      const entry = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
+      const mcp = await issueMcpSessionHandle(workspaceId, targetId, 'member', keyPair);
+      const workerRun = await issueWorkerRunHandle(workspaceId, targetId, 'member', keyPair);
+      const otherWorkerRun = await issueWorkerRunHandle(workspaceId, otherId, 'member', keyPair);
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await dispatchCapability({ pool }, owner, 'disable_principal', { principalId: targetId });
@@ -733,13 +975,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token, jti } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token, jti } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
       const { token: mcpToken, jti: mcpJti } = await issueMcpSessionHandle(
         workspaceId,
         targetId,
+        'member',
         keyPair,
       );
-      const { token: otherToken } = await issueEntryHandle(workspaceId, otherId, keyPair);
+      const { token: otherToken } = await issueEntryHandle(workspaceId, otherId, 'member', keyPair);
 
       // Sanity: all three Handles verify before the role change.
       await expect(
@@ -790,7 +1033,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const updated = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
@@ -803,6 +1046,135 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(
         authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: targetId });
+    });
+
+    it('set_principal_role (legacy 699): a demotion ends the Workers the new role does not cover and keeps the rest; a promotion keeps them; an auditor keeps none — the same rule as the platform plane', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'builder', 'Olga');
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      /** A Worker's Handle holding exactly `capabilities` (handle-mint.ts's session shape). */
+      const worker = (capabilities: string[]) =>
+        withWorkspace(pool, { workspaceId, principalId: targetId }, async (client) => {
+          const session = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $2, 'active') returning id`,
+            [workspaceId, targetId],
+          );
+          const sessionId = session.rows[0]?.id;
+          if (!sessionId) throw new Error('worker: no session row');
+          const issued = await issueHandle(client, {
+            sessionId,
+            scope: { capabilities, resources: {} },
+            ttlSeconds: 3600,
+            privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role: 'builder', credential: null },
+          });
+          return { sessionId, jti: issued.jti };
+        });
+      const state = async (handle: { sessionId: string; jti: string }) => {
+        const result = await pool.query<{ status: string; revoked: boolean }>(
+          `select s.status, h.revoked_at is not null as revoked
+             from sessions s join capability_handles h on h.session_id = s.id
+            where s.id = $1 and h.jti = $2`,
+          [handle.sessionId, handle.jti],
+        );
+        return result.rows[0];
+      };
+      // `propose_operation` is `minRole: 'builder'`.
+      const builderWorker = await worker(['search', 'propose_operation']);
+      const memberWorker = await worker(['search']);
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const setRole = (role: Role) =>
+        dispatchCapability({ pool }, owner, 'set_principal_role', { principalId: targetId, role });
+
+      await setRole('member');
+      expect(await state(builderWorker)).toEqual({ status: 'revoked', revoked: true });
+      expect(await state(memberWorker)).toEqual({ status: 'active', revoked: false });
+
+      await setRole('builder');
+      expect(await state(memberWorker)).toEqual({ status: 'active', revoked: false });
+
+      await setRole('auditor');
+      expect(await state(memberWorker)).toEqual({ status: 'revoked', revoked: true });
+    });
+
+    it('set_principal_role (legacy 699, #1150 review): a service key holding a capability the new role may not use is revoked; one the new role covers is kept, through a promotion and a demotion that still covers it', async () => {
+      const serviceId = await adminInsertPrincipal(
+        workspaceId,
+        'builder',
+        'CI builder key',
+        'service',
+        `key-${randomUUID()}`,
+      );
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      /**
+       * A service key holding exactly `capabilities` (`issue_service_handle`'s session shape),
+       * issued while the key is a builder (both calls below run under that role).
+       */
+      const serviceKey = (capabilities: string[]) =>
+        withWorkspace(
+          pool,
+          { workspaceId, principalId: serviceId },
+          async (client) => {
+            const session = await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'service', $2, 'active') returning id`,
+              [workspaceId, serviceId],
+            );
+            const sessionId = session.rows[0]?.id;
+            if (!sessionId) throw new Error('serviceKey: no session row');
+            const issued = await issueHandle(client, {
+              sessionId,
+              scope: { capabilities, resources: {} },
+              ttlSeconds: 3600,
+              privateKey: keyPair.privateKey,
+              basis: { kind: 'role', role: 'builder', credential: null },
+            });
+            return { sessionId, jti: issued.jti };
+          },
+          { skipRoleSwitch: true },
+        );
+      const state = async (key: { sessionId: string; jti: string }) => {
+        const result = await pool.query<{ status: string; revoked: boolean }>(
+          `select s.status, h.revoked_at is not null as revoked
+             from sessions s join capability_handles h on h.session_id = s.id
+            where s.id = $1 and h.jti = $2`,
+          [key.sessionId, key.jti],
+        );
+        return result.rows[0];
+      };
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const setRole = (role: Role) =>
+        dispatchCapability({ pool }, owner, 'set_principal_role', { principalId: serviceId, role });
+
+      // `propose_operation` is `minRole: 'builder'`; `search` a member may use.
+      const builderKey = await serviceKey(['search', 'propose_operation']);
+      const memberKey = await serviceKey(['search']);
+
+      await setRole('member');
+      expect(await state(builderKey)).toEqual({ status: 'revoked', revoked: true });
+      expect(await state(memberKey)).toEqual({ status: 'active', revoked: false });
+
+      await setRole('builder');
+      expect(await state(memberKey)).toEqual({ status: 'active', revoked: false });
+
+      const reissued = await serviceKey(['search', 'propose_operation']);
+      await setRole('owner');
+      expect(await state(reissued)).toEqual({ status: 'active', revoked: false });
+      await setRole('builder');
+      expect(await state(reissued)).toEqual({ status: 'active', revoked: false });
+      expect(await state(memberKey)).toEqual({ status: 'active', revoked: false });
+
+      // An auditor may still read: the role filter, not the Worker rule (an auditor runs no
+      // Workers, so a Worker keeps nothing) — the read-only key stays, the builder key goes.
+      await setRole('auditor');
+      expect(await state(reissued)).toEqual({ status: 'revoked', revoked: true });
+      expect(await state(memberKey)).toEqual({ status: 'active', revoked: false });
     });
 
     it('last-owner protection: refuses demoting or disabling the sole active owner, but allows it once a second owner exists', async () => {

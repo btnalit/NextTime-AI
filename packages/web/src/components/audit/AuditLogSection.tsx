@@ -198,6 +198,17 @@ export function AuditLogSection({
   const actorSelect = !principalsUnavailable;
   const actorName = (p: PrincipalRow) => principalShownName(p.displayName, t) ?? p.displayName;
   const actorSame = sameNameIds(principals, (p) => p.id, actorName);
+  // Legacy 729 (#1193 UX P3): someone added back after a removal has two memberships of one name;
+  // the disabled ones — earlier memberships, disabled service accounts — group at the bottom under
+  // their own label instead of reading as duplicates of the active ones.
+  const activeActors = (principals ?? []).filter((p) => !p.disabledAt);
+  const disabledActors = (principals ?? []).filter((p) => p.disabledAt);
+  const actorOption = (principal: PrincipalRow) => (
+    <option key={principal.id} value={principal.id}>
+      {withSameNameId(actorName(principal), principal.id, actorSame)} ·{' '}
+      {roleLabel(principal.role, t)}
+    </option>
+  );
 
   return (
     <section className="section" aria-labelledby="audit-query-title" data-testid="audit-log">
@@ -232,12 +243,18 @@ export function AuditLogSection({
               data-testid="audit-actor-select"
             >
               <option value="">{t('任意', 'Any')}</option>
-              {(principals ?? []).map((principal) => (
-                <option key={principal.id} value={principal.id}>
-                  {withSameNameId(actorName(principal), principal.id, actorSame)} ·{' '}
-                  {roleLabel(principal.role, t)}
-                </option>
-              ))}
+              {activeActors.map(actorOption)}
+              {disabledActors.length > 0 ? (
+                <optgroup
+                  label={t(
+                    '已停用的成员（含之前的成员资格）',
+                    'Disabled members (and earlier memberships)',
+                  )}
+                  data-testid="audit-actor-disabled"
+                >
+                  {disabledActors.map(actorOption)}
+                </optgroup>
+              ) : null}
               {actor !== '' && !(principals ?? []).some((p) => p.id === actor) ? (
                 <option value={actor}>{actor}</option>
               ) : null}
@@ -444,7 +461,11 @@ export function AuditLogSection({
                       </>
                     ) : null}
                   </div>
-                  <AuditPayloadNotes payload={row.payload} workspaceNames={targetNames} />
+                  <AuditPayloadNotes
+                    payload={row.payload}
+                    action={row.action}
+                    workspaceNames={targetNames}
+                  />
                   <details className="platform-audit-payload">
                     <summary>{t('负载', 'Payload')}</summary>
                     <pre className="code-block pre-wrap">

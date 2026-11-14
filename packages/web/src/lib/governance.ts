@@ -166,6 +166,13 @@ export interface GatekeeperDetail extends GatekeeperListRow {
   /** Legacy 674: present only while the platform suspends this self-connected gate — when, and
    *  the reason the administrator gave. Never who. */
   readonly platformSuspension?: { readonly suspendedAt: string; readonly reason?: string };
+  /** Legacy 701, for a workspace owner only: the address the kernel calls this self-connected
+   *  gate at (user info, query and fragment cut out). */
+  readonly endpoint?: GatekeeperDetailWire['endpoint'];
+  /** Legacy 701, for a workspace owner only: the open proposal to move it to a new address. */
+  readonly pendingAddressChange?: GatekeeperDetailWire['pendingAddressChange'];
+  /** Legacy 715: how the gate's latest proposal to move ended — owners only. */
+  readonly lastAddressChangeOutcome?: GatekeeperDetailWire['lastAddressChangeOutcome'];
 }
 
 // -------------------------------------------------------------------------------------------

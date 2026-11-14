@@ -25,6 +25,7 @@ import {
 } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { recordMintedConnectionSecret } from '../gates/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import type { CapabilityHandlerContext } from '../gateway/capability-handler.js';
 import {
@@ -164,6 +165,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId }, fn);
     }
 
+    /** A connection secret as `mint_connection_secret` issues one: its salt recorded (legacy 711). */
+    async function issuedSecret(workspaceId: string, principalId: string): Promise<string> {
+      const minted = CONNECTION_SECRETS.mint(workspaceId);
+      await inWs(workspaceId, principalId, (client) =>
+        recordMintedConnectionSecret(client, workspaceId, minted.salt, principalId),
+      );
+      return minted.secret;
+    }
+
     /** `resources`: what the runtime bakes in (`ensureAdminAgentHandle` — the person's gate
      *  Grants in the trial workspace); none by default. */
     async function issue(resources?: Readonly<Record<string, readonly string[]>>) {
@@ -196,6 +206,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 600,
           privateKey,
+          basis: { kind: 'role', role: 'owner', credential: null },
         }),
       );
       return {
@@ -1066,7 +1077,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { pool },
           person(trialWs, adminPrincipalId),
           'create_connection',
-          completeParams(CONNECTION_SECRETS.mint(trialWs).secret),
+          completeParams(await issuedSecret(trialWs, adminPrincipalId)),
         )) as { gatekeeperId: string; connectionRequestId: string | null };
         expect(created.connectionRequestId).toBe(requested.id);
         const completion = await lastAudit(trialWs, TRIAL_SELF_CONNECT_AUDIT_ACTION);

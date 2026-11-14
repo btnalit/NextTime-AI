@@ -275,6 +275,379 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: { workspaceId: created.workspaceId, from: formerUser.id, to: caller.id },
         });
       }, 30_000);
+
+      // Legacy 725: only an active membership of the caller's in that workspace clashes; a removed
+      // one stops belonging to the caller and the bound key's membership takes its place.
+      it('a removed membership of the caller’s there no longer blocks the bind; an active one does (already_member)', async () => {
+        const login = `bind-back-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Back', password });
+        const removedThere = await createWorkspace(pool, `auth-bind-rm-${randomUUID()}`, 'Owner');
+        const activeThere = await createWorkspace(pool, `auth-bind-on-${randomUUID()}`, 'Owner');
+        const theirs = await withAdminClient(pool, async (client) => {
+          const insert = (workspace: string, removed: boolean) =>
+            client.query<{ id: string }>(
+              `insert into principals (workspace_id, kind, role, display_name, user_id, disabled_at)
+               values ($1, 'human', 'member', 'Bind Back', $2, case when $3 then now() end)
+               returning id`,
+              [workspace, caller.id, removed],
+            );
+          return {
+            removed: (await insert(removedThere.workspaceId, true)).rows[0]?.id,
+            active: (await insert(activeThere.workspaceId, false)).rows[0]?.id,
+          };
+        });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+        const bind = (apiKey: string) =>
+          app.inject({
+            method: 'POST',
+            url: '/api/auth/bind-api-key',
+            headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+            payload: { apiKey },
+          });
+
+        const bound = await bind(removedThere.apiKey);
+        expect(bound.statusCode).toBe(200);
+        const rows = await withAdminClient(pool, (client) =>
+          client.query<{ id: string; user_id: string | null; disabled: boolean }>(
+            `select id, user_id, disabled_at is not null as disabled from principals
+              where workspace_id = $1 and id = any($2::uuid[])`,
+            [removedThere.workspaceId, [theirs.removed, removedThere.ownerPrincipalId]],
+          ),
+        );
+        expect(rows.rows.find((row) => row.id === theirs.removed)).toMatchObject({
+          user_id: null,
+          disabled: true,
+        });
+        expect(rows.rows.find((row) => row.id === removedThere.ownerPrincipalId)).toMatchObject({
+          user_id: caller.id,
+          disabled: false,
+        });
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [removedThere.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows[0]?.payload.detachedPrincipals).toEqual([
+          { workspaceId: removedThere.workspaceId, principalId: theirs.removed, userId: caller.id },
+        ]);
+
+        const refused = await bind(activeThere.apiKey);
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json().error.code).toBe('already_member');
+      }, 30_000);
+
+      // Legacy 725: the bind takes the lock of the user the key belongs to now, as well as the
+      // caller's — a membership given to that user meanwhile (`add_membership` holds the same
+      // lock) is seen, and the user it still has a membership for is not deleted from under it.
+      it('waits for the former user’s lock: a membership given to that user meanwhile keeps it (not deleted, no 500)', async () => {
+        const created = await createWorkspace(pool, `auth-bind-race-${randomUUID()}`, 'Owner');
+        const elsewhere = await createWorkspace(pool, `auth-bind-else-${randomUUID()}`, 'Owner');
+        const formerUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!formerUser) throw new Error('createWorkspace linked no user');
+        const login = `bind-race-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Race', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        let go!: () => void;
+        const going = new Promise<void>((resolve) => {
+          go = resolve;
+        });
+        let locked!: () => void;
+        const holding = new Promise<void>((resolve) => {
+          locked = resolve;
+        });
+        const writer = withAdminClient(pool, async (client) => {
+          await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+            [],
+            [formerUser.id],
+            [],
+          ]);
+          locked();
+          await going;
+          await client.query(
+            `insert into principals (workspace_id, kind, role, display_name, user_id)
+             values ($1, 'human', 'member', 'Bind Race Former', $2)`,
+            [elsewhere.workspaceId, formerUser.id],
+          );
+        });
+        await holding;
+
+        const bound = app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        try {
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ waiting: number }>(
+              `select count(*)::int as waiting from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            if ((rows[0]?.waiting ?? 0) > 0) break;
+            if (attempt > 200) throw new Error('the bind never waited on the former user’s lock');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        } finally {
+          go();
+        }
+        await writer;
+        const response = await bound;
+        expect(response.statusCode).toBe(200);
+        expect(await findUserByLogin(pool, created.ownerLogin)).toMatchObject({
+          id: formerUser.id,
+        });
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows[0]?.payload).toMatchObject({
+          from: formerUser.id,
+          to: caller.id,
+          formerUserDeleted: false,
+        });
+      }, 30_000);
+
+      // Legacy 725: the key moved to another user between the bind's first read and its locks
+      // (it held the first user's lock and waited for it) — the bind starts over and takes the
+      // new user's lock, rather than go on without it.
+      it('starts over when the key moved to another user while it waited, and waits for that user’s lock too', async () => {
+        const created = await createWorkspace(pool, `auth-bind-moved-${randomUUID()}`, 'Owner');
+        const elsewhere = await createWorkspace(pool, `auth-bind-mv-else-${randomUUID()}`, 'Owner');
+        const firstUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!firstUser) throw new Error('createWorkspace linked no user');
+        const movedLogin = `bind-moved-to-${randomUUID().slice(0, 8)}`;
+        const movedTo = await withAdminClient(pool, (client) =>
+          client.query<{ id: string }>(
+            'insert into users (login, display_name) values ($1, $1) returning id',
+            [movedLogin],
+          ),
+        );
+        const movedToId = movedTo.rows[0]?.id;
+        if (!movedToId) throw new Error('no user inserted');
+        const login = `bind-mv-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Moved', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        const gate = () => {
+          let open!: () => void;
+          const opened = new Promise<void>((resolve) => {
+            open = resolve;
+          });
+          return { open, opened };
+        };
+        const lockAll = (client: PoolClient, userIds: string[], principalIds: string[]) =>
+          client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+            [],
+            userIds,
+            principalIds,
+          ]);
+        // Holds the user the key is about to move to, and gives it a membership elsewhere.
+        const holdsMovedTo = gate();
+        const releaseMovedTo = gate();
+        const giver = withAdminClient(pool, async (client) => {
+          await lockAll(client, [movedToId], []);
+          holdsMovedTo.open();
+          await releaseMovedTo.opened;
+          await client.query(
+            `insert into principals (workspace_id, kind, role, display_name, user_id)
+             values ($1, 'human', 'member', 'Bind Moved To', $2)`,
+            [elsewhere.workspaceId, movedToId],
+          );
+        });
+        await holdsMovedTo.opened;
+        // Moves the key's Principal from the first user to that one, under the first's lock.
+        const holdsFirst = gate();
+        const releaseFirst = gate();
+        const mover = withAdminClient(pool, async (client) => {
+          await lockAll(client, [firstUser.id], [created.ownerPrincipalId]);
+          await client.query(
+            'update principals set user_id = $3 where workspace_id = $1 and id = $2',
+            [created.workspaceId, created.ownerPrincipalId, movedToId],
+          );
+          holdsFirst.open();
+          await releaseFirst.opened;
+        });
+        await holdsFirst.opened;
+
+        const waiters = async () =>
+          (
+            await pool.query<{ pid: number; xact_start: Date }>(
+              `select pid, xact_start from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            )
+          ).rows;
+        const waitedOn = async (
+          what: string,
+          isNew: (row: { pid: number; xact_start: Date }) => boolean,
+        ) => {
+          for (let attempt = 0; ; attempt += 1) {
+            const found = (await waiters()).find(isNew);
+            if (found) return found;
+            if (attempt > 200) throw new Error(`the bind never waited on ${what}`);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const bound = app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        try {
+          const first = await waitedOn('the first user’s lock', () => true);
+          releaseFirst.open();
+          await mover;
+          // The second wait is another transaction: the first one was rolled back.
+          await waitedOn(
+            'the lock of the user the key moved to',
+            (row) =>
+              row.pid !== first.pid || row.xact_start.getTime() !== first.xact_start.getTime(),
+          );
+        } finally {
+          releaseFirst.open();
+          releaseMovedTo.open();
+        }
+        await giver;
+        const response = await bound;
+        expect(response.statusCode).toBe(200);
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows).toHaveLength(1);
+        expect(audit.rows[0]?.payload).toMatchObject({
+          from: movedToId,
+          to: caller.id,
+          formerUserDeleted: false,
+        });
+        expect(await findUserByLogin(pool, movedLogin)).toMatchObject({ id: movedToId });
+      }, 30_000);
+
+      // Legacy 727: a key that keeps moving to yet another user, on every try, is refused with
+      // its own code — not `already_claimed`, which says the account it belongs to has a
+      // password (none of these do) — and nothing is written.
+      it('a key that moved again on every try is refused with bind_contended, nothing written', async () => {
+        const created = await createWorkspace(pool, `auth-bind-churn-${randomUUID()}`, 'Owner');
+        const firstUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!firstUser) throw new Error('createWorkspace linked no user');
+        const others = await withAdminClient(pool, async (client) => {
+          const ids: string[] = [];
+          for (let index = 0; index < 3; index += 1) {
+            const inserted = await client.query<{ id: string }>(
+              'insert into users (login, display_name) values ($1, $1) returning id',
+              [`bind-churn-${index}-${randomUUID().slice(0, 8)}`],
+            );
+            const id = inserted.rows[0]?.id;
+            if (!id) throw new Error('no user inserted');
+            ids.push(id);
+          }
+          return ids;
+        });
+        const chain = [firstUser.id, ...others];
+        const login = `bind-churn-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login, displayName: 'Bind Churn', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        const gate = () => {
+          let open!: () => void;
+          const opened = new Promise<void>((resolve) => {
+            open = resolve;
+          });
+          return { open, opened };
+        };
+        // Mover i holds the lock of the user the key belongs to on try i + 1, and moves the key
+        // on to the next user once that try waits for it.
+        const movers = chain.slice(0, 3).map((holder, index) => {
+          const held = gate();
+          const release = gate();
+          const done = withAdminClient(pool, async (client) => {
+            await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+              [],
+              [holder],
+              [],
+            ]);
+            held.open();
+            await release.opened;
+            await client.query(
+              'update principals set user_id = $3 where workspace_id = $1 and id = $2',
+              [created.workspaceId, created.ownerPrincipalId, chain[index + 1]],
+            );
+          });
+          return { held, release, done };
+        });
+        await Promise.all(movers.map((mover) => mover.held.opened));
+
+        // `xact_start` as text keeps its microseconds: each try is a new transaction, maybe on
+        // the same connection.
+        const waiting = async (seen: ReadonlySet<string>) => {
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ tx: string }>(
+              `select pid::text || '/' || xact_start::text as tx from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            const found = rows.find((row) => !seen.has(row.tx));
+            if (found) return found.tx;
+            if (attempt > 200) throw new Error('the bind never waited on the next user’s lock');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const bound = app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        const seen = new Set<string>();
+        try {
+          for (const mover of movers) {
+            seen.add(await waiting(seen));
+            mover.release.open();
+            await mover.done;
+          }
+        } finally {
+          for (const mover of movers) mover.release.open();
+        }
+        const response = await bound;
+        expect(seen.size).toBe(3);
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'bind_contended' } });
+
+        const principal = await withAdminClient(pool, (client) =>
+          client.query<{ user_id: string }>(
+            'select user_id from principals where workspace_id = $1 and id = $2',
+            [created.workspaceId, created.ownerPrincipalId],
+          ),
+        );
+        expect(principal.rows[0]?.user_id).toBe(others[2]);
+        const audit = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rowCount).toBe(0);
+        const users = await withAdminClient(pool, (client) =>
+          client.query<{ id: string }>('select id from users where id = any($1::uuid[])', [chain]),
+        );
+        expect(users.rows.map((row) => row.id).sort()).toEqual([...chain].sort());
+      }, 30_000);
     });
 
     // ---- POST /api/auth/claim -------------------------------------------------------------------
@@ -539,6 +912,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities: ['get_task'], resources: {} },
               ttlSeconds: 3600,
               privateKey,
+              basis: { kind: 'role', role: 'member', credential: null },
             });
             return issued.token;
           },
@@ -957,6 +1331,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 scope: { capabilities: ['search'], resources: {} },
                 ttlSeconds: 3600,
                 privateKey,
+                basis: { kind: 'role', role: 'owner', credential: null },
               });
             },
             { skipRoleSwitch: true },

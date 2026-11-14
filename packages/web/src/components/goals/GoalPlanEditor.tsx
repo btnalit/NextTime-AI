@@ -21,12 +21,14 @@ import {
   type PlanDraft,
   type StepDraft,
   budgetOf,
+  canAddReview,
   draftFromDetail,
   draftProblems,
   emptyStep,
   fieldOfProblem,
   fieldOfRefusal,
   hasRequesterConfirm,
+  isConfirmDraft,
   liveRuns,
   originalPrompt,
   planContractNotes,
@@ -35,6 +37,8 @@ import {
   releasableActions,
   removalsOf,
   requesterConfirmDraft,
+  reviewCheckDraft,
+  reviewDraftOf,
   shownOnly,
   stepEnded,
   supersededLiveSteps,
@@ -81,6 +85,7 @@ import {
   useOperationDone,
 } from './GoalOperationsBar.js';
 import { OutputContractFields } from './OutputContract.js';
+import { ReviewCheckEditor } from './ReviewCheckEditor.js';
 import { type SkillDirectory, StepSpecEditor } from './StepSpecEditor.js';
 
 export interface GoalPlanEditorProps {
@@ -103,7 +108,9 @@ export interface GoalPlanEditorProps {
  * from the published ones, dependencies from the plan's own steps, attempts within the limit. A
  * step that has ended cannot change (the kernel refuses), so it reads as it is and may only be
  * removed. Checks the platform makes stay as they are (a person adds or changes those through the
- * entry agent); the requester's own confirmation is written here. The budget is prefilled and
+ * entry agent); the requester's own confirmation is written here, and so is an independent review
+ * (S11 GO18b, `ReviewCheckEditor`): steps ticked, criteria described and weighted, the line and
+ * the model picked. The budget is prefilled and
  * sent only when changed; a live step this revision removes or changes is terminated unless the
  * person lets it finish and releases some of its requests.
  *
@@ -224,6 +231,8 @@ export function GoalPlanEditor({
   const changeStep = (uid: string, patch: Partial<StepDraft>) =>
     change(`step:${uid}`, (current) => ({
       ...current,
+      // S11 GO18b: a renamed new step stays among what a review reviews.
+      acceptance: followRename(current, uid, patch.key),
       steps: current.steps.map((step) => {
         if (step.uid === uid) return { ...step, ...patch };
         // A renamed new step: the steps that depended on it (and read its files) follow the new
@@ -278,7 +287,9 @@ export function GoalPlanEditor({
   const planProblem = errorOf('plan');
   const defs = definitions.state.status === 'ready' ? definitions.state.data.items : undefined;
   // UX P2-4 on #864: the goal planner's Worker plans goals; no step runs it.
-  const published = defs?.filter((row) => row.status === 'published' && row.goalPlanner !== true);
+  const published = defs?.filter(
+    (row) => row.status === 'published' && row.goalPlanner !== true && row.goalReviewer !== true,
+  );
   const dropped = plannerWorkDropped(latest, t);
 
   const submit = async () => {
@@ -460,6 +471,8 @@ export function GoalPlanEditor({
             <CheckEditor
               key={check.uid}
               check={check}
+              steps={draft.steps}
+              http={http}
               gateNames={gateNames}
               objectNames={objectNames}
               origin={
@@ -471,12 +484,14 @@ export function GoalPlanEditor({
               onChange={(patch) => changeCheck(check.uid, patch)}
               onRemove={() => {
                 if (check.original === null) {
-                  // Gone (a new one is the requester's confirmation, so 加一条请求人确认 is back):
-                  // that button, or the next check.
+                  // Gone (a new confirmation: 加一条请求人确认 is back; a new review: 加一条独立评审
+                  // is there): that button, or the next check.
                   const next = draft.acceptance[index + 1]?.uid;
+                  const back =
+                    check.review === null ? 'goal-plan-add-confirm' : 'goal-plan-add-review';
                   focusAfterRender(
                     () =>
-                      within(checksRef.current, '[data-testid="goal-plan-add-confirm"]') ??
+                      within(checksRef.current, `[data-testid="${back}"]`) ??
                       item(checksRef.current, 'checkUid', next)?.querySelector('button'),
                   );
                   change(`check:${check.uid}`, (current) => ({
@@ -504,12 +519,32 @@ export function GoalPlanEditor({
           ))}
           <span className="text-3 text-small">
             {t(
-              '平台观察和图谱事实这两类检查要在对话里让入口智能体加或改；这里可以移除它们，或者写请求人确认。',
-              'Checks the platform observes or judges on the graph are added or changed by the entry agent in a chat; here they can be removed, and the requester’s confirmation written.',
+              '平台观察和图谱事实这两类检查要在对话里让入口智能体加或改；这里可以移除它们，写请求人确认，或者加、改独立评审。',
+              'Checks the platform observes or judges on the graph are added or changed by the entry agent in a chat; here they can be removed, the requester’s confirmation written, and independent reviews added or changed.',
             )}
           </span>
-          {hasRequesterConfirm(draft) ? null : (
-            <div>
+          <div className="row-wrap">
+            {canAddReview(draft) ? (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => {
+                  const added = reviewCheckDraft(draft);
+                  // The first thing to write: its first criterion.
+                  focusAfterRender(() =>
+                    item(checksRef.current, 'checkUid', added.uid)?.querySelector('textarea'),
+                  );
+                  change('plan', (current) => ({
+                    ...current,
+                    acceptance: [...current.acceptance, added],
+                  }));
+                }}
+                data-testid="goal-plan-add-review"
+              >
+                {t('加一条独立评审', 'Add an independent review')}
+              </Button>
+            ) : null}
+            {hasRequesterConfirm(draft) ? null : (
               <Button
                 variant="secondary"
                 size="s"
@@ -530,8 +565,8 @@ export function GoalPlanEditor({
               >
                 {t('加一条请求人确认', 'Add a requester confirmation')}
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </section>
 
         <BudgetEditor
@@ -1339,6 +1374,8 @@ function AdoptOutputContract({
 
 function CheckEditor({
   check,
+  steps,
+  http,
   gateNames,
   objectNames,
   origin,
@@ -1348,6 +1385,9 @@ function CheckEditor({
   onRestore,
 }: {
   readonly check: CheckDraft;
+  /** S11 GO18b: the draft's steps, for a review to tick from. */
+  readonly steps: readonly StepDraft[];
+  readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   /** Legacy 454: the Procedure steps a requester's confirmation came from, when it did. */
@@ -1359,7 +1399,7 @@ function CheckEditor({
 }) {
   const t = useT();
   const id = useId();
-  const isConfirm = check.original === null || check.original.kind === 'requester_confirm';
+  const isConfirm = isConfirmDraft(check);
   if (check.removed) {
     return (
       <div
@@ -1397,6 +1437,8 @@ function CheckEditor({
               </span>
             ) : null}
           </span>
+        ) : check.review !== null ? (
+          <span className="text-3 text-small">{t('独立评审', 'Independent review')}</span>
         ) : check.original ? (
           <span className="text-small">
             {planCheckSentence(check.original, gateNames, t, objectNames)}
@@ -1434,7 +1476,41 @@ function CheckEditor({
           />
         </Field>
       ) : null}
+      {check.review !== null ? (
+        <ReviewCheckEditor
+          check={check}
+          review={check.review}
+          steps={steps}
+          http={http}
+          errorOf={errorOf}
+          onChange={(review) => onChange({ review })}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** S11 GO18b: the draft's checks with a new step's rename (`uid` to `key`) carried into the reviews
+ *  that review it. */
+function followRename(
+  draft: PlanDraft,
+  uid: string,
+  key: string | undefined,
+): readonly CheckDraft[] {
+  const renamed = draft.steps.find((step) => step.uid === uid);
+  if (key === undefined || renamed === undefined || renamed.key === key) return draft.acceptance;
+  return draft.acceptance.map((check) =>
+    check.review?.subjects.includes(renamed.key)
+      ? {
+          ...check,
+          review: {
+            ...check.review,
+            subjects: check.review.subjects.map((subject) =>
+              subject === renamed.key ? key : subject,
+            ),
+          },
+        }
+      : check,
   );
 }
 
@@ -1688,10 +1764,23 @@ function parseKeptRevision(raw: unknown): KeptRevision | null {
     typeof draft.removals !== 'object'
   )
     return null;
+  // S11 GO18b: a draft kept by a console before reviews were edited holds no `review`.
+  const acceptance = (draft.acceptance as Record<string, unknown>[]).map((check) =>
+    'review' in check
+      ? check
+      : {
+          ...check,
+          review:
+            (check.original as { kind?: unknown } | null)?.kind === 'review'
+              ? reviewDraftOf(check.original as Parameters<typeof reviewDraftOf>[0])
+              : null,
+        },
+  );
+  const normalized = { ...kept, draft: { ...draft, acceptance } } as unknown as KeptRevision;
   try {
-    planOf(kept.draft as PlanDraft);
+    planOf(normalized.draft);
   } catch {
     return null;
   }
-  return raw as KeptRevision;
+  return normalized;
 }

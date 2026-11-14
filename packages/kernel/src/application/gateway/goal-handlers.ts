@@ -8,6 +8,7 @@ import {
   type EndGoalResultWire,
   GOAL_LIST_DEFAULT_LIMIT,
   GOAL_LIST_MAX_LIMIT,
+  GOAL_PRECEDENT_DEFAULT_LIMIT,
   type GoalAcceptanceCheckWire,
   type GoalAcceptanceRoundWire,
   type GoalAcceptanceWire,
@@ -16,6 +17,7 @@ import {
   type GoalOperationResultWire,
   type GoalPlan,
   type GoalPlannerMode,
+  type GoalReviewWire,
   type GoalRunStatus,
   type GoalRunWire,
   type ObjectiveOutcome,
@@ -42,6 +44,7 @@ import {
   type GoalAcceptanceRoundView,
   type GoalAcceptanceView,
   type GoalControlActor,
+  type GoalReviewView,
   type GoalRunBudget,
   type GoalRunDetail,
   type GoalRunStepView,
@@ -60,6 +63,7 @@ import {
   createGoalRun,
   decidePlanRevision,
   endGoalRun,
+  findGoalPrecedents,
   getGoalRun,
   getGoalRunVisibleTo,
   listGoalRunUnresolvedActionsVisibleTo,
@@ -230,6 +234,14 @@ function toWirePlanRevisionSummary(
               : null,
           }
         : null,
+    // S11 GO17b: each cited goal's statement read as `statement` above.
+    citedPrecedents: row.citedPrecedents.map((precedent) => ({
+      goalRunId: precedent.goalRunId,
+      statement: precedent.statement,
+      outcome: precedent.outcome,
+      outcomeBasis: precedent.outcomeBasis,
+      polarity: precedent.polarity,
+    })),
   };
 }
 
@@ -334,6 +346,7 @@ function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCh
     check: shownFreeTextIn(check.check) as typeof check.check,
     fact: shownFreeTextIn(check.fact) as typeof check.fact,
     prompt: shownFreeText(check.prompt),
+    review: toWireReview(check.review),
     attempts: check.attempts,
     lastError: check.lastError,
     observationId: check.observationId,
@@ -342,6 +355,42 @@ function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCh
     nextAttemptAt: iso(check.nextAttemptAt),
     settledAt: iso(check.settledAt),
     overridden: check.overridden,
+  };
+}
+
+/** S11 GO18: a review check — the criteria a person wrote and the reasons and comment the reviewer
+ *  wrote read like the plan's free text (legacy 420); the derivation's numbers as recorded. */
+function toWireReview(review: GoalReviewView | null): GoalReviewWire | null {
+  if (!review) return null;
+  const { declaration, assessment } = review;
+  return {
+    subjects: [...declaration.subjects],
+    criteria: declaration.criteria.map((criterion) => ({
+      ...criterion,
+      description: shownFreeText(criterion.description),
+    })),
+    passAt: declaration.passAt,
+    model: declaration.model ?? null,
+    taskId: review.taskId,
+    assessment: assessment
+      ? {
+          reviewTaskId: assessment.reviewTaskId,
+          reviewerModel: assessment.reviewerModel,
+          executorModels: assessment.executorModels.map((executor) => ({ ...executor })),
+          sameModel: assessment.sameModel,
+          lines: assessment.derivation.lines.map((line) => ({
+            ...line,
+            reason: shownFreeText(line.reason),
+          })),
+          comment: shownFreeText(assessment.comment),
+          points: assessment.derivation.points,
+          maxPoints: assessment.derivation.maxPoints,
+          passAt: assessment.derivation.passAt,
+          unassessed: [...assessment.derivation.unassessed],
+          verdict: assessment.derivation.verdict,
+          createdAt: assessment.createdAt.toISOString(),
+        }
+      : null,
   };
 }
 
@@ -517,6 +566,33 @@ export const listGoalsHandler: CapabilityHandler = async (client, workspaceId, p
   };
 };
 
+/** S11 GO17: the caller's own earlier goals of the same kind — on a Handle, its obo's; an owner's
+ *  too, never anyone else's (`precedents.ts`: an agent never gets other people's plans). */
+export const findGoalPrecedentsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { procedureId, workerDefinitionIds, limit } = params as {
+    procedureId?: string;
+    workerDefinitionIds?: string[];
+    limit?: number;
+  };
+  const { principalId } = await goalViewer(client, ctx);
+  const items = await findGoalPrecedents(
+    client,
+    workspaceId,
+    principalId,
+    {
+      ...(procedureId !== undefined ? { procedureId } : {}),
+      ...(workerDefinitionIds !== undefined ? { workerDefinitionIds } : {}),
+    },
+    limit ?? GOAL_PRECEDENT_DEFAULT_LIMIT,
+  );
+  return { result: { items } };
+};
+
 export const getGoalRevisionHandler: CapabilityHandler = async (
   client,
   workspaceId,
@@ -587,6 +663,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     fromProcedure?: GoalFromProcedure;
     budget: GoalRunBudget;
     idempotencyKey?: string;
+    precedents?: readonly string[];
   };
   const requesterId =
     ctx?.principal?.id ?? (ctx?.principalId || (await currentPrincipalId(client)));
@@ -613,6 +690,8 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
       ? { fromProcedure: input.fromProcedure }
       : { plan: input.plan }),
     budget: input.budget,
+    // S11 GO17b: recorded on revision 1, checked first; not part of the derived key above.
+    ...(input.precedents !== undefined ? { precedents: input.precedents } : {}),
     idempotencyKey,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
     // Legacy 513: an agent proposing through its Handle never learns who connected which account.

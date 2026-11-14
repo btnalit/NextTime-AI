@@ -5,6 +5,7 @@ import type { GraphTypeUsage } from '../../substrate/graph/index.js';
 import { deriveOntologyPackId } from '../../substrate/ontology/index.js';
 import {
   type AdminProposalOrigin,
+  type OntologyItemLinkEndpointScope,
   type WorkspaceSegmentInput,
   type WorkspaceSegmentPlan,
   applyWorkspaceSegment,
@@ -71,12 +72,46 @@ import { type PackState, classifyPackState } from './state.js';
  *     before it was: the pack is `up_to_date`, its Worker `bindable` (`readWorkerBindings`).
  */
 
+/**
+ * Legacy 705 (L1): what `target`'s ontology items may name in their LinkType ends besides their own
+ * family and the platform-meta ontology — the version's other families, and those of the packs it
+ * requires directly (`requires.packs`; not the packs those require) — with the pack that has each
+ * family `registry` publishes, for the refusal's advice. A required pack's families are those any
+ * of its versions publishes: a pack keeps every family from one version to the next
+ * (`registry.ts`), and a type only a version not installed here declares is in no head of this
+ * workspace, so naming it is legacy 303's refusal, not this one. A module requires nothing
+ * (`application/platform/modules.ts`), so its scope is its own family.
+ */
+export function packLinkEndpointScope(
+  registry: PackRegistry,
+  target: PackVersion,
+): OntologyItemLinkEndpointScope {
+  const familiesOf = (version: PackVersion): string[] =>
+    version.components.flatMap((component) =>
+      component.kind === 'ontology' ? [component.family] : [],
+    );
+  const packOfFamily = new Map<string, string>();
+  for (const entry of registry.values()) {
+    for (const version of entry.versions) {
+      for (const family of familiesOf(version)) packOfFamily.set(family, entry.name);
+    }
+  }
+  const families = new Set(familiesOf(target));
+  for (const required of target.requiredPacks) {
+    for (const version of registry.get(required.name)?.versions ?? []) {
+      for (const family of familiesOf(version)) families.add(family);
+    }
+  }
+  return { families: [...families].sort(), packOfFamily };
+}
+
 /** The change item installing one component (an item per component, in the version's order).
  *  `gates`: what a Worker with no gates yet is bound to, `undefined` for one it is not (see this
- *  module's comment). */
+ *  module's comment). `scope`: what an ontology item's LinkType ends may name (legacy 705). */
 function componentIntent(
   component: PackComponent,
   gates: readonly string[] | undefined,
+  scope: OntologyItemLinkEndpointScope,
 ): WorkspaceSegmentInput['items'][number] {
   switch (component.kind) {
     case 'ontology':
@@ -84,6 +119,7 @@ function componentIntent(
         kind: 'ontology_version',
         family: component.family,
         definition: component.definition,
+        linkEndpointScope: scope,
       };
     case 'skill':
       return { kind: 'skill_version', skillId: component.skillId, content: component.content };
@@ -103,12 +139,15 @@ function componentIntent(
 /** The segment installing `target`: item `n` installs component `n` (ontology families, then
  *  Skills, then Workers — a Worker after the Skills it mounts). `gates`: by WorkerDefinition id,
  *  what a Worker with no gates yet is bound to (an empty list: none, kept as the choice); a Worker
- *  absent from it is bound to nothing and gets no `gates`. */
+ *  absent from it is bound to nothing and gets no `gates`. `registry`: the deployment's packs, for
+ *  what the ontology items' LinkType ends may name (`packLinkEndpointScope`). */
 export function packSegment(
+  registry: PackRegistry,
   entry: PackEntry,
   target: PackVersion,
   gates: ReadonlyMap<string, readonly string[]> = new Map(),
 ): WorkspaceSegmentInput {
+  const scope = packLinkEndpointScope(registry, target);
   return {
     source: {
       kind: 'pack',
@@ -120,6 +159,7 @@ export function packSegment(
       componentIntent(
         component,
         component.kind === 'worker' ? gates.get(component.definitionId) : undefined,
+        scope,
       ),
     ),
   };
@@ -292,6 +332,7 @@ export interface PackInstallPlan {
 async function installSegment(
   client: PoolClient,
   workspaceId: string,
+  registry: PackRegistry,
   entry: PackEntry,
   choice: WorkerGateChoice,
 ): Promise<{
@@ -301,19 +342,32 @@ async function installSegment(
 }> {
   const target = latestPackVersion(entry);
   const candidates = await readWorkerGateCandidates(client, workspaceId, target);
-  const segment = packSegment(entry, target, chooseWorkerGates(target, candidates, choice));
+  const segment = packSegment(
+    registry,
+    entry,
+    target,
+    chooseWorkerGates(target, candidates, choice),
+  );
   return { target, segment, candidates };
 }
 
 /** Plans installing `entry`'s latest version in `workspaceId`: locks its families (until the
- *  transaction ends) and reads what each has now. Writes nothing. */
+ *  transaction ends) and reads what each has now. Writes nothing. `registry`: the deployment's
+ *  packs (`entry` among them), for legacy 705's scope. */
 export async function planPackInstall(
   client: PoolClient,
   workspaceId: string,
+  registry: PackRegistry,
   entry: PackEntry,
   choice: WorkerGateChoice = new Map(),
 ): Promise<PackInstallPlan> {
-  const { target, segment, candidates } = await installSegment(client, workspaceId, entry, choice);
+  const { target, segment, candidates } = await installSegment(
+    client,
+    workspaceId,
+    registry,
+    entry,
+    choice,
+  );
   const plan = await planWorkspaceSegment(client, workspaceId, segment);
   // Read under the plan's locks: what each family has now, for the pack's state (a Worker's
   // without the workspace's own fields) and for the gates each Worker keeps.
@@ -411,7 +465,13 @@ export async function previewPackInstall(
   name: string,
   choice: WorkerGateChoice = new Map(),
 ): Promise<PackInstallPreview> {
-  const install = await planPackInstall(client, workspaceId, requirePack(registry, name), choice);
+  const install = await planPackInstall(
+    client,
+    workspaceId,
+    registry,
+    requirePack(registry, name),
+    choice,
+  );
   // A type one component drops and another declares after the install is not taken out.
   const ontology = install.target.components.flatMap((component) =>
     component.kind === 'ontology' ? [component] : [],
@@ -494,6 +554,7 @@ export async function installPack(
   const { target, segment } = await installSegment(
     client,
     workspaceId,
+    registry,
     entry,
     input.workerGates ?? new Map(),
   );

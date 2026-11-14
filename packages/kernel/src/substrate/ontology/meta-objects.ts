@@ -179,6 +179,30 @@ export async function setGatekeeperConnectionSecretSaltObject(
   return (result.rowCount ?? 0) > 0;
 }
 
+/** Legacy 701 `approve_gate_address_change`: moves a self-connected Gatekeeper Object to a new
+ *  `endpoint` together with the salt of the secret its new host holds — one statement, so the new
+ *  host is never called with the old secret, nor the old host with the new. Only from `fromEndpoint`
+ *  as stored (the change was proposed against it): `false` when no such Object, or its address moved
+ *  since. */
+export async function setGatekeeperAddressObject(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperObjectId: string,
+  move: { readonly fromEndpoint: string; readonly endpoint: string; readonly salt: string },
+): Promise<boolean> {
+  const result = await client.query(
+    `update objects
+     set properties = properties
+           || jsonb_build_object('endpoint', $3::text, 'connectionSecretSalt', $4::text),
+         updated_at = now()
+     where workspace_id = $1 and id = $2 and object_type = 'Gatekeeper'
+       and properties ->> 'endpoint' = $5
+     returning id`,
+    [workspaceId, gatekeeperObjectId, move.endpoint, move.salt, move.fromEndpoint],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 // -------------------------------------------------------------------------------------------
 // Operation (for governance/gatekeepers to call — S2.4 deliverable, the接入包-agnostic manifest
 // registry). Design doc §9.2 "operations 作为平台元本体存于 objects / links，状态与版本在

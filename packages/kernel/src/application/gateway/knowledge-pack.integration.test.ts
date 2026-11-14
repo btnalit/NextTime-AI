@@ -21,6 +21,7 @@ import type {
   Operation,
   PackInstallPreviewWire,
   PackInstallResultWire,
+  PreviewGateInstanceEnableResultWire,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
@@ -480,8 +481,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       await asAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
 
       // 2. The owner connects it.
+      // Legacy 311: the enable names the manifest its preview showed.
+      const { manifestDigest } = await asOwner<PreviewGateInstanceEnableResultWire>(
+        'preview_gate_instance_enable',
+        { gateId: GATE_ID },
+      );
       const linked = await asOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
         gateId: GATE_ID,
+        manifestDigest,
       });
       expect([...linked.publishedOperationNames].sort()).toEqual([
         'document.parse',

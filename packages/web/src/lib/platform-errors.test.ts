@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
-import { platformErrorMessage } from './platform-errors.js';
+import { isStaleMembershipError, platformErrorMessage } from './platform-errors.js';
 
 /** platform-errors.test: the 运行层 page's four refusals (S7-E, `application/platform/runtime.ts`)
  *  read in the viewer's language — they used to fall through to the generic pointer at the
@@ -42,5 +42,43 @@ describe('platformErrorMessage — trial workspace (S11 AA3a)', () => {
     );
     expect(platformErrorMessage(err, zh)).toContain('试验工作区不能设为默认工作区');
     expect(platformErrorMessage(err, en)).toContain('trial workspace cannot be the default');
+  });
+});
+
+describe('platformErrorMessage — removed membership (legacy 730)', () => {
+  it('membership_removed says the role is frozen and the user comes back by being added again', () => {
+    const err = new HttpError(
+      'capability_error',
+      "the user's membership in workspace ws-1 is removed",
+      'membership_removed',
+    );
+    expect(platformErrorMessage(err, zh)).toContain('角色不能再改');
+    expect(platformErrorMessage(err, zh)).toContain('在「加入工作区」里重新加入');
+    expect(platformErrorMessage(err, en)).toContain('Add to a workspace');
+    expect(platformErrorMessage(err, zh)).not.toContain('ws-1');
+  });
+});
+
+describe('platformErrorMessage — replaced membership (#1198 review)', () => {
+  it('membership_replaced says the user is back as a new membership and nothing changed', () => {
+    const err = new HttpError(
+      'capability_error',
+      "the user's membership in workspace ws-1 was removed and the user added back",
+      'membership_replaced',
+    );
+    expect(platformErrorMessage(err, zh)).toContain('又被重新加入了这个工作区');
+    expect(platformErrorMessage(err, zh)).toContain('什么也没有改');
+    expect(platformErrorMessage(err, en)).toContain('as a new membership');
+    expect(platformErrorMessage(err, zh)).not.toContain('ws-1');
+  });
+
+  it('isStaleMembershipError: only the two codes that mean the row on screen is stale', () => {
+    for (const code of ['membership_removed', 'membership_replaced']) {
+      expect(isStaleMembershipError(new HttpError('capability_error', 'x', code))).toBe(true);
+    }
+    for (const code of ['last_owner', 'membership_not_found', undefined]) {
+      expect(isStaleMembershipError(new HttpError('capability_error', 'x', code))).toBe(false);
+    }
+    expect(isStaleMembershipError(new Error('membership_removed'))).toBe(false);
   });
 });

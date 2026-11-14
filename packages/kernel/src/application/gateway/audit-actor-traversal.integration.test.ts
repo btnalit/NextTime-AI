@@ -96,18 +96,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    async function auditIds(): Promise<Set<string>> {
-      const rows = await pool.query<{ id: string }>('select id from audit_records');
-      return new Set(rows.rows.map((row) => row.id));
+    /** Where a walk's audit rows start: every row a call of it writes is written after this
+     *  (its transaction's `now()` is later), so a walk compares only its own rows — not, as it did,
+     *  every id in a database that a full run has filled (legacy 721: tens of thousands of ids sent
+     *  with every call outgrew the test's timeout). */
+    async function walkStart(): Promise<{ since: Date; seen: Set<string> }> {
+      const result = await pool.query<{ now: Date }>('select clock_timestamp() as now');
+      const since = result.rows[0]?.now;
+      if (since === undefined) throw new Error('no clock_timestamp()');
+      return { since, seen: new Set() };
     }
 
-    async function auditRowsSince(seen: Set<string>): Promise<AuditRow[]> {
+    async function auditRowsSince(start: { since: Date; seen: Set<string> }): Promise<AuditRow[]> {
       const rows = await pool.query<AuditRow>(
         `select id, workspace_id, actor_principal_id, actor_user_id, action, payload
-         from audit_records where not (id = any($1::uuid[]))`,
-        [[...seen]],
+         from audit_records where created_at >= $1 and not (id = any($2::uuid[]))`,
+        [start.since, [...start.seen]],
       );
-      for (const row of rows.rows) seen.add(row.id);
+      for (const row of rows.rows) start.seen.add(row.id);
       return rows.rows;
     }
 
@@ -137,7 +143,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const problems: string[] = [];
       const reads = new Set<string>();
       const writes = new Set<string>();
-      const seen = await auditIds();
+      const seen = await walkStart();
 
       for (const capability of capabilities) {
         let succeeded = true;

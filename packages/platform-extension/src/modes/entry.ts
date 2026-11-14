@@ -49,11 +49,12 @@ function buildGateObserveTool(
 
 /**
  * `entry` mode (design doc §7.4, §7.2, S1 scope): the pi extension registered inside a user's
- * persistent entry container. S1 registers only the graph observe group of tools
- * (`find_workers`/`invoke_worker`/gate tools land in S2.7/S2.4); subscribes to pi's `context`
- * event to inject the entry-agent context bootstrap (`get_entry_context`); and subscribes to
- * `input`/`agent_start`/`agent_end` to correlate each pi agent run with a platform Turn and
- * report its outcome back to the kernel.
+ * persistent entry container. Registers `ENTRY_TOOL_CAPABILITY_NAMES` below (the graph reads,
+ * `find_workers` / `invoke_worker` and the rest of the entry agent's capabilities) and projects
+ * one `<gate>.<op>` tool per observe-class Operation (`gate-tool-projection.ts`, refreshed every
+ * turn); subscribes to pi's `context` event to inject the entry-agent context bootstrap
+ * (`get_entry_context`); and subscribes to `input`/`agent_start`/`agent_end` to correlate each pi
+ * agent run with a platform Turn and report its outcome back to the kernel.
  */
 
 /** The S1 graph observe group (design doc §9.3 "graph"), registered verbatim as pi tools. */
@@ -103,6 +104,8 @@ export const ENTRY_TOOL_CAPABILITY_NAMES = [
   'list_goals',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S11 GO17: the person's own earlier goals of the same kind, read before writing a plan.
+  'find_goal_precedents',
 ] as const;
 
 export interface EntryModeOptions {

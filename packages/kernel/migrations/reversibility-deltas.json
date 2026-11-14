@@ -403,6 +403,66 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, governance 0036 row (conditionally reversible): 0036 adds the guard admin_proposal_segments_target_chosen — a workspace segment of an admin proposal is written, and moves to applied, only while its target is among the targets its proposer chose for their admin agent in that trial workspace (admin_agent_targets; the AA4c plan's F5 and D1). v0.61.0 has no targets: its admin agent may propose to any active standard workspace, so on this schema every admin proposal of its with a workspace segment is refused — all of the BASE failures below are that one refusal (\"the workspace segment's target is not among its proposer's targets\"), raised while the test makes its proposal, and each asserts the rule 0036 changes on purpose. This is a behaviour change for a code-only rollback, not a test artefact alone: v0.61.0's own propose path is refused the same way, so code may roll back only after dropping that trigger and its function (0036 header; the §6 row says so). The admin agent is off by default (ADMIN_AGENT_ENABLED), so a deployment that never enabled it never reaches the guard. HEAD's versions of these tests choose the targets first, as the platform's admin agent page does; the replacements assert the new rule: targets are chosen per person and trial workspace, a target not chosen is refused with one code on every channel, a target dropped later blocks its segment until it is chosen again, and the guard holds for a write that does not come from the kernel."
+    },
+    {
+      "migration": "goal/0019_review_acceptance.sql",
+      "baseTests": [
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) a round passed on an earlier plan does not achieve the run once a revision took effect"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) an outcome on the requester’s word rests on their own approved decision naming this run and that outcome — never an agent’s, another run’s or another outcome’s"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation, none of them a review (goal/0019’s guard, S11 GO18)"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word (goal/0019’s guard, S11 GO18)"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) a round passed on an earlier plan does not achieve the run once a revision took effect (goal/0019’s guard, S11 GO18)"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5) an outcome on the requester’s word rests on their own approved decision naming this run and that outcome — never an agent’s, another run’s or another outcome’s; a reviewer_assessed outcome only out of verifying (goal/0019’s guard, S11 GO18)"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, goal 0019 row (S11 GO18a): 0019 rewrites goal_runs_status_guard so that an achieved-by-check run needs a round with no review (B1 of the GO18 independent review) and a reviewer_assessed outcome is recorded — out of verifying only — instead of refused outright. The BASE tests assert the guard's exact refusal text, which now also names reviews; each still gets the refusal it expects, under the new wording. BASE's product code never writes a review check or reviewer_assessed, so every transition it makes is allowed or refused as before. The replacements keep every assertion, with the new messages."
+    },
+    {
+      "migration": "governance/0042_session_revocation_revokes_handles.sql",
+      "baseTests": [
+        {
+          "file": "src/substrate/audit/invariant-checks.integration.test.ts",
+          "fullName": "substrate/audit/invariant-checks (integration, real Postgres) ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/substrate/audit/invariant-checks.integration.test.ts",
+          "fullName": "substrate/audit/invariant-checks (integration, real Postgres) ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle — revoked before its session was, governance 0042), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)"
+        },
+        {
+          "file": "src/governance/capability/session-revocation.integration.test.ts",
+          "fullName": "governance/capability — a revoked session has no valid Handle (integration, real Postgres) issueHandle refuses a revoked session (session_revoked), and the DB refuses the row"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0042: 0042's insert trigger refuses any capability_handles row under a session already revoked (I-H1). The previous release's test fixture inserts its retired source's Handle directly under a session it created revoked; the fixture now inserts the Handle first and revokes the session after. No v0.68.0 product path issues into a revoked session: every reuse lookup filters on expires_at > now(), and every statement that revokes a session pulls expires_at to now."
     }
   ]
 }

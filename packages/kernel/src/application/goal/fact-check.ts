@@ -7,7 +7,8 @@ import {
   evaluatePredicate,
   lintPredicate,
 } from '../../substrate/epistemic/index.js';
-import { factSelectorProblems, predicateCredentialProblems } from './plan.js';
+import { type GraphReadViewer, operationDraftHiddenSql } from '../../substrate/graph/index.js';
+import { factCheckViewer, factSelectorProblems, predicateCredentialProblems } from './plan.js';
 
 /**
  * application/goal/fact-check (S11 GO4c; plan §4.6, I-G5): an acceptance check the platform judges
@@ -26,7 +27,8 @@ import { factSelectorProblems, predicateCredentialProblems } from './plan.js';
  *      `observed`, last confirmed at or after the round opened through a Source the requester does
  *      not own, by a gate observe no Task of this goal triggered, a gate apply of a request not
  *      raised in this goal, or a collector's submission), the most recently confirmed first.
- *      Read under RLS as the requester: a Fact they cannot see is no evidence.
+ *      Read under RLS as the requester, and narrowed for them as every graph read is (legacy 704:
+ *      an Operation draft they may not see is no end): a Fact they cannot see is no evidence.
  *   3. {@link judgeFact} — the predicate over the Fact's own properties, judged on them with
  *      suspected secrets redacted as an observation's result is (`platform-observation.ts`): a
  *      predicate is never an oracle for a value the credential review hides. No predicate: the
@@ -77,35 +79,56 @@ export interface FactEvidence {
   readonly properties: Record<string, unknown>;
 }
 
-/** The Object `ref` names, if it exists and the caller can see it. */
+/** The Object `ref` names, if it exists and `viewer` can see it: under RLS, and (legacy 704) not
+ *  an Operation draft hidden from them (`operation-draft-visibility.ts`). A Fact touching such a
+ *  draft is then no evidence either — its end resolves to nothing. */
 async function resolveObject(
   client: PoolClient,
   workspaceId: string,
+  viewer: GraphReadViewer,
   ref: FactObjectRef,
 ): Promise<string | null> {
+  const hidden = operationDraftHiddenSql('o', '$3', '$4');
   const result =
     'objectId' in ref
       ? await client.query<{ id: string }>(
-          'select id from objects where workspace_id = $1 and id = $2',
-          [workspaceId, ref.objectId],
+          `select o.id from objects o
+            where o.workspace_id = $1 and o.id = $2 and not ${hidden}`,
+          [workspaceId, ref.objectId, viewer.seesEveryDraft, viewer.principalId],
         )
       : await client.query<{ id: string }>(
-          `select id from objects
-            where workspace_id = $1 and object_type = $2 and identity_key = $3::jsonb`,
-          [workspaceId, ref.objectType, JSON.stringify(ref.identity)],
+          `select o.id from objects o
+            where o.workspace_id = $1 and o.object_type = $5 and o.identity_key = $2::jsonb
+              and not ${hidden}`,
+          [
+            workspaceId,
+            JSON.stringify(ref.identity),
+            viewer.seesEveryDraft,
+            viewer.principalId,
+            ref.objectType,
+          ],
         );
   return result.rows[0]?.id ?? null;
 }
 
 /** Step 2 — see the module comment. `since`: when the check's round opened (the row's
- *  `created_at`). `null`: no Fact that may serve as evidence. */
+ *  `created_at`). `requesterId`: whom the graph is read for. `null`: no Fact that may serve as
+ *  evidence. */
 export async function readFactEvidence(
   client: PoolClient,
   workspaceId: string,
-  input: { readonly goalRunId: string; readonly fact: FactCheck; readonly since: Date },
+  input: {
+    readonly goalRunId: string;
+    readonly requesterId: string;
+    readonly fact: FactCheck;
+    readonly since: Date;
+  },
 ): Promise<FactEvidence | null> {
-  const source = await resolveObject(client, workspaceId, input.fact.source);
-  const target = source ? await resolveObject(client, workspaceId, input.fact.target) : null;
+  const viewer = await factCheckViewer(client, workspaceId, input.requesterId);
+  const source = await resolveObject(client, workspaceId, viewer, input.fact.source);
+  const target = source
+    ? await resolveObject(client, workspaceId, viewer, input.fact.target)
+    : null;
   if (!source || !target) return null;
   const result = await client.query<{ id: string; properties: Record<string, unknown> | null }>(
     `select l.id, l.properties

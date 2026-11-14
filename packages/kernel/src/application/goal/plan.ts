@@ -11,6 +11,7 @@ import {
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_BYTES,
+  MAX_PLAN_REVIEW_CHECKS,
   MAX_PLAN_STEPS,
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
@@ -28,10 +29,12 @@ import {
   type StepReconcile,
   StepReconcileSchema,
   type WorkerSpec,
+  boundedEcho,
   operationAbsentAnswers,
+  quotedName,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import { WORKER_CEILING_CAPABILITIES, seesEveryDraft } from '../../governance/capability/index.js';
 import {
   existingGatekeeperIds,
   getGatekeeper,
@@ -55,12 +58,18 @@ import {
   lintPredicate,
   predicateLiterals,
 } from '../../substrate/epistemic/index.js';
+import { type GraphReadViewer, operationDraftHiddenSql } from '../../substrate/graph/index.js';
+import { getType } from '../../substrate/ontology/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
   observeRefusal,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
-import { findGoalPlannerFamily } from '../task/index.js';
+import {
+  findGoalPlannerFamily,
+  findGoalReviewerFamily,
+  requesterAllowedModels,
+} from '../task/index.js';
 import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../worker/index.js';
 
 /**
@@ -147,7 +156,14 @@ import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../wor
  *     so on those only the Fact being there can be checked;
  *   - `requester_confirm` — `prompt` is what the requester is asked to confirm; asked once every
  *     check the platform makes passed. At most one, and no prompt that looks like it carries a
- *     credential.
+ *     credential;
+ *   - `review` (S11 GO18, the goal's acceptance only) — an independent reviewer the platform
+ *     starts once every check it makes passed, scoring `criteria` (keys unique, descriptions free
+ *     of credentials) over the accepted output and files of `subjects` (steps of the plan, each
+ *     once); it passes on the platform's arithmetic over the scores against `passAt`
+ *     (`review.ts`). `model`, when set, is one the llm-proxy catalog offers and the requester's
+ *     workspace allows. At most {@link MAX_PLAN_REVIEW_CHECKS}. A proxy indicator: the goal is then
+ *     achieved on `reviewer_assessed`, or on the requester's word when the plan also asks them.
  * A plan without any is allowed: its goal is achieved only on the requester's word (an implicit
  * `requester_confirm` whose prompt is the goal statement) — {@link planHints} says so, for the
  * confirmation card to show.
@@ -257,6 +273,7 @@ export function parsePlan(plan: unknown): GoalPlan {
     );
   }
   problems.push(...acceptanceShapeProblems(shaped.acceptance ?? [], lintBudget, ''));
+  problems.push(...reviewShapeProblems(shaped.acceptance ?? [], keys));
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return shaped;
 }
@@ -293,6 +310,8 @@ function acceptanceShapeProblems(
       }
       return;
     }
+    // GO18: a review's own rules are `reviewShapeProblems`'s.
+    if (check.kind === 'review') return;
     if (check.kind === 'fact_predicate') {
       for (const problem of factSelectorProblems(check.fact)) problems.push(`${where}: ${problem}`);
     }
@@ -310,6 +329,48 @@ function acceptanceShapeProblems(
     for (const problem of predicateCredentialProblems(expect)) {
       problems.push(`${where}: ${problem}`);
     }
+  });
+  return problems;
+}
+
+/** S11 GO18: the plan's reviews — at most {@link MAX_PLAN_REVIEW_CHECKS}, each reviewing steps of
+ *  the plan (`stepKeys`) once each and scoring criteria whose keys are unique and whose
+ *  descriptions carry nothing the credential review counts (the reviewer and every person reading
+ *  the plan read them as written). */
+function reviewShapeProblems(
+  acceptance: readonly AcceptanceCheck[],
+  stepKeys: ReadonlySet<string>,
+): readonly string[] {
+  const problems: string[] = [];
+  let reviews = 0;
+  acceptance.forEach((check, index) => {
+    if (check.kind !== 'review') return;
+    const where = `acceptance[${index}] "${check.key}"`;
+    reviews += 1;
+    if (reviews === MAX_PLAN_REVIEW_CHECKS + 1) {
+      problems.push(`${where}: a plan has at most ${MAX_PLAN_REVIEW_CHECKS} review checks`);
+    }
+    const subjects = new Set<string>();
+    for (const subject of check.subjects) {
+      if (subjects.has(subject)) {
+        problems.push(`${where}: reviews step "${subject}" more than once`);
+      } else if (!stepKeys.has(subject)) {
+        problems.push(`${where}: reviews step "${subject}", which is not in the plan`);
+      }
+      subjects.add(subject);
+    }
+    const criteria = new Set<string>();
+    check.criteria.forEach((criterion, at) => {
+      const named = `${where}: criteria[${at}] "${criterion.key}"`;
+      if (criteria.has(criterion.key)) problems.push(`${named}: the key appears more than once`);
+      criteria.add(criterion.key);
+      const found = findSuspectedSecrets(criterion.description);
+      if (found.count > 0) {
+        problems.push(
+          `${named}: the description looks like it carries a credential (${found.count} suspected) — a plan does not carry credentials`,
+        );
+      }
+    });
   });
   return problems;
 }
@@ -340,6 +401,32 @@ export function factSelectorProblems(fact: FactCheck): readonly string[] {
 export function planHints(plan: GoalPlan): readonly PlanHint[] {
   const acceptance = plan.acceptance ?? [];
   if (acceptance.some((check) => isPlatformAcceptanceCheck(check.kind))) return [];
+  // S11 GO18 (independent review N4: a hint, no confirmation added): reviews and
+  // nothing else — no observation of the real state, no person — achieve the goal on a model's
+  // scores alone, and whoever confirms the plan should know it.
+  const reviewed = acceptance.some((check) => check.kind === 'review');
+  const confirmed = acceptance.some((check) => check.kind === 'requester_confirm');
+  if (reviewed && !confirmed) {
+    return [
+      {
+        code: 'review_only',
+        message:
+          'the plan has no check the platform makes and asks no confirmation of the requester: the goal is achieved once its reviews pass, on a model’s scores alone',
+      },
+    ];
+  }
+  // S11 GO18 (UX acceptance of #1102): reviews and the requester's word — not the requester's
+  // word alone: they confirm only once every review has passed (`confirm_goal_acceptance`), and
+  // a review below its line fails the goal whatever they would say.
+  if (reviewed) {
+    return [
+      {
+        code: 'review_and_confirm',
+        message:
+          'the plan has no check the platform makes: the goal is achieved only when its reviews pass and the requester then confirms it',
+      },
+    ];
+  }
   return [
     {
       code: 'requester_confirm_only',
@@ -720,7 +807,9 @@ interface Reviewed<T> {
 /** What a writer wrote of a call sent exactly as read: nothing the read showed differently from
  *  what is stored (`original`, the same shape) — each such value left out (`null`), the shape
  *  kept for the checks to read the plan by. What the read shows as stored stays: it is the same
- *  value, and the checks find nothing in it but a `[redacted]` mark stored before they ran. */
+ *  value, and the checks find nothing in it but a `[redacted]` mark stored before they ran. A key
+ *  the read showed differently — a credential written as a field name, masked (legacy 444) — is
+ *  left out with all under it: the writer wrote none of it. */
 function writtenOfRead(shown: unknown, original: unknown): unknown {
   if (Array.isArray(shown) && Array.isArray(original)) {
     return shown.map((item, i) => writtenOfRead(item, original[i]));
@@ -728,7 +817,9 @@ function writtenOfRead(shown: unknown, original: unknown): unknown {
   if (isRecord(shown) && isRecord(original)) {
     // `fromEntries` defines own properties, so a `"__proto__"` key stays a field.
     return Object.fromEntries(
-      Object.entries(shown).map(([key, inner]) => [key, writtenOfRead(inner, original[key])]),
+      Object.entries(shown).flatMap(([key, inner]) =>
+        Object.hasOwn(original, key) ? [[key, writtenOfRead(inner, original[key])]] : [],
+      ),
     );
   }
   return isDeepStrictEqual(shown, original) ? shown : null;
@@ -943,6 +1034,8 @@ export async function validatePlan(
   // S11 GO9a: the goal planner's family is the platform's, for planning rounds only — its Worker
   // reads a planning Task's input, so as a step it could do nothing useful.
   const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
+  // S11 GO18: so is the goal reviewer's, for review checks only.
+  const reviewerFamily = await findGoalReviewerFamily(client, workspaceId);
   for (const step of parsed.steps) {
     const definition = await getWorkerDefinition(client, workspaceId, step.worker);
     const ref = `${step.worker.definitionId}@${step.worker.version}`;
@@ -951,6 +1044,10 @@ export async function validatePlan(
     } else if (step.worker.definitionId === plannerFamily) {
       problems.push(
         `step "${step.key}": WorkerDefinition ${ref} is the goal planner's; it plans goals and does not run a step`,
+      );
+    } else if (step.worker.definitionId === reviewerFamily) {
+      problems.push(
+        `step "${step.key}": WorkerDefinition ${ref} is the goal reviewer's; it reviews goals and does not run a step`,
       );
     } else if (definition.kind !== 'worker') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.kind}-kind`);
@@ -977,16 +1074,23 @@ export async function validatePlan(
     }
     for (const [index, check] of (step.acceptance ?? []).entries()) {
       const where = `step "${step.key}": acceptance[${index}] "${check.key}"`;
-      for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
+      for (const problem of await acceptanceReferenceProblems(
+        client,
+        workspaceId,
+        requester,
+        check,
+      )) {
         problems.push(`${where}: ${problem}`);
       }
     }
   }
   for (const [index, check] of (parsed.acceptance ?? []).entries()) {
     const where = `acceptance[${index}] "${check.key}"`;
-    for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
-      problems.push(`${where}: ${problem}`);
-    }
+    const found =
+      check.kind === 'review'
+        ? await reviewModelProblems(client, workspaceId, requester, check.model, sources)
+        : await acceptanceReferenceProblems(client, workspaceId, requester, check);
+    for (const problem of found) problems.push(`${where}: ${problem}`);
   }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed;
@@ -1058,45 +1162,242 @@ export async function workerSpecProblems(
   return problems;
 }
 
+/** S11 GO18: a review's `model`, when it names one — offered by the llm-proxy catalog (when
+ *  `sources` reads it) and allowed by the requester's workspace (AgentPolicy `allowedModels`).
+ *  Checked again when the review starts (`review.ts`): either can change. */
+async function reviewModelProblems(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+  model: string | undefined,
+  sources: PlanReferenceSources,
+): Promise<readonly string[]> {
+  if (model === undefined) return [];
+  const problems: string[] = [];
+  if (sources.modelCatalog && !(await sources.modelCatalog()).has(model)) {
+    problems.push(`model — one the llm-proxy catalog does not offer: ${JSON.stringify(model)}`);
+  }
+  const allowed = await requesterAllowedModels(client, workspaceId, requester);
+  if (allowed.length > 0 && !allowed.includes(model)) {
+    problems.push(`model — one this workspace does not allow: ${JSON.stringify(model)}`);
+  }
+  return problems;
+}
+
 /** What an acceptance check refers to, as of now: an observation's what
  *  {@link observationCheckProblems} accepts — an absence check's Operation declaring, besides,
  *  which answers mean "does not exist" (without, nothing it answers could meet the check); a fact
- *  check's Objects named by id exist in the workspace (one named by identity may be created by the
- *  goal's own work; a link type is not checked against the ontology here). */
+ *  check's Objects named by id exist in the workspace for its requester (legacy 704: an Operation
+ *  draft they may not see does not), and one named by identity is one an identity
+ *  could ever name ({@link factIdentityProblems}; it may be created by the goal's own work; a link
+ *  type is not checked against the ontology here). */
 async function acceptanceReferenceProblems(
   client: PoolClient,
   workspaceId: string,
+  requester: string,
   check: AcceptanceCheck | StepAcceptanceCheck,
 ): Promise<readonly string[]> {
-  if (check.kind === 'requester_confirm') return [];
+  if (check.kind === 'requester_confirm' || check.kind === 'review') return [];
   if (check.kind === 'observe_predicate' || check.kind === 'observe_absent') {
     return (await observationCheckProblems(client, workspaceId, check.check)).map(
       (problem) => `check: ${problem}`,
     );
   }
   const problems: string[] = [];
+  const viewer = await factCheckViewer(client, workspaceId, requester);
   for (const [end, ref] of [
     ['source', check.fact.source],
     ['target', check.fact.target],
   ] as const) {
-    if (!('objectId' in ref)) continue;
-    if (!(await objectExists(client, workspaceId, ref))) {
+    if (!('objectId' in ref)) {
+      for (const problem of await factIdentityProblems(
+        client,
+        workspaceId,
+        requester,
+        viewer,
+        ref,
+      )) {
+        problems.push(`fact: the ${end}'s ${problem}`);
+      }
+      continue;
+    }
+    if (!(await objectExists(client, workspaceId, viewer, ref))) {
       problems.push(`fact: the ${end} Object ${ref.objectId} does not exist in this workspace`);
     }
   }
   return problems;
 }
 
+/** How many of an ObjectType's Objects {@link factIdentityProblems} reads to see how the type's
+ *  identities are written (which fields, which JSON types) — bounded, so a large type costs a
+ *  proposal no more than this. */
+const IDENTITY_SAMPLE = 1000;
+
+/** JSON's name for a value's type, as Postgres `jsonb_typeof` gives it. */
+function jsonTypeOf(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value === 'object' ? 'object' : typeof value;
+}
+
+/**
+ * Legacy 466: why a fact check's Object named by ObjectType and identity could never be the one
+ * the check means. Such an Object is matched as written — `objects.identity_key` equal to the
+ * identity, as jsonb (`fact-check.ts`, and goal/0007's `goal_fact_endpoint_is` in the database) —
+ * so `"3"` is not `3`, and a field more or fewer is another identity: a wrong one used to leave the
+ * check waiting forever for evidence that could not exist, with nothing said.
+ *
+ * An Object of that type with exactly this identity already in the workspace settles it: the
+ * check names something that is there. Otherwise the identity must be one such an Object could be
+ * written with:
+ *   - **its fields** are the ObjectType's `identityKey`, no more and no fewer, when the requester's
+ *     ontology declares one — unless an Object of the type in the workspace is identified by
+ *     exactly these fields: a gate's observe and a Worker's result write identities as they come,
+ *     not held to the ontology (`submit_observations` is), so a shape the graph already holds is
+ *     one its writers use;
+ *   - **each value's JSON type** is one the type's Objects in the workspace store that field with,
+ *     when they store it at all — the ontology declares no property types, so what the graph holds
+ *     is the only evidence of them.
+ * Both read at most {@link IDENTITY_SAMPLE} of the type's Objects. An ObjectType the ontology does
+ * not declare has no key to check (an `observed` Link reaches anything a gate observes), only its
+ * stored types. Nothing here reads a Fact or a property. Every read is the requester's
+ * (`viewer`, legacy 704): an Operation draft they may not see neither settles it nor shapes it.
+ */
+async function factIdentityProblems(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+  viewer: GraphReadViewer,
+  ref: Extract<FactObjectRef, { objectType: string }>,
+): Promise<readonly string[]> {
+  const exact = await client.query(
+    `select 1 from objects o
+      where o.workspace_id = $1 and o.object_type = $2 and o.identity_key = $3::jsonb
+        and not ${operationDraftHiddenSql('o', '$4', '$5')}
+      limit 1`,
+    [
+      workspaceId,
+      ref.objectType,
+      JSON.stringify(ref.identity),
+      viewer.seesEveryDraft,
+      viewer.principalId,
+    ],
+  );
+  if ((exact.rowCount ?? 0) > 0) return [];
+
+  const problems: string[] = [];
+  const type = quotedName(ref.objectType);
+  const fields = Object.keys(ref.identity);
+  const declared = await getType(client, workspaceId, requester, ref.objectType);
+  const identityKey = declared?.kind === 'object' ? declared.identityKey : undefined;
+  if (identityKey && identityKey.length > 0) {
+    const missing = identityKey.filter((field) => !fields.includes(field));
+    const extra = fields.filter((field) => !identityKey.includes(field));
+    if (
+      (missing.length > 0 || extra.length > 0) &&
+      !(await someObjectIdentifiedBy(client, workspaceId, viewer, ref.objectType, fields))
+    ) {
+      const names = (list: readonly string[]) => list.map((field) => quotedName(field)).join(', ');
+      const parts = [
+        missing.length > 0 ? `${names(missing)} missing` : '',
+        extra.length > 0 ? `${names(extra)} not part of it` : '',
+      ].filter((part) => part !== '');
+      problems.push(
+        `identity does not have the fields of ObjectType ${type}'s identityKey (${names(identityKey)}): ${parts.join('; ')} — and no ${type} Object in this workspace is identified by these fields, so none could match`,
+      );
+    }
+  }
+
+  const stored = await client.query<{ field: string; types: string[] }>(
+    `select e.key as field,
+            array_agg(distinct jsonb_typeof(e.value) order by jsonb_typeof(e.value)) as types
+       from (select s.identity_key from objects s
+              where s.workspace_id = $1 and s.object_type = $2
+                and jsonb_typeof(s.identity_key) = 'object'
+                and not ${operationDraftHiddenSql('s', '$5', '$6')}
+              limit $4) o
+       cross join lateral jsonb_each(o.identity_key) e
+      where e.key = any($3::text[])
+      group by e.key`,
+    [
+      workspaceId,
+      ref.objectType,
+      fields,
+      IDENTITY_SAMPLE,
+      viewer.seesEveryDraft,
+      viewer.principalId,
+    ],
+  );
+  const storedTypes = new Map(stored.rows.map((row) => [row.field, row.types]));
+  for (const field of fields) {
+    const types = storedTypes.get(field);
+    const value = ref.identity[field];
+    const written = jsonTypeOf(value);
+    if (!types || types.includes(written)) continue;
+    problems.push(
+      `identity field ${quotedName(field)} is a ${written} (${boundedEcho(JSON.stringify(value))}), but the ${type} Objects in this workspace store it as ${types.length === 1 ? 'a ' : ''}${types.join(' or ')} — an identity is matched as written`,
+    );
+  }
+  return problems;
+}
+
+/** Whether one of the first {@link IDENTITY_SAMPLE} `objectType` Objects in the workspace is
+ *  identified by exactly `fields` (jsonb keys are unique, as are an object's own keys: holding all
+ *  of them and as many is the same set). */
+async function someObjectIdentifiedBy(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: GraphReadViewer,
+  objectType: string,
+  fields: readonly string[],
+): Promise<boolean> {
+  const found = await client.query(
+    `select 1
+       from (select s.identity_key from objects s
+              where s.workspace_id = $1 and s.object_type = $2
+                and jsonb_typeof(s.identity_key) = 'object'
+                and not ${operationDraftHiddenSql('s', '$5', '$6')}
+              limit $4) o
+      where o.identity_key ?& $3::text[]
+        and (select count(*) from jsonb_object_keys(o.identity_key)) = cardinality($3::text[])
+      limit 1`,
+    [workspaceId, objectType, fields, IDENTITY_SAMPLE, viewer.seesEveryDraft, viewer.principalId],
+  );
+  return (found.rowCount ?? 0) > 0;
+}
+
 async function objectExists(
   client: PoolClient,
   workspaceId: string,
+  viewer: GraphReadViewer,
   ref: Extract<FactObjectRef, { objectId: string }>,
 ): Promise<boolean> {
-  const result = await client.query('select 1 from objects where workspace_id = $1 and id = $2', [
-    workspaceId,
-    ref.objectId,
-  ]);
+  const result = await client.query(
+    `select 1 from objects o
+      where o.workspace_id = $1 and o.id = $2
+        and not ${operationDraftHiddenSql('o', '$3', '$4')}`,
+    [workspaceId, ref.objectId, viewer.seesEveryDraft, viewer.principalId],
+  );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Legacy 704: who a fact check's Objects are read for — its requester, as every graph read is
+ * narrowed for a viewer (`substrate/graph/operation-draft-visibility.ts`): an Operation draft they
+ * may not see is not there, at proposal ({@link validatePlan}: neither "does not exist" nor an
+ * identity's shape or stored types may tell one apart) and when the check is judged
+ * (`fact-check.ts`). A requester who is no principal of the workspace sees no draft.
+ */
+export async function factCheckViewer(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+): Promise<GraphReadViewer> {
+  const viewer = await planViewer(client, workspaceId, requester);
+  return {
+    principalId: requester,
+    seesEveryDraft: viewer !== null && seesEveryDraft(viewer.role),
+  };
 }
 
 /** What a reconcile declaration refers to, as of now: its action a published execute-class

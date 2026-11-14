@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runWithCorrelationId } from '../../substrate/correlation/index.js';
-import { OutboundTargetRefusedError } from '../outbound-target/index.js';
+import { OutboundTargetRefusedError, createOutboundTargetGuard } from '../outbound-target/index.js';
 import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
@@ -14,6 +14,7 @@ import {
   deriveConnectionSecret,
   gateAbsenceOf,
   gateFailureRetry,
+  gateRefusalOf,
   platformGateTarget,
 } from './index.js';
 
@@ -517,6 +518,67 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  // Legacy 413: a self-connected gate already registered at http:// on a public address is never
+  // called again — the call would carry its connection secret (and, for a connected account, the
+  // credential) across the internet unencrypted. The same gate over https://, or at http:// on a
+  // LAN address, is called as before.
+  it('refuses every call to a self-connected http:// public endpoint, sending nothing', async () => {
+    const { fetchImpl, calls } = recordingFetch();
+    const lanAddress = [192, 168, 1, 20].join('.');
+    const addresses: Record<string, string> = {
+      'gate.owner.example': '93.184.216.34',
+      'gate.home.example': lanAddress,
+    };
+    const client = new HttpGatekeeperClient({
+      fetchImpl,
+      token: GATE_TOKEN,
+      outboundTargetGuard: createOutboundTargetGuard({
+        policy: { platformSubnets: [] },
+        resolve: async (host) => [addresses[host] ?? '93.184.216.34'],
+      }),
+    });
+    const target = (endpoint: string) => ({
+      endpoint,
+      credential: { kind: 'connection' as const, workspaceId: WORKSPACE, salt: SALT },
+    });
+    const plaintextPublic = target('http://gate.owner.example:8090');
+    for (const send of [
+      () => client.health(plaintextPublic),
+      () => client.observe(plaintextPublic, { operation: 'x', operationDigest: DIGEST }),
+      () =>
+        client.apply(plaintextPublic, {
+          operation: 'x',
+          actionRequestId: 'ar-1',
+          operationDigest: DIGEST,
+        }),
+      () =>
+        client.storeConnectedAccount(plaintextPublic, {
+          onBehalfOf: 'p-1',
+          credential: { token: 'synthetic-not-a-secret' },
+        }),
+    ]) {
+      const thrown = await send().catch((err: unknown) => err);
+      expect(thrown).toMatchObject({
+        name: 'GatekeeperClientError',
+        code: 'target_refused',
+        status: 0,
+        targetRefusal: 'plaintext-public',
+      });
+      expect((thrown as Error).message).toContain('plain http:// URL');
+      // Legacy 700: a refusal the caller can act on, not an upstream failure.
+      expect(gateRefusalOf(thrown as GatekeeperClientError)).toEqual({
+        status: 424,
+        code: 'target_refused',
+        details: { reason: 'plaintext-public' },
+      });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await client.health(target('https://gate.owner.example:8443'));
+    await client.health(target('http://gate.home.example:8090'));
+    expect(calls).toHaveLength(2);
+  });
+
   it('does not run the guard for a platform target (a provisioned gate is not owner-supplied)', async () => {
     const { fetchImpl } = recordingFetch();
     const guard = vi.fn(async () => {
@@ -843,6 +905,39 @@ describe('gateFailureRetry — whether a failed call is worth making again (S11 
         jsonResponse({ ok: false, error: { code: 'invalid_params', message: 'no' } }, 400),
       ),
     ).toBe('deterministic');
+  });
+});
+
+describe('gateRefusalOf — the client’s own target_refused (legacy 700)', () => {
+  it('passes it through as 424 with the rule, only as the client raises it', () => {
+    expect(
+      gateRefusalOf(
+        new GatekeeperClientError('not sent', {
+          code: 'target_refused',
+          status: 0,
+          targetRefusal: 'platform-subnet',
+        }),
+      ),
+    ).toEqual({ status: 424, code: 'target_refused', details: { reason: 'platform-subnet' } });
+    // Without a rule (nothing else raises it, but the shape holds).
+    expect(
+      gateRefusalOf(new GatekeeperClientError('not sent', { code: 'target_refused', status: 0 })),
+    ).toEqual({ status: 424, code: 'target_refused' });
+  });
+
+  it('never takes a gate’s answer for it: an answer carries the status it came with', async () => {
+    for (const status of [424, 400, 502]) {
+      const client = new HttpGatekeeperClient({
+        token: 't'.repeat(32),
+        fetchImpl: async () =>
+          jsonResponse({ ok: false, error: { code: 'target_refused', message: 'mine' } }, status),
+      });
+      const err = await client
+        .observe(GATE, { operation: 'svc.status', params: {}, operationDigest: DIGEST })
+        .catch((thrown: unknown) => thrown);
+      expect(err).toMatchObject({ code: 'target_refused', status });
+      expect(gateRefusalOf(err as GatekeeperClientError), String(status)).toBeUndefined();
+    }
   });
 });
 

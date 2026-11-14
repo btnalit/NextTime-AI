@@ -1,4 +1,9 @@
-import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
+import type {
+  AvailableGateInstanceWire,
+  GatekeeperListItemWire,
+  OperationSummaryWire,
+  Role,
+} from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -196,6 +201,32 @@ export function SystemsPage({
     {},
     { autoLoadAll: true },
   );
+
+  // Legacy 716: an owner's cards mark a gate the workspace connected itself whose move to a new
+  // address awaits a platform administrator (`list_gatekeepers`' `addressChangePending`, given to
+  // owners only — so the read is held until the role is known, and made by owners alone).
+  const gatekeepersList = useCapabilityList<GatekeeperListItemWire>(
+    http,
+    'list_gatekeepers',
+    {},
+    { enabled: can('grant_capability') === true },
+  );
+  const movePendingGates = useMemo(() => {
+    const ids = new Set<string>();
+    if (gatekeepersList.state.status === 'ready') {
+      for (const item of gatekeepersList.state.data.items) {
+        if (item.addressChangePending === true) ids.add(item.id);
+      }
+    }
+    return ids;
+  }, [gatekeepersList.state]);
+  // A proposal is made or withdrawn in the move sheet, or withdrawn in 「健康与操作」: read the
+  // marks again when either closes (an administrator's decision shows on the next visit).
+  const readsMoves = can('grant_capability') === true;
+  const reloadMoves = gatekeepersList.reload;
+  const rereadMoves = useCallback(() => {
+    if (readsMoves) void reloadMoves();
+  }, [readsMoves, reloadMoves]);
 
   const healthByGate = useMemo(() => {
     const map = new Map<
@@ -675,6 +706,8 @@ export function SystemsPage({
                 selfPrincipalId={selfPrincipalId}
                 platformAdmin={platformAdmin}
                 current={gate.gateId === pointedGatekeeperId}
+                addressChangePending={movePendingGates.has(gate.gateId)}
+                onAddressChangeClosed={rereadMoves}
               />
             );
           })}
@@ -988,7 +1021,11 @@ export function SystemsPage({
 
       <Sheet
         open={selectedGatekeeperId !== undefined}
-        onOpenChange={(open) => !open && onSelectGatekeeper?.(null)}
+        onOpenChange={(open) => {
+          if (open) return;
+          onSelectGatekeeper?.(null);
+          rereadMoves();
+        }}
       >
         <SheetContent data-testid="gatekeeper-detail-drawer">
           <SheetHeader>

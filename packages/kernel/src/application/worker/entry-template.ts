@@ -224,23 +224,36 @@ export async function proposeEntryTemplateUpgrade(
     : { ...template.definition };
   validateWorkerDefinitionContent('entry', definition);
 
-  if (current) {
-    const mine = await client.query<{ version: number; definition: Record<string, unknown> }>(
-      `select version, definition from worker_definitions
-       where workspace_id = $1 and id = $2 and status = 'draft' and proposed_by = $3
-       order by version desc`,
-      [workspaceId, current.id, principalId],
-    );
-    const wanted = canonicalJson(definition);
-    const same = mine.rows.find((row) => canonicalJson(row.definition) === wanted);
-    if (same) {
-      const draft = await getWorkerDefinition(client, workspaceId, {
-        definitionId: current.id,
-        version: same.version,
-      });
-      if (draft)
-        return { draft, templateDigest: template.digest, basedOn, differs, created: false };
-    }
+  // The caller's own draft with this very content, returned instead of a second one: the next
+  // version of the published family, or — none published (legacy 691) — the first version of an
+  // entry family nothing was ever published from (a new family per call otherwise).
+  const mine = await client.query<{
+    id: string;
+    version: number;
+    definition: Record<string, unknown>;
+  }>(
+    current
+      ? `select id, version, definition from worker_definitions
+          where workspace_id = $1 and id = $3 and kind = 'entry' and status = 'draft'
+            and proposed_by = $2
+          order by version desc`
+      : `select d.id, d.version, d.definition from worker_definitions d
+          where d.workspace_id = $1 and d.kind = 'entry' and d.status = 'draft'
+            and d.proposed_by = $2
+            and not exists (
+              select 1 from worker_definitions o
+               where o.workspace_id = d.workspace_id and o.id = d.id and o.status <> 'draft')
+          order by d.created_at desc, d.id, d.version desc`,
+    current ? [workspaceId, principalId, current.id] : [workspaceId, principalId],
+  );
+  const wanted = canonicalJson(definition);
+  const same = mine.rows.find((row) => canonicalJson(row.definition) === wanted);
+  if (same) {
+    const draft = await getWorkerDefinition(client, workspaceId, {
+      definitionId: same.id,
+      version: same.version,
+    });
+    if (draft) return { draft, templateDigest: template.digest, basedOn, differs, created: false };
   }
 
   const draft = await proposeWorkerDefinition(client, workspaceId, principalId, {

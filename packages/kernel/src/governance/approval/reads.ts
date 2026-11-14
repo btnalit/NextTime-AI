@@ -18,6 +18,7 @@ import {
   type ActionRequestDbRow,
   ActionRequestNotFoundError,
   type ActionRequestRow,
+  IN_FLIGHT_ACTION_REQUEST_STATUSES,
   mapActionRequestRow,
 } from './types.js';
 
@@ -590,4 +591,25 @@ export async function getOperationStats(
       ? a.operationName.localeCompare(b.operationName)
       : a.gatekeeperId.localeCompare(b.gatekeeperId),
   );
+}
+
+/** Legacy 701: the requests of one Gatekeeper not finished yet (`IN_FLIGHT_ACTION_REQUEST_STATUSES`)
+ *  — `total`, and `unbound`, those with no gate address on file (`gate_endpoint_key` null: made
+ *  before governance 0044 knew the address). An address change shows the first to whoever decides
+ *  it (each such request runs only at the address it was made for, I-A3) and is refused while the
+ *  second is not zero (`gate_address_change_blocked`): an unbound request would otherwise run at
+ *  the new address. */
+export async function countInFlightActionRequestsForGatekeeper(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<{ readonly total: number; readonly unbound: number }> {
+  const result = await client.query<{ total: string; unbound: string }>(
+    `select count(*) as total, count(*) filter (where gate_endpoint_key is null) as unbound
+       from action_requests
+      where workspace_id = $1 and gatekeeper_id = $2 and status = any($3::text[])`,
+    [workspaceId, gatekeeperId, IN_FLIGHT_ACTION_REQUEST_STATUSES],
+  );
+  const row = result.rows[0];
+  return { total: Number(row?.total ?? 0), unbound: Number(row?.unbound ?? 0) };
 }

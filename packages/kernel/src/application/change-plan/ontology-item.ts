@@ -1,14 +1,23 @@
+import { PLATFORM_META_ONTOLOGY_FAMILY } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import {
+  type NamedOntologyLinkEndpointProblem,
   type OntologyDefinition,
   OntologyDefinitionSchema,
+  OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
+  type OntologyLinkEndpointProblems,
+  type OntologyLinkEndpointScope,
   type OntologyNamespaceConflict,
   OntologyNamespaceConflictError,
   type OntologyVersionRow,
-  assertOntologyNamespace,
+  type PendingOntologyHead,
+  assertOntologyFamilyName,
+  assertOntologyPublishable,
   deprecatePublishedOntologyVersion,
   deriveOntologyPackId,
+  loadOntologyFamilyId,
   loadOntologyVersion,
   loadPublishedOntologyHead,
   lockOntologyFamily,
@@ -42,9 +51,39 @@ import type { ChangeItemOrigin } from './family-item.js';
 
 export interface OntologyVersionIntent {
   readonly kind: 'ontology_version';
-  /** The ontology family's stable name, e.g. a module's (`deriveOntologyPackId`). */
+  /** The ontology family's stable name, e.g. a module's (`deriveOntologyPackId`). Legacy 706: a
+   *  family name's shape, never `platform-meta` (F3); recorded as the family's name when it is
+   *  published (`ontology_families`). */
   readonly family: string;
   readonly definition: OntologyDefinition;
+  /** Legacy 705 (L1), set by a pack's install (`application/packs/install.ts`) and only there:
+   *  what its LinkType ends may name. Absent (an admin proposal's item): any published family, as
+   *  legacy 303 alone. */
+  readonly linkEndpointScope?: OntologyItemLinkEndpointScope;
+}
+
+/** Legacy 705 (L1): the families, by name, a pack's ontology item may name in its LinkType ends
+ *  besides its own family and the platform-meta ontology — the version's other families and those
+ *  of the packs it requires directly — and, for the refusal's advice, the pack that has each
+ *  family the deployment's packs publish. */
+export interface OntologyItemLinkEndpointScope {
+  readonly families: readonly string[];
+  readonly packOfFamily: ReadonlyMap<string, string>;
+}
+
+/** The scope by id in `workspaceId`: the item's own family, the platform-meta ontology (when this
+ *  workspace has it named — every workspace created or migrated since legacy 706), and `families`
+ *  (their ids derived from their names, F2). */
+async function linkEndpointScopeIds(
+  client: PoolClient,
+  workspaceId: string,
+  ontologyId: string,
+  scope: OntologyItemLinkEndpointScope,
+): Promise<OntologyLinkEndpointScope> {
+  const familyIds = new Set([ontologyId, ...scope.families.map(deriveOntologyPackId)]);
+  const meta = await loadOntologyFamilyId(client, workspaceId, PLATFORM_META_ONTOLOGY_FAMILY);
+  if (meta !== null) familyIds.add(meta);
+  return { familyIds };
 }
 
 /** Type names of an ontology definition, per section, sorted. */
@@ -145,12 +184,20 @@ export async function lockOntologyItem(
 
 /** The item's dry run: validates the definition, reads the family's published head, classifies the
  *  change, and checks I-P1 (another family's ObjectType / ActionType name refuses with
- *  `OntologyNamespaceConflictError` here, at review, rather than only at apply). Writes nothing. */
+ *  `OntologyNamespaceConflictError` here, at review, rather than only at apply) and legacy 303 (a
+ *  LinkType end naming no declared ObjectType refuses with `OntologyLinkEndpointError`, likewise —
+ *  `pending` are the segment's earlier ontology items, published before this one when it applies),
+ *  and for a pack's item legacy 705 (an end naming a type of a family the pack does not require
+ *  refuses with `OntologyLinkEndpointOutsideRequiresError`, saying which pack has it). A family
+ *  name that is not one, or `platform-meta`, throws `OntologyFamilyNameError` (legacy 706). Writes
+ *  nothing. */
 export async function planOntologyItem(
   client: PoolClient,
   workspaceId: string,
   intent: OntologyVersionIntent,
+  pending: readonly PendingOntologyHead[] = [],
 ): Promise<PlannedOntologyItem> {
+  assertOntologyFamilyName(intent.family);
   const definition = OntologyDefinitionSchema.parse(intent.definition);
   const ontologyId = deriveOntologyPackId(intent.family);
   const head = await loadPublishedOntologyHead(client, workspaceId, ontologyId);
@@ -159,7 +206,21 @@ export async function planOntologyItem(
     ? { version: head.version, definitionDigest: contentDigest(head.definition) }
     : null;
   const unchanged = before?.definitionDigest === definitionDigest;
-  if (!unchanged) await assertOntologyNamespace(client, workspaceId, ontologyId, definition);
+  if (!unchanged) {
+    const scope =
+      intent.linkEndpointScope === undefined
+        ? undefined
+        : await linkEndpointScopeIds(client, workspaceId, ontologyId, intent.linkEndpointScope);
+    try {
+      await assertOntologyPublishable(client, workspaceId, ontologyId, definition, pending, scope);
+    } catch (err) {
+      const packOfFamily = intent.linkEndpointScope?.packOfFamily;
+      if (err instanceof OntologyLinkEndpointOutsideRequiresError && packOfFamily !== undefined) {
+        throw err.withPacks((family) => packOfFamily.get(family));
+      }
+      throw err;
+    }
+  }
   return {
     target: { family: intent.family, ontologyId },
     before,
@@ -189,6 +250,8 @@ export async function applyOntologyItem(
     principalId: appliedBy,
     // S11 AA3a (legacy 293) / AA3b-2: who drafted what the segment writes (`ChangeItemOrigin`).
     origin,
+    // Legacy 706: the family's name, written with its first named publish.
+    family: planned.target.family,
   });
   return { definitionDigest: planned.after.definitionDigest, version: published.version };
 }
@@ -266,6 +329,10 @@ export type OntologyRollbackBlocker =
   | {
       readonly reason: 'namespace_conflict';
       readonly conflicts: readonly OntologyNamespaceConflict[];
+    }
+  | {
+      readonly reason: 'link_endpoint_undeclared';
+      readonly problems: OntologyLinkEndpointProblems<NamedOntologyLinkEndpointProblem>;
     };
 
 export interface PlannedOntologyRollback {
@@ -283,19 +350,26 @@ export interface PlannedOntologyRollback {
     readonly linkTypes: readonly string[];
     readonly actionTypes: readonly string[];
   };
+  /** The definition the family's head will have afterwards (`null`: none — retired, or blocked):
+   *  what a later item of the same rollback is checked against (legacy 303). */
+  readonly restoredDefinition: OntologyDefinition | null;
   readonly blocker: OntologyRollbackBlocker | null;
 }
 
 const NOTHING_REMOVED = { objectTypes: [], linkTypes: [], actionTypes: [] } as const;
 
 /** The item's rollback dry run (§3.4 "逆操作…先比较再写"): blocked unless the family's head is still
- *  the version the item published and the version before it is still there to return to, and the
- *  restored definition does not give a type name a second owner (I-P1). Writes nothing; a rollback
- *  calls it under `lockOntologyRollback`. */
+ *  the version the item published and the version before it is still there to return to, the
+ *  restored definition does not give a type name a second owner (I-P1), and no LinkType end would
+ *  name an ObjectType no published family declares — the restored version's own, or another
+ *  family's naming a type the rollback takes away, retiring the family included (legacy 303;
+ *  `pending` are the families the same rollback returns before this item). Writes nothing; a
+ *  rollback calls it under `lockOntologyRollback`. */
 export async function planOntologyRollback(
   client: PoolClient,
   workspaceId: string,
   item: StoredOntologyItem,
+  pending: readonly PendingOntologyHead[] = [],
 ): Promise<PlannedOntologyRollback> {
   const blocked = (blocker: OntologyRollbackBlocker): PlannedOntologyRollback => ({
     target: item.target,
@@ -303,6 +377,7 @@ export async function planOntologyRollback(
     to: item.before,
     widening: [],
     removes: NOTHING_REMOVED,
+    restoredDefinition: null,
     blocker,
   });
   const { ontologyId } = item.target;
@@ -318,12 +393,23 @@ export async function planOntologyRollback(
       return blocked({ reason: 'restored_version_missing' });
     }
     restored = row;
-    try {
-      await assertOntologyNamespace(client, workspaceId, ontologyId, row.definition);
-    } catch (err) {
-      if (!(err instanceof OntologyNamespaceConflictError)) throw err;
+  }
+  try {
+    await assertOntologyPublishable(
+      client,
+      workspaceId,
+      ontologyId,
+      restored?.definition ?? null,
+      pending,
+    );
+  } catch (err) {
+    if (err instanceof OntologyNamespaceConflictError) {
       return blocked({ reason: 'namespace_conflict', conflicts: err.conflicts });
     }
+    if (err instanceof OntologyLinkEndpointError) {
+      return blocked({ reason: 'link_endpoint_undeclared', problems: err.problems });
+    }
+    throw err;
   }
   const to = restored?.definition ?? null;
   return {
@@ -332,6 +418,7 @@ export async function planOntologyRollback(
     to: item.before,
     widening: classifyOntologyDefinitionChange(head.definition, to),
     removes: ontologyTypeChanges(head.definition, to).removed,
+    restoredDefinition: to,
     blocker: null,
   };
 }

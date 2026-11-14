@@ -2,7 +2,7 @@ import type { CapabilityName } from '@nexttime/shared';
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError } from '../lib/errors.js';
+import { isForbiddenError, isPrincipalRefusal } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import {
   type PrincipalRow,
@@ -35,6 +35,10 @@ export interface PrincipalDetailProps {
   readonly lastActiveOwner?: boolean;
   readonly onChanged: (principal: PrincipalRow) => void;
   readonly onForbidden: (capabilityName: CapabilityName) => void;
+  /** The kernel refused because this member was disabled after the drawer read it
+   *  (`set_principal_role` → `disabled`): the caller reads the members again, so the drawer shows
+   *  it as disabled (#1198 UX P2). */
+  readonly onStale?: () => void;
 }
 
 /**
@@ -60,6 +64,10 @@ export interface PrincipalDetailProps {
  * Review 2026-10-02 D-25 (L8a-11): "Rotate API key" is a service credential's control only — the
  * kernel refuses to mint a key for a person (a key the owner could use to act as the member), so a
  * human member's drawer says why there is no button instead.
+ *
+ * Legacy 730 / #1198 UX: a disabled member's role is history — no role picker, a line saying why
+ * and, by kind, the way back (a person is added again by login, as a new membership; a service
+ * account is replaced by a new one).
  */
 export function PrincipalDetail({
   http,
@@ -69,6 +77,7 @@ export function PrincipalDetail({
   lastActiveOwner = false,
   onChanged,
   onForbidden,
+  onStale,
 }: PrincipalDetailProps) {
   const t = useT();
   const [role, setRole] = useState<Role>(principal.role);
@@ -107,6 +116,7 @@ export function PrincipalDetail({
       if (isForbiddenError(err)) onForbidden('set_principal_role');
       setRoleError(err);
       setRole(principal.role);
+      if (isPrincipalRefusal(err, 'disabled')) onStale?.();
     } finally {
       setSavingRole(false);
     }
@@ -117,6 +127,12 @@ export function PrincipalDetail({
       await callSetRole();
     } catch (err) {
       if (isForbiddenError(err)) onForbidden('set_principal_role');
+      if (isPrincipalRefusal(err, 'disabled')) {
+        setConfirmingOwner(false);
+        setRoleError(err);
+        setRole(principal.role);
+        onStale?.();
+      }
       throw err;
     }
   }
@@ -246,6 +262,20 @@ export function PrincipalDetail({
                   "This is the workspace's last active owner, so the role cannot change and it cannot be disabled — make another member an owner first.",
                 )}
               </p>
+            ) : disabled ? (
+              <div className="stack-s" data-testid="principal-disabled-readonly">
+                <p className="text-3 text-small">
+                  {principal.kind === 'human'
+                    ? t(
+                        '这个成员已停用，只留作审计溯源，角色不能再改。要让这个人回到这个工作区，按登录名重新添加成员，会新建一条成员资格。',
+                        'This member is disabled and kept only for audit lineage, so the role cannot change. To bring the person back to this workspace, add them again by login, which makes a new membership.',
+                      )
+                    : t(
+                        '这个服务账号已停用，只留作审计溯源，角色不能再改；需要时新建一个服务账号。',
+                        'This service account is disabled and kept only for audit lineage, so the role cannot change. Create a new service account if you need one.',
+                      )}
+                </p>
+              </div>
             ) : (
               <>
                 <Field
@@ -293,14 +323,15 @@ export function PrincipalDetail({
                     />
                   </div>
                 </Field>
-                {roleError !== null ? (
-                  <ErrorBanner
-                    error={roleError}
-                    title={t('无法修改角色', 'Could not change the role')}
-                  />
-                ) : null}
               </>
             )}
+            {/* Outside the picker: kept when the refusal turns the drawer read-only. */}
+            {roleError !== null ? (
+              <ErrorBanner
+                error={roleError}
+                title={t('无法修改角色', 'Could not change the role')}
+              />
+            ) : null}
 
             <div className="row-wrap">
               <StatusChip machine="role" status={principal.role} size="s" />
@@ -362,6 +393,13 @@ export function PrincipalDetail({
                     '停用会吊销该成员持有的全部 Handle 与入口会话，且不能从这里撤销。',
                     'Disabling revokes every Handle and entry session this member holds. This cannot be undone from here.',
                   )}
+                  {/* Legacy 725: a person can be added back, as a new membership. */}
+                  {principal.kind === 'human'
+                    ? t(
+                        '之后可以按登录名把这个人再加回来，但那是一条新的成员资格，看不到停用前的草稿和目标。',
+                        ' The person can be added back by login later, but as a new membership that does not see the drafts and goals from before.',
+                      )
+                    : null}
                 </Notice>
                 {disableError !== null ? (
                   <ErrorBanner

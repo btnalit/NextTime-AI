@@ -1,8 +1,13 @@
 import { type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { issueHandle, roleMayUseCapability } from '../../governance/capability/index.js';
+import {
+  issueHandle,
+  lockIssuingAuthority,
+  roleMayUseCapability,
+} from '../../governance/capability/index.js';
+import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
 import {
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -19,6 +24,7 @@ import {
  * platform capability whatever the page asks for. The token is returned once and never stored.
  * Review 2026-10-02 R-36: the platform's internal service Principals are refused, and the
  * requested capabilities are narrowed by the service Principal's role, like every other issuer's.
+ * Legacy 690: and its gates are the service Principal's own, by `issue_handle`'s rule.
  */
 
 const DEFAULT_SERVICE_HANDLE_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -66,9 +72,17 @@ async function requireServicePrincipal(
   return row.role;
 }
 
-export const issueServiceHandleHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const issueServiceHandleHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { privateKey } = getConfiguredTaskRuntime();
   const input = params as { principalId: string; scope: string[]; ttlSeconds?: number };
+  // Legacy 702 (governance 0043): the authority locks before the service Principal is read, and
+  // before the session row below references it; `issueHandle` re-checks the role under them.
+  await lockIssuingAuthority(client, workspaceId, input.principalId);
   const role = await requireServicePrincipal(client, workspaceId, input.principalId);
   // R-36: the third Handle issuer applies the same role narrowing as the other two (W5.5,
   // `entryScope({ role })` / issue-handle-handler.ts): a capability the service Principal's role
@@ -97,11 +111,29 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
   if (!sessionId)
     throw new Error('issue_service_handle: session INSERT ... RETURNING produced no row');
 
+  // Legacy 690: its gates, by `issue_handle`'s rule — the service Principal's own gate Grants now,
+  // when a capability reads them (application/gates/execute-access.ts `serviceHandleResources`).
+  const resources = await serviceHandleResources(
+    client,
+    workspaceId,
+    input.principalId,
+    capabilities,
+  );
+
   const issued = await issueHandle(client, {
     sessionId,
-    scope: { capabilities, resources: {} },
+    scope: { capabilities, resources },
     ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
     privateKey,
+    // Legacy 712: and only while the cookie or API key of the person issuing it is still live —
+    // checked under the service Principal's locks: revoking the person's credentials does not
+    // revoke a service Handle (it is not theirs), so a revocation that commits after this check
+    // orders after the issue either way.
+    basis: {
+      kind: 'role',
+      role,
+      credential: requirePresentedCredential('issue_service_handle', ctx),
+    },
   });
   return {
     result: {

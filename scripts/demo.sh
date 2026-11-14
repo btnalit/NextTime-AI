@@ -432,7 +432,14 @@ worker_setup_step() {
   done
   [ "$docker_gate_ready" = "true" ] || step_fail worker-setup "gatekeeper-docker announced no Operations within 60s"
 
-  out=$(cap "$OWNER_KEY" enable_gate_instance '{"gateId":"gatekeeper-docker"}' "d.result.gatekeeperId")
+  # Legacy 311: an enable names the manifest digest its preview showed (R-18).
+  out=$(cap "$OWNER_KEY" preview_gate_instance_enable '{"gateId":"gatekeeper-docker"}' "d.result.manifestDigest")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || step_fail worker-setup "preview_gate_instance_enable HTTP $status: $(parse_kv "$out" BODY)"
+  docker_manifest_digest=$(parse_kv "$out" EXTRACTED)
+  [ -n "$docker_manifest_digest" ] || step_fail worker-setup "no manifestDigest in the preview: $(parse_kv "$out" BODY)"
+
+  out=$(cap "$OWNER_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\",\"manifestDigest\":\"$docker_manifest_digest\"}" "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || step_fail worker-setup "enable_gate_instance HTTP $status: $(parse_kv "$out" BODY)"
   GATEKEEPER_ID_DOCKER=$(parse_kv "$out" EXTRACTED)

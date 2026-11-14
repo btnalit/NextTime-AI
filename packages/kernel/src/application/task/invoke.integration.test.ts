@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { IllegalTransition } from '@nexttime/shared';
-import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
+import type { CapabilityScope, HandleClaims, Role } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -20,10 +20,13 @@ import {
   type IssuedHandle,
   entryScope,
   generateEphemeralHandleKeyPair,
+  grantCapability,
   issueHandle,
+  revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { fixtureApiKeyHash } from '../gateway/traversal-fixture.js';
 import { composeSystemPrompt, updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { invokeWorker } from './invoke.js';
@@ -34,7 +37,7 @@ import {
   readTaskRow,
   readWorkerRunRow,
 } from './lifecycle.js';
-import { runTaskReaper } from './reaper.js';
+import { TaskReaperCandidateErrors, runTaskReaper } from './reaper.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
 import { spawnWorkerRun } from './spawn.js';
@@ -161,13 +164,22 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     });
   }
 
+  /** `role`: the role of the Principal the session acts for, as the fixture created it — what
+   *  the Handle is issued under (legacy 702). */
   async function issueTestHandle(
     sessionId: string,
+    role: Role,
     scope: CapabilityScope,
     ttlSeconds = 3600,
   ): Promise<IssuedHandle> {
     return inTx(ownerId, (client) =>
-      issueHandle(client, { sessionId, scope, ttlSeconds, privateKey }),
+      issueHandle(client, {
+        sessionId,
+        scope,
+        ttlSeconds,
+        privateKey,
+        basis: { kind: 'role', role, credential: null },
+      }),
     );
   }
 
@@ -230,7 +242,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('invoke_worker (wait=false) spawns a running Task + WorkerRun via the supervisor', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
 
     const result = await invokeWorker(
@@ -254,11 +266,55 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(workerRun?.activityId).not.toBeNull();
   });
 
+  it('legacy 712: a person’s own invoke_worker (the human channel) starts a Worker only while the API key it came with is live — refused (credential_revoked) without one: no container is asked for, and the Task it opened ends failed: spawn_failed, as any refused issue does', async () => {
+    const personId = await adminInsertPrincipal('owner', 'owner-712');
+    const call = () =>
+      invokeWorker(
+        workspaceId,
+        {
+          principalId: personId,
+          channel: 'human',
+          credential: {
+            kind: 'api_key',
+            principalId: personId,
+            apiKeyHash: fixtureApiKeyHash(personId),
+          },
+        },
+        { definitionId: workerDefinitionId, version: 1, input: { foo: 'bar' }, wait: false },
+        deps(supervisorClient),
+      );
+    const supervisorClient = new FakeTaskSupervisorClient();
+
+    await expect(call()).rejects.toMatchObject({
+      name: 'HandleIssuanceError',
+      code: 'credential_revoked',
+    });
+    expect(supervisorClient.spawnCalls).toHaveLength(0);
+    const refused = await withAdminClient(pool, (client) =>
+      client.query<{ status: string; failure_reason: string | null }>(
+        'select status, failure_reason from tasks where workspace_id = $1 and on_behalf_of = $2',
+        [workspaceId, personId],
+      ),
+    );
+    expect(refused.rows).toEqual([{ status: 'failed', failure_reason: 'spawn_failed' }]);
+
+    await withAdminClient(pool, (client) =>
+      client.query('update principals set api_key_hash = $3 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        personId,
+        fixtureApiKeyHash(personId),
+      ]),
+    );
+    const started = await call();
+    expect(started.status).toBe('running');
+    expect(supervisorClient.spawnCalls).toHaveLength(1);
+  });
+
   it('rejects the 4th derivation level with a readable depth_exceeded error — S2.7 acceptance', async () => {
     // Seed a WorkerRun already at depth 3 (the platform ceiling) with its own session/Handle —
     // invoking from it would derive depth 4.
     const deepSessionId = await insertSession('worker_run', ownerId, ownerId);
-    const deepHandle = await issueTestHandle(deepSessionId, {
+    const deepHandle = await issueTestHandle(deepSessionId, 'owner', {
       capabilities: ['get_object', 'invoke_worker'],
       resources: {},
     });
@@ -373,7 +429,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     const stepOwnerId = await adminInsertPrincipal('member', 'goal-step');
     // The step's own attempt Task and its Worker (`seedGoalStepWorker`).
     const stepSessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
-    const stepHandle = await issueTestHandle(stepSessionId, {
+    const stepHandle = await issueTestHandle(stepSessionId, 'member', {
       capabilities: ['get_object', 'invoke_worker'],
       resources: {},
     });
@@ -409,7 +465,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       {
         principalId: stepOwnerId,
         channel: 'handle',
-        claims: claimsFromIssued(await issueTestHandle(entrySessionId, entryScope())),
+        claims: claimsFromIssued(await issueTestHandle(entrySessionId, 'member', entryScope())),
       },
       { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
       deps(new FakeTaskSupervisorClient()),
@@ -429,7 +485,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     const childOf = async (seed: Parameters<typeof seedGoalStepWorker>[2]) => {
       const stepOwnerId = await adminInsertPrincipal('member', 'goal-step-budget');
       const sessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
-      const handle = await issueTestHandle(sessionId, {
+      const handle = await issueTestHandle(sessionId, 'member', {
         capabilities: ['get_object', 'invoke_worker'],
         resources: {},
       });
@@ -526,7 +582,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   it('S11 GO3a (review #493 P2-1): a lone nested step of a 150000-token goal starts a child that runs to its end, and the goal spends no more than its budget', async () => {
     const stepOwnerId = await adminInsertPrincipal('member', 'goal-step-nested');
     const sessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
-    const handle = await issueTestHandle(sessionId, {
+    const handle = await issueTestHandle(sessionId, 'member', {
       capabilities: ['get_object', 'invoke_worker'],
       resources: {},
     });
@@ -634,7 +690,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     });
 
     const sessionId = await insertSession('entry', racerId, racerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'member', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
     const caller = {
@@ -708,7 +764,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       gates: [gatekeeperId],
     });
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope()); // never holds execute-class caps
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope()); // never holds execute-class caps
 
     const supervisorClient = new FakeTaskSupervisorClient();
     await expect(
@@ -725,7 +781,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('wait=true returns {taskId, status} on timeout instead of hanging', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient(); // status stays 'running' forever
 
     let clockMs = 0;
@@ -748,7 +804,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('requeues once on a non-zero exit, then fails the Task on a second failure', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -796,7 +852,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     async function spawnRunningTask(displayName: string) {
       const principalId = await adminInsertPrincipal('member', displayName);
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'member', entryScope());
       const supervisorClient = new FakeTaskSupervisorClient();
       const runtimeDeps = deps(supervisorClient);
       const spawnResult = await invokeWorker(
@@ -1065,6 +1121,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           onBehalfOf: principalId,
           parentAuthority: 'unconstrained',
           parentClaimsForLineage: undefined,
+          issuanceBasis: { kind: 'role', role: 'member', credential: null },
           declaredCapabilities: [],
           declaredGates: [],
           definitionName: 'r58-spawn-for-share',
@@ -1122,6 +1179,184 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
     });
 
+    /** The scope of `workerRunId`'s own Handle. */
+    async function runHandleScope(principalId: string, workerRunId: string) {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ scope: CapabilityScope }>(
+          `select h.scope from worker_runs wr
+             join capability_handles h
+               on h.workspace_id = wr.workspace_id and h.session_id = wr.session_id
+            where wr.workspace_id = $1 and wr.id = $2`,
+          [workspaceId, workerRunId],
+        );
+        return result.rows[0]?.scope;
+      });
+    }
+
+    // Each change runs on the admin client between the first run and its crash ($1 the workspace,
+    // $2 the principal); `undo` puts back what the file's other tests share.
+    it.each<{ who: string; change: readonly string[]; undo?: string }>([
+      {
+        who: 'disabled meanwhile',
+        change: ['update principals set disabled_at = now() where workspace_id = $1 and id = $2'],
+      },
+      {
+        who: 'made an auditor meanwhile',
+        change: ["update principals set role = 'auditor' where workspace_id = $1 and id = $2"],
+      },
+      // Review #501 of #1135 (P3-1): a disabled platform user is seen from the workspace
+      // transaction only through the `users_workspace_members` RLS policy (core 0021) — pinned
+      // here, so a change to that policy cannot quietly let a disabled user's retry through.
+      {
+        who: 'whose platform user was disabled meanwhile',
+        change: [
+          `with u as (
+             insert into users (login, display_name) values ('l289-user-' || $2::text, 'l289 user')
+             returning id
+           )
+           update principals set user_id = (select id from u) where workspace_id = $1 and id = $2::uuid`,
+          `update users set status = 'disabled'
+            where id = (select user_id from principals where workspace_id = $1 and id = $2)`,
+        ],
+      },
+      {
+        who: 'whose workspace was disabled meanwhile',
+        change: [
+          "update workspaces set status = 'disabled' where id = $1 and $2::uuid is not null",
+        ],
+        undo: "update workspaces set status = 'active' where id = $1",
+      },
+    ])(
+      'a crash retry for a person $who is not started: the Task fails, no Handle is minted (legacy 289)',
+      async ({ who, change, undo }) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l289-${who}`,
+        );
+        try {
+          await withAdminClient(pool, async (client) => {
+            for (const statement of change)
+              await client.query(statement, [workspaceId, principalId]);
+          });
+          supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+          await reactToSupervisorStatus(
+            runtimeDeps,
+            workspaceId,
+            principalId,
+            spawnResult.workerRunId,
+          );
+        } finally {
+          if (undo !== undefined) {
+            await withAdminClient(pool, (client) => client.query(undo, [workspaceId]));
+          }
+        }
+
+        // Before the fix: a second spawn, with a fresh Handle llm-proxy would accept.
+        expect(supervisorClient.spawnCalls).toHaveLength(1);
+        expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(1);
+        const task = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(task?.status).toBe('failed');
+        expect(task?.failureReason).toBe('worker_failed');
+        expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+      },
+    );
+
+    it("a crash retry holds the failed run's scope only as far as its person may hold it now: a capability the role lost and a gate whose Grant was revoked drop out (legacy 289)", async () => {
+      const principalId = await adminInsertPrincipal('builder', 'l289-narrowed');
+      const gatekeeperId = await inTx(ownerId, async (client) => {
+        const activity = await client.query<{ id: string }>(
+          `insert into activities (workspace_id, kind, status, started_by) values ($1, 'test.invoke-worker', 'running', $2) returning id`,
+          [workspaceId, ownerId],
+        );
+        const gate = await registerGatekeeper(client, workspaceId, {
+          name: 'l289-gate',
+          transportKind: 'http',
+          target: 'l289-system',
+          endpoint: 'https://l289-gate.example.invalid',
+          activityId: activity.rows[0]?.id ?? '',
+          registeredBy: { id: ownerId, kind: 'human' },
+        });
+        return gate.gatekeeperId;
+      });
+      const grant = await inTx(ownerId, (client) =>
+        grantCapability(client, workspaceId, {
+          principalId,
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
+          grantedBy: ownerId,
+        }),
+      );
+      const definition = await publishWorkerDef({
+        systemPrompt: 'You are a gate worker that may propose a Skill.',
+        capabilities: ['get_object', 'propose_skill', 'request_action'],
+        gates: [gatekeeperId],
+      });
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(
+        sessionId,
+        'builder',
+        entryScope({ resources: { gatekeeper: [gatekeeperId] } }, { role: 'builder' }),
+      );
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+      const invoke = () =>
+        invokeWorker(
+          workspaceId,
+          { principalId, channel: 'handle', claims: claimsFromIssued(issued) },
+          {
+            definitionId: definition.id,
+            version: definition.version,
+            input: {},
+            wait: false,
+          },
+          runtimeDeps,
+        );
+      const crashAndRetry = async (workerRunId: string): Promise<string> => {
+        const before = supervisorClient.spawnCalls.length;
+        supervisorClient.setStatus(workerRunId, { status: 'failed', exitCode: 1 });
+        await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, workerRunId);
+        expect(supervisorClient.spawnCalls).toHaveLength(before + 1);
+        return supervisorClient.spawnCalls[before]?.workerRunId as string;
+      };
+
+      // Nothing changed since the run started: the retry holds exactly the failed run's scope.
+      const unchanged = await invoke();
+      const unchangedScope = await runHandleScope(principalId, unchanged.workerRunId);
+      expect(unchangedScope?.capabilities).toEqual(
+        expect.arrayContaining(['propose_skill', 'request_action']),
+      );
+      expect(unchangedScope?.resources.gatekeeper).toEqual([gatekeeperId]);
+      const unchangedRetry = await crashAndRetry(unchanged.workerRunId);
+      expect(await runHandleScope(principalId, unchangedRetry)).toEqual(unchangedScope);
+
+      // Demoted to member and the gate's Grant revoked, then the run crashes.
+      const changed = await invoke();
+      const changedScope = await runHandleScope(principalId, changed.workerRunId);
+      expect(changedScope).toEqual(unchangedScope);
+      await withAdminClient(pool, (client) =>
+        client.query("update principals set role = 'member' where workspace_id = $1 and id = $2", [
+          workspaceId,
+          principalId,
+        ]),
+      );
+      await inTx(ownerId, (client) => revokeCapabilityGrant(client, workspaceId, grant.id));
+      const changedRetry = await crashAndRetry(changed.workerRunId);
+
+      const retryScope = await runHandleScope(principalId, changedRetry);
+      // Before the fix: the failed run's scope as it was, propose_skill and the gate included.
+      expect(retryScope?.capabilities).toEqual(
+        (changedScope?.capabilities ?? []).filter((name) => name !== 'propose_skill'),
+      );
+      expect(retryScope?.resources.gatekeeper).toBeUndefined();
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, changed.taskId),
+      );
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+    });
+
     it('a crash reaction under a Task cancelled meanwhile spawns no retry', async () => {
       const { principalId, supervisorClient, runtimeDeps, spawnResult } =
         await spawnRunningTask('r58-cancelled-meanwhile');
@@ -1151,6 +1386,176 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(run?.status).toBe('terminated');
     });
 
+    // Legacy 206 (#534 delta review, item 1): the `exited` and `terminated` branches decide the Task
+    // only when this call ended the run. The one writer that ends a run and leaves its Task
+    // undecided is a crash reaction that claimed the retry — so a late reaction to the same run,
+    // which reads the Task after the retry was claimed, must leave the retrying Task running.
+    it.each([
+      ['exited', { status: 'exited', exitCode: 0 }],
+      ['terminated: timeout', { status: 'terminated', reason: 'timeout' }],
+    ] as const)(
+      'a late %s reaction to a run another reaction retried leaves the retrying Task running (legacy 206)',
+      async (_label, lateStatus) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l206-late-${lateStatus.status}`,
+        );
+        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+        // The late reaction reads the run while it is live; its status call answers only after the
+        // first reaction has claimed the retry and spawned it.
+        let lateEntered!: () => void;
+        const lateInStatus = new Promise<void>((resolve) => {
+          lateEntered = resolve;
+        });
+        let releaseLate!: () => void;
+        const firstDone = new Promise<void>((resolve) => {
+          releaseLate = resolve;
+        });
+        const lateDeps = deps(supervisorClient, {
+          supervisorClient: {
+            spawn: (input) => supervisorClient.spawn(input),
+            terminate: (id) => supervisorClient.terminate(id),
+            status: async (id) => {
+              lateEntered();
+              await firstDone;
+              const seen = await supervisorClient.status(id);
+              return seen === undefined ? undefined : { ...seen, ...lateStatus };
+            },
+          },
+        });
+
+        const late = reactToSupervisorStatus(
+          lateDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+        await lateInStatus;
+        await reactToSupervisorStatus(
+          runtimeDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+        releaseLate();
+        await late;
+
+        const task = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        // Without the guard: failed (no_result / timeout), the retry running under it.
+        expect(task?.status).toBe('running');
+        expect(task?.failureReason).toBeNull();
+        expect(task?.retryCount).toBe(1);
+        const live = await liveRuns(principalId, spawnResult.taskId);
+        expect(live).toHaveLength(1);
+        expect(live[0]?.id).not.toBe(spawnResult.workerRunId);
+        expect(live[0]?.handleRevoked).toBe(false);
+      },
+    );
+
+    /** The cancel committed and the kernel gone before it ended the runs: the Task row as a
+     *  cancel's own transaction leaves it, the run still live (legacy 206, #534 delta item 2). */
+    async function cancelledWithLiveRun(displayName: string) {
+      const spawned = await spawnRunningTask(displayName);
+      await inTx(spawned.principalId, (client) =>
+        client.query(
+          `update tasks set status = 'cancelled', cancelled_at = now()
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, spawned.spawnResult.taskId],
+        ),
+      );
+      const before = await liveRuns(spawned.principalId, spawned.spawnResult.taskId);
+      expect(before).toEqual([
+        { id: spawned.spawnResult.workerRunId, status: 'running', handleRevoked: false },
+      ]);
+      return spawned;
+    }
+
+    async function terminateAudit(principalId: string, workerRunId: string) {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ reason: string }>(
+          `select payload->>'reason' as reason from audit_records
+            where workspace_id = $1 and action = 'worker_run.terminate' and resource_id = $2`,
+          [workspaceId, workerRunId],
+        );
+        return result.rows.map((row) => row.reason);
+      });
+    }
+
+    it('cancelling a Task already decided still ends a run left live under it (legacy 206)', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await cancelledWithLiveRun('l206-cancel-again');
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      let returned: TaskRow;
+      try {
+        returned = await terminateTask(workspaceId, principalId, spawnResult.taskId);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+
+      // Before: the call returned at once for the cancelled Task, and the run kept its Handle.
+      expect(returned.status).toBe('cancelled');
+      expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+      expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
+      expect(await terminateAudit(principalId, spawnResult.workerRunId)).toEqual(['requested']);
+      // No second `task.cancel`: the Task is left as it was.
+      const cancels = await inTx(principalId, (client) =>
+        client.query(
+          `select 1 from audit_records
+            where workspace_id = $1 and action = 'task.cancel' and resource_id = $2`,
+          [workspaceId, spawnResult.taskId],
+        ),
+      );
+      expect(cancels.rowCount).toBe(0);
+    });
+
+    it.each([
+      ['cancelled', 'cancelled_at = now()'],
+      ['failed', "failed_at = now(), failure_reason = 'worker_failed'"],
+      ['completed', 'completed_at = now()'],
+    ] as const)(
+      'the reaper ends a run left live under a %s Task on its next tick, the Task left as it is (legacy 206)',
+      async (status, set) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l206-reaper-${status}`,
+        );
+        await inTx(principalId, (client) =>
+          client.query(
+            `update tasks set status = '${status}', ${set} where workspace_id = $1 and id = $2`,
+            [workspaceId, spawnResult.taskId],
+          ),
+        );
+        const decided = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        // A crash the supervisor already reports would otherwise be reacted to; the sweep ends it
+        // without deciding anything.
+        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+        const result = await runTaskReaper(runtimeDeps).catch((err: unknown) => {
+          // A row another test left behind may fail on its own; this test's run must not.
+          if (!(err instanceof TaskReaperCandidateErrors)) throw err;
+          expect(
+            (err.errors as { id: string }[]).filter((e) => e.id === spawnResult.workerRunId),
+          ).toEqual([]);
+          return undefined;
+        });
+        if (result) expect(result.taskEnded).toBeGreaterThanOrEqual(1);
+
+        expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+        expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
+        expect(await terminateAudit(principalId, spawnResult.workerRunId)).toEqual(['task_ended']);
+        expect(supervisorClient.spawnCalls).toHaveLength(1); // no retry
+        const after = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(after).toEqual(decided);
+      },
+    );
+
     it('spawnWorkerRun refuses a terminal Task before creating a WorkerRun or calling the supervisor', async () => {
       const principalId = await adminInsertPrincipal('member', 'r58-spawn-terminal');
       const supervisorClient = new FakeTaskSupervisorClient();
@@ -1176,6 +1581,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           onBehalfOf: principalId,
           parentAuthority: 'unconstrained',
           parentClaimsForLineage: undefined,
+          issuanceBasis: { kind: 'role', role: 'member', credential: null },
           declaredCapabilities: [],
           declaredGates: [],
           definitionName: 'r58-spawn-terminal',
@@ -1189,7 +1595,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('an exited (code 0) container without a posted result marks the Task failed: no_result', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -1216,7 +1622,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   // `task.resume` a Task with no live WorkerRun to resume into (the P1-2 dead state).
   it('an exited (code 0) container while the Task is waiting_approval also marks it failed: no_result', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -1249,7 +1655,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   // `parent_worker_run_id` does not point to — a later approval could never resume the right run.
   it('a non-zero exit while the Task is waiting_approval fails it directly, without requeuing', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -1278,9 +1684,48 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(supervisorClient.spawnCalls).toHaveLength(1); // no requeue attempt
   });
 
+  // Legacy 290, decided: the duration limit counts the time a Task spends waiting for approval
+  // (reaper.ts says why). Pinned so that pausing it is a deliberate change.
+  it('a Task waiting_approval past its duration limit is timed out like a running one (legacy 290)', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+    await inTx(ownerId, async (client) => {
+      await client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      );
+      await client.query(
+        `update worker_runs set started_at = now() - make_interval(secs => coalesce(
+           (select duration_limit_sec from tasks where workspace_id = $1 and id = $3), 3600) + 60)
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, spawnResult.workerRunId, spawnResult.taskId],
+      );
+    });
+
+    await runTaskReaper(runtimeDeps).catch((error: unknown) => {
+      // Other files' rows may fail this shared tick; only this Task matters here.
+      if (!(error instanceof TaskReaperCandidateErrors)) throw error;
+    });
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('timeout');
+    expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
+  });
+
   it('terminateTask revokes the WorkerRun Handle (capability_handles.revoked_at set)', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -1355,7 +1800,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   describe('leftover 67 — status-guarded Task UPDATEs (docs/STATUS.md §4)', () => {
     it('a Task cancelled while spawnWorkerRun is in flight is not reverted to running by the guarded queued -> running UPDATE', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new RacingSupervisorClient(false);
       const runtimeDeps = deps(supervisorClient);
 
@@ -1381,7 +1826,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('a Task cancelled while spawnWorkerRun fails is not overwritten by the guarded queued -> failed:spawn_failed UPDATE', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new RacingSupervisorClient(true);
       const runtimeDeps = deps(supervisorClient);
 
@@ -1410,7 +1855,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('terminateTask does not revert a Task that completes concurrently while its own cancellation is in flight', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new FakeTaskSupervisorClient();
       const runtimeDeps = deps(supervisorClient);
 
@@ -1486,7 +1931,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   describe('leftover 90 — status-guarded WorkerRun UPDATEs in spawnWorkerRun (docs/STATUS.md §4)', () => {
     it('a WorkerRun terminated while spawnWorkerRun is in flight is not reverted to running by the guarded provisioning -> running UPDATE, and the orphaned container is best-effort stopped', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new RacingSupervisorClient(false);
       const runtimeDeps = deps(supervisorClient);
 
@@ -1537,7 +1982,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('a spawn failure on a WorkerRun already terminated concurrently does not write a second worker_run.spawn_failed transition, and the original error still propagates', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new RacingSupervisorClient(true);
       const runtimeDeps = deps(supervisorClient);
 
@@ -1654,6 +2099,8 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         onBehalfOf: principalId,
         parentAuthority: 'unconstrained',
         parentClaimsForLineage: undefined,
+        // Both callers seed a `freshPrincipal` — a member.
+        issuanceBasis: { kind: 'role', role: 'member', credential: null },
         declaredCapabilities: [],
         declaredGates: [],
         definitionName: 'r09-spawn-lost',
@@ -1665,7 +2112,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     it('a spawn whose supervisor call times out leaves the WorkerRun terminated, its Handle revoked, and asks the supervisor to terminate it', async () => {
       const principalId = await freshPrincipal('r09-spawn-timeout');
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'member', entryScope());
       const supervisorClient = new TimingOutSupervisorClient();
 
       await expect(
@@ -1701,7 +2148,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     it('a requeue whose spawn times out reaps the retry WorkerRun the same way (Task failed: worker_failed)', async () => {
       const principalId = await freshPrincipal('r09-requeue-timeout');
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'member', entryScope());
       const supervisorClient = new TimingOutSupervisorClient(1); // the original spawn answers
       const runtimeDeps = deps(supervisorClient);
 
@@ -1816,7 +2263,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('budget 100% marks the Task failed: budget_exhausted and terminates the WorkerRun', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -1872,7 +2319,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   // 100% stops it there too; its WorkerRun (never suspended meanwhile) is terminated.
   async function spawnWithBudget(status: string, cancelled = false) {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
     const spawnResult = await invokeWorker(
@@ -1953,7 +2400,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
   it('80% budget warning fires exactly once (budget_warned_at set)', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
-    const issued = await issueTestHandle(sessionId, entryScope());
+    const issued = await issueTestHandle(sessionId, 'owner', entryScope());
     const supervisorClient = new FakeTaskSupervisorClient();
     const runtimeDeps = deps(supervisorClient);
 
@@ -2015,7 +2462,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         ),
       );
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, 'owner', entryScope());
       const supervisorClient = new FakeTaskSupervisorClient();
 
       await invokeWorker(
@@ -2056,9 +2503,9 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   // terminal, an explicit key against its one Task whatever its status. Each test uses its own
   // principal so its running Tasks never count against another test's concurrency quota.
   describe('R-54 — invoke_worker idempotency key (docs/code-review-2026-10-02.md)', () => {
-    async function entryCaller(principalId: string) {
+    async function entryCaller(principalId: string, role: Role) {
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId, entryScope());
+      const issued = await issueTestHandle(sessionId, role, entryScope());
       return { principalId, channel: 'handle' as const, claims: claimsFromIssued(issued) };
     }
 
@@ -2074,7 +2521,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('a duplicate with the same derived key returns the running Task; once that Task is terminal, an identical call starts a new one', async () => {
       const principalId = await adminInsertPrincipal('owner', 'r54-derived');
-      const caller = await entryCaller(principalId);
+      const caller = await entryCaller(principalId, 'owner');
       const supervisorClient = new FakeTaskSupervisorClient();
       const idempotencyKey = `auto:${caller.claims.sid}:${workerDefinitionId}@1:${randomUUID()}`;
       const input = {
@@ -2111,7 +2558,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('two identical calls sent together start one Task and one Worker', async () => {
       const principalId = await adminInsertPrincipal('owner', 'r54-concurrent');
-      const caller = await entryCaller(principalId);
+      const caller = await entryCaller(principalId, 'owner');
       const supervisorClient = new FakeTaskSupervisorClient();
       const idempotencyKey = `auto:${caller.claims.sid}:${workerDefinitionId}@1:${randomUUID()}`;
       const input = {
@@ -2134,7 +2581,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
 
     it('an explicit key returns its Task whatever its status, and a fresh key starts a second Worker alongside a running one', async () => {
       const principalId = await adminInsertPrincipal('owner', 'r54-explicit');
-      const caller = await entryCaller(principalId);
+      const caller = await entryCaller(principalId, 'owner');
       const supervisorClient = new FakeTaskSupervisorClient();
       const explicitKey = (key: string) => `explicit:${principalId}:${caller.claims.sid}:${key}`;
       const input = (key: string) => ({

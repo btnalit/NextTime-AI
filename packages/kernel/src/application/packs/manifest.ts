@@ -1,4 +1,9 @@
-import { CONNECTOR_NAME_PATTERN, isGenericConnector } from '@nexttime/shared';
+import {
+  CONNECTOR_NAME_PATTERN,
+  ONTOLOGY_FAMILY_NAME_MAX_LENGTH,
+  PLATFORM_META_ONTOLOGY_FAMILY,
+  isGenericConnector,
+} from '@nexttime/shared';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -70,7 +75,14 @@ const ComponentNameSchema = z.string().regex(PACK_NAME_PATTERN);
 
 const OntologyComponentSchema = z
   .object({
-    family: z.string().regex(PACK_NAME_PATTERN),
+    // Legacy 706: a family name (`ontology_families`, F1/F3) — never the platform-meta ontology's.
+    family: z
+      .string()
+      .max(ONTOLOGY_FAMILY_NAME_MAX_LENGTH)
+      .regex(PACK_NAME_PATTERN)
+      .refine((family) => family !== PLATFORM_META_ONTOLOGY_FAMILY, {
+        message: `"${PLATFORM_META_ONTOLOGY_FAMILY}" is the platform's own ontology; a pack names its family otherwise`,
+      }),
     domainPack: z
       .string()
       .regex(DOMAIN_PACK_FILE_PATTERN)

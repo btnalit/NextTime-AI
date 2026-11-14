@@ -45,15 +45,18 @@ import {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
+  GateAddressChangeError,
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   OntologyViolationError,
   PrincipalOperationRefusedError,
   SupersedeIdentityMismatchError,
@@ -105,7 +108,7 @@ import {
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
-import { mapCapabilityError } from './capability-route.js';
+import { AUTHORITY_CHANGED_MESSAGE, mapCapabilityError } from './capability-route.js';
 
 /**
  * interfaces/http/capability-route.test: HTTP-level tests through Fastify `inject` (no real
@@ -215,6 +218,7 @@ describe('mapCapabilityError — S11 P1-B change segment rollback (unit)', () =>
       blocker: 'replaced' as const,
       blockedBy: { segmentId: 'seg-2' },
       conflicts: [],
+      linkEnds: [],
     };
     const mapped = mapCapabilityError(new ChangeRollbackConflictError('seg-1', [item]));
     expect(mapped).toMatchObject({
@@ -473,8 +477,39 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
         'manifestSource',
       ),
     );
-    expect(refused).toMatchObject({ status: 400, code: 'connection_target_refused' });
+    expect(refused).toMatchObject({
+      status: 400,
+      code: 'connection_target_refused',
+      details: { reason: 'bare-hostname', field: 'manifestSource' },
+    });
     expect(refused.message).toContain('manifestSource "worker-supervisor"');
+    // Legacy 413: the console tells "use https://" apart from "points at the platform" by the reason.
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError(
+          'http://gate.owner.example:8090',
+          'plaintext-public',
+          'gate.owner.example',
+          'endpoint',
+        ),
+      ),
+    ).toEqual({
+      status: 400,
+      code: 'connection_target_refused',
+      message:
+        'create_connection: endpoint "gate.owner.example" is refused: it is a plain http:// URL to an address on the public internet — the connection secret and any credentials would cross the internet unencrypted; use https://',
+      details: { reason: 'plaintext-public', field: 'endpoint' },
+    });
+    // A URL that came in no named field carries no `details.field`.
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError(
+          'http://gate.owner.example',
+          'plaintext-public',
+          'gate.owner.example',
+        ),
+      ).details,
+    ).toEqual({ reason: 'plaintext-public' });
     // R-01 (D-01) connection secrets.
     expect(mapCapabilityError(new ConnectionSecretInvalidError(true))).toMatchObject({
       status: 400,
@@ -484,6 +519,30 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
       status: 409,
       code: 'conflict',
     });
+    // Legacy 701: a secret another Gatekeeper holds, or that already served an address change —
+    // one code, "get a new one".
+    expect(mapCapabilityError(new ConnectionSecretInUseError('in use'))).toEqual({
+      status: 409,
+      code: 'connection_secret_in_use',
+      message: 'in use',
+    });
+    // Legacy 701: each address-change refusal keeps its own status and code; a refused URL names
+    // the capability it came in.
+    expect(
+      mapCapabilityError(new GateAddressChangeError('gate_address_change_not_found', 'gone')),
+    ).toEqual({ status: 404, code: 'gate_address_change_not_found', message: 'gone' });
+    expect(
+      mapCapabilityError(new GateAddressChangeError('gate_address_manifest_mismatch', 'differs')),
+    ).toMatchObject({ status: 409, code: 'gate_address_manifest_mismatch' });
+    expect(
+      mapCapabilityError(new GateAddressChangeError('manifest_fetch_failed', 'down')),
+    ).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError('http://127.0.0.1', 'loopback', '127.0.0.1', 'endpoint'),
+        'preview_gate_address_change',
+      ).message,
+    ).toMatch(/^preview_gate_address_change: endpoint /);
     expect(mapCapabilityError(new GateConnectionSecretsUnavailableError())).toMatchObject({
       status: 503,
       code: 'service_unavailable',
@@ -543,6 +602,31 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     const mapped = mapCapabilityError(err);
     expect(mapped.message).not.toContain(key);
     expect(mapped.message).toContain('bad key [redacted]');
+  });
+
+  // Legacy 700: the gate's endpoint is not an allowed target (since legacy 413, a plain http://
+  // URL to the public internet) — nothing was sent, and only the gate's set-up can change that.
+  it('passes the client’s target_refused through as 424 with the rule in details.reason', () => {
+    const message =
+      'gatekeeper client: gate/observe not sent — gate endpoint "gate.owner.example" is refused: it is a plain http:// URL to an address on the public internet';
+    expect(
+      mapCapabilityError(
+        new GatekeeperClientError(message, {
+          code: 'target_refused',
+          status: 0,
+          targetRefusal: 'plaintext-public',
+        }),
+      ),
+    ).toEqual({
+      status: 424,
+      code: 'target_refused',
+      message,
+      details: { reason: 'plaintext-public' },
+    });
+    // A gate answering with that code is still the gate's error.
+    expect(
+      mapCapabilityError(new GatekeeperClientError('m', { code: 'target_refused', status: 424 })),
+    ).toMatchObject({ status: 502, code: 'gatekeeper_error' });
   });
 
   it.each([
@@ -674,6 +758,31 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.code).toBe('invalid_params');
   });
 
+  it('legacy 699 / 702 / 712: HandleIssuanceError with a code (session or parent revoked, Principal disabled, credential revoked) → 401 unauthorized, message withheld', () => {
+    for (const code of [
+      'session_revoked',
+      'parent_revoked',
+      'acting_principal_disabled',
+      'credential_revoked',
+    ] as const) {
+      const mapped = mapCapabilityError(
+        new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
+      );
+      expect(mapped).toEqual({ status: 401, code: 'unauthorized', message: 'unauthorized' });
+    }
+  });
+
+  it('legacy 714: authority_changed (role or user changed while the call ran) → 409 conflict to call again, naming nobody', () => {
+    const mapped = mapCapabilityError(
+      new HandleIssuanceError(
+        'the Principal "p-1" is "member" now, not "owner" as this Handle was computed for',
+        'authority_changed',
+      ),
+    );
+    expect(mapped).toEqual({ status: 409, code: 'conflict', message: AUTHORITY_CHANGED_MESSAGE });
+    expect(mapped.message).not.toContain('p-1');
+  });
+
   it('review fix F10: TaskRuntimeNotConfiguredError (invoke_worker) → 503 service_unavailable, not 500', () => {
     const mapped = mapCapabilityError(new TaskRuntimeNotConfiguredError());
     expect(mapped.status).toBe(503);
@@ -732,6 +841,38 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new OntologyDraftNotFoundError('ont-1', 2));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('not_found');
+  });
+
+  it('OntologyLinkEndpointError (legacy 303) → 409 ontology_link_endpoint_undeclared with each end in details', () => {
+    const problems = {
+      undeclared: [
+        {
+          ontologyId: 'ont-1',
+          family: null,
+          linkType: 'served_by',
+          end: 'range' as const,
+          objectType: 'Gatekeepr',
+        },
+      ],
+      orphaned: [
+        {
+          ontologyId: 'ont-2',
+          family: 'ops-assets',
+          linkType: 'runs_on',
+          end: 'domain' as const,
+          objectType: 'Host',
+        },
+      ],
+    };
+    const mapped = mapCapabilityError(new OntologyLinkEndpointError(problems));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'ontology_link_endpoint_undeclared',
+      details: problems,
+    });
+    expect(mapped.message).toContain('"served_by" range "Gatekeepr"');
+    // An orphaned end names its family when the ChangePlan recorded one, else its id.
+    expect(mapped.message).toContain('(ontology ops-assets)');
   });
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) → 409 ontology_base_moved', () => {
@@ -1344,6 +1485,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },

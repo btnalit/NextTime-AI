@@ -40,6 +40,7 @@ import { lockGoalRun } from '../goal/service.js';
 import { PLANNER_HANDLE_CAPABILITIES, PLANNER_MIN_TOKEN_BUDGET } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { findGoalPlannerFamily } from '../task/planning-task.js';
+import { ensureReviewerDefinition, loadReviewerTemplate } from '../task/review-task.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -463,6 +464,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const spawned = supervisor.spawnCalls.find((input) => input.taskId === task.id);
       expect(spawned?.egressDenyAll).toBe(true);
+      // Legacy 697: and pi's built-in tools only read files, as a reviewer's do; the failed
+      // step's Worker kept every one.
+      expect(spawned?.builtinTools).toBe('read_only');
+      const others = supervisor.spawnCalls.filter((input) => input.taskId !== task.id);
+      expect(others.length).toBeGreaterThan(0);
+      expect(others.map((input) => input.builtinTools)).toEqual(others.map(() => undefined));
 
       const planner = await workerOf(task.id);
       if (planner.channel !== 'handle') throw new Error('not a Handle');
@@ -483,6 +490,107 @@ describe.runIf(DATABASE_URL !== undefined)(
       await advanceOnce(goalRunId, requester);
       expect(await rounds(goalRunId)).toHaveLength(1);
       expect((await liveStep(goalRunId, 'renew')).id).toBe(step.id);
+    });
+
+    it("S11 GO17: the planner's input holds the requester's own earlier goals of the same kind, as records", async () => {
+      const requester = await newPrincipal('member');
+      const someoneElse = await newPrincipal('member');
+      /** An ended goal of `by` whose one step ran `worker` — the write paths are other files'. */
+      const ended = async (by: string, outcome: string, basis: string) => {
+        const [row] = await raw<{ id: string }>(
+          `insert into goal_runs (workspace_id, status, outcome, outcome_basis, on_behalf_of,
+             statement, current_revision, confirmed_at, budget_max_tokens, budget_max_steps,
+             budget_max_revisions, budget_max_wall_clock_seconds, ended_at)
+           values ($1, 'completed', $2, $3, $4, 'renew the certificate last time', 1, now(),
+                   100000, 10, 3, 3600, now()) returning id`,
+          [workspaceId, outcome, basis, by],
+        );
+        const id = row?.id as string;
+        await raw(
+          `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan,
+             proposed_by, decided_by, decided_at)
+           values ($1, $2, 1, 'accepted', $3, $4, $4, now())`,
+          [workspaceId, id, JSON.stringify(planOf([{ key: 'renew' }])), by],
+        );
+        await raw(
+          `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+             status, attempt_count, ended_at)
+           values ($1, $2, 'renew', 1, 'succeeded', 1, now())`,
+          [workspaceId, id],
+        );
+        return id;
+      };
+      const first = await ended(requester, 'achieved', 'verified_by_check');
+      const notMine = await ended(someoneElse, 'not_achieved', 'requester');
+
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const input = (await plannerTask(round.id)).input as {
+        precedents: { goalRunId: string; match: string; polarity: string; plan: unknown }[];
+      };
+      expect(input.precedents.map((precedent) => precedent.goalRunId)).toEqual([first]);
+      expect(input.precedents[0]).toMatchObject({
+        match: 'worker',
+        polarity: 'positive',
+        outcome: 'achieved',
+        outcomeBasis: 'verified_by_check',
+        steps: [{ key: 'renew', status: 'succeeded' }],
+      });
+      expect(JSON.stringify(input.precedents)).not.toContain(notMine);
+      expect(input.precedents.map((precedent) => precedent.goalRunId)).not.toContain(goalRunId);
+
+      // S11 GO17b: its report cites only precedents its input gave it, and only with a revision.
+      const task = await plannerTask(round.id);
+      const goal = await getGoal(goalRunId, requester);
+      const cite = (precedents: unknown, decision = 'revise') =>
+        report(task.id, {
+          decision,
+          ...(decision === 'revise' ? { plan: reroute(goal) } : {}),
+          precedents,
+          reason: 'The other Worker renewed it the last time.',
+        });
+      for (const [precedents, place, message] of [
+        [[notMine], 'output.precedents.0', 'is not one of the precedents your input gives'],
+        [[first, first], 'output.precedents.1', 'is cited a second time'],
+        [[goalRunId], 'output.precedents.0', 'a goal is never its own precedent'],
+        [['not-an-id'], 'output.precedents.0', ''],
+      ] as const) {
+        const refused = await refusal(cite(precedents));
+        expect(refused).toMatchObject({ status: 400 });
+        const problems = JSON.stringify(refused.details);
+        expect(problems).toContain(place);
+        expect(problems).toContain(message);
+      }
+      const noRevision = JSON.stringify((await refusal(cite([first], 'no_revision'))).details);
+      expect(noRevision).toContain('precedents are given with decision revise, and only then');
+      expect((await plannerTask(round.id)).status).toBe('running');
+
+      await cite([first]);
+      await advanceOnce(goalRunId, requester);
+      const proposed = await getGoal(goalRunId, requester);
+      expect(proposed.revisions.at(-1)).toMatchObject({
+        revision: 2,
+        proposer: 'planner',
+        citedPrecedents: [
+          {
+            goalRunId: first,
+            statement: 'renew the certificate last time',
+            outcome: 'achieved',
+            outcomeBasis: 'verified_by_check',
+            polarity: 'positive',
+          },
+        ],
+      });
+      // Revision 1, the requester's, cites nothing.
+      expect(proposed.revisions[0]?.citedPrecedents).toEqual([]);
+      const [audit] = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and action = 'plan_revision.propose'
+            and payload ->> 'goalRunId' = $2`,
+        [workspaceId, goalRunId],
+      );
+      expect(audit?.payload).toMatchObject({ proposer: 'planner', citedPrecedents: [first] });
     });
 
     it('the planner proposes another Worker; the requester accepts and resumes; the goal reaches done the other way', async () => {
@@ -1131,6 +1239,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(refused.message).toContain('evidence:');
       expect(await facts()).toBe(before);
       expect((await plannerTask(round.id)).status).toBe('running');
+
+      // S11 GO18 (independent review of #1102): the round stops running (here the owner holds the
+      // run) and the planner's Task is stopped only after that commit — a report landing in
+      // between is still held to what a planner may write.
+      await call(human(ownerId), 'pause_goal', { goalRunId });
+      expect(await rounds(goalRunId)).toMatchObject([{ status: 'abandoned' }]);
+      expect((await plannerTask(round.id)).status).toBe('running');
+      const late = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'planned',
+          output: { decision: 'no_revision', reason: 'nothing to change' },
+          factsToAssert: [
+            {
+              linkType: 'runs_on',
+              source: { objectType: 'Host', identity: { name: 'web-1' } },
+              target: { objectType: 'Host', identity: { name: 'rack-1' } },
+            },
+          ],
+        }),
+      );
+      expect(late).toMatchObject({ status: 400 });
+      expect(late.message).toContain('factsToAssert:');
+      expect(await facts()).toBe(before);
     });
 
     it('a rejected proposal stays rejected: no accepting it after, no new round for the same failure', async () => {
@@ -3120,6 +3251,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       const requester = await newPrincipal('member');
+      // S11 GO18 (#493 on #1102): the goal reviewer's family, once a review has published it.
+      const reviewer = await asApp(requester, async (client) =>
+        ensureReviewerDefinition(client, workspaceId, await loadReviewerTemplate()),
+      );
+      if (!reviewer) throw new Error('no reviewer definition');
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const { goalRunId } = await failedForPerson(requester);
@@ -3153,11 +3289,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           (byId.get(worker.definitionId)?.hints as { cost: { tasks: number } }).cost.tasks,
         ).toBeGreaterThan(0);
-        // The planner's family is never offered (as find_workers).
+        // The planner's family is never offered (as find_workers), nor the reviewer's.
         const plannerFamily = await asApp(requester, (client) =>
           findGoalPlannerFamily(client, workspaceId),
         );
         expect(byId.has(plannerFamily)).toBe(false);
+        expect(byId.has(reviewer.id)).toBe(false);
         expect(task.input.rules).toEqual(
           expect.arrayContaining([expect.stringContaining('not a ranking')]),
         );

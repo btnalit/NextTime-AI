@@ -205,8 +205,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const first = await sessionOf(member);
       const harness = newRuntime();
       await startAdminTurn(harness, member, first);
-      // The first session ends without its Handle being revoked (the platform's same-role
-      // set_membership_role does this): the next one opens and its Turn names it.
+      // The first session ends without its Handle being revoked (a session can end while its
+      // Handles stay valid): the next one opens and its Turn names it.
       await withAdminClient(pool, (client) =>
         client.query(`update sessions set status = 'revoked' where id = $1`, [first]),
       );
@@ -250,15 +250,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await handleCount(member)).toBe(2);
     });
 
-    it('#941 review (#493 P3): a Turn queued under a session that ended while its Handle stayed live (same-role set_membership_role) fails rather than reusing the cached Handle', async () => {
+    it('#941 review (#493 P3): a Turn queued under a session that ended while its Handle stayed live fails rather than reusing the cached Handle', async () => {
       const member = await newTrialMember();
       const sessionId = await sessionOf(member);
       const harness = newRuntime();
       await startAdminTurn(harness, member, sessionId);
       expect(startFrames(harness.sent)).toHaveLength(1);
       harness.sent.length = 0;
-      // What the platform's set_membership_role does to the same role: the session ends, its
-      // Handles are left alone (they are revoked only on a role change).
+      // The session ends and its Handles are left alone (a session that expires, say:
+      // `verifyHandle` reads only a Handle's own `revoked_at`).
       await withAdminClient(pool, (client) =>
         client.query(
           `update sessions set status = 'revoked', expires_at = least(expires_at, now()) where id = $1`,

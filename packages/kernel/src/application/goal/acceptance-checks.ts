@@ -58,6 +58,15 @@ function observationCallOf(check: AcceptanceCheck | StepAcceptanceCheck): string
     : null;
 }
 
+/** The `review_check` a check's row carries (S11 GO18): a review's declaration as the plan holds
+ *  it — the entry without `kind` and `key` (goal/0019's guard holds the row to exactly that) — as
+ *  JSON; `null` for any other kind. */
+function reviewCheckOf(check: AcceptanceCheck): string | null {
+  if (check.kind !== 'review') return null;
+  const { kind: _kind, key: _key, ...declaration } = check;
+  return JSON.stringify(declaration);
+}
+
 /** The `last_error` of a fact check's attempt that found no Fact that may serve as evidence — kept
  *  apart from a check that could not be made (a refusal) and from one that saw a Fact that did not
  *  satisfy its predicate (`failed`), in the rows, the audit and a pause's detail. */
@@ -86,6 +95,9 @@ export interface AcceptanceCheckRow {
   readonly factCheck: FactCheck | null;
   /** `requester_confirm`: what the requester is asked; `null` for an observation. */
   readonly prompt: string | null;
+  /** `review` (S11 GO18): its declaration as the plan holds it, without `kind` and `key` —
+   *  read with `review.ts` `reviewDeclarationOf`; `null` for any other kind. */
+  readonly reviewCheck: Record<string, unknown> | null;
   readonly status: GoalAcceptanceCheckStatus;
   readonly attempts: number;
   readonly firstAttemptAt: Date | null;
@@ -114,6 +126,7 @@ interface AcceptanceCheckDbRow {
   observation_check: PlatformObservationCall | null;
   fact_check: FactCheck | null;
   prompt: string | null;
+  review_check: Record<string, unknown> | null;
   status: GoalAcceptanceCheckStatus;
   attempts: number;
   first_attempt_at: Date | null;
@@ -129,14 +142,16 @@ interface AcceptanceCheckDbRow {
 
 const ACCEPTANCE_CHECK_COLUMNS =
   'workspace_id, goal_run_id, null::uuid as step_run_id, null::int as step_attempt, round, ' +
-  'check_key, plan_revision, kind, observation_check, fact_check, prompt, status, attempts, ' +
+  'check_key, plan_revision, kind, observation_check, fact_check, prompt, review_check, status, ' +
+  'attempts, ' +
   'first_attempt_at, next_attempt_at, lease_until, observation_id, fact_id, decision_id, ' +
   'last_error, created_at, settled_at';
 
-/** A step's row in the shape of a goal's: it has no prompt and no decision. */
+/** A step's row in the shape of a goal's: it has no prompt, no review and no decision. */
 const STEP_ACCEPTANCE_CHECK_COLUMNS =
   'workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key, plan_revision, kind, ' +
-  'observation_check, fact_check, null::text as prompt, status, attempts, first_attempt_at, ' +
+  'observation_check, fact_check, null::text as prompt, null::jsonb as review_check, status, ' +
+  'attempts, first_attempt_at, ' +
   'next_attempt_at, lease_until, observation_id, fact_id, null::uuid as decision_id, last_error, ' +
   'created_at, settled_at';
 
@@ -185,6 +200,7 @@ function mapRow(row: AcceptanceCheckDbRow): AcceptanceCheckRow {
     observationCheck: row.observation_check,
     factCheck: row.fact_check,
     prompt: row.prompt,
+    reviewCheck: row.review_check,
     status: row.status,
     attempts: row.attempts,
     firstAttemptAt: row.first_attempt_at,
@@ -247,7 +263,7 @@ async function auditCheck(
   client: PoolClient,
   workspaceId: string,
   check: AcceptanceCheckRow,
-  outcome: GoalAcceptanceCheckStatus | 'retry',
+  outcome: GoalAcceptanceCheckStatus | 'retry' | 'started',
   actorPrincipalId: string,
   extra: Record<string, unknown>,
 ): Promise<void> {
@@ -303,8 +319,8 @@ export async function openAcceptanceRound(
     const inserted = await client.query<AcceptanceCheckDbRow>(
       `insert into goal_acceptance_checks
          (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check,
-          fact_check, prompt)
-       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+          fact_check, prompt, review_check)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb)
        returning ${ACCEPTANCE_CHECK_COLUMNS}`,
       [
         workspaceId,
@@ -316,6 +332,7 @@ export async function openAcceptanceRound(
         observationCallOf(check),
         check.kind === 'fact_predicate' ? JSON.stringify(check.fact) : null,
         check.kind === 'requester_confirm' ? check.prompt : null,
+        reviewCheckOf(check),
       ],
     );
     const row = inserted.rows[0];
@@ -502,6 +519,28 @@ export async function settleAcceptanceCheck(
     ...(input.lastError ? { code: clippedCode(input.lastError) } : {}),
     ...(input.detail ?? {}),
     ...(error ? { error } : {}),
+  });
+}
+
+/** Marks a pending review tried (S11 GO18): its reviewer Task `reviewTaskId` was created in this
+ *  transaction (goal/0019 lets the attempt count grow only then; a review is tried once). Audited
+ *  as a `started` attempt. */
+export async function markReviewTried(
+  client: PoolClient,
+  workspaceId: string,
+  check: AcceptanceCheckRow,
+  reviewTaskId: string,
+  actorPrincipalId: string,
+): Promise<void> {
+  await client.query(
+    `update goal_acceptance_checks
+        set attempts = 1, first_attempt_at = now()
+      where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4
+        and kind = 'review' and status = 'pending' and attempts = 0`,
+    [workspaceId, check.goalRunId, check.round, check.checkKey],
+  );
+  await auditCheck(client, workspaceId, { ...check, attempts: 1 }, 'started', actorPrincipalId, {
+    reviewTaskId,
   });
 }
 

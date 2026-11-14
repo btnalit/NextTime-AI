@@ -19,7 +19,7 @@ spawn / stop 原地改写它；root 属主时写入 `EACCES`，S1.5a 起不挡 s
 
 `worker-runtime` 镜像（`deploy/worker-runtime/Dockerfile`）是入口容器与（后续 S2.8/S2.9）Worker
 容器共用的唯一镜像：`node:24-bookworm-slim` + pi（版本见根目录 `pi.version`，当前 1.1.0；`deploy/worker-runtime/pi/` 的锁文件钉死它的整棵依赖树）+
-`@nexttime/platform-extension` + `git curl python3 pip build-essential ripgrep`。`worker-supervisor` 的常驻模式
+`@nexttime/platform-extension` + `git curl python3 pip build-essential ripgrep` + 固定版本的 `fd`（官方静态构建，校验 SHA-256，见 `pi-upgrade.md` 2.2）。`worker-supervisor` 的常驻模式
 （`POST /resident/spawn` 等）按用户拉起该镜像的常驻容器（设计文档 §7.2）。
 
 本任务不含：agent-host 事件桥（下一个任务把容器 stdout 的 JSONL 事件桥到内核）、内核侧真正的
@@ -175,11 +175,11 @@ docker exec nexttime-entry-demo-alice sh -c 'echo x >> /opt/nexttime/platform/sy
 `.../workspaces/.platform/principals/<principalId>:/opt/nexttime/platform:ro`、
 `.../models/models.json:/opt/nexttime/models.json:ro`；写入探针三条都是 `Read-only file system`。
 这几项只在本版 worker-supervisor 新建的容器上成立；升级前就在跑的入口容器下一轮对话时会被重建（容器没有
-`nexttime.runtime-contract` label），之后再核。容器一启动就退出、日志是 `check=models_json result=fail
+`nexttime.runtime-contract` label，或者不是本版的），之后再核。容器一启动就退出、日志是 `check=models_json result=fail
 reason=empty_mount` 时，起它的 worker-supervisor 比镜像旧（没挂 `models.json`）：把 worker-supervisor 也升到同一版本。
 worker-supervisor 返回 409
-`runtime_image_incompatible` 时，活动镜像是遗留 422 之前构建的（没有 `ai.nexttime.runtime-contract=2`
-label）：按 §2 用本版重建镜像，在运行层页把新镜像设为活动。
+`runtime_image_incompatible` 时，活动镜像的 `ai.nexttime.runtime-contract` 不是本版的（遗留 422 之前构建的没有这个
+label；S11 GO18a 遗留之前构建的是 2，本版是 3）：按 §2 用本版重建镜像，在运行层页把新镜像设为活动。
 
 ```bash
 docker exec nexttime-entry-demo-alice curl -sS -o /dev/null -w '%{http_code}\n' https://example.com

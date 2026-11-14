@@ -81,6 +81,7 @@ describe.runIf(DATABASE_URL !== undefined)('recordUsage — integration (real Po
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 3600,
         privateKey,
+        basis: { kind: 'role', role: 'member', credential: null },
       });
       return issued.jti;
     });

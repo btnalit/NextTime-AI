@@ -385,13 +385,30 @@ const RollbackBlockedByShape = {
   blockedBy: z.object({ segmentId: z.string() }).strict().nullable(),
 };
 
+/** A LinkType end naming an ObjectType no published ontology family would declare (legacy 303):
+ *  the family whose LinkType it is, the LinkType's name, which end, and the type it names.
+ *  `family` is that family's stable name as the ChangePlan item that last installed it recorded
+ *  it (an `ontology_version` item's `target.family`: a pack's or module's family) — null when no
+ *  item has: the platform-meta ontology, a family published from a draft or seeded from the
+ *  command line. */
+export const OntologyLinkEndWireSchema = z
+  .object({
+    ontologyId: z.string(),
+    family: z.string().nullable(),
+    linkType: z.string(),
+    end: z.enum(['domain', 'range']),
+    objectType: z.string(),
+  })
+  .strict();
+export type OntologyLinkEndWire = z.infer<typeof OntologyLinkEndWireSchema>;
+
 /** One item of a rollback dry run, by kind. The family goes back from `from` (the version the item
  *  published) to `to` (the version before it; null — the family is no longer installed: a Skill
  *  no Worker mounts any more, a WorkerDefinition nobody can invoke). Its classification is the
  *  rollback's own, by the same whitelist as applying (I-A4): an `authority_widening` item is
  *  confirmed by its ordinal in `roll_back_change_segment`. Only an `ontology_version` item can be
- *  blocked by `namespace_conflict`; a Skill or WorkerDefinition rollback only retires a version, so
- *  it never gives a name a second owner. */
+ *  blocked by `namespace_conflict` or `link_endpoint_undeclared`; a Skill or WorkerDefinition
+ *  rollback only retires a version, so it never gives a name a second owner. */
 export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -414,6 +431,11 @@ export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
           })
           .strict(),
       ),
+      /** For `blocker: 'link_endpoint_undeclared'` (legacy 303): each LinkType end that would name
+       *  an ObjectType no published family declares — `ontologyId` is the family whose LinkType it
+       *  is: this item's own family (the restored version names a type that is gone) or another
+       *  (it names a type the rollback takes away). Empty otherwise. */
+      linkEnds: z.array(OntologyLinkEndWireSchema),
     })
     .strict(),
   z

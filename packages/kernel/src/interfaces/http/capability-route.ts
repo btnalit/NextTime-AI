@@ -74,6 +74,7 @@ import {
   EvaluationChangedError,
   EvaluationReviewRequiredError,
 } from '../../application/eval/index.js';
+import { GateAddressChangeError } from '../../application/gateway/gate-address-change-handlers.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
@@ -92,6 +93,8 @@ import {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   CsrfHeaderRequiredError,
@@ -113,6 +116,8 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
   OntologyViolationError,
   PasswordChangeRequiredError,
@@ -171,6 +176,8 @@ import {
   ModuleNotFoundError,
 } from '../../application/platform/modules.js';
 import {
+  CombinationNotEligibleError,
+  CombinationNotFoundError,
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
@@ -284,7 +291,18 @@ interface ErrorMapping {
  * echoed back to the caller; it is still available server-side via the `outcome`/error passed to
  * the structured log below (never persisted with credentials, see log() call).
  */
-export function mapCapabilityError(err: unknown): ErrorMapping {
+/** Legacy 714: `issueHandle` refused because the caller's role or user changed while the call
+ *  ran (`HandleIssuanceError` code `authority_changed`) — a conflict to retry, not a lost
+ *  credential. Shared with the WS mapping's message (`interfaces/ws/rpc.ts`). */
+export const AUTHORITY_CHANGED_MESSAGE =
+  'authority_changed: the role or user this call was authorized under changed while it ran; call again';
+const AUTHORITY_CHANGED_CONFLICT: ErrorMapping = {
+  status: 409,
+  code: 'conflict',
+  message: AUTHORITY_CHANGED_MESSAGE,
+};
+
+export function mapCapabilityError(err: unknown, capability = 'create_connection'): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
   }
@@ -780,6 +798,40 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof OntologyNamespaceConflictError) {
     return { status: 409, code: err.code, message: err.message };
   }
+  // Legacy 303: a LinkType end would name an ObjectType no published ontology family declares —
+  // the version's own (`undeclared`) or another family's naming a type this version drops
+  // (`orphaned`). Same paths as I-P1 above; nothing was published.
+  if (err instanceof OntologyLinkEndpointError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        undeclared: err.problems.undeclared.map((p) => ({ ...p })),
+        orphaned: err.problems.orphaned.map((p) => ({ ...p })),
+      },
+    };
+  }
+  // Legacy 705: a pack's LinkType end names an ObjectType of a family the pack does not require —
+  // `preview_pack_install`, `install_pack`, `install_module`, `upgrade_module`. Each end says the
+  // family that declares the type and, when the deployment ships it, the pack to require.
+  // Nothing was published.
+  if (err instanceof OntologyLinkEndpointOutsideRequiresError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        ends: err.ends.map((e) => ({
+          linkType: e.linkType,
+          end: e.end,
+          objectType: e.objectType,
+          family: e.family,
+          pack: e.pack,
+        })),
+      },
+    };
+  }
   // Legacy 145: `propose_entry_template_upgrade` — nothing to upgrade to, or the template / the
   // published entry version is not the one the caller looked at. Nothing was proposed.
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
@@ -920,9 +972,23 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     };
   }
   // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own
-  // services or networks — refused before any fetch (adapters/outbound-target).
+  // services or networks, or (legacy 413) a plain http:// URL to the public internet — refused
+  // before any fetch (adapters/outbound-target). `details.reason` is the predicate's closed reason
+  // (`OutboundTargetRefusalReason`), so the console can say which of the two it was; `details.field`
+  // names the param the URL came in, so the console never guesses it from the text (UX acceptance
+  // of #1129: the plaintext-public text mentions credentials).
   if (err instanceof OutboundTargetRefusedError) {
-    return { status: 400, code: err.code, message: `create_connection: ${err.message}` };
+    return {
+      status: 400,
+      code: err.code,
+      message: `${capability}: ${err.message}`,
+      details: {
+        reason: err.reason,
+        ...(err.subject === 'endpoint' || err.subject === 'manifestSource'
+          ? { field: err.subject }
+          : {}),
+      },
+    };
   }
   // R-01 (D-01) connection secrets: missing / not minted for this workspace (400), reused or not
   // applicable to a platform-catalog gate (409), no gate token to derive one from (503).
@@ -931,6 +997,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ConnectionSecretConflictError) {
     return { status: 409, code: 'conflict', message: err.message };
+  }
+  // R-01 / legacy 701: the secret already belongs to a Gatekeeper, or already served a proposal to
+  // move a gate; legacy 711: or it is no longer fresh — "get a new one" in every case.
+  if (err instanceof ConnectionSecretInUseError || err instanceof ConnectionSecretExpiredError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // Legacy 701 (gate-address-change-handlers.ts): each refusal carries its own status and code.
+  if (err instanceof GateAddressChangeError) {
+    return { status: err.status, code: err.code, message: err.message };
   }
   if (err instanceof GateConnectionSecretsUnavailableError) {
     return { status: 503, code: 'service_unavailable', message: err.message };
@@ -943,9 +1018,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof GatekeeperClientError) {
     // A refusal the caller can act on keeps the gate's own status and code (`gateRefusalOf`) —
-    // 403 `operation_refused` used to arrive as 502 and read as an outage worth retrying.
+    // 403 `operation_refused` used to arrive as 502 and read as an outage worth retrying; legacy
+    // 700: so did 424 `target_refused` (the gate's endpoint is not an allowed target), with the
+    // rule in `details.reason`.
     const refusal = gateRefusalOf(err);
-    if (refusal) return { status: refusal.status, code: refusal.code, message: err.message };
+    if (refusal) {
+      return {
+        status: refusal.status,
+        code: refusal.code,
+        message: err.message,
+        ...(refusal.details !== undefined ? { details: refusal.details } : {}),
+      };
+    }
     return { status: 502, code: 'gatekeeper_error', message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
@@ -964,6 +1048,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // invalid issuance request (unknown session, non-positive ttl) — the caller's own malformed
   // request, same 400 bucket every other Handle-mint failure mode above already uses.
   if (err instanceof HandleIssuanceError) {
+    // Legacy 699: the caller's session or the Handle it attenuates from was revoked while the call
+    // ran — its credential is gone, the same generic 401 as a revoked Handle. Legacy 702's
+    // `acting_principal_disabled` takes the same 401: the Principal, their user or workspace was
+    // disabled while the call ran. Legacy 712's `credential_revoked` too: the console session or
+    // API key this call was made with was revoked (a reset, a sign-out) while it ran.
+    // Legacy 714: `authority_changed` is not a lost credential — the Principal's role or user
+    // changed while the call ran, and their credential is still good (a 401 would send the console
+    // back to sign-in). A 409: calling again computes the Handle from what holds now, or meets a
+    // 401 if that change also ended the credential. The message names nobody.
+    if (err.code === 'authority_changed') return AUTHORITY_CHANGED_CONFLICT;
+    if (err.code !== undefined)
+      return { status: 401, code: 'unauthorized', message: 'unauthorized' };
     return { status: 400, code: 'invalid_params', message: err.message };
   }
   // Review fix 2026-09 (code-review finding F10): `invoke_worker`'s task-runtime precondition
@@ -1137,9 +1233,21 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (
     err instanceof WorkerDefinitionNotFoundError ||
     err instanceof SkillNotFoundError ||
-    err instanceof ProcedureNotFoundError
+    err instanceof ProcedureNotFoundError ||
+    // S11 GO16b: no goal the caller can read ran the combination — as an unknown definition.
+    err instanceof CombinationNotFoundError
   ) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S11 GO16b: the combination does not qualify now — `details.shortfalls` and
+  // `details.evidence`; nothing was proposed.
+  if (err instanceof CombinationNotEligibleError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { shortfalls: [...err.details.shortfalls], evidence: { ...err.details.evidence } },
+    };
   }
   if (err instanceof WorkerDefinitionNotPublishedError) {
     return { status: 409, code: 'not_published', message: err.message };
@@ -1298,7 +1406,7 @@ export async function handleCapabilityRoute(
     return { ok: true, result };
   } catch (err) {
     outcome = 'error';
-    const mapped = mapCapabilityError(err);
+    const mapped = mapCapabilityError(err, capability);
     reply.code(mapped.status);
     // Lane-4 P2 fix (docs/development-tasks.md "errors never logged on either transport (500s
     // invisible server-side)"): one structured line per failed call, `{capability, errorName,

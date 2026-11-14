@@ -53,7 +53,7 @@ import {
  * | I3 | a `links` row has non-null `activity_id`/`asserted_by`/`recorded_at` | No | `NOT NULL` columns (core/0002_substrate.sql) — same structural argument as I1. |
  * | I4 | a recorded `links` row's content is append-only | Yes | `checkI4` — verifies the two enforcing triggers (`links_immutable_content`, `links_immutable_delete`) are present and enabled in `pg_trigger`. The triggers themselves make a real breach unrepresentable in the table; this check watches the mechanism, not the (unreachable) violation. |
  * | I5 | cross-source inconsistency → Conflict; same-source change → supersede | No | The same-source/cross-source branch is decided by comparing `source_id` at write time (S1.2's assert path) — `links` has no `source_id` column (only `activity_id`; the chain to a Source runs through Observation, which a Fact does not reference either). A "two active edges, no Conflict row" scan would conflate legitimate multi-edges with real breaches without replicating that same source comparison outside its owning module — documented gap, not approximated (same posture `get_operation_stats`'s own capability-registry doc comment already takes for its own audit-query gap). |
- * | I6 | an ActionRequest only ever moves along `ACTION_REQUEST_TRANSITIONS`' edges | Yes | `checkI6` — every `action_request.*` transition writes an AuditRecord carrying `resultingStatus` (`transition-log.ts`'s `recordTransition`, called from every mutator in `governance/approval`); consecutive rows for the same ActionRequest are compared against `@nexttime/shared`'s `ACTION_REQUEST_EDGES`. Only rows carrying `resultingStatus` are transitions: an annotation of a request — no `resultingStatus` (`action_request.release`, S11 GO3b; `action_request.reconcile` / `.reexecute`, GO3c) or one restating the status the row already has (`action_request.outcome_in_doubt`, legacy 287: `executing` stays `executing`) — is neither compared nor allowed to stand between two transitions (no edge is a self-loop, so a pair with the same status is never a transition). The very first recorded status per ActionRequest (row creation collapses `proposed → policy_evaluated → X` into one write, `request-action.ts`'s own `insertActionRequestRow`) has no predecessor to compare and is not independently re-validated here — that set of legal *initial* statuses is `governance/approval`'s own code-level contract. |
+ * | I6 | an ActionRequest only ever moves along `ACTION_REQUEST_TRANSITIONS`' edges | Yes | `checkI6` — every `action_request.*` transition writes an AuditRecord carrying `resultingStatus` (`transition-log.ts`'s `recordTransition`, called from every mutator in `governance/approval`); consecutive rows for the same ActionRequest are compared against `@nexttime/shared`'s `ACTION_REQUEST_EDGES`, in `created_at` order — and, among rows one transaction wrote (they share its `now()`), in lifecycle order (`ACTION_REQUEST_STATUS_DEPTH`), so a request approved, started and failed in one transaction is not read in the random order of its audit ids. Only rows carrying `resultingStatus` are transitions: an annotation of a request — no `resultingStatus` (`action_request.release`, S11 GO3b; `action_request.reconcile` / `.reexecute`, GO3c) or one restating the status the row already has (`action_request.outcome_in_doubt`, legacy 287: `executing` stays `executing`) — is neither compared nor allowed to stand between two transitions (no edge is a self-loop, so a pair with the same status is never a transition). The very first recorded status per ActionRequest (row creation collapses `proposed → policy_evaluated → X` into one write, `request-action.ts`'s own `insertActionRequestRow`) has no predecessor to compare and is not independently re-validated here — that set of legal *initial* statuses is `governance/approval`'s own code-level contract. |
  * | I7 | execution requires a recorded, non-deny Policy decision | Yes | `checkI7` — mirrors the three `action_requests` CHECK constraints (governance/0003_action_requests.sql) that already make this structurally unrepresentable; defense in depth, expected to always read zero. |
  * | I8 | auto-approval requires both the Operation's own `auto_approvable` and the workspace policy rule | No | The Operation's current `auto_approvable` lives on a graph Object (`governance/gatekeepers`'s own projection), not as a column this module can join to without depending on that module's schema assumptions; the workspace rule is `policies.auto_approve`. Reconstructing "was the *double* signal actually satisfied at decision time" would require replicating `governance/policy/engine.ts`'s own evaluation outside the module that owns it. |
  * | I9 | no agent/kernel process holds an external credential | No | Process/environment-level (container env vars), not a database fact — nothing in Postgres represents this either way. |
@@ -90,6 +90,11 @@ import {
  *   active Handle is also excluded — an old/retired/superseded Source can never observe again
  *   regardless of how long it stays silent (see `checkCollectorSilent`'s own doc comment).
  *
+ * ## Legacy 701 — I-A1
+ *
+ * A self-connected gate moved by an approved address change is at the address that change moved
+ * it to — the Gatekeeper Object's address and its self connection's key alike (`checkIA1`).
+ *
  * ## S11 goal execution — I-G1, I-G2, I-G5, I-G6, I-G9
  *
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.3, in `goal-invariant-checks.ts`
@@ -100,6 +105,22 @@ import {
  * pauses (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step
  * of a live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G7/I-G8 are enforced where
  * their mechanism lives (a DB trigger for I-G3's base revision; GO2–GO4 code for the rest).
+ *
+ * ## Handle revocation — I-H1
+ *
+ * Legacy 699 / 707: a revoked session has no valid Handle (`revoked_at is null and expires_at >
+ * now()`). Enforced by governance 0042 — the `sessions_revoked_revokes_handles` trigger revokes a
+ * session's Handles when it is revoked, and the insert trigger refuses a Handle under a revoked
+ * session. `checkIH1` is the monitor: it reads non-zero if the trigger is dropped or stops reaching
+ * rows (it is a `security definer` function and `capability_handles` must never FORCE row level
+ * security, which would hide every row from it).
+ *
+ * ## Handle authority — I-H2
+ *
+ * Legacy 702: a disabled workspace, user or Principal has no valid Handle acting for it. Enforced
+ * by governance 0043 — every disable revokes the sessions acting for it (and 0042 their Handles),
+ * and every issuer re-checks the authority under the advisory locks every writer takes. `checkIH2`
+ * is the monitor: non-zero means a disable missed a session, or a Handle was issued past one.
  */
 
 export interface InvariantCheckResult {
@@ -203,6 +224,27 @@ const VALID_ACTION_REQUEST_EDGES = new Set(
   ACTION_REQUEST_EDGES.map((edge) => `${edge.from}->${edge.to}`),
 );
 
+/** Each status's depth in the ActionRequest lifecycle (the longest path to it over
+ *  `ACTION_REQUEST_EDGES`, which has no cycle): every legal edge goes to a deeper status. Rows a
+ *  transaction writes share its `now()` as `created_at`, so their order there is not recorded —
+ *  an approval, its execution's start and its failure, written together, would otherwise be
+ *  compared in the random order of their ids and read as illegal edges. Ordered by depth within
+ *  one `created_at`, a legal path is compared as the path it is, and an edge that skips a status
+ *  or joins two siblings stays illegal in any order. What one transaction's rows cannot show is
+ *  their order: one that wrote a backward step (`executing` then `approved`) or came back to a
+ *  status it had left reads as the forward path — as it read under the ids, by luck. Across
+ *  `created_at` values the order is the recorded one, and a step back is a violation. */
+export const ACTION_REQUEST_STATUS_DEPTH: Readonly<Record<string, number>> = (() => {
+  const depth: Record<string, number> = {};
+  for (const edge of ACTION_REQUEST_EDGES) depth[edge.from] ??= 0;
+  for (let pass = 0; pass < ACTION_REQUEST_EDGES.length; pass += 1) {
+    for (const edge of ACTION_REQUEST_EDGES) {
+      depth[edge.to] = Math.max(depth[edge.to] ?? 0, (depth[edge.from] ?? 0) + 1);
+    }
+  }
+  return depth;
+})();
+
 async function checkI6(client: PoolClient): Promise<InvariantCheckResult> {
   const result = await client.query<TransitionAuditRow>(
     `with transitions as (
@@ -212,7 +254,8 @@ async function checkI6(client: PoolClient): Promise<InvariantCheckResult> {
               resource_id as action_request_id,
               payload ->> 'resultingStatus' as to_status,
               lag(payload ->> 'resultingStatus') over (
-                partition by workspace_id, resource_id order by created_at, id
+                partition by workspace_id, resource_id
+                order by created_at, ($1::jsonb ->> (payload ->> 'resultingStatus'))::int, id
               ) as from_status
        from audit_records
        where resource_type = 'action_request'
@@ -225,6 +268,7 @@ async function checkI6(client: PoolClient): Promise<InvariantCheckResult> {
      where from_status is not null
        and from_status <> to_status
      order by created_at desc, audit_id desc`,
+    [JSON.stringify(ACTION_REQUEST_STATUS_DEPTH)],
   );
 
   const violations = result.rows.filter(
@@ -552,7 +596,7 @@ async function checkIS53(client: PoolClient): Promise<InvariantCheckResult> {
 /**
  * S10 P0 (docs/s10-evolution-plan-2026-10-04.md §3.3; `substrate/ontology/namespace.ts`): within
  * one workspace, the latest published version of each family is compared with every other
- * family's — the same "latest published per family" set `assertOntologyNamespace` checks at write
+ * family's — the same "latest published per family" set `assertOntologyPublishable` checks at write
  * time and `loadPublishedLinkTypes` reads writes against. Both publish paths refuse a collision
  * under a workspace-wide advisory lock, so this is defence in depth on that mechanism (the I4 / I7
  * / I12 posture): it reads non-zero only for a collision written before the check existed (the
@@ -595,6 +639,164 @@ async function checkIP1(client: PoolClient): Promise<InvariantCheckResult> {
     sample: result.rows
       .slice(0, SAMPLE_LIMIT)
       .map((row) => `${row.workspace_id}:${row.kind}:${row.name} (${row.families.join(', ')})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// I-P1-LINK — every LinkType end of a published ontology names a declared ObjectType or "*".
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Legacy 303 (`substrate/ontology/namespace.ts`'s `assertOntologyPublishable`): within one
+ * workspace, each `domain` / `range` of a LinkType in a family's latest published version is `"*"`
+ * or an ObjectType some family's latest published version declares. Every publish path, a pack's
+ * review and an ontology item's rollback refuse to break it, so this reads non-zero only for a
+ * version published before the check existed (docs/runbooks/release.md, this check's SQL is the
+ * pre-upgrade query) or by a path that bypasses them. One violation per (workspace, family,
+ * LinkType, end, type); drafts are not counted.
+ */
+async function checkIP1Link(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    id: string;
+    link_type: string;
+    side: string;
+    object_type: string;
+  }>(
+    `with heads as (
+       select t.workspace_id, t.id, t.definition
+       from ontology_versions t
+       where t.status = 'published'
+         and t.version = (
+           select max(t2.version) from ontology_versions t2
+           where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+         )
+     ),
+     declared as (
+       select distinct workspace_id, e ->> 'name' as name
+       from heads, jsonb_array_elements(coalesce(definition -> 'objectTypes', '[]'::jsonb)) e
+     ),
+     ends as (
+       select workspace_id, id, l ->> 'name' as link_type, 'domain' as side,
+              l ->> 'domain' as object_type
+       from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+       union
+       select workspace_id, id, l ->> 'name', 'range', l ->> 'range'
+       from heads, jsonb_array_elements(coalesce(definition -> 'linkTypes', '[]'::jsonb)) l
+     )
+     select e.workspace_id, e.id, e.link_type, e.side, e.object_type
+     from ends e
+     where e.object_type <> '*'
+       and not exists (
+         select 1 from declared d
+         where d.workspace_id = e.workspace_id and d.name = e.object_type
+       )
+     order by e.workspace_id, e.id, e.link_type, e.side, e.object_type`,
+  );
+  return {
+    invariant: 'I-P1-LINK',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map(
+        (row) => `${row.workspace_id}:${row.id}:${row.link_type}.${row.side} -> ${row.object_type}`,
+      ),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// I-A1 — a self-connected gate that moved is at the address its last applied change moved it to.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Legacy 701 (`approve_gate_address_change`, application/gateway/gate-address-change-handlers.ts):
+ * the approval moves the Gatekeeper Object's `endpoint` and its self connection's `endpoint` /
+ * `endpoint_key` in one transaction, so the gate is called where the workspace's other references
+ * say it is. For every self connection whose gate had an address change applied, the latest one's
+ * `to_endpoint` is the Object's `endpoint` (where the gate is called) and its `to_endpoint_key` the
+ * row's `endpoint_key` (what a request is bound to, I-A3). The row's `endpoint` is not compared:
+ * it is the copy the platform plane shows, which the raw-secret scrub may cut
+ * (`application/platform/scrub-raw-secrets.ts`, `selfConnectionAddresses`). A gate never moved is
+ * not counted (its key is the landing's, core 0045); a row whose landing left no key is not
+ * either. One violation per self connection.
+ */
+async function checkIA1(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    gatekeeper_object_id: string;
+    change_id: string;
+  }>(
+    `with last_applied as (
+       select distinct on (c.workspace_id, c.gatekeeper_object_id)
+              c.workspace_id, c.gatekeeper_object_id, c.id, c.to_endpoint, c.to_endpoint_key
+         from gate_address_changes c
+        where c.status = 'applied'
+        order by c.workspace_id, c.gatekeeper_object_id, c.decided_at desc, c.id
+     )
+     select s.workspace_id, s.gatekeeper_object_id, a.id as change_id
+       from workspace_self_connections s
+       join last_applied a
+         on a.workspace_id = s.workspace_id and a.gatekeeper_object_id = s.gatekeeper_object_id
+       left join objects o
+         on o.workspace_id = s.workspace_id and o.id = s.gatekeeper_object_id
+        and o.object_type = 'Gatekeeper'
+      where s.endpoint_key is not null
+        and (s.endpoint_key is distinct from a.to_endpoint_key
+             or o.properties ->> 'endpoint' is distinct from a.to_endpoint)
+      order by s.workspace_id, s.gatekeeper_object_id`,
+  );
+  return {
+    invariant: 'I-A1',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.gatekeeper_object_id} (change ${row.change_id})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// I-H1 — a revoked session has no valid Handle (legacy 699 / 707, see module doc comment).
+// -------------------------------------------------------------------------------------------
+
+async function checkIH1(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{ workspace_id: string; jti: string }>(
+    `select h.workspace_id, h.jti
+     from capability_handles h
+     join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+     where s.status = 'revoked' and h.revoked_at is null and h.expires_at > now()
+     order by h.created_at desc, h.jti desc`,
+  );
+  return {
+    invariant: 'I-H1',
+    violations: result.rows.length,
+    sample: result.rows.slice(0, SAMPLE_LIMIT).map((row) => `${row.workspace_id}:${row.jti}`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// I-H2 — a disabled workspace, user or Principal has no valid Handle (legacy 702).
+// -------------------------------------------------------------------------------------------
+
+async function checkIH2(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{ workspace_id: string; jti: string; what: string }>(
+    `select h.workspace_id, h.jti,
+            case when w.status = 'disabled' then 'workspace'
+                 when u.status = 'disabled' then 'user'
+                 else 'principal' end as what
+     from capability_handles h
+     join principals p on p.workspace_id = h.workspace_id and p.id = h.on_behalf_of
+     join workspaces w on w.id = h.workspace_id
+     left join users u on u.id = p.user_id
+     where h.revoked_at is null and h.expires_at > now()
+       and (p.disabled_at is not null or u.status = 'disabled' or w.status = 'disabled')
+     order by h.created_at desc, h.jti desc`,
+  );
+  return {
+    invariant: 'I-H2',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.jti} (${row.what} disabled)`),
   };
 }
 
@@ -730,11 +932,15 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-2',
   'I-S5-3',
   'I-P1',
+  'I-P1-LINK',
+  'I-A1',
   'I-G1',
   'I-G2',
   'I-G5',
   'I-G6',
   'I-G9',
+  'I-H1',
+  'I-H2',
   'ops.one_running_turn',
   'ops.outbox_stuck',
   'ops.collector_silent',
@@ -770,11 +976,15 @@ export async function runInvariantChecks(
       await checkIS52(client),
       await checkIS53(client),
       await checkIP1(client),
+      await checkIP1Link(client),
+      await checkIA1(client),
       await checkIG1(client, SAMPLE_LIMIT),
       await checkIG2(client, SAMPLE_LIMIT),
       await checkIG5(client, SAMPLE_LIMIT),
       await checkIG6(client, SAMPLE_LIMIT, goalBudgetGraceMs),
       await checkIG9(client, SAMPLE_LIMIT),
+      await checkIH1(client),
+      await checkIH2(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
       await checkCollectorSilent(client, collectorSilenceMs),

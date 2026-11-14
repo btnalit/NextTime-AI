@@ -123,6 +123,8 @@ const PURGE_COUNT_LABELS = {
   // S11 GO9a (goal/0014).
   goalPlannerDelegations: { zh: '目标规划器授权', en: 'Goal planner leaves' },
   goalPlanningRounds: { zh: '规划轮次', en: 'Planning rounds' },
+  // S11 GO18 (goal/0019).
+  goalReviewAssessments: { zh: '目标评审的打分结果', en: 'Goal review assessments' },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },
@@ -155,6 +157,9 @@ const PURGE_COUNT_LABELS = {
   // administrator's admin agent may propose to.
   adminAgentTargets: { zh: '管理员智能体的目标工作区', en: 'Admin agent targets' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
+  // Legacy 711 (migrations/core/0058): one row per connection secret issued (its salt, never the
+  // secret) — the name 连接密钥 has everywhere else.
+  connectionSecretIssuances: { zh: '连接密钥的签发记录', en: 'Connection secret issuances' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   // S10 E3-1a / E3-1b / E3-2a / E3-2b / E3-2c (migrations/worker/0007–0011): the names 治理 → 评测
   // uses.
@@ -168,8 +173,11 @@ const PURGE_COUNT_LABELS = {
   evalSuites: { zh: '用例集', en: 'Evaluation suites' },
   evalTrialCalls: { zh: '评测试跑的夹具调用', en: 'Evaluation fixture calls' },
   evalTrials: { zh: '评测试跑', en: 'Evaluation trials' },
+  // Legacy 701 (migrations/core/0057): the names the capability labels use.
+  gateAddressChanges: { zh: '门地址申请', en: 'Gate address changes' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
+  ontologyFamilies: { zh: '本体的名字', en: 'Ontology family names' },
   ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },
   outbox: { zh: '待投递事件', en: 'Outbox events' },
   pendingContextItems: { zh: '待告知智能体的事项', en: 'Pending context items' },
@@ -179,6 +187,7 @@ const PURGE_COUNT_LABELS = {
   skills: { zh: 'Skill', en: 'Skills' },
   turnOutcomes: { zh: '对话结果标记', en: 'Turn outcomes' },
   turnProcedureClaims: { zh: '流程使用记录', en: 'Procedure usage records' },
+  workerDefinitionDerivations: { zh: 'Worker 定义的来历', en: 'Worker definition origins' },
   workerDefinitions: { zh: 'Worker 定义', en: 'Worker definitions' },
   workerRunSkills: { zh: 'Skill 使用记录', en: 'Skill usage records' },
   workspaceGateLinks: { zh: '已启用的门实例', en: 'Enabled gate instances' },

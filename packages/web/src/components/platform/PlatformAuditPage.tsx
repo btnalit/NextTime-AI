@@ -338,7 +338,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                       : ''}
                     <ActingThroughChip actingThrough={row.actingThrough} payload={row.payload} />
                   </div>
-                  <AuditPayloadNotes payload={row.payload} />
+                  <AuditPayloadNotes payload={row.payload} action={row.action} />
                   <details className="platform-audit-payload">
                     <summary>{t('负载', 'Payload')}</summary>
                     <pre className="code-block pre-wrap">

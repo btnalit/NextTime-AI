@@ -1,8 +1,12 @@
 import type { CapabilityScope } from '@nexttime/shared';
-import { entryScope, issueHandle } from '../../governance/capability/index.js';
+import {
+  entryScope,
+  issueHandle,
+  lockIssuingAuthority,
+} from '../../governance/capability/index.js';
 import { entryGatekeeperIds, readExecuteAccess } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
 
 /**
  * application/gateway/issue-handle-handler: `issue_handle` (design doc §5.1.4, §9.2 "mcp_session
@@ -86,7 +90,15 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
   const { privateKey } = getConfiguredTaskRuntime();
 
   const input = params as IssueHandleParams;
-  const onBehalfOf = ctx?.principalId ?? '';
+  const principal = ctx?.principal;
+  if (!principal) {
+    throw new Error('issue_handle: no resolved human principal in context (channel:"human"-only)');
+  }
+  const onBehalfOf = principal.id;
+  // Legacy 702 (governance 0043): the authority locks before the session row below references the
+  // Principal; under them `issueHandle` refuses if the role this scope is computed from changed,
+  // or the Principal, their user or the workspace was disabled, since the caller was resolved.
+  await lockIssuingAuthority(client, workspaceId, onBehalfOf);
 
   // R-37 / D-20: the same gate set the entry Handle carries — the caller's active Grants minus
   // their own My Agent exclusions, capped by the workspace AgentPolicy (`effective.enabledGatekeepers`).
@@ -99,7 +111,7 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
   // is `minRole:'owner'` today, so this is a no-op here, but the rule is applied at every issuer.
   const ceiling = entryScope(
     gatekeeperIds.length > 0 ? { resources: { gatekeeper: [...gatekeeperIds] } } : {},
-    ctx?.principal ? { role: ctx.principal.role } : {},
+    { role: principal.role },
   );
   const scope = intersectScope(ceiling, input.scope);
 
@@ -119,6 +131,12 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
     scope,
     ttlSeconds: input.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     privateKey,
+    // Legacy 712: and only while the cookie or API key this call came with is still live.
+    basis: {
+      kind: 'role',
+      role: principal.role,
+      credential: requirePresentedCredential('issue_handle', ctx),
+    },
   });
   // Review 2026-10-02 R-12: the session lives exactly as long as its Handle, so the platform's
   // external-runtime inventory (`list_external_runtimes`, application/gates/store.ts) lists it

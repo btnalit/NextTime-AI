@@ -4648,6 +4648,7 @@ describe('CatalogPage — Worker usage (S11 GO16a)', () => {
         ],
         failureGroups: [],
       }),
+      get_combination_candidates: () => null,
     });
   }
 
@@ -5092,6 +5093,16 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
             definition: { name: 'Old' },
             proposedBy: 'p-owner',
           },
+          {
+            id: 'wd-reviewer',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            goalReviewer: true,
+            definition: { name: 'goal-reviewer' },
+            proposedBy: 'p-reviewer',
+            origin: 'platform',
+          },
         ],
       }),
       resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Olga' }] }),
@@ -5100,6 +5111,7 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const rows = await screen.findAllByTestId('catalog-row');
     const entryRow = rows.find((row) => row.textContent?.includes('Entry')) as HTMLElement;
     const oldRow = rows.find((row) => row.textContent?.includes('Old')) as HTMLElement;
+    const reviewerRow = rows.find((row) => row.textContent?.includes('目标评审器')) as HTMLElement;
     const entry = await selectRow(entryRow);
     const origin = within(entry).getByTestId('worker-detail-origin');
     expect(origin.querySelector('.chip')?.textContent).toBe('平台模板');
@@ -5115,6 +5127,13 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const old = await selectRow(oldRow);
     expect(within(old).getByTestId('worker-detail-proposer')).toBeTruthy();
     expect(within(old).queryByTestId('worker-detail-origin')).toBeNull();
+
+    // UX acceptance of #1102: the platform's goal reviewer (and planner) is proposed by the
+    // service account it runs as — its note says so, not that its proposer is the owner.
+    const reviewer = await selectRow(reviewerRow);
+    expect(within(reviewer).getByTestId('worker-detail-origin-note').textContent).toBe(
+      '平台自带，由平台维护；提议者是平台为它设的服务账号，不是工作区里的人。',
+    );
   });
 
   it('an Operation draft an agent last wrote warns it may have replaced its proposer’s own draft; the gate’s manifest names no proposer', async () => {
@@ -5371,5 +5390,116 @@ describe('CatalogPage 列表行的「智能体」标记 (legacy 602)', () => {
     } finally {
       localStorage.removeItem('nexttime.lang');
     }
+  });
+});
+
+describe('CatalogPage — keeping a combination as a definition (S11 GO16b)', () => {
+  function workspaceAs(role: string) {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 1,
+      gatekeeperCount: 0,
+      caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+    };
+  }
+
+  const DIGEST = 'd'.repeat(64);
+  const evidence = { achieved: 3, notAchieved: 0, goals: 2, rate: 1, windowDays: 90 };
+  const base = {
+    id: 'wd-1',
+    version: 1,
+    kind: 'worker',
+    status: 'published',
+    proposedBy: 'p-owner',
+    definition: { name: 'Fixer', systemPrompt: 'You fix services.' },
+  };
+  const kept = {
+    id: 'wd-2',
+    version: 1,
+    kind: 'worker',
+    status: 'draft',
+    proposedBy: 'p-me',
+    origin: 'human',
+    definition: { name: 'Fixer · logs first', systemPrompt: 'You fix services.\n\nLogs first.' },
+    derivedFrom: {
+      definitionId: 'wd-1',
+      version: 1,
+      evidence,
+      derivedAt: new Date().toISOString(),
+    },
+  };
+
+  it('a builder keeps a combination: the draft is written, said so, and opened with where it came from', async () => {
+    let proposed = false;
+    const http = scriptedHttp({
+      get_workspace: () => workspaceAs('builder'),
+      list_worker_definitions: () => ({ items: proposed ? [base, kept] : [base] }),
+      get_worker_definition_stats: () => null,
+      get_combination_candidates: () => ({
+        definitionId: 'wd-1',
+        thresholds: { windowDays: 90, minAchieved: 3, minGoals: 2, minRate: 0.8 },
+        candidates: [
+          {
+            definitionId: 'wd-1',
+            version: 1,
+            specRef: DIGEST.slice(0, 12),
+            specDigest: DIGEST,
+            fields: ['instructions'],
+            evidence,
+            spec: { instructions: 'Logs first.' },
+            definition: { systemPrompt: 'You fix services.\n\nLogs first.' },
+            derivedAs: [],
+          },
+        ],
+      }),
+      propose_definition_from_combination: () => {
+        proposed = true;
+        return kept;
+      },
+    });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const card = `combination-candidate-1-${DIGEST.slice(0, 12)}`;
+    fireEvent.click(await within(detail).findByTestId(`${card}-keep`));
+    const confirm = await screen.findByTestId(`${card}-confirm`);
+    fireEvent.change(within(confirm).getByTestId(`${card}-name`), {
+      target: { value: 'Fixer · logs first' },
+    });
+    fireEvent.click(within(confirm).getByRole('button', { name: '写成草稿' }));
+
+    expect(await screen.findByText('已写成草稿：Fixer · logs first。审核后由你发布')).toBeTruthy();
+    const from = await within(await screen.findByTestId('catalog-detail')).findByTestId(
+      'worker-detail-derived-from',
+    );
+    expect(from.textContent).toContain('Fixer v1');
+    expect(from.textContent).toContain(
+      '当时：近 90 天达成 3 次，来自 2 个目标，达成率 100%（3 / 3）',
+    );
+    expect(
+      http.calls.find((call) => call.name === 'propose_definition_from_combination')?.params,
+    ).toEqual({ definitionId: 'wd-1', version: 1, specDigest: DIGEST, name: 'Fixer · logs first' });
+  });
+
+  it.each([
+    ['a member', 'member', base],
+    ['a draft', 'builder', { ...base, status: 'draft', proposedBy: 'p-me' }],
+    ['a deprecated version', 'builder', { ...base, status: 'deprecated' }],
+  ] as const)('%s: no candidates and none asked for', async (_case, role, row) => {
+    const http = scriptedHttp({
+      get_workspace: () => workspaceAs(role),
+      list_worker_definitions: () => ({ items: [row] }),
+      get_worker_definition_stats: () => null,
+      get_combination_candidates: () => null,
+    });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('worker-detail-definition');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    expect(within(detail).queryByTestId('combination-candidates')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'get_combination_candidates')).toBe(false);
   });
 });

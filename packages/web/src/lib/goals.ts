@@ -3,6 +3,7 @@ import type {
   ActionFailureCode,
   ActionRequestFailureKind,
   ActionRequestReconciliation,
+  CitedGoalPrecedentWire,
   FactCheck,
   FactObjectRef,
   GoalAbsenceBaselineWire,
@@ -36,7 +37,7 @@ import type {
   UnresolvedGoalActionWire,
   WorkerSpec,
 } from '@nexttime/shared';
-import { GOAL_PLANNER_NO_PROGRESS_LIMIT, visibleText } from '@nexttime/shared';
+import { GOAL_PLANNER_NO_PROGRESS_LIMIT, PLAN_HINT_ADMISSION, visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
 import {
@@ -44,6 +45,7 @@ import {
   plannerRoundsUsedUpText,
   planningOutcomeText,
 } from './goal-planner.js';
+import { REVIEW_UNAVAILABLE_TEXT, inPlanOrder } from './goal-review.js';
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -344,6 +346,28 @@ export function outcomeBasisLabel(basis: GoalOutcomeBasis, t: Translate): string
   return t(zh, en);
 }
 
+/**
+ * S11 GO17b: how a precedent a plan was written from ended, short enough to follow its statement
+ * in 「参考了先例」 — by its polarity (`goalPrecedentPolarity` in `@nexttime/shared`): achieved with
+ * the platform's checks passing; achieved over checks the requester overrode, or not achieved; or
+ * achieved on the requester's word or a review alone.
+ */
+export function citedPrecedentOutcomeText(
+  precedent: Pick<CitedGoalPrecedentWire, 'outcome' | 'outcomeBasis' | 'polarity'>,
+  t: Translate,
+): string {
+  if (precedent.outcome === 'not_achieved') return t('未达成', 'not achieved');
+  if (precedent.polarity === 'positive') {
+    return t('达成，平台检查通过', 'achieved, the platform’s checks passed');
+  }
+  if (precedent.polarity === 'negative') {
+    return t('达成，但覆盖了没通过的检查', 'achieved over checks that did not pass');
+  }
+  return precedent.outcomeBasis === 'reviewer_assessed'
+    ? t('达成，依据独立评审', 'achieved on a review')
+    : t('达成，只有请求人确认', 'achieved on the requester’s word');
+}
+
 // ---------------------------------------------------------------------------------------------
 // A goal's milestone in the chat it was proposed from (S11 GO5e-2)
 // ---------------------------------------------------------------------------------------------
@@ -447,6 +471,7 @@ const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, str
   observe_absent: ['平台确认不存在', 'Platform confirms it is not there'],
   fact_predicate: ['事实判定', 'Fact check'],
   requester_confirm: ['请求人确认', 'Requester confirms'],
+  review: ['独立评审', 'Independent review'],
 };
 
 /** Legacy 454: the Procedure a goal's plan was made from — revision 1's, the only one that can be
@@ -634,6 +659,17 @@ const PLAN_HINT: Readonly<
   requester_confirm_only: () => [
     '这个计划没有平台能做的验收检查：目标是否达成只凭请求人确认。',
     'No check the platform makes: the goal is achieved only on the requester’s word.',
+  ],
+  // S11 GO18 (independent review N4): reviews alone decide.
+  review_only: () => [
+    '这个计划没有平台能做的验收检查，也不请请求人确认：评审打分过线，目标就算达成，只凭模型的打分。',
+    'No check the platform makes and no confirmation asked of the requester: the goal is achieved once its reviews pass, on a model’s scores alone.',
+  ],
+  // S11 GO18 (UX acceptance of #1102): reviews and the requester's word — a review below its line
+  // fails the goal, whatever the requester would say.
+  review_and_confirm: () => [
+    '这个计划没有平台能做的验收检查：评审打分过线、再由请求人确认，目标才算达成。',
+    'No check the platform makes: the goal is achieved only when its reviews pass and the requester then confirms it.',
   ],
   requester_cannot_start_workers: () => [
     '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。可以请工作区所有者在「成员与授权」查看请求人的角色和状态。',
@@ -900,10 +936,11 @@ export function isStepContractHint(hint: PlanHint): boolean {
 }
 
 /** Whether a plan hint is about the requester's authority over a step (S11 GO5c) — the steps card
- *  shows those; `requester_confirm_only`, about how the goal is verified, stays with acceptance;
- *  a contract hint (S11 GO13) is advice the steps card shows apart. */
+ *  shows those; `requester_confirm_only`, `review_only` and `review_and_confirm` (S11 GO18), about
+ *  how the goal is verified, stay with acceptance; a contract hint (S11 GO13) is advice the steps
+ *  card shows apart. */
 export function isStepAuthorityHint(hint: PlanHint): boolean {
-  return hint.code !== 'requester_confirm_only' && !isStepContractHint(hint);
+  return PLAN_HINT_ADMISSION[hint.code] !== 'plan' && !isStepContractHint(hint);
 }
 
 /** The chip a step row carries for its own authority hint. */
@@ -1331,6 +1368,8 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     '平台用同样的调用没有一次看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
     'No look of the platform’s with the same call ever saw it there: its absence now does not show this goal removed it, so the check is not made',
   ],
+  // S11 GO18b: why a review has no verdict — a closed list of codes (`lib/goal-review.ts`).
+  ...REVIEW_UNAVAILABLE_TEXT,
 };
 
 /** What went wrong at a check's last attempt (`lastError`, a short code the kernel keeps): the
@@ -1425,7 +1464,40 @@ export function planCheckSentence(
       return factCheckSentence(check.fact, t, objectNames);
     case 'requester_confirm':
       return check.prompt;
+    // S11 GO18: what the review scores and its line; its criteria are on the goal's detail. The
+    // row's kind label already says 「独立评审」 (UX acceptance of #1102).
+    case 'review':
+      return reviewSentence(check, t);
   }
+}
+
+/** A review check in one line: whose output it scores, on how many criteria, and its line. */
+function reviewSentence(
+  review: {
+    readonly subjects: readonly string[];
+    readonly criteria: readonly unknown[];
+    readonly passAt: number;
+  },
+  t: Translate,
+  stepOrder?: readonly string[],
+): string {
+  const subjects = stepOrder ? inPlanOrder(review.subjects, stepOrder) : review.subjects;
+  return t(
+    `给 ${subjects.join('、')} 的产出打分：${review.criteria.length} 条标准，得分达到 ${review.passAt}% 才算通过`,
+    `Scores what ${subjects.join(', ')} produced: ${review.criteria.length} criteria, passing at ${review.passAt}% of the points`,
+  );
+}
+
+/** S11 GO18b: whose output a review scores, alone — where its criteria and line are shown beside it
+ *  (`ReviewDeclaration`), so they are not said twice (UX acceptance of #1111). In the plan's step
+ *  order. */
+export function reviewSubjectsSentence(
+  subjects: readonly string[],
+  stepOrder: readonly string[],
+  t: Translate,
+): string {
+  const ordered = inPlanOrder(subjects, stepOrder);
+  return t(`给 ${ordered.join('、')} 的产出打分`, `Scores what ${ordered.join(', ')} produced`);
 }
 
 /** An absence check of the plan in force (S11 「门确认不存在」 B) — the goal's (`stepKey` null) or
@@ -1530,11 +1602,15 @@ export function roundCheckSentence(
   gateNames: ReadonlyMap<string, string>,
   t: Translate,
   objectNames: ObjectNames = NO_NAMES,
+  /** S11 GO18b: the plan's step keys, to list a review's steps in their order. */
+  stepOrder?: readonly string[],
 ): string {
   if (check.check) {
     return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
   }
   if (check.fact) return factCheckSentence(check.fact, t, objectNames);
+  // S11 GO18b: a review check as its round made it.
+  if (check.review) return reviewSentence(check.review, t, stepOrder);
   return check.prompt ?? '';
 }
 
@@ -2412,7 +2488,12 @@ const ACTION_FAILURE_CODE: Readonly<Record<ActionFailureCode, readonly [string, 
   apply_not_received: ['门上没有它执行过的记录', 'The gate has no record of running it'],
   operation_disabled: ['这个动作在平台上被停用了', 'The Operation is disabled on the platform'],
   operation_definition_unavailable: ['没有批准过的定义', 'No approved definition'],
-  target_refused: ['门的地址不是允许的目标', 'The gate’s address is not an allowed target'],
+  // Legacy 700: the usual case since legacy 413 is a gate connected at http:// to the public
+  // internet — the step has only the code, so the remedy for that case is said here.
+  target_refused: [
+    '门的地址不是平台允许调用的目标，调用没有发出。最常见的是门的地址用 http:// 连公网：工作区所有者要在「系统与授权」用门的 https:// 地址重新接入它',
+    'The gate’s address is not a target the platform calls, so nothing was sent. Most often it uses http:// to the public internet: a workspace owner connects the gate again at its https:// address under Systems & access',
+  ],
   redirect_refused: [
     '门要求跳转到别处，平台不跟随',
     'The gate answered with a redirect the platform does not follow',

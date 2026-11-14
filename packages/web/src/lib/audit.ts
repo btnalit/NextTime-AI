@@ -256,6 +256,10 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'agent_policy.auto_approve_low_default_applied',
   'principal.auditor_handles_revoked',
   'principal.container_handles_revoked',
+  // Legacy 699 / 707: governance 0042 revokes the Handles left valid under revoked sessions.
+  'principal.revoked_session_handles_revoked',
+  // Legacy 702: governance 0043 revokes the Handles left valid under a disabled authority.
+  'principal.disabled_authority_handles_revoked',
   // S10 E3-1c: evaluation content stopped on its way to an agent (`application/eval-seal`).
   'evaluation.content_withheld',
   // S10 E3-2a: an evaluation trial's fixture call (`application/eval-session`) and its end

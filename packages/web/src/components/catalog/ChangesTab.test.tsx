@@ -106,6 +106,7 @@ function preview(
     blocker: null,
     blockedBy: null,
     conflicts: [],
+    linkEnds: [],
     ...patch,
   };
   return {
@@ -273,6 +274,55 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     const done = screen.getByTestId('catalog-change-rolled-back');
     expect(done.closest('output')).not.toBeNull();
     expect(done.textContent).toContain('已有的对象和事实都保留着');
+  });
+
+  it('legacy 303: a rollback that would leave a link type pointing at no declared object type says why and names each end; nothing is called', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => detail(FIRST),
+      preview_roll_back_change_segment: () =>
+        preview(FIRST, {
+          blocker: 'link_endpoint_undeclared',
+          linkEnds: [
+            {
+              ontologyId: 'o-2',
+              family: 'uxlink-services',
+              linkType: 'served_by',
+              end: 'range',
+              objectType: 'Host',
+            },
+            {
+              ontologyId: 'o-3',
+              family: null,
+              linkType: 'relates',
+              end: 'domain',
+              objectType: 'Host',
+            },
+            {
+              ontologyId: 'o-1',
+              family: 'ops-assets',
+              linkType: 'runs_on',
+              end: 'domain',
+              objectType: 'Gone',
+            },
+          ],
+        }),
+    });
+    renderTab(http, FIRST);
+
+    fireEvent.click(await screen.findByTestId('catalog-change-rollback-trigger'));
+    const blocker = await screen.findByTestId('catalog-change-blocker-1');
+    expect(blocker.textContent).toContain(
+      '撤销后会有关系类型指向工作区里没有任何本体声明的对象类型',
+    );
+    // Another family's end names that family (UX acceptance of #1141) — "another ontology" when
+    // no ChangePlan record names it; this item's own end names no family.
+    expect(blocker.textContent).toContain(
+      '（本体 uxlink-services 的关系类型 served_by 的 range 是 Host；另一个本体的关系类型 relates 的 domain 是 Host；关系类型 runs_on 的 domain 是 Gone）',
+    );
+    expect((screen.getByRole('button', { name: '撤销' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(http.calls.some((c) => c.name === 'roll_back_change_segment')).toBe(false);
   });
 
   it('a member reads the history but is not offered the rollback', async () => {

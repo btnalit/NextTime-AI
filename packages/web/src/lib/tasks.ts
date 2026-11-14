@@ -89,6 +89,8 @@ export interface WorkerDefinitionSummary {
   readonly publishedAt?: string | null;
   /** S11 GO9a: a version of the workspace's goal planner family — no step runs it. */
   readonly goalPlanner?: boolean;
+  /** S11 GO18: a version of the workspace's goal reviewer family — no step runs it either. */
+  readonly goalReviewer?: boolean;
 }
 
 /** A Task can be cancelled iff `TASK_TRANSITIONS` has a `cancel` edge out of its status. The

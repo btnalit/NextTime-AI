@@ -13,7 +13,8 @@
  *
  *   POST /task/spawn                {taskId, workerRunId, workspaceId, onBehalfOf,
  *                                     capabilityHandle, image?, model?, skills?, skillsInline?,
- *                                     timeoutSec?, egressDeny?, egressDenyAll?}
+ *                                     timeoutSec?, egressDeny?, egressDenyAll?,
+ *                                     builtinTools?}
  *                                     -> 200 {containerId, ip, runtime} / 403 (image not
  *                                        allowlisted) / 400
  *   POST /task/:workerRunId/terminate -> 204 | 404
@@ -163,6 +164,14 @@ export interface TaskSpawnInput {
    *  supervisor that predates the field refuses the spawn (strict schema → 400), so an evaluation
    *  run never starts without it. */
   readonly egressDenyAll?: boolean;
+  /** S11 GO18a P3 (independent review N6): `read_only` for a goal reviewer's run — pi starts with
+   *  only the built-in tools that read files (worker-supervisor's `builtinTools`, the runtime
+   *  image's `NEXTTIME_BUILTIN_TOOLS`), so a reviewer reads what the steps left and runs none of
+   *  it; legacy 697: a goal planner's run too. Set by `spawnWorkerRun` from the Task's own
+   *  `purpose` (`review`, `planning`), never by a caller. A supervisor
+   *  that predates the field refuses the spawn (strict schema → 400), and one that has it starts
+   *  only a runtime image that honours it (runtime contract 3). */
+  readonly builtinTools?: 'read_only';
   /** P-A2: the Worker container's system prompt (the WorkerDefinition's own `systemPrompt` plus
    *  the platform's `instanceInstructions`), written by worker-supervisor into the Task's
    *  platform directory outside its workspace (read-only `/opt/nexttime/platform/system-prompt.md`

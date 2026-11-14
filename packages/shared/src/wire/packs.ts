@@ -217,12 +217,17 @@ export const PackWireSchema = z
   .strict();
 export type PackWire = z.infer<typeof PackWireSchema>;
 
-/** S11 AA5d: an extra pack this deployment reads (`extra_packs_status`), by its latest version. */
+/** S11 AA5d: an extra pack this deployment reads (`extra_packs_status`), by its latest version.
+ *  `warnings` (legacy 705): why it cannot be installed beside a later version of a pack it
+ *  requires — a LinkType end naming an ObjectType that version no longer declares; empty when
+ *  nothing is wrong. Installing that combination is refused (409
+ *  `ontology_link_endpoint_undeclared` or `ontology_link_endpoint_outside_requires`). */
 export const ExtraPackWireSchema = z
   .object({
     name: z.string(),
     summary: z.string(),
     latestVersion: z.number().int().positive(),
+    warnings: z.array(z.string()),
   })
   .strict();
 export type ExtraPackWire = z.infer<typeof ExtraPackWireSchema>;

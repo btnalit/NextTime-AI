@@ -20,9 +20,9 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 4
+  kernel_test_missing: 1
   e2e_waived: 59
-  repeat_unclear: 76
+  repeat_unclear: 1
 capabilities:
   add_eval_case:
     console: required
@@ -38,12 +38,12 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: already_member" # two at once too: the user's lock orders them, and the second is refused the same way (legacy 688)
   add_membership:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: already_member" # the first call makes the user a member, so the same call again is refused, nothing written (409)
   agent_get_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
@@ -59,27 +59,32 @@ capabilities:
   agent_withdraw_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_not_open"  # withdrawn by the first call, so the same call again finds no segment still proposed (409)
   apply_admin_proposal_segment:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # applied by the first call, so the same call again finds it decided (409)
   apply_platform_segment:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # applied by the first call, so the same call again finds it decided (409)
   approve:
     console: required
     agents: []
     e2e: observed
     repeat: "conflict: illegal_transition"
+  approve_gate_address_change:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: "conflict: gate_address_change_decided" # the first call applied it; the same call again finds it decided, nothing moves
   approve_step_trial:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # an approval already applying to the same step, WorkerSpec and drafts is returned as it is (changed: false)
   archive_chat:
     console: required
     agents: []
@@ -106,7 +111,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: conflict" # the first call cancels the running evaluation; the same cancel again finds it ended, nothing written (409 conflict)
   cancel_goal:
     console: required
     agents: []
@@ -116,7 +121,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # an already cancelled Task stays as it is
   causal_chain:
     console: required
     agents: []
@@ -124,7 +129,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: no_pending_manifest"  # the first call adopts the pending manifest, so the same call again finds nothing pending (409)
   confirm_goal:
     console: required
     agents: []
@@ -143,7 +148,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: endpoint_already_connected"
   create_eval_suite:
     console: required
     agents: []
@@ -153,7 +158,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: gate_id_taken"  # the first call takes the gate id, so the same call again is refused (409)
   create_principal:
     console: required
     agents: []
@@ -163,17 +168,17 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: login_taken" # the first call takes the login, so the same call again is refused, nothing written (409)
   create_workspace:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates  # names are not unique: each call makes another workspace
   decide_plan_revision:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same decision again changes nothing (changed: false)
   decision_impact:
     console: required
     agents: []
@@ -181,7 +186,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: gate_not_found"  # the first call deletes the instance, so the same call again finds none (404)
   deprecate_operation:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
@@ -206,7 +211,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: idempotent
+    repeat: idempotent # already disabled: nothing is written or revoked, and the audit row says unchanged (legacy 729)
   discard_draft:
     console: required
     agents: []
@@ -226,7 +231,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent  # an instance enabled here already returns its link, nothing written
   end_goal:
     console: required
     agents: []
@@ -247,6 +252,9 @@ capabilities:
   extra_packs_status:
     console: required
     agents: []
+  find_goal_precedents:
+    console: "none: agent 写计划前查同类目标的先例；人在控制台「目标」列表与详情页看同一批目标"
+    agents: [entry]
   find_operations:
     console: "none: agent 的手段发现；人在控制台按「能力目录」各页浏览同一批对象"
     agents: [entry, admin]
@@ -281,6 +289,9 @@ capabilities:
     console: required
     agents: []
   get_chat_history:
+    console: required
+    agents: []
+  get_combination_candidates:
     console: required
     agents: []
   get_draft_evaluation:
@@ -373,12 +384,12 @@ capabilities:
   install_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # installed at the latest content already: a no-op returning the current state, no new segment or version
   install_pack:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: change_plan_changed" # the install changes what its dry run shows, so the same reviewedDigest again is refused, nothing written; reviewed again, an up-to-date pack installs as a no-op. With adminProposalSegmentId the retry is refused earlier, 409 admin_proposal_segment_not_open (the segment it answered is applied)
   invalidate_fact:
     console: required
     agents: []
@@ -387,32 +398,32 @@ capabilities:
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same idempotencyKey, or an identical call while the first Task is unfinished; once it has finished, an identical call without a key starts a new one
   issue_gate_credential_token:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing, as issue_gate_host_token: another token for the caller's own slot, no row changed; the earlier one stays valid until its own expiry
   issue_gate_host_token:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing (the token is signed, not recorded): another call mints another token and changes no row; the earlier token stays valid until its own expiry
   issue_handle:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates
   issue_llm_admin_token:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates  # each call mints another token (a new jti), stored nowhere: its issuance audit row is its record
   issue_service_handle:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates
   list_action_requests:
     console: required
     agents: []
@@ -474,6 +485,9 @@ capabilities:
   list_facts:
     console: required
     agents: [entry, admin]
+  list_gate_address_changes:
+    console: required
+    agents: []
   list_gate_instances:
     console: required
     agents: []
@@ -564,12 +578,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: user_not_found"  # the first call deletes the source user, so the same call again finds none (404)
   mint_connection_secret:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates # legacy 711: another secret each call, its salt another issued row (usable once, within 24 hours)
   new_chat:
     console: required
     agents: []
@@ -578,7 +592,7 @@ capabilities:
   observe_operation:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats # each read calls the gate again and records another observe Activity on the same Gatekeeper (and the Facts the gate observed, if any)
   pause_goal:
     console: required
     agents: []
@@ -623,6 +637,9 @@ capabilities:
   preview_admin_proposal_segment:
     console: required
     agents: []
+  preview_gate_address_change:
+    console: required
+    agents: []
   preview_gate_instance_enable:
     console: required
     agents: []
@@ -644,12 +661,22 @@ capabilities:
   propose_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
-    repeat: "unclear: 664"
+    repeat: creates  # each call is another proposal (a new id), from the same agent to the same workspace
+  propose_definition_from_combination:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: creates
   propose_entry_template_upgrade:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # returns the caller's identical draft (created: false), with no published entry too (legacy 691)
+  propose_gate_address_change:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: "conflict: connection_secret_in_use" # a secret serves one proposal: the same call again is refused before anything is asked or written
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
     agents: [entry]
@@ -657,7 +684,7 @@ capabilities:
   propose_ontology_change:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: [entry, admin]
-    repeat: "unclear: 664"
+    repeat: creates  # without an id: a new family each time
   propose_operation:
     console: required
     agents: [entry, admin]
@@ -666,7 +693,7 @@ capabilities:
   propose_pack_install:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
     agents: [admin]
-    repeat: "unclear: 664"
+    repeat: creates  # each call is another proposal (a new id) to install the same pack in the same workspace
   propose_procedure:
     console: required
     agents: [entry, admin]
@@ -691,7 +718,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: not_found"  # a published version no longer reads as a draft; the other publish rows answer illegal_transition (legacy 686)
   publish_operation:
     console: required
     agents: []
@@ -716,12 +743,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # purged already: the second call skips the user as not found
   purge_workspace:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # the preview (no confirm) removes nothing; a confirmed purge again finds no workspace (404 workspace_not_found)
   query_decisions:
     console: required
     agents: []
@@ -740,12 +767,12 @@ capabilities:
   record_procedure_followed:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
-    repeat: "unclear: 664"
+    repeat: idempotent  # the first Procedure recorded for a Turn stands
   refresh_operation_governance:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper (legacy 689)
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
@@ -759,12 +786,17 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # rejected by the first call, so the same call again finds it decided (409)
   reject_draft:
     console: required
     agents: []
     e2e: observed
     repeat: "conflict: not_found"
+  reject_gate_address_change:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: "conflict: gate_address_change_decided"
   reject_goal:
     console: required
     agents: []
@@ -774,12 +806,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_segment_not_open"  # rejected by the first call, so the same call again finds it decided (409)
   release_eval_seal_hold:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: conflict" # the first call releases the pause; the same release again finds it released already, nothing written
   release_goal_hold:
     console: required
     agents: []
@@ -794,7 +826,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # already removed: nothing is written or revoked, and the audit row says unchanged (legacy 729)
   rename_chat:
     console: required
     agents: []
@@ -808,12 +840,11 @@ capabilities:
   report_task_outcome:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: idempotent
   report_task_result:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: "conflict: unauthorized" # the first report settles the Task, and ending its WorkerRun revokes the run's Handle
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
@@ -821,7 +852,7 @@ capabilities:
   request_action:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # an explicit idempotencyKey replays its ActionRequest in any state; without one, a call collapses onto the request only while it is in flight, and once that is terminal an identical call is a new one
   request_connection:
     console: required
     agents: [entry, admin]
@@ -831,7 +862,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # each reset hashes a new temporary password and revokes the credentials again
   resolve_conflict:
     console: required
     agents: []
@@ -849,7 +880,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # not suspended any more: nothing is written, nothing is re-issued
   retire_eval_case:
     console: required
     agents: []
@@ -869,27 +900,27 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: runtime_not_found"  # revoked by the first call, so the same call again finds no active session (404)
   roll_back_change_segment:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: change_segment_rolled_back" # the same rollback again finds the segment rolled back, nothing written (409)
   roll_back_platform_change_segment:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: platform_change_segment_rolled_back"  # rolled back by the first call, so the same call again finds it rolled back (409)
   roll_entry_containers:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # stops only residents that need a rebuild; the first call stopped them, so the same call again stops none
   rollback_runtime_image:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # switches back to the last different image: the second call undoes the first (toggles)
   rotate_api_key:
     console: required
     agents: []
@@ -899,7 +930,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # a new salt on the same Gatekeeper each call; the secret before it stops working
   runtime_inventory:
     console: required
     agents: []
@@ -917,12 +948,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # the settings take another version (the one replaced kept in the history), the same image again
   set_admin_agent_targets:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # the same list: nothing is added or removed
   set_agent_policy:
     console: required
     agents: []
@@ -937,7 +968,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # the same list again rewrites the workspace AgentPolicy's updated_at
   set_auto_approved_action_kind:
     console: required
     agents: []
@@ -947,23 +978,22 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # the same mode and deny list again rewrite the connector row (its updated_at); no linked entry Handle is re-issued
   set_default_modules:
     console: required
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: repeats  # each write keeps the replaced settings version in the history and takes the next
   set_membership_role:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # the role is already the one asked for: nothing is written, no session ends (legacy 696)
   set_platform_default_model:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # the settings take another version (the one replaced kept in the history), the same model again
   set_policy:
     console: required
     agents: []
@@ -983,28 +1013,27 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: repeats  # the same limit again rewrites the user row's updated_at
   set_user_status:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same status is set again (disabling again revokes a member's already revoked credentials); the user row moves by its updated_at
   set_workspace_status:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # disabling again: the sessions are already revoked, disabled_at keeps the first time
   start_draft_evaluation:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: draft_evaluating" # while the first evaluation of the draft runs, the same start again is refused, nothing written
   start_eval_case_trial:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates # each call starts another case_trial run and its evaluation Task
   state_at:
     console: required
     agents: [entry, admin]
@@ -1012,7 +1041,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # the sessions and their Handles are already revoked: nothing left to stop
   stop_agent:
     console: required
     agents: []
@@ -1021,7 +1050,7 @@ capabilities:
   submit_observations:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats # without an activityId, one Activity per submission: the same observations again record another Activity and Observations, and upsert the same Objects; a submission into a given activityId records no new Activity, and a window close repeated there changes nothing
   subscribe_chat:
     console: required
     agents: []
@@ -1034,16 +1063,16 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # suspended already: the first suspension stands, nothing is re-issued
   sync_eval_fixture_gate:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed" # each sync is a new suite version, so the same suiteVersion again is refused, nothing written; read again, the gate matches (409 conflict)
   test_gate_instance:
     console: required
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats  # each call probes the instance again and records the check time
   traverse:
     console: "none: agent 的图遍历；控制台的对象页用 get_object / state_at 呈现同样的关系"
     agents: [entry, admin]
@@ -1056,7 +1085,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # the same values again rewrite the instance row (its updated_at)
   update_operation_description:
     console: required
     agents: []
@@ -1066,21 +1095,21 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # each update keeps the replaced version in the history and takes the next
   update_user:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same values are written again; the user row moves only by its updated_at
   update_workspace:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # the same values again change nothing
   upgrade_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # installed at the latest content already: a no-op returning the current state, no new segment or version
   validate:
     console: required
     agents: [admin]
@@ -1088,7 +1117,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: change_verification_cooldown" # the same verification again inside the cooldown is refused before anything is checked, nothing written (429)
   verify_fact:
     console: required
     agents: []
@@ -1098,4 +1127,9 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: admin_proposal_not_open"  # withdrawn by the first call, so the same call again finds nothing still proposed (409)
+  withdraw_gate_address_change:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: "conflict: gate_address_change_decided"

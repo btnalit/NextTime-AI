@@ -1,11 +1,13 @@
 import type { PrincipalKind, PrincipalRefusalReason, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
+  lockAuthoritiesForChange,
   revokeOnBehalfOfSessionHandles,
-  revokeRoleScopedSessionHandles,
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { freeMembershipSlot } from '../identity/memberships.js';
+import { applyRoleChange } from '../task/role-change.js';
 import { generateApiKey, hashApiKey, isLastActiveHumanOwner } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -382,18 +384,29 @@ const SetPrincipalRoleParams = (params: unknown) => params as { principalId: str
  */
 export const addMemberHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { login, role } = params as { login: string; role: Role };
-  const found = await client.query<{ id: string; display_name: string; status: string }>(
-    'select id, display_name, status from lookup_user_by_login($1)',
-    [login.trim().toLowerCase()],
-  );
-  const user = found.rows[0];
-  if (!user) throw new MemberUserNotFoundError(login);
-  if (user.status !== 'active') throw new MemberUserNotFoundError(login);
-  const existing = await client.query(
-    `select 1 from principals where workspace_id = $1 and user_id = $2 and kind = 'human'`,
-    [workspaceId, user.id],
-  );
-  if ((existing.rowCount ?? 0) > 0) throw new AlreadyMemberError(login);
+  const normalized = login.trim().toLowerCase();
+  const lookUp = async () =>
+    (
+      await client.query<{ id: string; display_name: string; status: string }>(
+        'select id, display_name, status from lookup_user_by_login($1)',
+        [normalized],
+      )
+    ).rows[0];
+  const found = await lookUp();
+  if (!found) throw new MemberUserNotFoundError(login);
+  // Legacy 725: the user's authority lock, as every path that changes a user's memberships takes
+  // it (`add_membership`, `merge_user`, binding an API key), then the user read again under it —
+  // a disable that was committing has committed.
+  await lockAuthoritiesForChange(client, { userIds: [found.id] });
+  const user = await lookUp();
+  if (!user || user.id !== found.id || user.status !== 'active') {
+    throw new MemberUserNotFoundError(login);
+  }
+  // Legacy 725: only an active membership makes the person a member already. A removed one stops
+  // belonging to them and a new membership takes its place (identity/memberships.ts): the
+  // removed one's drafts and goals stay in the workspace under it, the person starts afresh.
+  const slot = await freeMembershipSlot(client, { workspaceId, userId: user.id });
+  if (slot.state === 'held') throw new AlreadyMemberError(login);
   const inserted = await client.query<{ id: string; created_at: Date }>(
     `insert into principals (workspace_id, kind, role, display_name, user_id)
      values ($1, 'human', $2, $3, $4)
@@ -412,7 +425,27 @@ export const addMemberHandler: CapabilityHandler = async (client, workspaceId, p
     hasApiKey: false,
     disabledAt: null,
   };
-  return { result: toWirePrincipal(principal), resourceType: 'principal', resourceId: row.id };
+  return {
+    result: toWirePrincipal(principal),
+    resourceType: 'principal',
+    resourceId: row.id,
+    // Legacy 725: the removed membership this one replaces, as `merge_user` lists the ones it
+    // lets go — named by the login the owner typed, never by the platform user id: this row is
+    // the workspace's, and the workspace plane does not carry platform user ids.
+    ...(slot.released !== null
+      ? {
+          auditPayload: {
+            detachedPrincipals: [
+              {
+                workspaceId: slot.released.workspaceId,
+                principalId: slot.released.principalId,
+                login: normalized,
+              },
+            ],
+          },
+        }
+      : {}),
+  };
 };
 
 export class MemberUserNotFoundError extends Error {
@@ -431,9 +464,23 @@ export class AlreadyMemberError extends Error {
 
 export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { principalId, role } = SetPrincipalRoleParams(params);
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is read or
+  // locked here (`assertNotLastActiveHumanOwner` takes `for update` on the owners' rows).
+  await lockAuthoritiesForChange(client, { principalIds: [principalId] });
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'set_principal_role');
+  // Legacy 730 (687): a disabled Principal — for a person, a removed membership — keeps the role it
+  // was disabled with. Its role grants nothing while it is disabled, nothing re-enables it, and a
+  // person who should be back is added again as a new membership (legacy 725), so a role change
+  // here would only rewrite history. Read under the Principal's lock, which `disable_principal`
+  // and the platform's `remove_membership` take too.
+  if (target.disabledAt !== null) {
+    throw new PrincipalOperationRefusedError(
+      'disabled',
+      `set_principal_role: principal ${principalId} is disabled — its role cannot change; add the person again for a new membership`,
+    );
+  }
 
   if (target.role === 'owner' && role !== 'owner') {
     await assertNotLastActiveHumanOwner(client, workspaceId, target);
@@ -452,9 +499,11 @@ export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspa
   // role — the resident entry agent's *and* any `issue_handle` `mcp_session` ones (which can carry
   // a ttl of up to 30 days) — otherwise a demoted member keeps builder-gated `propose_*` until ttl,
   // and a promoted one waits for it. The agent-host runtime's in-memory cache re-checks its cached
-  // Handle's revocation on the next Turn and reissues on its own.
+  // Handle's revocation on the next Turn and reissues on its own. Legacy 699: and a running
+  // Worker's, when the new role no longer covers it — the rule the platform's
+  // `set_membership_role` applies too (`applyRoleChange`).
   if (role !== target.role) {
-    await revokeRoleScopedSessionHandles(client, workspaceId, principalId);
+    await applyRoleChange(client, workspaceId, principalId);
   }
 
   const wire = toWirePrincipal({ ...target, role });
@@ -536,9 +585,23 @@ export const disablePrincipalHandler: CapabilityHandler = async (
     );
   }
 
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is read or locked.
+  await lockAuthoritiesForChange(client, { principalIds: [principalId] });
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'disable_principal');
+  // Legacy 729: disabled already — here or by the platform's `remove_membership`, which takes this
+  // Principal's lock too — so it has nothing left to revoke (its key, sessions and Handles went
+  // when it was disabled): nothing is written, no socket is kicked, and the audit row says the call
+  // changed nothing (legacy 696).
+  if (target.disabledAt !== null) {
+    return {
+      result: toWirePrincipal(target),
+      resourceType: 'principal',
+      resourceId: principalId,
+      auditPayload: { unchanged: true },
+    };
+  }
   await assertNotLastActiveHumanOwner(client, workspaceId, target);
 
   const disabled = await client.query<{ disabled_at: Date }>(

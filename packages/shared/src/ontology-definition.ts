@@ -47,12 +47,16 @@ const ObjectTypeDefinitionSchema = z
   .strict();
 export type ObjectTypeDefinition = z.infer<typeof ObjectTypeDefinitionSchema>;
 
-/** `domain`/`range` name an ObjectType from this same definition's `objectTypes`, or the sentinel
- *  `"*"` for a Link whose other end is not confined to one platform-meta ObjectType — e.g.
+/** `domain`/`range` name an ObjectType — declared by this definition's `objectTypes` or by another
+ *  ontology family published in the same workspace (`ops-assets` v2's `served_by` ends at
+ *  platform-meta's `Gatekeeper`) — or are the sentinel `"*"` for a Link whose other end is not
+ *  confined to one platform-meta ObjectType — e.g.
  *  `Operation --reads/writes--> ObjectType` (any domain ObjectType, not one of the six platform
  *  meta-ontology types) and `Gatekeeper --connects_to--> 系统对象` (an arbitrary connected-system
  *  object). I2 ("Link 符合 LinkType 的 domain/range") still holds — `"*"` is an explicit, named
- *  wildcard, not an omitted field.
+ *  wildcard, not an omitted field. This schema checks shape only: whether a named type is declared
+ *  depends on the workspace, so publishing refuses an end naming none (legacy 303, the kernel's
+ *  `substrate/ontology/namespace.ts`).
  *
  *  S3.1 note: two entries may share the same `name` with different concrete `domain`/`range`
  *  pairs (e.g. `runs_on` has one entry per "thing that runs on a Host") — a LinkType name is not
@@ -117,3 +121,19 @@ export const OntologyDefinitionSchema = z
   })
   .strict();
 export type OntologyDefinition = z.infer<typeof OntologyDefinitionSchema>;
+
+/**
+ * Legacy 706: an ontology family's name (`ontology_families.name`, migrations/core/0056) — a pack
+ * name's shape (`ops-assets`), at most {@link ONTOLOGY_FAMILY_NAME_MAX_LENGTH} characters; the
+ * table's check is the same. A pack's, an admin proposal's and a command-line seed's family is
+ * named so, and its id is derived from the name (`deriveOntologyPackId`, F2).
+ */
+export const ONTOLOGY_FAMILY_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+export const ONTOLOGY_FAMILY_NAME_MAX_LENGTH = 64;
+
+/**
+ * Legacy 706 (F3): the platform-meta ontology's family name in every workspace. Its id is a fresh
+ * one per workspace, never derived from this name, so the name is reserved: a pack, an admin
+ * proposal or a command-line seed naming a family so is refused.
+ */
+export const PLATFORM_META_ONTOLOGY_FAMILY = 'platform-meta';

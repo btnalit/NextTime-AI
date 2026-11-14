@@ -3,7 +3,7 @@ import { PLATFORM_EVENT_NAMES, PlatformEventNameSchema, PlatformEventSchema } fr
 import type { PlatformEvent } from './events.js';
 
 describe('PLATFORM_EVENT_NAMES', () => {
-  it('lists the canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated, S2.13 adds ConnectionRequested, S11 GO2 adds GoalRunUpdated and StepRunUpdated)', () => {
+  it('lists the canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated, S2.13 adds ConnectionRequested, S11 GO2 adds GoalRunUpdated and StepRunUpdated, legacy 701 adds GatekeeperAddressChanged)', () => {
     expect(PLATFORM_EVENT_NAMES).toEqual([
       'TurnStarted',
       'TurnCompleted',
@@ -13,6 +13,7 @@ describe('PLATFORM_EVENT_NAMES', () => {
       'ActionRequestUpdated',
       'ConnectionRequested',
       'ConnectionCreated',
+      'GatekeeperAddressChanged',
       'FactAsserted',
       'EgressObserved',
       'BudgetWarning',
@@ -79,6 +80,12 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     gatekeeperId: 'gk1',
     kind: 'ssh',
     target: 'example-host',
+  },
+  {
+    type: 'GatekeeperAddressChanged',
+    workspaceId: 'ws1',
+    gatekeeperId: 'gk1',
+    gateAddressChangeId: 'gac1',
   },
   { type: 'FactAsserted', workspaceId: 'ws1', factId: 'fact1', epistemicStatus: 'observed' },
   { type: 'EgressObserved', workspaceId: 'ws1', activityId: 'act1', domain: 'example.com' },
@@ -181,9 +188,9 @@ describe('PlatformEventSchema', () => {
     }
   });
 
-  it('covers all nineteen variants (13 domain + 6 chat/ws)', () => {
+  it('covers all twenty variants (14 domain + 6 chat/ws)', () => {
     const seenTypes = new Set(SAMPLE_EVENTS.map((e) => e.type));
-    expect(seenTypes.size).toBe(19);
+    expect(seenTypes.size).toBe(20);
   });
 
   it('rejects an event with an unknown discriminant', () => {

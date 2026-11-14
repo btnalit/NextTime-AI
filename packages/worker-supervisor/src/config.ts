@@ -505,6 +505,9 @@ export const TaskUpstreamFilesSchema = z
   .strict();
 export type TaskUpstreamFiles = z.infer<typeof TaskUpstreamFilesSchema>;
 
+/** S11 GO18a P3: the pi built-in tool sets a Task's Worker may be limited to
+ *  (`TaskSpawnRequestSchema.builtinTools`). */
+export const TASK_BUILTIN_TOOLS_VALUES = ['read_only'] as const;
 /** `POST /task/spawn` request body (S2.8 task brief). `onBehalfOf` carries the `principalId` the
  *  child Handle's `on_behalf_of` is scoped to (I13) — named per the task brief, not `principalId`,
  *  to keep the wire shape distinct from resident mode's own field of that name (this is a
@@ -553,6 +556,14 @@ export const TaskSpawnRequestSchema = z
      *  leaves egress as before. A supervisor that predates this field rejects the request (this
      *  schema is strict), so the kernel never gets an unrestricted evaluation container. */
     egressDenyAll: z.boolean().optional(),
+    /** S11 GO18a P3 (independent review N6): `read_only` — the Worker's pi built-in tools are only
+     *  the ones that read files (`read`, `grep`, `find`, `ls`), no `bash`, `edit` or `write`: the
+     *  container's `NEXTTIME_BUILTIN_TOOLS` (`task-spawn-spec.ts`), which `entrypoint.sh` turns into
+     *  pi's settings. The kernel sets it for a goal reviewer. Omitted: every built-in the image
+     *  runs. A supervisor that predates this field rejects the request (strict), and one that has
+     *  it starts only an image of runtime contract 3 (`runtime-contract.ts`), so a reviewer never
+     *  starts with the full set. */
+    builtinTools: z.enum(TASK_BUILTIN_TOOLS_VALUES).optional(),
     /** S11 GO14 (`upstream-files.ts`): the goal run this Task works for — present for every Task
      *  of a goal step. `spawn()` then makes the Task's handoff directory (`/workspace/out`) and
      *  writes its owner marker, so a later step of the same goal may mount what it leaves there.
@@ -587,6 +598,7 @@ export const TaskSpawnRequestSchema = z
     }
   });
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
+export type TaskBuiltinTools = NonNullable<TaskSpawnRequest['builtinTools']>;
 
 /** S11 GO14: how many Tasks one `POST /task-dirs/keep` names. */
 export const MAX_TASK_DIRS_KEEP_BATCH = 500;

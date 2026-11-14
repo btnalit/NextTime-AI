@@ -377,10 +377,13 @@ export const TaskStatusSchema = asEnum(TASK_STATUS_VALUES);
  * gate calls, its report), every gate call is answered from the case's fixtures and its egress is
  * denied. S11 GO9a `planning`: a goal planner's run for one planning round of a GoalRun — it acts
  * for the goal's requester, observes nothing, its Handle holds its own Task, its (empty) tool list
- * and its report, and what it reports is a proposal the requester decides on. `null` on the wire:
+ * and its report, and what it reports is a proposal the requester decides on. S11 GO18 `review`: a
+ * reviewer's run for one `review` acceptance check of a verifying GoalRun — it acts for the goal's
+ * requester, observes nothing, reaches nothing outside, its Handle holds the same three, and what
+ * it reports is scores the platform works the check's verdict out from. `null` on the wire:
  * ordinary work.
  */
-export const TASK_PURPOSE_VALUES = ['evaluation', 'planning'] as const;
+export const TASK_PURPOSE_VALUES = ['evaluation', 'planning', 'review'] as const;
 export type TaskPurpose = (typeof TASK_PURPOSE_VALUES)[number];
 export const TaskPurposeSchema = asEnum(TASK_PURPOSE_VALUES);
 
@@ -507,8 +510,10 @@ export const ProcedureFailurePlaceSchema = asEnum(PROCEDURE_FAILURE_PLACE_VALUES
  * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
  * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a
  * platform service account), `human_api_key` (a person signs in with a password, not an API key),
- * `reserved_name` (a display name reserved for platform identities). The console's copy is keyed
- * by this type, so a new reason does not compile until it has copy.
+ * `reserved_name` (a display name reserved for platform identities), `disabled` (the Principal is
+ * disabled — a removed membership — and its role no longer means anything: a person who should be
+ * back is added again, as a new membership, legacy 730). The console's copy is keyed by this type,
+ * so a new reason does not compile until it has copy. Values are only ever added.
  */
 export const PRINCIPAL_REFUSAL_REASON_VALUES = [
   'last_owner',
@@ -516,6 +521,7 @@ export const PRINCIPAL_REFUSAL_REASON_VALUES = [
   'platform_managed',
   'human_api_key',
   'reserved_name',
+  'disabled',
 ] as const;
 export type PrincipalRefusalReason = (typeof PRINCIPAL_REFUSAL_REASON_VALUES)[number];
 export const PrincipalRefusalReasonSchema = asEnum(PRINCIPAL_REFUSAL_REASON_VALUES);
@@ -639,17 +645,23 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  *     and a predicate over its properties (`FactCheck`), judged by the platform on a Fact observed
  *     since the round opened, and not by the goal's own doing;
  *   - `requester_confirm` (请求人确认): the requester says the goal is achieved — asked once every
- *     check the platform makes in the round passed. A plan with no acceptance check has one
- *     implicitly.
+ *     other check of the round passed. A plan with no acceptance check has one implicitly;
+ *   - `review` (独立评审, S11 GO18, goal/0019): an independent reviewer Worker the platform starts
+ *     scores what named steps produced against the check's criteria (`ReviewCheck`), once every
+ *     check the platform makes in the round passed; the kernel works out from the scores whether
+ *     it passes (`goal-review.ts` `reviewDerivation`) — the reviewer's word alone is not a
+ *     verdict. A proxy indicator, not an observation of the world: an `achieved` resting on one
+ *     is `reviewer_assessed`.
  * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has the platform's kinds
  * only (`observe_predicate`, `observe_absent`, `fact_predicate`): a step's acceptance never waits
- * on a person. W4 adds `review`.
+ * on a person, and is never reviewed.
  */
 export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
   'observe_predicate',
   'observe_absent',
   'fact_predicate',
   'requester_confirm',
+  'review',
 ] as const;
 export type GoalAcceptanceCheckKind = (typeof GOAL_ACCEPTANCE_CHECK_KIND_VALUES)[number];
 export const GoalAcceptanceCheckKindSchema = asEnum(GOAL_ACCEPTANCE_CHECK_KIND_VALUES);
@@ -1131,7 +1143,10 @@ export const PackRequirementStateSchema = asEnum(PACK_REQUIREMENT_STATE_VALUES);
  * version_missing` — the state it would return to is gone; `namespace_conflict` — what it would
  * restore declares a type name another ontology family has taken since (I-P1); `revision_pending`
  * — its target, an Operation, has a revision draft under review, which a rollback would neither
- * overwrite nor publish past (P1-E: publish or discard that draft first).
+ * overwrite nor publish past (P1-E: publish or discard that draft first);
+ * `link_endpoint_undeclared` — afterwards a LinkType end would name an ObjectType no published
+ * ontology family declares: one the restored version names that is gone, or one another family
+ * names that the rollback takes away (legacy 303).
  */
 export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
   'replaced',
@@ -1139,6 +1154,7 @@ export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
   'restored_version_missing',
   'namespace_conflict',
   'revision_pending',
+  'link_endpoint_undeclared',
 ] as const;
 export type ChangeRollbackBlocker = (typeof CHANGE_ROLLBACK_BLOCKER_VALUES)[number];
 export const ChangeRollbackBlockerSchema = asEnum(CHANGE_ROLLBACK_BLOCKER_VALUES);

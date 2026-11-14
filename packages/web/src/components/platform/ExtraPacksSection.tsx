@@ -97,10 +97,31 @@ function ExtraPacksBody({ status }: { readonly status: ExtraPacksWire }) {
       ) : (
         <ul className="stack-s extra-packs-list" data-testid="extra-packs-list">
           {status.packs.map((pack) => (
-            <li key={pack.name} className="row-wrap" data-testid={`extra-pack-${pack.name}`}>
-              <span className="mono">{pack.name}</span>
-              <span className="tag tabular">v{pack.latestVersion}</span>
-              {pack.summary ? <span className="text-2 wrap-anywhere">{pack.summary}</span> : null}
+            <li key={pack.name} className="stack-s" data-testid={`extra-pack-${pack.name}`}>
+              <div className="row-wrap">
+                <span className="mono">{pack.name}</span>
+                <span className="tag tabular">v{pack.latestVersion}</span>
+                {pack.summary ? <span className="text-2 wrap-anywhere">{pack.summary}</span> : null}
+              </div>
+              {pack.warnings.length > 0 ? (
+                <Notice tone="warn" testId={`extra-pack-warnings-${pack.name}`}>
+                  <div className="stack-s">
+                    <span>
+                      {t(
+                        '能装，但不能和它依赖的包的某些更高版本一起装：它的关系类型连着的对象类型，那些版本里已经没有了。工作区里装了那些版本时，安装会被拒绝。要改的是这个包：换一个仍然声明那个类型的依赖，或者跟着改它的关系类型。',
+                        'It installs, but not beside some later versions of a pack it requires: a LinkType of it ends on an ObjectType those versions no longer declare. A workspace that has one of them is refused the install. The fix is in this pack: require one that still declares the type, or change its LinkType to match.',
+                      )}
+                    </span>
+                    <ul className="stack-s">
+                      {pack.warnings.map((warning) => (
+                        <li key={warning} className="text-small text-2 pre-wrap wrap-anywhere">
+                          {warning}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </Notice>
+              ) : null}
             </li>
           ))}
         </ul>

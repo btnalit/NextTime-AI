@@ -41,12 +41,18 @@ export type {
 
 // R-05 (review 2026-10-02): the live-socket half of revocation — per-call recheck + kick bus.
 export {
+  callerWithRole,
   publishSessionKick,
   recheckHumanSession,
   sessionKickVerdict,
   subscribeToSessionKicks,
 } from './session-revocation.js';
-export type { HumanCaller, HumanSessionVerdict, SessionKick } from './session-revocation.js';
+export type {
+  HumanCaller,
+  HumanSessionRecheck,
+  HumanSessionVerdict,
+  SessionKick,
+} from './session-revocation.js';
 
 export {
   authorizeCapabilityCall,
@@ -106,11 +112,15 @@ export {
 // `proposeOntologyChange`/`publishOntologyDraft` (R-60: `OntologyBaseMovedError`, the draft's base
 // is no longer the family's published head).
 // I-P1 (S10 P0): either publish path, plus `install_module` / `upgrade_module` through the loader,
-// refuses an ObjectType / ActionType name another family already owns.
+// refuses an ObjectType / ActionType name another family already owns; legacy 303, a LinkType end
+// that would name an ObjectType no published family declares; legacy 705, a pack's LinkType end
+// naming an ObjectType of a family it does not require.
 export {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
+  OntologyLinkEndpointOutsideRequiresError,
   OntologyNamespaceConflictError,
 } from '../../substrate/ontology/index.js';
 // S3.2 `verify_fact` (I3.6's "harder half" — epistemic-handlers.ts's own doc comment on this
@@ -222,6 +232,8 @@ export {
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
+  ConnectionSecretExpiredError,
+  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   connectGatekeeperHandler,
@@ -233,6 +245,12 @@ export {
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 export { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
+export type { ResolvedGateTarget } from './gate-target.js';
+export {
+  forgetGatekeeperPresence,
+  registerGatekeeperAddressChangedConsumer,
+} from './credential-presence.js';
+export { GateAddressChangeError } from './gate-address-change-handlers.js';
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
 // P0b: the one landing path's own refusals (application/gates/landing.ts) — a second
 // self-connection to an address, or relinking a Gatekeeper whose self connection the platform

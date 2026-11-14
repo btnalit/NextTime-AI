@@ -24,7 +24,7 @@ import {
   type PreparedStepAttempt,
   STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
-  requesterStartRefusal,
+  requesterStartAuthority,
 } from './step-attempt.js';
 import { recordTaskTransition } from './transition-log.js';
 import { QuotaExceededError, TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
@@ -72,16 +72,55 @@ export const PLANNER_MIN_TOKEN_BUDGET = 20_000;
 /** How long a planner Task may run, at most. */
 export const PLANNER_MAX_DURATION_SEC = 600;
 
+/** S11 GO18: a kernel-owned service Principal of the workspace by its internal name (`__…__`) —
+ *  the goal planner's, the goal reviewer's — or `null` when the workspace never needed it. */
+export async function findKernelServicePrincipal(
+  client: PoolClient,
+  workspaceId: string,
+  displayName: string,
+): Promise<string | null> {
+  const found = await client.query<{ id: string }>(
+    "select id from principals where workspace_id = $1 and kind = 'service' and display_name = $2 order by created_at limit 1",
+    [workspaceId, displayName],
+  );
+  return found.rows[0]?.id ?? null;
+}
+
+/** The kernel-owned service Principal named `displayName`, created the first time the workspace
+ *  needs it; two first needs at once create one (serialized per workspace and name). */
+export async function getOrCreateKernelServicePrincipal(
+  client: PoolClient,
+  workspaceId: string,
+  displayName: string,
+): Promise<string> {
+  const existing = await findKernelServicePrincipal(client, workspaceId, displayName);
+  if (existing) return existing;
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    displayName === GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME
+      ? `goal-planner-principal:${workspaceId}`
+      : `kernel-principal:${displayName}:${workspaceId}`,
+  ]);
+  const raced = await findKernelServicePrincipal(client, workspaceId, displayName);
+  if (raced) return raced;
+  const inserted = await client.query<{ id: string }>(
+    `insert into principals (workspace_id, kind, role, display_name)
+     values ($1, 'service', 'member', $2)
+     returning id`,
+    [workspaceId, displayName],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) {
+    throw new Error('getOrCreateKernelServicePrincipal: INSERT ... RETURNING produced no row');
+  }
+  return id;
+}
+
 /** The planner Principal's id, or `null` when the workspace never needed one. */
 export async function findGoalPlannerPrincipal(
   client: PoolClient,
   workspaceId: string,
 ): Promise<string | null> {
-  const found = await client.query<{ id: string }>(
-    "select id from principals where workspace_id = $1 and kind = 'service' and display_name = $2 order by created_at limit 1",
-    [workspaceId, GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME],
-  );
-  return found.rows[0]?.id ?? null;
+  return findKernelServicePrincipal(client, workspaceId, GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME);
 }
 
 /** The planner Principal's id, created the first time a workspace's goal needs a planner; two
@@ -90,26 +129,15 @@ export async function getOrCreateGoalPlannerPrincipal(
   client: PoolClient,
   workspaceId: string,
 ): Promise<string> {
-  const existing = await findGoalPlannerPrincipal(client, workspaceId);
-  if (existing) return existing;
-  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-    `goal-planner-principal:${workspaceId}`,
-  ]);
-  const raced = await findGoalPlannerPrincipal(client, workspaceId);
-  if (raced) return raced;
-  const inserted = await client.query<{ id: string }>(
-    `insert into principals (workspace_id, kind, role, display_name)
-     values ($1, 'service', 'member', $2)
-     returning id`,
-    [workspaceId, GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME],
+  return getOrCreateKernelServicePrincipal(
+    client,
+    workspaceId,
+    GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME,
   );
-  const id = inserted.rows[0]?.id;
-  if (!id) throw new Error('getOrCreateGoalPlannerPrincipal: INSERT ... RETURNING produced no row');
-  return id;
 }
 
-/** The planner template as this kernel ships it, with the digest a published version is compared
- *  by (the whole content's canonical JSON). */
+/** A kernel Worker template (the planner's, S11 GO18 the reviewer's) as this kernel ships it, with
+ *  the digest a published version is compared by (the whole content's canonical JSON). */
 export interface PlannerTemplate {
   readonly definition: Record<string, unknown>;
   readonly digest: string;
@@ -121,47 +149,65 @@ export function plannerContentDigest(definition: Readonly<Record<string, unknown
 
 const templates = new Map<string, Promise<PlannerTemplate>>();
 
+/** `ontology/<file>` under `ontologyDir` (default `resolveOntologyDir()`), read once per file. A
+ *  template that is not a `worker` one is a deployment problem and throws. */
+export function loadKernelWorkerTemplate(
+  file: string,
+  ontologyDir: string = resolveOntologyDir(),
+): Promise<PlannerTemplate> {
+  const at = path.join(ontologyDir, file);
+  let loaded = templates.get(at);
+  if (!loaded) {
+    loaded = loadWorkerDefinitionTemplate(at).then((template) => {
+      if (template.kind !== 'worker') {
+        throw new Error(`${file}: a kernel Worker is a worker definition, not ${template.kind}`);
+      }
+      return {
+        definition: template.definition,
+        digest: plannerContentDigest(template.definition),
+      };
+    });
+    loaded.catch(() => templates.delete(at));
+    templates.set(at, loaded);
+  }
+  return loaded;
+}
+
 /** `ontology/goal-planner.yaml` under `ontologyDir` (default `resolveOntologyDir()`), read once per
  *  directory. A template that is not a `worker` one is a deployment problem and throws. */
 export function loadPlannerTemplate(
   ontologyDir: string = resolveOntologyDir(),
 ): Promise<PlannerTemplate> {
-  let loaded = templates.get(ontologyDir);
-  if (!loaded) {
-    loaded = loadWorkerDefinitionTemplate(path.join(ontologyDir, 'goal-planner.yaml')).then(
-      (template) => {
-        if (template.kind !== 'worker') {
-          throw new Error(
-            `goal-planner.yaml: a planner is a worker definition, not ${template.kind}`,
-          );
-        }
-        return {
-          definition: template.definition,
-          digest: plannerContentDigest(template.definition),
-        };
-      },
-    );
-    loaded.catch(() => templates.delete(ontologyDir));
-    templates.set(ontologyDir, loaded);
-  }
-  return loaded;
+  return loadKernelWorkerTemplate('goal-planner.yaml', ontologyDir);
 }
 
-/** The WorkerDefinition family the planner Principal first proposed — the planner's, whoever
+/** The WorkerDefinition family `principalId` first proposed — the kernel Worker's, whoever
  *  published its later versions. */
-async function plannerFamilyOf(
+async function kernelFamilyOf(
   client: PoolClient,
   workspaceId: string,
-  plannerId: string,
+  principalId: string,
 ): Promise<string | undefined> {
   const family = await client.query<{ id: string }>(
     `select id from worker_definitions
       where workspace_id = $1 and proposed_by = $2 and kind = 'worker'
       order by created_at, version
       limit 1`,
-    [workspaceId, plannerId],
+    [workspaceId, principalId],
   );
   return family.rows[0]?.id;
+}
+
+/** The WorkerDefinition family of the kernel service Principal named `displayName`, or `null`
+ *  when the workspace has none yet. Read only: never creates the Principal. */
+export async function findKernelWorkerFamily(
+  client: PoolClient,
+  workspaceId: string,
+  displayName: string,
+): Promise<string | null> {
+  const principalId = await findKernelServicePrincipal(client, workspaceId, displayName);
+  if (principalId === null) return null;
+  return (await kernelFamilyOf(client, workspaceId, principalId)) ?? null;
 }
 
 /** The goal planner's WorkerDefinition family in the workspace, or `null` when the workspace has
@@ -170,35 +216,35 @@ export async function findGoalPlannerFamily(
   client: PoolClient,
   workspaceId: string,
 ): Promise<string | null> {
-  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
-  if (plannerId === null) return null;
-  return (await plannerFamilyOf(client, workspaceId, plannerId)) ?? null;
+  return findKernelWorkerFamily(client, workspaceId, GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME);
 }
 
 /**
- * The planner WorkerDefinition a round runs: the latest published version of the family the
- * planner Principal first proposed. The first time, the kernel proposes and publishes the template
- * for it; when the latest published version is the planner's own and differs from the template, the
- * next version (this kernel's template) is proposed and published. A version a workspace owner
+ * The WorkerDefinition a kernel Worker runs — the goal planner's ({@link ensurePlannerDefinition}),
+ * S11 GO18 the goal reviewer's: the latest published version of the family its service Principal
+ * (`displayName`) first proposed. The first time, the kernel proposes and publishes the template
+ * for it; when the latest published version is the Principal's own and differs from the template,
+ * the next version (this kernel's template) is proposed and published. A version a workspace owner
  * published in the family is run as it is. `null` when the family has no published version — an
- * owner deprecated it: no planner runs until one is published again.
+ * owner deprecated it: no such Worker runs until one is published again.
  */
-export async function ensurePlannerDefinition(
+export async function ensureKernelWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
+  displayName: string,
   template: PlannerTemplate,
 ): Promise<WorkerDefinitionRow | null> {
-  const plannerId = await getOrCreateGoalPlannerPrincipal(client, workspaceId);
-  const familyId = await plannerFamilyOf(client, workspaceId, plannerId);
+  const principalId = await getOrCreateKernelServicePrincipal(client, workspaceId, displayName);
+  const familyId = await kernelFamilyOf(client, workspaceId, principalId);
   const publish = async (definitionId: string | undefined): Promise<WorkerDefinitionRow> => {
-    const proposed = await proposeWorkerDefinition(client, workspaceId, plannerId, {
+    const proposed = await proposeWorkerDefinition(client, workspaceId, principalId, {
       ...(definitionId !== undefined ? { definitionId } : {}),
       kind: 'worker',
       definition: template.definition,
       // S11 AA3a (legacy 293): this kernel's own template, written with no caller.
       origin: 'platform',
     });
-    return publishWorkerDefinition(client, workspaceId, plannerId, {
+    return publishWorkerDefinition(client, workspaceId, principalId, {
       definitionId: proposed.id,
       version: proposed.version,
     });
@@ -218,10 +264,28 @@ export async function ensurePlannerDefinition(
     version: head.version,
   });
   if (!row) return null;
-  if (head.proposed_by === plannerId && plannerContentDigest(row.definition) !== template.digest) {
+  if (
+    head.proposed_by === principalId &&
+    plannerContentDigest(row.definition) !== template.digest
+  ) {
     return publish(familyId);
   }
   return row;
+}
+
+/** The planner WorkerDefinition a round runs — {@link ensureKernelWorkerDefinition} for the goal
+ *  planner Principal. */
+export async function ensurePlannerDefinition(
+  client: PoolClient,
+  workspaceId: string,
+  template: PlannerTemplate,
+): Promise<WorkerDefinitionRow | null> {
+  return ensureKernelWorkerDefinition(
+    client,
+    workspaceId,
+    GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME,
+    template,
+  );
 }
 
 export interface CreatePlanningTaskInput {
@@ -258,8 +322,8 @@ export async function createPlanningTask(
   if (await hasActiveSealHold(client, workspaceId, input.requesterId)) {
     return refused({ kind: 'paused', detail: STEP_ATTEMPT_PAUSED_DETAIL });
   }
-  const cannot = await requesterStartRefusal(client, workspaceId, input.requesterId);
-  if (cannot) return refused(cannot);
+  const authority = await requesterStartAuthority(client, workspaceId, input.requesterId);
+  if ('refusal' in authority) return refused(authority.refusal);
 
   const { definition } = input;
   const content = readDefinitionContent(definition.definition);
@@ -360,6 +424,9 @@ export async function createPlanningTask(
         onBehalfOf: input.requesterId,
         parentAuthority: handleScope,
         parentClaimsForLineage: undefined,
+        // Legacy 702: issued only while the requester's role is still the one read above.
+        // Legacy 712: the advancer's Task, not a request of the requester's — no credential.
+        issuanceBasis: { kind: 'role', role: authority.role, credential: null },
         declaredCapabilities: PLANNER_HANDLE_CAPABILITIES,
         declaredGates: [],
         model,

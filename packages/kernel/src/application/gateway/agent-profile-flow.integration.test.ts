@@ -209,6 +209,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueEntryHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -227,6 +228,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -795,7 +797,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           crv: 'Ed25519',
           extractable: true,
         });
-        const { token, jti } = await issueEntryHandle(workspaceId, memberId, keyPair);
+        const { token, jti } = await issueEntryHandle(workspaceId, memberId, 'member', keyPair);
 
         // Sanity: the Handle verifies before the profile change.
         await expect(
@@ -820,8 +822,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           crv: 'Ed25519',
           extractable: true,
         });
-        const memberHandle = await issueEntryHandle(workspaceId, memberId, keyPair);
-        const ownerHandle = await issueEntryHandle(workspaceId, ownerId, keyPair);
+        const memberHandle = await issueEntryHandle(workspaceId, memberId, 'member', keyPair);
+        const ownerHandle = await issueEntryHandle(workspaceId, ownerId, 'owner', keyPair);
 
         const owner = humanCaller(workspaceId, ownerId, 'owner');
         await dispatchCapability({ pool }, owner, 'set_agent_profile', {
@@ -862,8 +864,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).rows[0]?.revoked_at ?? null;
 
         const before = {
-          member: await issueEntryHandle(policyWs, memberId, keyPair),
-          owner: await issueEntryHandle(policyWs, policyOwnerId, keyPair),
+          member: await issueEntryHandle(policyWs, memberId, 'member', keyPair),
+          owner: await issueEntryHandle(policyWs, policyOwnerId, 'owner', keyPair),
         };
         await dispatchCapability({ pool }, owner, 'set_agent_policy', {
           maxPromptAddendumChars: 1500,
@@ -878,7 +880,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await revokedAt(before.owner.jti)).not.toBeNull();
 
         // Re-sending the same cap is not a change.
-        const after = await issueEntryHandle(policyWs, memberId, keyPair);
+        const after = await issueEntryHandle(policyWs, memberId, 'member', keyPair);
         const unchanged = (await dispatchCapability({ pool }, owner, 'get_agent_policy', {})) as {
           allowedGatekeepers: string[];
         };

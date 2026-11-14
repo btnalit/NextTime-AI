@@ -12,7 +12,9 @@
  * `WORKSPACE_ID`, `WORKER_RUN_ID`, `NEXTTIME_MODE=worker`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`
  * — plus the same lowercase `http_proxy`/`https_proxy`/`no_proxy` mirrors resident mode's own
  * `spawn-spec.ts` documents (verified there against the "httpoxy" plain-`http://`-only-honors-
- * lowercase behavior; identical proxy setup, identical reasoning, not re-verified here).
+ * lowercase behavior; identical proxy setup, identical reasoning, not re-verified here) — and,
+ * for a Worker limited to reading files (S11 GO18a P3: a goal reviewer), {@link BUILTIN_TOOLS_ENV}
+ * (`entrypoint.sh` picks pi's settings by it).
  *
  * Deliberately **not** in this list, unlike resident mode's entry spec: `HOME`, already
  * `/workspace` at the image level (`deploy/worker-runtime/Dockerfile`). Neither mode sets
@@ -33,7 +35,7 @@ import {
   SOURCE_BOUND_CAPABILITY_HANDLE,
   isValidCorrelationId,
 } from '@nexttime/shared';
-import type { SupervisorConfig, TaskUpstreamFiles } from './config.js';
+import type { SupervisorConfig, TaskBuiltinTools, TaskUpstreamFiles } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import {
   MODELS_JSON_MOUNT_TARGET,
@@ -68,6 +70,15 @@ export { EGRESS_DENY_LABEL as TASK_EGRESS_DENY_LABEL };
  *  `docker ps --filter label=nexttime.correlation-id=<id>`. Only set when an id was given. */
 export const TASK_CORRELATION_ID_LABEL = 'nexttime.correlation-id';
 
+/** S11 GO18a P3: the container's pi built-in tool set, when the kernel limited it
+ *  (`TaskSpawnRequestSchema.builtinTools`) — `entrypoint.sh` reads it and refuses to start on a
+ *  value it does not know. Absent: every built-in the image runs. */
+export const BUILTIN_TOOLS_ENV = 'NEXTTIME_BUILTIN_TOOLS';
+
+/** S11 GO18a P3: the same value on the container, for an operator to see which Workers ran with
+ *  fewer tools (`docker ps --filter label=nexttime.builtin-tools=read_only`). Absent otherwise. */
+export const TASK_BUILTIN_TOOLS_LABEL = 'nexttime.builtin-tools';
+
 /** S10 E3-2-0: `'true'` on an evaluation Task's container, whose egress source entry is
  *  deny-all — read back by `task-service.ts`'s `reconcile()` after a supervisor restart, like
  *  `TASK_EGRESS_DENY_LABEL`. Absent on every other container. */
@@ -95,6 +106,8 @@ export interface BuildTaskSpawnSpecInput {
   readonly egressDeny?: readonly string[];
   /** S10 E3-2-0: stamps `TASK_EGRESS_DENY_ALL_LABEL` — see that label's own doc comment. */
   readonly egressDenyAll?: boolean;
+  /** S11 GO18a P3: becomes {@link BUILTIN_TOOLS_ENV} and {@link TASK_BUILTIN_TOOLS_LABEL}. */
+  readonly builtinTools?: TaskBuiltinTools;
   /** Leftover 87: the delegating call's correlation id — becomes the container's
    *  `NEXTTIME_CORRELATION_ID` (the platform extension's worker mode sends it on every kernel
    *  call) and `TASK_CORRELATION_ID_LABEL`. Ignored unless valid (`@nexttime/shared`). */
@@ -128,6 +141,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
   ];
   const correlationId = isValidCorrelationId(input.correlationId) ? input.correlationId : undefined;
   if (correlationId !== undefined) env.push(`${CORRELATION_ID_ENV}=${correlationId}`);
+  if (input.builtinTools !== undefined) env.push(`${BUILTIN_TOOLS_ENV}=${input.builtinTools}`);
 
   const binds: string[] = [
     `${paths.hostWorkspaceDir}:${WORKSPACE_MOUNT_TARGET}`,
@@ -152,6 +166,9 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
       [TASK_WORKSPACE_LABEL]: input.workspaceId,
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
       ...(input.egressDenyAll === true ? { [TASK_EGRESS_DENY_ALL_LABEL]: 'true' } : {}),
+      ...(input.builtinTools !== undefined
+        ? { [TASK_BUILTIN_TOOLS_LABEL]: input.builtinTools }
+        : {}),
       ...(correlationId !== undefined ? { [TASK_CORRELATION_ID_LABEL]: correlationId } : {}),
     },
     networkName: input.networkName,

@@ -31,6 +31,12 @@ function bindErrorMessage(err: unknown, t: Translate): string | null {
       );
     case 'already_member':
       return t('你已经是该工作区的成员了', 'You are already a member of that workspace');
+    // Legacy 727: the kernel tried a few times and the key moved to another account each time.
+    case 'bind_contended':
+      return t(
+        '绑定期间这把 key 一直被别的操作移到其他账户（有人同时在绑定或合并它），这次没有绑定，什么也没有改。稍后再点一次「绑定」。',
+        'Another operation kept moving that key to a different account while it was being bound (someone binding or merging it at the same time). Nothing was changed — try Bind again in a moment.',
+      );
     default:
       return null;
   }

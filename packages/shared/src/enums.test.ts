@@ -87,7 +87,14 @@ const enumsUnderTest = [
     'PrincipalRefusalReason',
     PRINCIPAL_REFUSAL_REASON_VALUES,
     PrincipalRefusalReasonSchema,
-    ['last_owner', 'self_disable', 'platform_managed', 'human_api_key', 'reserved_name'],
+    [
+      'last_owner',
+      'self_disable',
+      'platform_managed',
+      'human_api_key',
+      'reserved_name',
+      'disabled',
+    ],
   ],
   ['Role', ROLE_VALUES, RoleSchema, ['owner', 'builder', 'operator', 'member', 'auditor']],
   [
@@ -294,7 +301,7 @@ const enumsUnderTest = [
     'GoalAcceptanceCheckKind',
     GOAL_ACCEPTANCE_CHECK_KIND_VALUES,
     GoalAcceptanceCheckKindSchema,
-    ['observe_predicate', 'observe_absent', 'fact_predicate', 'requester_confirm'],
+    ['observe_predicate', 'observe_absent', 'fact_predicate', 'requester_confirm', 'review'],
   ],
   [
     'GoalAcceptanceCheckStatus',

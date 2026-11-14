@@ -1,3 +1,4 @@
+import type { Role } from '@nexttime/shared';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withAdminClient } from './auth.js';
 import type { ResolvedCaller } from './caller.js';
@@ -13,7 +14,10 @@ import type { ResolvedCaller } from './caller.js';
  *   - {@link recheckHumanSession}: one indexed read per WS call — the Principal is not disabled,
  *     its platform user is active, (cookie sockets) the console `user_sessions` row is still
  *     unrevoked and unexpired, and (API-key sockets) the Principal still has a key. A disabled
- *     workspace is already refused per call by `dispatchCapability` itself.
+ *     workspace is already refused per call by `dispatchCapability` itself. Legacy 699: the same
+ *     read returns the Principal's role now, and the socket dispatches with it — a person demoted
+ *     after connecting does not keep the old role's capabilities over `/ws` (HTTP re-reads the
+ *     role per request anyway). The socket stays open: a role change signs nobody out.
  *   - the kick bus ({@link publishSessionKick} / {@link subscribeToSessionKicks}): logout,
  *     `reset_user_password`, `set_user_status` → disabled, a self-service password change,
  *     `disable_principal` and `remove_membership` publish to it after their transaction commits,
@@ -34,7 +38,14 @@ export type HumanCaller = Extract<ResolvedCaller, { readonly channel: 'human' }>
 
 export type HumanSessionVerdict = 'live' | 'session_invalid' | 'membership_gone';
 
+/** {@link recheckHumanSession}'s answer: live, with the Principal's role as it is now, or why
+ *  not. */
+export type HumanSessionRecheck =
+  | { readonly verdict: 'live'; readonly role: Role }
+  | { readonly verdict: Exclude<HumanSessionVerdict, 'live'> };
+
 interface SessionLivenessRow {
+  role: Role;
   principal_active: boolean;
   user_active: boolean;
   console_session_live: boolean;
@@ -51,11 +62,12 @@ interface SessionLivenessRow {
 export async function recheckHumanSession(
   pool: PoolLike,
   caller: HumanCaller,
-): Promise<HumanSessionVerdict> {
+): Promise<HumanSessionRecheck> {
   const consoleUser = caller.user;
   const row = await withAdminClient(pool, async (client) => {
     const result = await client.query<SessionLivenessRow>(
-      `select p.disabled_at is null as principal_active,
+      `select p.role,
+              p.disabled_at is null as principal_active,
               (u.id is null or u.status = 'active') as user_active,
               p.api_key_hash is not null as has_api_key,
               ($3::uuid is null or exists (
@@ -76,13 +88,30 @@ export async function recheckHumanSession(
     );
     return result.rows[0];
   });
-  if (row && (!row.console_session_live || !row.user_active)) return 'session_invalid';
+  if (row && (!row.console_session_live || !row.user_active)) return { verdict: 'session_invalid' };
   // R-12 / R-13: an API-key socket whose Principal no longer has a key (a reset, a disable or a
   // password change cleared it) has lost its credential, like an API-key socket of a disabled
   // Principal.
-  if (row && !consoleUser && !row.has_api_key) return 'session_invalid';
-  if (!row || !row.principal_active) return consoleUser ? 'membership_gone' : 'session_invalid';
-  return 'live';
+  //
+  // "Has a key", not "has the key this socket presented": a service Principal that rotated its
+  // own key over this socket keeps the socket (R-06, D-05: `rotate_api_key` kicks the
+  // credential's sockets only when someone else re-keys it), and so keeps calling here with the
+  // old key. A Handle issuance on such a socket does compare the key presented
+  // (`assertPresentedCredentialLive`, legacy 712), so it is refused there — two answers on one
+  // socket, both safe. Comparing here too would close a self-rotated socket on its next call,
+  // which changes R-06; that is a decision of its own (registered from the review of #1180).
+  if (row && !consoleUser && !row.has_api_key) return { verdict: 'session_invalid' };
+  if (!row || !row.principal_active) {
+    return { verdict: consoleUser ? 'membership_gone' : 'session_invalid' };
+  }
+  return { verdict: 'live', role: row.role };
+}
+
+/** `caller` acting with `role` — the same caller when the role has not changed. */
+export function callerWithRole(caller: HumanCaller, role: Role): HumanCaller {
+  return caller.principal.role === role
+    ? caller
+    : { ...caller, principal: { ...caller.principal, role } };
 }
 
 /**

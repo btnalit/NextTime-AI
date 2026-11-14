@@ -6,7 +6,11 @@ import type {
   TaskSpawnOutcome,
   TaskUpstreamFilesInput,
 } from '../../adapters/supervisor-client/index.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import {
+  type IssuanceBasis,
+  lockIssuingAuthority,
+  revokeSession,
+} from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import {
@@ -63,6 +67,10 @@ export interface SpawnWorkerRunInput {
   readonly onBehalfOf: string;
   readonly parentAuthority: ParentAuthority;
   readonly parentClaimsForLineage: MintWorkerRunHandleInput['parentClaims'];
+  /** Legacy 702: what `parentAuthority` was computed under — the caller's Handle, or the role of
+   *  `onBehalfOf` the caller read ({@link IssuanceBasis}). The Handle is issued only while it
+   *  still holds, under the authority locks this function takes first. */
+  readonly issuanceBasis: IssuanceBasis;
   readonly declaredCapabilities: readonly string[];
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
@@ -84,7 +92,8 @@ export interface SpawnWorkerRunInput {
    *  from the Task's own *pinned* WorkerDefinition (P2-10 fix — see that function's own doc
    *  comment for why `getWorkerDefinition`, not `requirePublishedWorkerDefinition`); everything
    *  else about the retry (capabilities/gates/authority) still comes from the failed WorkerRun's
-   *  own already-granted Handle scope, never re-derived. */
+   *  own already-granted Handle scope, never widened — only narrowed to what its person may hold
+   *  now (legacy 289, `acting-authority.ts`'s `retryScopeNow`). */
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
   /** S10 E1: the Skill versions `skillsInline` was rendered from (`definition-content.ts`'s
    *  `resolveSkillsInline`, same caller-resolved convention). Written to `worker_run_skills` in the
@@ -149,6 +158,13 @@ export async function spawnWorkerRun(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
     async (client) => {
+      // Legacy 702 (governance 0043): the authority locks of the Principal this Worker acts for,
+      // before this transaction locks or inserts anything — the Task read `for share` below, the
+      // rows that reference the Principal (the WorkerRun's activity, its session) — so a disable
+      // or a role change either waits for this spawn and then ends the Worker it started, or
+      // comes first and the Handle below is refused (the Task fails `spawn_failed`).
+      await lockIssuingAuthority(client, workspaceId, input.onBehalfOf);
+
       // 2026-10-02 review R-58: never start a WorkerRun under a Task that is already terminal. The
       // caller read `input.task` earlier (`invoke.ts`'s initial spawn sees it `queued`,
       // `lifecycle.ts`'s crash retry `running`), and a cancel may have landed since. Checked before
@@ -273,6 +289,7 @@ export async function spawnWorkerRun(
         scope: childScope,
         ttlSeconds: durationLimitSec + HANDLE_TTL_GRACE_SECONDS,
         privateKey: deps.privateKey,
+        basis: input.issuanceBasis,
       });
       await client.query(
         'update worker_runs set session_id = $3 where workspace_id = $1 and id = $2',
@@ -328,9 +345,18 @@ export async function spawnWorkerRun(
         egressDeny: input.egressDeny,
         // S10 E3-2a: from what the Task is for, whoever spawns it (the trial runner today). S11
         // GO9a: a goal planner observes nothing and only reports (`planning-task.ts`), so it has
-        // no egress either.
-        ...(input.task.purpose === 'evaluation' || input.task.purpose === 'planning'
+        // no egress either; S11 GO18: nor a goal reviewer (`review-task.ts`).
+        ...(input.task.purpose === 'evaluation' ||
+        input.task.purpose === 'planning' ||
+        input.task.purpose === 'review'
           ? { egressDenyAll: true }
+          : {}),
+        // S11 GO18a P3 (independent review N6): a goal reviewer reads what other Workers wrote
+        // and runs none of it — only the pi built-in tools that read files, whatever the
+        // reviewer's definition says. Legacy 697: nor does a goal planner, which reads step
+        // outputs and precedents other people's Workers wrote and only reports a proposal.
+        ...(input.task.purpose === 'review' || input.task.purpose === 'planning'
+          ? { builtinTools: 'read_only' as const }
           : {}),
         systemPrompt: input.systemPrompt,
         image: input.image,

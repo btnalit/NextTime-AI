@@ -454,6 +454,8 @@ async function auditGateRefusal(
             refusal: {
               code: refusal.code,
               status: refusal.status,
+              // Legacy 700: the outbound-target rule, a closed name — never the endpoint.
+              ...(refusal.details !== undefined ? { reason: refusal.details.reason } : {}),
               ...(gateCall !== undefined
                 ? {
                     operation: gateCall.operation,
@@ -1187,6 +1189,28 @@ async function dispatchInActingContext(
           : {}),
         // S11 AA2: an admin agent's session and its administrator, checked above.
         ...(adminAgent ? { adminAgent } : {}),
+        // Legacy 712: what this human-channel call was authenticated with — the cookie's console
+        // session, or (no console login behind it) the API key it presented, by its hash. A Handle
+        // issued for this call is refused under the authority locks once it is revoked or, for a
+        // key, replaced. A human caller with neither carries none, and the three capabilities that
+        // issue on it refuse to run (`requirePresentedCredential`).
+        ...(caller.channel === 'human' && caller.user
+          ? {
+              presentedCredential: {
+                kind: 'console_session' as const,
+                userId: caller.user.id,
+                consoleSessionId: caller.user.consoleSessionId,
+              },
+            }
+          : caller.channel === 'human' && caller.apiKeyHash !== undefined
+            ? {
+                presentedCredential: {
+                  kind: 'api_key' as const,
+                  principalId: caller.principal.id,
+                  apiKeyHash: caller.apiKeyHash,
+                },
+              }
+            : {}),
       };
       // An evaluation session's call is answered by application/eval-session, except `get_task`
       // of its own Task, which the capability's own handler answers like any other call.

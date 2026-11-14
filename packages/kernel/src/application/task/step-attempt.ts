@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '@nexttime/gatekeeper-base';
-import type { CapabilityScope, OutputSchema, WorkerSpec } from '@nexttime/shared';
+import type { CapabilityScope, OutputSchema, Role, WorkerSpec } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
@@ -24,6 +24,7 @@ import {
   readVisibleSkillDrafts,
   skillDraftDigest,
 } from '../worker/index.js';
+import { principalDisabled, roleStartsWorkers } from './acting-authority.js';
 import {
   type ResolvedRunSkills,
   type TrialDraftRef,
@@ -258,27 +259,6 @@ export const STEP_ATTEMPT_PAUSED_DETAIL =
 /** Capabilities a step's Handle carries only when its plan entry declares `nested`. */
 const DERIVATION_CAPABILITIES: ReadonlySet<string> = new Set(['invoke_worker', 'find_workers']);
 
-/** Whether the requester, their platform user or their workspace is disabled — the predicate
- *  `application/gateway/handle-auth.ts` applies to every Handle acting for them (a missing row is
- *  disabled). A Worker minted for a disabled requester could not authenticate anyway. */
-async function requesterDisabled(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-): Promise<boolean> {
-  const result = await client.query<{ disabled: boolean }>(
-    `select (p.disabled_at is not null
-             or coalesce(u.status = 'disabled', false)
-             or w.status = 'disabled') as disabled
-       from principals p
-       join workspaces w on w.id = p.workspace_id
-       left join users u on u.id = p.user_id
-      where p.workspace_id = $1 and p.id = $2`,
-    [workspaceId, principalId],
-  );
-  return result.rows[0]?.disabled ?? true;
-}
-
 /** The parent scope of a step's Handle — see the module doc comment (I-G7) — with who reads the
  *  Skill registry for the requester and the models their workspace allows (S11 GO8a). */
 interface StepParent {
@@ -294,7 +274,7 @@ async function stepParentScope(
   requesterId: string,
   nested: boolean,
 ): Promise<StepParent | { readonly refusal: StepAttemptRefusal }> {
-  if (await requesterDisabled(client, workspaceId, requesterId)) {
+  if (await principalDisabled(client, workspaceId, requesterId)) {
     return {
       refusal: { kind: 'authority_lost', reason: 'requester', detail: 'the requester is disabled' },
     };
@@ -314,7 +294,7 @@ async function stepParentScope(
     gatekeeperIds.length > 0 ? { resources: { gatekeeper: [...gatekeeperIds] } } : {},
     { role: access.role },
   );
-  if (!entry.capabilities.includes('invoke_worker')) {
+  if (!roleStartsWorkers(access.role)) {
     return {
       refusal: {
         kind: 'authority_lost',
@@ -336,15 +316,17 @@ async function stepParentScope(
 }
 
 /** S11 GO9a: why the requester cannot start a Worker now — disabled, gone, or a role that no
- *  longer starts Workers — or `null`: the check every attempt makes first ({@link stepParentScope}),
- *  for a Task of a goal that is no step's (the planner's, `planning-task.ts`). */
-export async function requesterStartRefusal(
+ *  longer starts Workers — or, when they can, their role: the check every attempt makes first
+ *  ({@link stepParentScope}), for a Task of a goal that is no step's (the planner's,
+ *  `planning-task.ts`; the reviewer's, `review-task.ts`). Legacy 702: the role is what that Task's
+ *  Handle is issued under (`IssuanceBasis`). */
+export async function requesterStartAuthority(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
-): Promise<StepAttemptRefusal | null> {
+): Promise<{ readonly refusal: StepAttemptRefusal } | { readonly role: Role }> {
   const parent = await stepParentScope(client, workspaceId, requesterId, false);
-  return 'refusal' in parent ? parent.refusal : null;
+  return 'refusal' in parent ? { refusal: parent.refusal } : { role: parent.viewer.role };
 }
 
 /** S11 GO8a: the digest a RunConfigSnapshot keeps of a step's WorkerSpec (`null`: none). */
@@ -987,6 +969,11 @@ export async function createStepAttemptTask(
         onBehalfOf: requesterId,
         parentAuthority: parent.scope,
         parentClaimsForLineage: undefined,
+        // Legacy 702: issued only while the requester's role is still the one `parent.scope` was
+        // computed from (a change since this attempt was prepared fails its start `spawn_failed`,
+        // and the next attempt reads the new role).
+        // Legacy 712: a goal step runs on the requester's confirmed authority — no credential.
+        issuanceBasis: { kind: 'role', role: parent.viewer.role, credential: null },
         declaredCapabilities,
         declaredGates,
         model,

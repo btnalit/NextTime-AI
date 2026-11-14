@@ -25,6 +25,7 @@ import {
   checkGoalGuidance,
   checkGoalUpdateWords,
   checkGraphQuestionGuidance,
+  checkPrecedentPolarityWords,
   checkPromptFile,
   checkProposeGoalDescription,
   checkProposeGoalWords,
@@ -322,6 +323,22 @@ test('checkGoalUpdateWords', async (t) => {
   });
 });
 
+test('checkPrecedentPolarityWords', async (t) => {
+  const polarities = new Set(['positive', 'negative', 'unverified']);
+
+  await t.test('no violations when the prompt names every polarity in backticks', () => {
+    const prompt = 'a polarity: `positive` (checked), `negative` (failed), `unverified` (said).';
+    assert.deepEqual(checkPrecedentPolarityWords('fixture.yaml', prompt, polarities), []);
+  });
+
+  await t.test('catches a polarity the prompt never names', () => {
+    const prompt = 'a polarity: `positive` (checked), `negative` (failed), unverified (said).';
+    const violations = checkPrecedentPolarityWords('fixture.yaml', prompt, polarities);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"unverified"/);
+  });
+});
+
 test('checkGoalChangeWords', async (t) => {
   const changes = goalChangeWordsInContext(['confirm', 'pause', 'release_hold', 'fail', 'propose']);
 
@@ -367,6 +384,7 @@ test('checkProposeGoalWords', async (t) => {
       statement: { type: 'string' },
       fromProcedure: { type: 'object', properties: { procedureId: { type: 'string' } } },
       idempotencyKey: { type: 'string' },
+      precedents: { type: 'array' },
       plan: {
         type: 'object',
         properties: {
@@ -391,6 +409,17 @@ test('checkProposeGoalWords', async (t) => {
                 { properties: { kind: { const: 'observe_absent' } } },
                 { properties: { kind: { const: 'fact_predicate' } } },
                 { properties: { kind: { type: 'string', enum: ['requester_confirm'] } } },
+                {
+                  properties: {
+                    kind: { const: 'review' },
+                    subjects: {},
+                    criteria: {
+                      type: 'array',
+                      items: { properties: { key: {}, description: {}, weight: {} } },
+                    },
+                    passAt: {},
+                  },
+                },
               ],
             },
           },

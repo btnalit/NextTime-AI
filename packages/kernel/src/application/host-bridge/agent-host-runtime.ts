@@ -1214,9 +1214,11 @@ export class AgentHostRuntime implements AgentRuntime {
       principalId,
       cached?.jti,
     );
-    if (disabled) {
+    if (disabled || role === undefined) {
       this.handleCache.delete(principalId);
-      throw new Error(`ensureEntryHandle: principal ${principalId} or its user is disabled`);
+      throw new Error(
+        `ensureEntryHandle: principal ${principalId} ${role === undefined ? 'not found' : 'or its user is disabled'}`,
+      );
     }
 
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
@@ -1255,10 +1257,15 @@ export class AgentHostRuntime implements AgentRuntime {
         sessionId,
         scope: entryScope(
           gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
-          role === undefined ? {} : { role },
+          { role },
         ),
         ttlSeconds: this.entryHandleTtlSeconds,
         privateKey: this.privateKey,
+        // Legacy 702: issued only while the role this scope was computed from is still the
+        // Principal's, and nothing above them is disabled, under governance 0043's locks — a
+        // change committed since `readHandleFreshness` fails this Turn; the next one reads it.
+        // Legacy 712: a Turn is not the request that sent its message — no credential to re-check.
+        basis: { kind: 'role', role, credential: null },
       }),
     );
     this.handleCache.set(principalId, {
@@ -1580,7 +1587,7 @@ export class AgentHostRuntime implements AgentRuntime {
       const existing = await client.query<{ id: string }>(
         `select id from sessions
          where workspace_id = $1 and principal_id = $2 and kind = 'entry' and on_behalf_of = $2
-           and (expires_at is null or expires_at > now())
+           and status <> 'revoked' and (expires_at is null or expires_at > now())
          order by created_at desc, id desc
          limit 1`,
         [workspaceId, principalId],

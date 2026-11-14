@@ -1,5 +1,8 @@
 import type { PoolClient } from 'pg';
-import { normalizeGateEndpoint } from '../../governance/gatekeepers/index.js';
+import {
+  lockSelfConnectionState,
+  normalizeGateEndpoint,
+} from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 
 /**
@@ -8,11 +11,12 @@ import { shownFreeText } from '../../governance/redaction/index.js';
  * ①). The catalog twin is `workspace_gate_links` (store.ts). Written by the landing only
  * (`landing.ts`), read by the platform policy (`readGatekeeperPlatformPolicy`, store.ts) and by the
  * platform's `list_self_connections` / `suspend_self_connection` / `resume_self_connection`
- * (application/gateway/platform-gates-handlers.ts).
+ * (application/gateway/platform-gates-handlers.ts), and moved by an approved address change
+ * (`moveSelfConnectionAddress`, legacy 701).
  *
  * RLS (core 0045): a workspace transaction reads and inserts its own rows and deletes an
  * unsuspended one of a Gatekeeper that already has a catalog link; only a platform transaction
- * updates a row. `setSelfConnectionSuspension` is therefore a platform-plane call — from a
+ * updates a row. `setSelfConnectionSuspension` and `moveSelfConnectionAddress` are therefore a platform-plane call — from a
  * workspace transaction it would match no row. The one other writer is the raw-secret scrub's
  * address rewrite (`selfConnectionAddressRewrite`, on the login role). Every statement that writes
  * this table is in this file (`landing-path.guard.test.ts`).
@@ -104,23 +108,9 @@ export async function insertSelfConnection(
 }
 
 /** Serializes the platform's suspend / resume of one self connection with every workspace path
- *  that checks it before acting on it — the catalog claim, the re-sync — so what such a check saw
- *  still holds when its transaction commits (#620 review M1, and the same check-then-act class).
- *  Shared for a check (many at once), exclusive for a change. A held check delays a suspension by
- *  at most that transaction — a re-sync's, at most its one `describe_operations` call. */
-export async function lockSelfConnectionState(
-  client: PoolClient,
-  workspaceId: string,
-  gatekeeperObjectId: string,
-  mode: 'check' | 'change',
-): Promise<void> {
-  await client.query(
-    mode === 'change'
-      ? 'select pg_advisory_xact_lock(hashtext($1::text))'
-      : 'select pg_advisory_xact_lock_shared(hashtext($1::text))',
-    [`self_connection:${workspaceId}:${gatekeeperObjectId}`],
-  );
-}
+ *  that checks it before acting on it (`governance/gatekeepers`'s `lockSelfConnectionState`, where
+ *  a new ActionRequest takes it too). */
+export { lockSelfConnectionState };
 
 export async function findSelfConnection(
   client: PoolClient,
@@ -173,6 +163,33 @@ export function selfConnectionAddressRewrite(
       read.endpoint,
     ],
   };
+}
+
+/** Platform plane, legacy 701: an approved address change moves the self connection's address
+ *  copy and its key with it (`approve_gate_address_change`,
+ *  application/gateway/gate-address-change-handlers.ts), in the transaction that moves the
+ *  Gatekeeper Object's — I-A1, the Object's endpoint and this row's key stay one address. Only from
+ *  the address the change was proposed from (`fromEndpointKey`; a backfilled row with no key
+ *  matches on its address copy): `false` when the row is not there any more or moved since. The
+ *  key's unique index (core 0045) refuses a second self connection at the new address, behind the
+ *  caller's own check under the landing's lock. */
+export async function moveSelfConnectionAddress(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperObjectId: string,
+  move: {
+    readonly fromEndpointKey: string;
+    readonly toEndpoint: string;
+    readonly toEndpointKey: string;
+  },
+): Promise<boolean> {
+  const result = await client.query(
+    `update workspace_self_connections s set endpoint = $3, endpoint_key = $4
+      where s.workspace_id = $1 and s.gatekeeper_object_id = $2
+        and coalesce(s.endpoint_key, $5) = $5`,
+    [workspaceId, gatekeeperObjectId, move.toEndpoint, move.toEndpointKey, move.fromEndpointKey],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** Platform plane: every self connection, newest first, optionally one connector's, one

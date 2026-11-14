@@ -1,4 +1,5 @@
 import {
+  type AcceptanceCheck,
   GOAL_RUN_CHANGE_VALUES,
   type GoalDetailWire,
   type GoalPlan,
@@ -17,6 +18,7 @@ import {
   checkErrorLabel,
   checkErrorReason,
   checkKindLabel,
+  citedPrecedentOutcomeText,
   confirmRefusedText,
   exhaustedBudget,
   factCheckSentence,
@@ -220,6 +222,8 @@ describe('lib/goals', () => {
     // how the goal is verified stays with acceptance.
     expect(isStepAuthorityHint(gate)).toBe(true);
     expect(isStepAuthorityHint({ code: 'requester_confirm_only', message: 'm' })).toBe(false);
+    expect(isStepAuthorityHint({ code: 'review_only', message: 'm' })).toBe(false);
+    expect(isStepAuthorityHint({ code: 'review_and_confirm', message: 'm' })).toBe(false);
     expect(stepHintChipLabel(gate, zh)).toBe('请求人无权限');
     expect(stepHintChipLabel(capability, zh)).toBe('请求人无权限');
     expect(
@@ -700,6 +704,9 @@ describe('lib/goals', () => {
       'credential_unavailable',
     );
     expect(actionFailureCodeText('gate_unreachable', zh)).toBe('连不上门');
+    // Legacy 700: the step has only the code, so the usual case's remedy is in its sentence.
+    expect(actionFailureCodeText('target_refused', zh)).toContain('用门的 https:// 地址重新接入');
+    expect(actionFailureCodeText('target_refused', en)).toContain('at its https:// address');
   });
 
   it('reads a predicate as a sentence: leaves, all / any / not', () => {
@@ -1265,6 +1272,34 @@ describe('lib/goals', () => {
     expect(withParams).not.toMatch(/not-a-real-value/);
   });
 
+  it('S11 GO18 (UX acceptance of #1102): a plan reviewed and then confirmed says both decide; the review row does not repeat its label', () => {
+    const both = planHintText({ code: 'review_and_confirm', message: 'm' }, zh);
+    expect(both).toBe(
+      '这个计划没有平台能做的验收检查：评审打分过线、再由请求人确认，目标才算达成。',
+    );
+    expect(both).not.toContain('只凭请求人确认');
+    expect(planHintText({ code: 'review_and_confirm', message: 'm' }, en)).toMatch(
+      /only when its reviews pass and the requester then confirms it\.$/,
+    );
+    const review: AcceptanceCheck = {
+      kind: 'review',
+      key: 'quality',
+      subjects: ['draft', 'polish'],
+      criteria: [
+        { key: 'clear', description: 'Reads clearly', weight: 2 },
+        { key: 'sourced', description: 'Cites its sources', weight: 1 },
+        { key: 'short', description: 'Fits on a page', weight: 1 },
+      ],
+      passAt: 75,
+    };
+    const zhRow = planCheckSentence(review, new Map(), zh);
+    expect(zhRow).toBe('给 draft、polish 的产出打分：3 条标准，得分达到 75% 才算通过');
+    expect(`${checkKindLabel('review', zh)} ${zhRow}`).not.toMatch(/独立评审.*独立评审/);
+    expect(planCheckSentence(review, new Map(), en)).toBe(
+      'Scores what draft, polish produced: 3 criteria, passing at 75% of the points',
+    );
+  });
+
   it('an absence check reads as the gate answering “not there”, in both languages (S11 「门确认不存在」 B)', () => {
     const check = { gatekeeperId: '66000000-0000-4000-8000-0000000000d1', operation: 'svc.lookup' };
     expect(observationSentence(check, 'svc-gate', zh)).toBe(
@@ -1450,5 +1485,42 @@ describe('goalMilestoneText (S11 GO5e-2)', () => {
     expect(goalMilestoneText({ ...base, change: 'finish_cancel', cleanupPending: true }, zh)).toBe(
       '目标已取消，还有遗留要清理',
     );
+  });
+});
+
+describe('citedPrecedentOutcomeText (S11 GO17b)', () => {
+  const en: Translate = (_zh, enText) => enText;
+  it('says how each kind of precedent ended, by its polarity', () => {
+    const cases = [
+      [
+        { outcome: 'achieved', outcomeBasis: 'verified_by_check', polarity: 'positive' },
+        '达成，平台检查通过',
+        'achieved, the platform’s checks passed',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'requester', polarity: 'negative' },
+        '达成，但覆盖了没通过的检查',
+        'achieved over checks that did not pass',
+      ],
+      [
+        { outcome: 'not_achieved', outcomeBasis: 'verified_by_check', polarity: 'negative' },
+        '未达成',
+        'not achieved',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'requester', polarity: 'unverified' },
+        '达成，只有请求人确认',
+        'achieved on the requester’s word',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'reviewer_assessed', polarity: 'unverified' },
+        '达成，依据独立评审',
+        'achieved on a review',
+      ],
+    ] as const;
+    for (const [precedent, zhText, enText] of cases) {
+      expect(citedPrecedentOutcomeText(precedent, zh)).toBe(zhText);
+      expect(citedPrecedentOutcomeText(precedent, en)).toBe(enText);
+    }
   });
 });

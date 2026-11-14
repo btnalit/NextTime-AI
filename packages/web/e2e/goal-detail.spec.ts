@@ -29,6 +29,8 @@ const TASK_FETCH = '66000000-0000-4000-8000-000000000101';
 const TASK_APPLY = '66000000-0000-4000-8000-000000000102';
 const TASK_FETCH_REWORK = '66000000-0000-4000-8000-000000000103';
 const PROCEDURE = '66000000-0000-4000-8000-000000000201';
+// GO17b: an earlier goal of alice's that revision 1 was written from.
+const PRECEDENT = '66000000-0000-4000-8000-000000000301';
 
 // Within the last hour, so the wall-clock budget reads as it would on a goal running today.
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -156,6 +158,19 @@ function revision(n: 1 | 2) {
             confirmCheck: { key: 'looks-right', procedureSteps: [2] },
           }
         : null,
+    // GO17b: revision 1 was written from one of alice's earlier goals.
+    citedPrecedents:
+      n === 1
+        ? [
+            {
+              goalRunId: PRECEDENT,
+              statement: '上个月续期主站证书',
+              outcome: 'achieved',
+              outcomeBasis: 'verified_by_check',
+              polarity: 'positive',
+            },
+          ]
+        : [],
   };
 }
 
@@ -471,6 +486,14 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
         `#/govern/catalog/procedures/${PROCEDURE}`,
       );
       await expect(page.getByTestId('goal-revision-from-procedure')).toHaveCount(1);
+      // GO17b: and the earlier goal it was written from, opening that goal's page.
+      const precedents = page.getByTestId('goal-revision-precedents');
+      await expect(precedents).toHaveText('参考了先例上个月续期主站证书（达成，平台检查通过）');
+      await expect(precedents.getByRole('listitem')).toHaveCount(1);
+      await expect(precedents.getByRole('link', { name: '上个月续期主站证书' })).toHaveAttribute(
+        'href',
+        `#/work/goals/${PRECEDENT}`,
+      );
       // Legacy 454: the start parameters it was made with, and where the requester's
       // confirmation came from.
       await expect(page.getByTestId('goal-plan-parameters')).toHaveText('要续期的站点 site = main');
@@ -751,6 +774,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                     decidedAt: null,
                     removals: {},
                     fromProcedure: null,
+                    citedPrecedents: [],
                   },
                   revisions: [
                     {
@@ -1065,6 +1089,275 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
             PLAN_V2.steps[0],
             { ...PLAN_V2.steps[1], worker: { definitionId: WORKER, version: 3 } },
             { ...PLAN_V2.steps[2], input: { keep: 'none' } },
+          ],
+        },
+      });
+    });
+  }
+});
+
+/**
+ * S11 GO18b: an independent review (`review` acceptance check, GO18a) on the goal's page — the
+ * criteria it scores, their weights, how many points pass and which model scores, then what the
+ * review of a round came to: each criterion's score and points, the points against the line, the
+ * verdict, the models and whether they were the same, the reviewer's Task — and in the plan editor,
+ * where a review is written with nothing typed but what each criterion asks. The goal reads and
+ * the revision are stand-ins as above; the models and the workspace's policy are the stack's own.
+ */
+test.describe('S11 GO18b: an independent review on a goal (stand-in reads)', () => {
+  test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
+
+  const TASK_REVIEW = '66000000-0000-4000-8000-000000000104';
+  const REVIEW = {
+    kind: 'review' as const,
+    key: 'quality',
+    subjects: ['apply', 'remove-old'],
+    criteria: [
+      { key: 'complete', description: '三台主机的证书都换成了新签发的', weight: 3 },
+      { key: 'clear', description: '报告逐台写清楚换了什么、旧证书在哪删的', weight: 1 },
+    ],
+    passAt: 75,
+  };
+  const PLAN_REVIEWED = { ...PLAN_V2, acceptance: [PLAN_V2.acceptance[0], REVIEW] };
+  const ROUND = {
+    round: 1,
+    planRevision: 2,
+    openedAt: T3,
+    checks: [
+      {
+        checkKey: 'certs',
+        kind: 'observe_predicate',
+        status: 'passed',
+        check:
+          PLAN_V2.acceptance[0]?.kind === 'observe_predicate' ? PLAN_V2.acceptance[0].check : null,
+        fact: null,
+        prompt: null,
+        review: null,
+        attempts: 1,
+        lastError: null,
+        observationId: null,
+        factId: null,
+        decisionId: null,
+        nextAttemptAt: null,
+        settledAt: T3,
+        overridden: false,
+      },
+      {
+        checkKey: 'quality',
+        kind: 'review',
+        status: 'passed',
+        check: null,
+        fact: null,
+        prompt: null,
+        review: {
+          subjects: REVIEW.subjects,
+          criteria: REVIEW.criteria,
+          passAt: 75,
+          model: null,
+          taskId: TASK_REVIEW,
+          assessment: {
+            reviewTaskId: TASK_REVIEW,
+            reviewerModel: 'model-a',
+            executorModels: [
+              { stepKey: 'apply', attempt: 1, model: 'model-a' },
+              { stepKey: 'remove-old', attempt: 1, model: 'model-a' },
+            ],
+            sameModel: true,
+            lines: [
+              {
+                criterion: 'complete',
+                weight: 3,
+                score: 4,
+                reason: '三台主机的新证书指纹都对得上。',
+                points: 12,
+                maxPoints: 12,
+              },
+              {
+                criterion: 'clear',
+                weight: 1,
+                score: 2,
+                reason: '报告列了主机，但没写旧证书在哪删的。',
+                points: 2,
+                maxPoints: 4,
+              },
+            ],
+            comment: '换证书本身做完了，报告还可以更清楚。',
+            points: 14,
+            maxPoints: 16,
+            passAt: 75,
+            unassessed: [],
+            verdict: 'passed',
+            createdAt: T3,
+          },
+        },
+        attempts: 1,
+        lastError: null,
+        observationId: null,
+        factId: null,
+        decisionId: null,
+        nextAttemptAt: null,
+        settledAt: T3,
+        overridden: false,
+      },
+    ],
+  };
+
+  for (const width of [1440, 390] as const) {
+    test(`a review declared in the plan and scored in a round at ${width}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      NAMES[TASK_REVIEW] = { kind: 'task', name: 'goal-reviewer' };
+      await page.route('**/api/cap/get_goal', (route) =>
+        route.fulfill(
+          answer('get_goal', {
+            ...DETAIL,
+            ...run({ status: 'verifying', pauseReason: null }),
+            planRevision: { ...revision(2), plan: PLAN_REVIEWED },
+            acceptance: { ...DETAIL.acceptance, rounds: [ROUND] },
+          }),
+        ),
+      );
+      await loginAsOwner(page);
+      await page.goto(`/#/work/goals/${GOAL}`);
+
+      const declaration = page.getByTestId('goal-review-declaration');
+      await expect(declaration).toBeVisible({ timeout: 15_000 });
+      await expect(declaration.getByTestId('goal-review-criterion')).toHaveCount(2);
+      await expect(declaration).toContainText('至少 12 分（满分 16 的 75%）算通过');
+      await expect(declaration.getByTestId('goal-review-model')).toContainText('请求人的模型');
+      await expect(declaration.getByTestId('goal-review-model-note')).toBeVisible();
+
+      const outcome = page.getByTestId('goal-review-outcome');
+      await expect(outcome).toHaveAttribute('data-verdict', 'passed');
+      await expect(outcome.getByTestId('goal-review-line')).toHaveCount(2);
+      await expect(outcome.getByTestId('goal-review-points')).toHaveText(
+        '得分 14 / 16（87%），至少 12 分（75%）通过',
+      );
+      await expect(outcome.getByTestId('goal-review-same-model')).toContainText('同一个模型');
+      await expect(outcome.getByTestId('goal-review-task')).toContainText('独立评审');
+      await expect(outcome.getByTestId('goal-review-line').first()).toContainText('打分');
+      await page.getByTestId('goal-review-declaration').scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-review-${width}.png`),
+        fullPage: true,
+      });
+    });
+
+    test(`a review written in the plan editor at ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      const owner = (await signedInOwner(page)).id;
+      await page.route('**/api/cap/get_goal', async (route) => {
+        const ownerId = await owner;
+        NAMES[ownerId] = { kind: 'principal', name: 'owner' };
+        await route.fulfill(
+          answer('get_goal', {
+            ...DETAIL,
+            onBehalfOf: ownerId,
+            pauseReason: 'requested',
+            pausedBy: ownerId,
+            pausedByAuthority: 'requester',
+            planRevision: { ...revision(2), plan: PLAN_REVIEWED },
+          }),
+        );
+      });
+      await page.route('**/api/cap/list_worker_definitions', (route) =>
+        route.fulfill(
+          answer('list_worker_definitions', {
+            items: [
+              {
+                id: WORKER,
+                version: 2,
+                kind: 'worker',
+                status: 'published',
+                definition: { name: 'cert-rotator' },
+                proposedBy: ALICE,
+                publishedBy: ALICE,
+                createdAt: T0,
+                publishedAt: T0,
+                goalPlanner: false,
+              },
+            ],
+          }),
+        ),
+      );
+      const sent: unknown[] = [];
+      await page.route('**/api/cap/revise_goal', async (route) => {
+        sent.push(route.request().postDataJSON());
+        await route.fulfill(
+          answer('revise_goal', {
+            goalRunId: GOAL,
+            status: 'paused',
+            changed: true,
+            revision: 3,
+            planRevisionId: 'rev-3',
+            supersededStepRunIds: [],
+            createdStepRunIds: [],
+            withdrawnActionRequestIds: [],
+            releasedActionRequestIds: [],
+            hints: [],
+          }),
+        );
+      });
+      await loginAsOwner(page);
+      await page.goto(`/#/work/goals/${GOAL}`);
+      await page.getByRole('button', { name: '修订计划…' }).click({ timeout: 15_000 });
+
+      const editor = page.getByTestId('goal-plan-editor');
+      const quality = editor.locator('[data-testid="goal-plan-check"][data-check-key="quality"]');
+      await expect(quality.getByTestId('goal-plan-review')).toBeVisible();
+      await expect(quality.getByTestId('goal-plan-review-criterion')).toHaveCount(2);
+      // A third criterion: written, weighted 2; the line moves to 80%.
+      await quality.getByRole('button', { name: '加一条标准' }).click();
+      const third = quality.getByRole('textbox', { name: '第 3 条标准', exact: true });
+      await expect(third).toBeFocused();
+      await third.fill('旧证书删掉之前确认过没有服务还在用');
+      await quality.getByRole('combobox', { name: '第 3 条标准的权重' }).selectOption('2');
+      await quality.getByRole('combobox', { name: '通过线' }).selectOption('80');
+      await expect(quality).toContainText('至少 20 分（满分 24 的 80%）算通过');
+      await expect(quality.getByTestId('goal-plan-review-model')).toHaveValue('');
+      await expect(quality.getByTestId('goal-plan-review-model-note')).toBeVisible();
+      await quality.scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-plan-review-${width}.png`),
+        fullPage: true,
+      });
+
+      // Another review, of what the plan ends with: its first criterion takes the focus.
+      await editor.getByRole('button', { name: '加一条独立评审' }).click();
+      const added = editor.locator('[data-testid="goal-plan-check"][data-check-key="review"]');
+      const addedFirst = added.getByRole('textbox', { name: '第 1 条标准', exact: true });
+      await expect(addedFirst).toBeFocused();
+      await expect(addedFirst).toHaveAttribute('aria-invalid', 'true');
+      await addedFirst.fill('删证书前后各有一份清单');
+      await page
+        .getByLabel('修订原因', { exact: true })
+        .fill('评审多看一条：旧证书删之前确认没在用');
+      await page.getByRole('button', { name: '提交修订…' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: '提交修订', exact: true }).click();
+      await expect(page.getByTestId('goal-op-done')).toContainText('计划已改为第 3 版');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        plan: {
+          acceptance: [
+            PLAN_V2.acceptance[0],
+            {
+              ...REVIEW,
+              criteria: [
+                ...REVIEW.criteria,
+                { key: 'c1', description: '旧证书删掉之前确认过没有服务还在用', weight: 2 },
+              ],
+              passAt: 80,
+            },
+            {
+              kind: 'review',
+              key: 'review',
+              subjects: ['remove-old'],
+              criteria: [{ key: 'c1', description: '删证书前后各有一份清单', weight: 1 }],
+              passAt: 75,
+            },
           ],
         },
       });

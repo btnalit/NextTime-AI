@@ -2102,3 +2102,23 @@ html:has(.md-layout--wide .md-detail-pane .overlay-actions),
   margin: 0;
   padding: 0;
 }
+
+/* UX acceptance of #1158 (P3): a move waiting for a platform administrator (集成 → 自己接入的门)
+ * at phone width — 批准 / 驳回 take their own line under the move instead of squeezing the
+ * addresses into a column narrow enough to break a host name in the middle. */
+.gate-address-change-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .gate-address-change-row .data-row-main {
+    flex-basis: 100%;
+  }
+
+  .gate-address-change-row .data-row-trailing {
+    flex-basis: 100%;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+}

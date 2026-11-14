@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 import type { GateTarget } from '../../adapters/gatekeeper-client/index.js';
 import { isConnectionSecretSalt } from '../../adapters/gatekeeper-client/index.js';
-import { type GatekeeperRecord, gateEndpointHost } from '../../governance/gatekeepers/index.js';
+import {
+  type GatekeeperRecord,
+  gateEndpointHost,
+  normalizeGateEndpoint,
+} from '../../governance/gatekeepers/index.js';
 
 /**
  * application/gateway/gate-target: which credential the kernel presents to a registered
@@ -51,21 +55,31 @@ export async function platformGateIdForEndpoint(
   return null;
 }
 
+/** A `GateTarget` as resolved for a call, with the address it dials in the kernel's one
+ *  gate-address spelling (`normalizeGateEndpoint`). Legacy 701 (I-A3): the action executor compares
+ *  `endpointKey` with the address a request was made for (`action_requests.gate_endpoint_key`) — the
+ *  very address this call would dial, not a second read of it. */
+export interface ResolvedGateTarget extends GateTarget {
+  readonly endpointKey: string;
+}
+
 /** The `GateTarget` for a registered Gatekeeper (see the module doc comment). */
 export async function resolveGateTarget(
   client: PoolClient,
   workspaceId: string,
   gatekeeper: Pick<GatekeeperRecord, 'endpoint' | 'connectionSecretSalt'>,
-): Promise<GateTarget> {
+): Promise<ResolvedGateTarget> {
   const { endpoint, connectionSecretSalt } = gatekeeper;
+  const endpointKey = normalizeGateEndpoint(endpoint);
   if ((await platformGateIdForEndpoint(client, endpoint)) !== null) {
-    return { endpoint, credential: { kind: 'platform' } };
+    return { endpoint, endpointKey, credential: { kind: 'platform' } };
   }
   if (isConnectionSecretSalt(connectionSecretSalt)) {
     return {
       endpoint,
+      endpointKey,
       credential: { kind: 'connection', workspaceId, salt: connectionSecretSalt },
     };
   }
-  return { endpoint, credential: { kind: 'none' } };
+  return { endpoint, endpointKey, credential: { kind: 'none' } };
 }

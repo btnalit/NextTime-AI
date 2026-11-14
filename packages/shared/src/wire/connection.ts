@@ -7,6 +7,10 @@ import {
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
 import {
+  GateAddressChangeOutcomeWireSchema,
+  GateAddressChangeWireSchema,
+} from './gate-address-change.js';
+import {
   AbsentAnswerDraftWireSchema,
   GateOwnedParamDraftWireSchema,
   GateOwnedParamWireSchema,
@@ -71,6 +75,16 @@ export const GatekeeperSummaryWireSchema = z
   })
   .strict();
 export type GatekeeperSummaryWire = z.infer<typeof GatekeeperSummaryWireSchema>;
+
+/** `list_gatekeepers`' item: the summary, plus (legacy 716) whether a gate the workspace connected
+ *  itself has an open proposal to move to a new address — for a workspace owner only, as
+ *  `get_gatekeeper`'s `pendingAddressChange` is: `true` while one awaits a platform administrator
+ *  (and is not past its expiry), `false` when none does, absent for anyone else and for a
+ *  platform-catalog gate, whose address is the platform instance's. */
+export const GatekeeperListItemWireSchema = GatekeeperSummaryWireSchema.extend({
+  addressChangePending: z.boolean().optional(),
+});
+export type GatekeeperListItemWire = z.infer<typeof GatekeeperListItemWireSchema>;
 
 /** Legacy K (UX acceptance of #538): one param of an Operation's `params_schema` — where the gate
  *  sends it (`x-in`, lower-cased; absent = the request body) and whether it is required. */
@@ -174,6 +188,18 @@ export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   /** Legacy 674: present only while the platform suspends this self-connected gate. Its
    *  Operations stay listed — kept, and refused on every call until it is resumed. */
   platformSuspension: GatekeeperPlatformSuspensionWireSchema.optional(),
+  /** Legacy 701: the address the kernel calls this gate at, user info, query and fragment cut out
+   *  — for a workspace owner only (absent for anyone else, and for a platform-catalog gate, whose
+   *  address is the platform instance's). */
+  endpoint: z.string().optional(),
+  /** Legacy 701: the open proposal to move this self-connected gate to a new address, awaiting a
+   *  platform administrator — for a workspace owner only, absent when there is none. */
+  pendingAddressChange: GateAddressChangeWireSchema.optional(),
+  /** Legacy 715: how the gate's latest proposal that is no longer open ended — applied, rejected
+   *  (with the administrator's reason), withdrawn or expired — for a workspace owner only, absent
+   *  when the gate never had one. Present alongside `pendingAddressChange` when a newer proposal
+   *  is open. */
+  lastAddressChangeOutcome: GateAddressChangeOutcomeWireSchema.optional(),
 });
 export type GatekeeperDetailWire = z.infer<typeof GatekeeperDetailWireSchema>;
 

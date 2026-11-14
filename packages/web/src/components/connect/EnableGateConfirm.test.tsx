@@ -39,6 +39,7 @@ function emptyPreview(overrides: Record<string, unknown> = {}) {
     operationsToImport: [],
     operationsAlreadyPresent: [],
     awaitingPlatformAdoption: null,
+    manifestDigest: 'sha256:previewed',
     ...overrides,
   };
 }
@@ -61,7 +62,8 @@ describe('EnableGateConfirm', () => {
         });
       },
       enable_gate_instance: (params) => {
-        expect(params).toEqual({ gateId: 'gate-1' });
+        // Legacy 311: always bound to the manifest the preview showed.
+        expect(params).toEqual({ gateId: 'gate-1', manifestDigest: 'sha256:previewed' });
         return {
           gateId: 'gate-1',
           gatekeeperId: 'gk-1',

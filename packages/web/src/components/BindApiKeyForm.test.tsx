@@ -73,6 +73,26 @@ describe('BindApiKeyForm', () => {
 
     await waitFor(() => expect(screen.getByText('你已经是该工作区的成员了')).toBeTruthy());
   });
+
+  // Legacy 727: not the "has a password" copy — the key kept moving while it was being bound.
+  it('maps bind_contended to its own inline message and keeps the key in the box', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(409, {
+        ok: false,
+        error: { code: 'bind_contended', message: 'that API key kept moving' },
+      }),
+    );
+    render(<BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />);
+
+    fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-moving' } });
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('一直被别的操作移到其他账户');
+    expect(alert.textContent).toContain('什么也没有改');
+    expect(alert.textContent).not.toContain('密码');
+    expect((screen.getByLabelText(/API key/) as HTMLInputElement).value).toBe('sk-moving');
+  });
 });
 
 describe('BindApiKeyForm copy', () => {

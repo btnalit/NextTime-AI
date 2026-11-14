@@ -46,7 +46,9 @@ export function ProcedureEditorHost({
       workerDefinitions={
         definitions.state.status === 'ready'
           ? // UX P2-4 on #864: the goal planner's Worker plans goals; no step runs it.
-            definitions.state.data.items.filter((row) => row.goalPlanner !== true)
+            definitions.state.data.items.filter(
+              (row) => row.goalPlanner !== true && row.goalReviewer !== true,
+            )
           : undefined
       }
       onProposed={onProposed}

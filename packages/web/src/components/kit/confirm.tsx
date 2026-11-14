@@ -659,8 +659,7 @@ function IrreversibleTier({
               {target !== undefined ? (
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor={typedId} className="text-13 font-medium text-text">
-                    键入 "{target}
-                    {t('" 以确认', 'Type the target name to confirm')}
+                    {t(`键入 "${target}" 以确认`, `Type "${target}" to confirm`)}
                   </label>
                   <input
                     id={typedId}

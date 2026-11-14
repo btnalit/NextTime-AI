@@ -676,6 +676,89 @@ function entryGoalChatScenario(messages) {
   ];
 }
 
+/** S11 GO17b (scripts/accept_s2.sh `step9_goal_from_chat`, after the goal above completed):
+ *  "引用先例发起目标 GOAL_NONCE=<n>" — asked in the same chat, the entry agent looks up how this
+ *  user's earlier goals of the same kind went and cites the one it builds on. Every argument
+ *  chains off a *real* tool result, never a value accept_s2.sh guessed:
+ *
+ *  Turn 1: `find_workers({need:'restart'})` — the ops-runner WorkerDefinition, as above.
+ *
+ *  Turn 2: `find_goal_precedents({workerDefinitionIds:[its id]})` — alice's own completed goals
+ *  with a step on that Worker; the one step 9 just saw achieved is among them, `positive`.
+ *
+ *  Turn 3: `propose_goal` — one step on that Worker, citing the newest `positive` precedent in
+ *  `precedents`. No acceptance check: accept_s2.sh turns the goal down unconfirmed, nothing runs.
+ *  Neither the statement nor the input carries a chat marker (see `entryGoalChatScenario`).
+ *
+ *  Turn 4: a final text with `PRECEDENT_GOAL_ID=` (the new run), `CITED=` (the id it cited, or
+ *  `none`) and `FOUND=` (how many precedents the lookup returned) for accept_s2.sh to read.
+ */
+function entryGoalPrecedentChatScenario(messages) {
+  const asked = latestMessageWith(messages, '引用先例发起目标');
+  const nonce = extractMarker(asked, 'GOAL_NONCE') ?? 'none';
+  const foundWorkers = findToolResult(messages, 'find_workers');
+  const workerMatch = Array.isArray(foundWorkers?.items)
+    ? foundWorkers.items.find((w) => w && w.kind === 'worker')
+    : undefined;
+  const found = findToolResult(messages, 'find_goal_precedents');
+  const items = Array.isArray(found?.items) ? found.items : undefined;
+  const cited = items?.find(
+    (p) => p && p.polarity === 'positive' && typeof p.goalRunId === 'string',
+  );
+  const proposed = findToolResult(messages, 'propose_goal');
+  const goalRunId =
+    proposed && typeof proposed.goalRunId === 'string' ? proposed.goalRunId : undefined;
+
+  return [
+    { tool: { name: 'find_workers', args: { need: 'restart' } } },
+    workerMatch
+      ? {
+          tool: {
+            name: 'find_goal_precedents',
+            args: { workerDefinitionIds: [workerMatch.definitionId] },
+          },
+        }
+      : {
+          text: 'echo: 引用先例发起目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
+    workerMatch && cited
+      ? {
+          tool: {
+            name: 'propose_goal',
+            args: {
+              statement: `accept_s2 precedent journey ${nonce}: the same one ops-runner step, planned from the goal that went well before.`,
+              plan: {
+                steps: [
+                  {
+                    key: 'report',
+                    worker: {
+                      definitionId: workerMatch.definitionId,
+                      version: workerMatch.version,
+                    },
+                    input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce}`,
+                  },
+                ],
+              },
+              budget: {
+                maxTokens: 200000,
+                maxSteps: 3,
+                maxRevisions: 1,
+                maxWallClockSeconds: 1800,
+              },
+              idempotencyKey: `accept-s2-precedent-${nonce}`,
+              precedents: [cited.goalRunId],
+            },
+          },
+        }
+      : {
+          text: `echo: 引用先例发起目标 (find_goal_precedents found no positive precedent: FOUND=${items?.length ?? 'unresolved'} — see docs/runbooks/host-accept-s2.md)`,
+        },
+    {
+      text: `Proposed goal PRECEDENT_GOAL_ID=${goalRunId ?? 'none'} CITED=${cited?.goalRunId ?? 'none'} FOUND=${items?.length ?? 0} — written from the goal that went well before; confirm it in the console under Goals.`,
+    },
+  ];
+}
+
 /** S11 GO5e-1: the *Worker* half of `entryGoalChatScenario` — the goal's one step. Reports back
  *  with no Fact: the goal is accepted on the platform's own observation of the stock API, which a
  *  Worker's report could not stand in for. S11 GO7a-3 (S2, S12): with `HOLD=<name>` in its input
@@ -686,6 +769,9 @@ function goalStepScenario(messages) {
   const nonce = extractMarker(blob, 'GOAL_NONCE') ?? 'none';
   // S11 GO7a-3: `HOLD=<name>` keeps the report back until accept_s2.sh releases it ("Held turns").
   const hold = extractMarker(blob, 'HOLD');
+  // S11 GO18b (accept_s2 S15, a goal judged by review): `GOAL_REPORT=<word>` reports an output
+  // `{report}` too — what the step's `outputSchema` there asks for, and what its review reads.
+  const report = extractMarker(blob, 'GOAL_REPORT');
   return [
     {
       ...(hold ? { hold } : {}),
@@ -697,6 +783,7 @@ function goalStepScenario(messages) {
           factsToAssert: [],
           evidence: [{ kind: 'accept_s2_worker_note', content: { nonce } }],
           artifacts: [],
+          ...(report ? { output: { report: `accept_s2 report ${report} for goal step ${nonce}` } } : {}),
         },
       },
     },
@@ -930,6 +1017,93 @@ function plannerTaskInput(messages) {
   return undefined;
 }
 
+/** The goal reviewer's Task input (`kind: goal_review`, see `goalReviewerScenario`), read like the
+ *  planner's ({@link plannerTaskInput}). `undefined` when no message carries one. */
+function reviewerTaskInput(messages) {
+  for (const message of messages) {
+    if (!message) continue;
+    const text = toolMessageText(message);
+    const at = text.indexOf('### Task input\n');
+    if (at < 0) continue;
+    const rest = text.slice(at + '### Task input\n'.length);
+    const end = rest.indexOf('\n\n');
+    try {
+      const input = JSON.parse(end < 0 ? rest : rest.slice(0, end));
+      if (input && typeof input === 'object' && input.kind === 'goal_review') return input;
+    } catch {
+      // Not the reviewer's input: look further.
+    }
+  }
+  return undefined;
+}
+
+/** S11 GO18a (runtime contract 3): pi built-ins a goal reviewer — and, legacy 697, a goal
+ *  planner — is never offered. The kernel spawns every review and planning Task with
+ *  `builtinTools: read_only`, and the image's entrypoint then gives pi only read, grep, find and ls
+ *  (deploy/worker-runtime/pi-settings-read-only.json). */
+const READ_ONLY_FORBIDDEN_TOOLS = ['bash', 'edit', 'write'];
+
+/** Why `tools` (a request's tool definitions) is not the read-only set — it must offer `read` and
+ *  none of {@link READ_ONLY_FORBIDDEN_TOOLS}; `undefined` when it is. A request with no tools at
+ *  all does not pass: pi always sends them. */
+function readOnlyToolsProblem(tools) {
+  const names = (Array.isArray(tools) ? tools : []).map(
+    (tool) => tool?.function?.name ?? tool?.name,
+  );
+  const offered = names.filter((name) => READ_ONLY_FORBIDDEN_TOOLS.includes(name));
+  if (offered.length > 0) return `was offered ${offered.join(', ')}`;
+  if (!names.includes('read')) return 'was not offered read';
+  return undefined;
+}
+
+/** S11 GO18 (accept_s2's review step, GO18b): the goal reviewer — the Worker the platform starts
+ *  for a goal's `review` check once every check it makes passed (ontology/goal-reviewer.yaml).
+ *  Selected by `goal_review`, which only the reviewer's Task input carries; listed before the step
+ *  scenarios because that input shows the reviewed steps' output. One turn: `report_result` with
+ *  a score for every criterion of the input, each once — `ACCEPT_S2_SCORE=<n>` in a criterion's
+ *  description scores it n (a script can make a review fail), any other the highest score — and
+ *  nothing but its output: a reviewer writes no findings, Facts, evidence or artifacts
+ *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`).
+ *
+ *  A request whose tools are not the read-only set ({@link readOnlyToolsProblem}) gets a text
+ *  answer saying why instead of the report: the reviewer did not run read-only, so it ends without
+ *  reporting, its review settles `unavailable` and S15's goals miss the outcomes S15 asserts. */
+function goalReviewerScenario(messages, tools) {
+  const problem = readOnlyToolsProblem(tools);
+  if (problem !== undefined) {
+    return [
+      {
+        text: `accept_s2: the goal reviewer ${problem}; a reviewer's pi tools must be read-only (S11 GO18a).`,
+      },
+    ];
+  }
+  const input = reviewerTaskInput(messages);
+  const criteria = Array.isArray(input?.criteria) ? input.criteria : [];
+  const max = typeof input?.scoreRange?.max === 'number' ? input.scoreRange.max : 4;
+  const scores = criteria
+    .filter((criterion) => criterion && typeof criterion.key === 'string')
+    .map((criterion) => {
+      const scripted = /ACCEPT_S2_SCORE=(\d+)/.exec(String(criterion.description ?? ''))?.[1];
+      const score = scripted === undefined ? max : Math.min(max, Number(scripted));
+      return {
+        criterion: criterion.key,
+        score,
+        reason: `accept_s2: scripted score ${score} of ${max}.`,
+      };
+    });
+  return [
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: the goal reviewer scored ${scores.length} criteria.`,
+          output: { scores },
+        },
+      },
+    },
+  ];
+}
+
 /** S11 GO9a/GO9b (scripts/lib/accept-s2-goals.sh `goal_s13_planner`, legacy 549): the goal
  *  planner — the Worker the platform starts for a goal whose step failed for its requester
  *  (ontology/goal-planner.yaml). Selected by `goal_planning`, which only the planner's Task input
@@ -946,8 +1120,21 @@ function plannerTaskInput(messages) {
  *    - anything else: `no_revision`, so a goal no scenario here plans for pauses for a person —
  *      among them S6's (legacy 560): a round for the goal's own acceptance (S11 GO10b, the input
  *      carries `failedAcceptance` instead of `failedStep`), whose reason names the verification
- *      round it was told about, so the script can tell the planner read what failed. */
-function goalPlannerScenario(messages) {
+ *      round it was told about, so the script can tell the planner read what failed.
+ *
+ *  Legacy 697: a request whose tools are not the read-only set ({@link readOnlyToolsProblem}) gets
+ *  a text answer saying why instead of the report, as the reviewer's does: the planner did not run
+ *  read-only, so it ends without reporting, its round settles without a proposal and S13's and
+ *  S6's goals miss the outcomes they assert. */
+function goalPlannerScenario(messages, tools) {
+  const problem = readOnlyToolsProblem(tools);
+  if (problem !== undefined) {
+    return [
+      {
+        text: `accept_s2: the goal planner ${problem}; a planner's pi tools must be read-only (legacy 697).`,
+      },
+    ];
+  }
   const input = plannerTaskInput(messages);
   const plan = input?.plan;
   const failedKey = input?.failedStep?.key;
@@ -1044,6 +1231,8 @@ const ENTRY_ONLY_TOOLS = [
   'record_procedure_followed',
   'report_task_outcome',
   'propose_goal',
+  // S11 GO17: precedents are for whoever writes the plan of a goal; the admin agent writes none.
+  'find_goal_precedents',
 ];
 
 function offeredToolNames(tools) {
@@ -1517,6 +1706,8 @@ const SCENARIOS = [
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
+  // S11 GO17b. Not a superstring of '发起验收目标': `pickScenario` takes the latest marker.
+  { marker: '引用先例发起目标', build: entryGoalPrecedentChatScenario, chat: true },
   { marker: ADMIN_PROPOSE_MARKER, build: adminAgentProposeChatScenario, chat: true },
   { marker: TICKETS_CONNECT_MARKER, build: ticketsConnectChatScenario, chat: true },
   { marker: TICKETS_DRAFT_MARKER, build: ticketsDraftChatScenario, chat: true },
@@ -1524,6 +1715,7 @@ const SCENARIOS = [
   { marker: TICKETS_PROPOSE_MARKER, build: ticketsProposeChatScenario, chat: true },
   { marker: TICKETS_PROGRESS_MARKER, build: ticketsProgressChatScenario, chat: true },
   { marker: 'goal_planning', build: goalPlannerScenario, chat: false },
+  { marker: 'goal_review', build: goalReviewerScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },

@@ -61,8 +61,41 @@ export type { SelfConnectionListRow, SelfConnectionRow } from './self-connection
 export {
   findSelfConnection,
   listSelfConnections,
+  lockSelfConnectionState,
+  moveSelfConnectionAddress,
   setSelfConnectionSuspension,
 } from './self-connections.js';
+export type {
+  ConnectionSecretConsumer,
+  ConnectionSecretIssuanceState,
+  ConnectionSecretIssuer,
+} from './connection-secret-issuances.js';
+export {
+  connectionSecretIssuanceState,
+  consumeConnectionSecret,
+  recordMintedConnectionSecret,
+  recordRotatedConnectionSecret,
+} from './connection-secret-issuances.js';
+export type {
+  GateAddressChangeListPosition,
+  GateAddressChangeRow,
+  InsertGateAddressChangeInput,
+  PlatformGateAddressChangeRow,
+} from './gate-address-changes.js';
+export {
+  GATE_ADDRESS_CHANGE_ONE_OPEN_CONSTRAINT,
+  GATE_ADDRESS_CHANGE_SALT_CONSTRAINT,
+  expireStaleGateAddressChange,
+  findGateAddressChange,
+  findLatestEndedGateAddressChange,
+  findOpenGateAddressChange,
+  gateAddressChangeSaltUsed,
+  gatekeepersWithOpenGateAddressChange,
+  insertGateAddressChange,
+  isExpired as gateAddressChangeExpired,
+  listGateAddressChanges,
+  settleGateAddressChange,
+} from './gate-address-changes.js';
 export type {
   CatalogLandingSource,
   LandingActor,
@@ -75,6 +108,7 @@ export {
   assertEndpointFreeForSelfConnection,
   assertSelfConnectionNotSuspended,
   landGatekeeper,
+  lockSelfConnectionEndpoint,
 } from './landing.js';
 export type { AnnouncedManifestDiff } from './manifest-review.js';
 export {
@@ -90,6 +124,7 @@ export {
   executableGatekeepers,
   narrowScopeToExecutableGates,
   readExecuteAccess,
+  serviceHandleResources,
 } from './execute-access.js';
 export type {
   ObserveExclusions,

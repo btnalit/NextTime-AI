@@ -10,6 +10,7 @@ import {
   type IssuedHandle,
   adminAgentScope,
   issueHandle,
+  lockIssuingAuthority,
 } from '../../governance/capability/index.js';
 import { type PlatformRole, effectivePlatformRole } from '../identity/users.js';
 
@@ -234,7 +235,7 @@ export class AdminAgentSessionEndedError extends Error {
 
 /**
  * Issues an admin agent's Handle, on `client` inside a transaction of `workspaceId`: the authority
- * check (refusing with {@link AdminAgentRefused}), then the Principal's `admin_agent` session — the
+ * locks, the authority check under them (refusing with {@link AdminAgentRefused}), then the Principal's `admin_agent` session — the
  * newest one not revoked or expired, or a new one — and a Handle under it scoped to
  * `adminAgentScope` for the Principal's role here (issueHandle refuses anything wider for this
  * session kind). The runtime (`AgentHostRuntime`, S11 AA4c-2) calls it when an admin agent's Turn
@@ -255,6 +256,10 @@ export async function issueAdminAgentHandle(
       `an admin agent's Handle lives between 1 and ${ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS} seconds, got ${params.ttlSeconds}`,
     );
   }
+  // The authority locks first (governance 0043, legacy 702): the I-A3 check below then reads every
+  // change of the workspace, the user (its platform role) or the Principal that committed before
+  // them, and any later one waits until this transaction commits — and then revokes this Handle.
+  await lockIssuingAuthority(client, params.workspaceId, params.principalId);
   const facts = await assertAdminAgentAuthority(client, params.workspaceId, params.principalId);
   const sessionId =
     params.sessionId === undefined
@@ -270,6 +275,8 @@ export async function issueAdminAgentHandle(
     scope: adminAgentScope(params.resources ?? {}, { role: facts.principalRole }),
     ttlSeconds: params.ttlSeconds,
     privateKey: params.privateKey,
+    // Legacy 712: issued for a Turn, not for a request of the administrator's — no credential.
+    basis: { kind: 'role', role: facts.principalRole, credential: null },
   });
 }
 
@@ -293,9 +300,9 @@ async function readLiveAdminAgentSession(
 
 /** `sessionId`, when it is the Principal's live `admin_agent` session; otherwise
  *  {@link AdminAgentSessionEndedError}. The runtime (`AgentHostRuntime`) also calls it before it
- *  reuses a cached Handle: a session can end without its Handles being revoked (the platform's
- *  `set_membership_role` to the same role ends the person's sessions, revoking Handles only on a
- *  role change), and a Turn queued under that session must not start on the cached one. */
+ *  reuses a cached Handle: a session can end without its Handles being revoked (it can expire, and
+ *  `verifyHandle` reads only a Handle's own `revoked_at`), and a Turn queued under that session
+ *  must not start on the cached one. */
 export async function requireLiveAdminAgentSession(
   client: PoolClient,
   workspaceId: string,

@@ -97,7 +97,7 @@ a concrete gate"与"Manifest format"两节；`accept-s2-ssh-gate`/`accept-s2-htt
 
 3. 主机侧建数据目录（`GATE_DATA_DIR` 承载幂等 apply 存储/`ConnectedAccountStore`），并放进这个门
    自己的连接密钥——owner 调 `mint_connection_secret`（控制台"直接注册门"表单打开时显示的那一把同样可用），
-   §7 第 3 步 `create_connection` 带同一把：
+   §7 第 3 步 `create_connection` 带同一把（一把只接一个门，签出后 24 小时内用，遗留 711）：
    ```bash
    mkdir -p "${NEXTTIME_DATA}/gatekeepers/<system>"
    printf '%s\n' '<ntgc1_...>' > "${NEXTTIME_DATA}/gatekeepers/<system>/kernel.token"

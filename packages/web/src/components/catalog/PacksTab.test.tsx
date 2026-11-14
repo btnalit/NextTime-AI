@@ -465,6 +465,125 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('legacy 303: a link type pointing at an object type no ontology declares reads as its own sentence in the review', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+      preview_pack_install: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'ontology LinkType ends must name a declared ObjectType or "*": LinkType "served_by" range "Gatekeeper" (ontology —) names no ObjectType this workspace\'s ontology declares',
+            'ontology_link_endpoint_undeclared',
+          ),
+        ),
+    });
+    renderTab(http, 'ops-assets');
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    // Without details it says both cases in general.
+    expect(banner.textContent).toMatch(/多半是它依赖的能力包还没装/);
+    expect(banner.textContent).toContain('ontology_link_endpoint_undeclared');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('legacy 303: with the refusal’s details the review names each end — the pack’s own, then another ontology’s it would orphan (UX of #1141)', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+      preview_pack_install: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'ontology LinkType ends must name a declared ObjectType or "*"',
+            'ontology_link_endpoint_undeclared',
+            {
+              undeclared: [
+                {
+                  ontologyId: 'o-1',
+                  family: null,
+                  linkType: 'served_by',
+                  end: 'range',
+                  objectType: 'Gatekeepr',
+                },
+              ],
+              orphaned: [
+                {
+                  ontologyId: 'o-2',
+                  family: 'uxlink-services',
+                  linkType: 'runs_on',
+                  end: 'domain',
+                  objectType: 'UxHost',
+                },
+              ],
+            },
+          ),
+        ),
+    });
+    renderTab(http, 'ops-assets');
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toContain(
+      '这个能力包的本体里有关系类型指向工作区里没有任何本体声明的对象类型：关系类型 served_by 的 range 是 Gatekeepr。',
+    );
+    expect(banner.textContent).toContain(
+      '装上它会去掉别的本体的关系类型还在用的对象类型：本体 uxlink-services 的关系类型 runs_on 的 domain 是 UxHost。',
+    );
+    expect(banner.textContent).toContain('所以现在装不上，什么也没有改');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('legacy 705: a link type ending in an ontology the pack does not build on names the end and sends the owner to an administrator', async () => {
+    const refuse = (details?: Record<string, unknown>) =>
+      scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+        preview_pack_install: () =>
+          Promise.reject(
+            new HttpError(
+              'capability_error',
+              "a pack's LinkType ends name ObjectTypes of the platform-meta ontology, of its own families or of the packs it requires",
+              'ontology_link_endpoint_outside_requires',
+              details,
+            ),
+          ),
+      });
+    renderTab(
+      refuse({
+        ends: [
+          {
+            linkType: 'ticket_on_host',
+            end: 'range',
+            objectType: 'Host',
+            family: 'ops-hosts',
+            pack: 'ops-hosts-pack',
+          },
+        ],
+      }),
+      'ops-assets',
+    );
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toContain(
+      '这个能力包的关系类型连到了它没有声明依赖的本体里的对象类型：关系类型 ticket_on_host 的 range 是 Host，由能力包 ops-hosts-pack 的本体 ops-hosts 声明。',
+    );
+    expect(banner.textContent).toContain(
+      '在工作区里改不了（要让它依赖 ops-hosts-pack）；请平台管理员处理',
+    );
+    expect(banner.textContent).toContain('ontology_link_endpoint_outside_requires');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+
+    // Without details it says it in general.
+    cleanup();
+    renderTab(refuse(), 'ops-assets');
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    expect((await screen.findByTestId('catalog-pack-preview-error')).textContent).toMatch(
+      /这要改能力包本身，在工作区里改不了/,
+    );
+  });
+
   it('someone’s pending draft of a Skill the pack upgrades reads as its own sentence in the review (S11 W1a E2-0)', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

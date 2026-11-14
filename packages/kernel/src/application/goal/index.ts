@@ -56,6 +56,13 @@ export {
 } from './disposition.js';
 
 export {
+  type PrecedentFilter,
+  findGoalPrecedents,
+  precedentsOfGoal,
+  readRecentGoalPrecedents,
+} from './precedents.js';
+
+export {
   getGoalRun,
   getPlanRevision,
   getStepRun,
@@ -283,6 +290,7 @@ export {
   type GoalAcceptanceCheckView,
   type GoalAcceptanceRoundView,
   type GoalAcceptanceView,
+  type GoalReviewView,
   type OverriddenAcceptanceCheck,
   type StepAcceptanceRoundView,
   type StepAcceptanceState,
@@ -355,3 +363,15 @@ export type {
   StepRemoval,
   StepRunRow,
 } from './types.js';
+
+export {
+  REVIEWER_INPUT_KIND,
+  REVIEW_SEALED,
+  type ReviewAssessmentView,
+  type ReviewDeclaration,
+  readRunReviews,
+  reviewDeclarationOf,
+  reviewerReportProblems,
+  sealReviews,
+  unsealPlannerPlan,
+} from './review.js';

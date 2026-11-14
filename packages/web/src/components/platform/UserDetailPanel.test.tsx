@@ -302,7 +302,8 @@ describe('UserDetailPanel', () => {
       list_users: () => ({
         items: [
           source,
-          user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
+          // No membership where the source has one: two that are not removed would clash.
+          user({ id: 'u-2', login: 'bob', displayName: 'Bob', memberships: [] }),
           user({ id: 'u-3', login: 'carol', displayName: 'Carol', status: 'disabled' }),
         ],
       }),
@@ -345,6 +346,132 @@ describe('UserDetailPanel', () => {
     await waitFor(() => expect(onMerged).toHaveBeenCalledTimes(1));
   });
 
+  it.each([
+    { status: 'disabled' as const, removedOnly: false, says: true },
+    { status: 'disabled' as const, removedOnly: true, says: false },
+    { status: 'active' as const, removedOnly: false, says: false },
+  ])(
+    'legacy 719: merging a $status source (only removed memberships: $removedOnly) says the memberships are usable again: $says',
+    async ({ status, removedOnly, says }) => {
+      const source = user({
+        status,
+        hasPassword: false,
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'member',
+            disabled: removedOnly,
+          },
+          {
+            workspaceId: 'ws-2',
+            workspaceName: 'Beta',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-2',
+            role: 'member',
+            disabled: true,
+          },
+        ],
+      });
+      const http = scriptedHttp({
+        list_users: () => ({
+          items: [source, user({ id: 'u-2', login: 'bob', displayName: 'Bob', memberships: [] })],
+        }),
+      });
+      renderPanel(http, source);
+      const target = screen.getByLabelText(/合并到/);
+      await findComboboxOption(target, 'bob — Bob');
+      await pickComboboxOption(target, 'bob — Bob');
+      fireEvent.click(screen.getByRole('button', { name: '合并' }));
+
+      const confirm = await screen.findByTestId('user-merge-confirm');
+      const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+      const line =
+        '已停用：合并后，下面没有停用的成员资格会以 bob 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」';
+      if (says) expect(impact).toContain(line);
+      else expect(impact).not.toContain('恢复可用');
+      expect(impact).toContain('Acme');
+      expect(impact).toContain('Beta');
+    },
+  );
+
+  // UX acceptance of #1185 (P2): only two memberships that are not removed clash; a removed one
+  // is let go, said in the impact list.
+  it('a membership in a workspace the target is also in: a clash is said before the merge, a disabled one is let go', async () => {
+    const membership = (
+      workspaceId: string,
+      workspaceName: string,
+      principalId: string,
+      disabled: boolean,
+    ) => ({
+      workspaceId,
+      workspaceName,
+      workspacePurpose: 'standard' as const,
+      workspaceStatus: 'active' as const,
+      principalId,
+      role: 'member' as const,
+      disabled,
+    });
+    const source = user({
+      hasPassword: false,
+      memberships: [
+        membership('ws-1', 'Acme', 'p-1', true),
+        membership('ws-2', 'Beta', 'p-2', false),
+        membership('ws-3', 'Gamma', 'p-3', false),
+      ],
+    });
+    const clashing = user({
+      id: 'u-2',
+      login: 'bob',
+      displayName: 'Bob',
+      memberships: [membership('ws-3', 'Gamma', 'p-9', false)],
+    });
+    const fine = user({
+      id: 'u-3',
+      login: 'carol',
+      displayName: 'Carol',
+      memberships: [
+        membership('ws-1', 'Acme', 'p-7', false),
+        membership('ws-2', 'Beta', 'p-8', true),
+      ],
+    });
+    const http = scriptedHttp({ list_users: () => ({ items: [source, clashing, fine] }) });
+    renderPanel(http, source);
+    const target = screen.getByLabelText(/合并到/);
+    const merge = screen.getByRole('button', { name: '合并' });
+
+    await findComboboxOption(target, 'bob — Bob');
+    await pickComboboxOption(target, 'bob — Bob');
+    expect(merge.hasAttribute('disabled')).toBe(true);
+    // Legacy 725 (UX on #1189): and where each one is removed.
+    const clashWith = 'bob';
+    expect(screen.getByTestId('user-merge-missing').textContent).toBe(
+      `两个账户在工作区 Gamma 都有没停用的成员资格：先在那里移出其中一个（alice 的在本页「管理成员资格」里移出，${clashWith} 的在 ${clashWith} 的用户详情里移出）`,
+    );
+    fireEvent.click(merge);
+    expect(screen.queryByTestId('user-merge-confirm')).toBeNull();
+
+    await pickComboboxOption(target, 'carol — Carol');
+    expect(merge.hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByTestId('user-merge-missing')).toBeNull();
+    fireEvent.click(merge);
+    const confirm = await screen.findByTestId('user-merge-confirm');
+    const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+    expect(impact).toContain(
+      '工作区 Acme · 成员（已停用）：carol 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）',
+    );
+    // Legacy 725 (UX on #1189): the target is a member there again.
+    expect(impact).toContain(
+      '工作区 Beta · 成员 → carol：carol 曾被移出这里，合并后以这一条的角色重新成为这里的成员；carol 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）',
+    );
+    const to = 'carol';
+    expect(impact).toContain(`工作区 Gamma · 成员 → ${to}`);
+  });
+
   it('merge picker: searches the whole directory and ranks accounts with the same display name first', async () => {
     const source = user({
       id: 'u-9',
@@ -356,7 +483,9 @@ describe('UserDetailPanel', () => {
       list_users: (params) => {
         const query = (params as { query?: string }).query;
         if (query === 'zed')
-          return { items: [user({ id: 'u-7', login: 'zed', displayName: 'Zed' })] };
+          return {
+            items: [user({ id: 'u-7', login: 'zed', displayName: 'Zed', memberships: [] })],
+          };
         return {
           items: [
             user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),

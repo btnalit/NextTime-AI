@@ -496,6 +496,8 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'platform.llm_provider_models_probed',
   'user.identity_claimed',
   'principal.user_rebound',
+  // Legacy 719: `merge_user` of a disabled user, one row per membership that is usable again.
+  'platform.membership_restored',
   'gate_instance.manifest_confirmed',
   // S11 AA3c-1: an admin proposal's platform part, applied and rolled back.
   'gate_instance.created',
@@ -505,6 +507,9 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   // Legacy 245 a (same sweep): written with `workspaceId: null` too — a self connection's
   // suspension revoking entry Handles, and the host CLI's own actions.
   'self_connection.entry_handles_revoked',
+  // Legacy 701: `approve_gate_address_change` records the move it applies under its own action,
+  // with `workspaceId: null` — the platform's decision about a workspace's gate.
+  'gatekeeper.address_changed',
   'cli.workspace_created',
   'cli.principal_added',
   'cli.service_handle_issued',

@@ -255,6 +255,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '为门签发新的连接密钥，旧密钥立即失效。',
     enHint: 'Issues a new connection secret; the old one stops working at once.',
   },
+  // Legacy 701: moving a self-connected gate to a new address.
+  preview_gate_address_change: {
+    zh: '预览更换门地址',
+    en: 'Preview gate address change',
+    zhHint: '用新地址和新连接密钥读新主机的接口清单，列出会跟着门走的授权；不写任何东西。',
+    enHint:
+      'Reads the new host’s manifest with the new connection secret and lists what follows the gate there; writes nothing.',
+  },
+  propose_gate_address_change: {
+    zh: '申请更换门地址',
+    en: 'Propose gate address change',
+    zhHint: '申请把自己接入的门换到新地址，交平台管理员批准，24 小时内有效。',
+    enHint:
+      'Asks the platform administrator to move a self-connected gate to a new address; open for 24 hours.',
+  },
+  withdraw_gate_address_change: {
+    zh: '撤回门地址申请',
+    en: 'Withdraw gate address change',
+    zhHint: '撤回还没被决定的更换门地址申请。',
+    enHint: 'Withdraws a proposal to move a gate that is not decided yet.',
+  },
   publish_manifest: {
     zh: '发布接口清单',
     en: 'Publish manifest',
@@ -735,6 +756,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '读取目标计划的某一个版本：当时的计划、谁改的、为什么改。',
     enHint: "Reads one revision of a goal's plan: the plan as it stood, who made it and why.",
   },
+  find_goal_precedents: {
+    zh: '查找同类目标的先例',
+    en: 'Find goal precedents',
+    zhHint:
+      '找出发起人自己以前做过、已有结果的同类目标，带当时的计划、结果和验收情况，供写新计划时参考。',
+    enHint:
+      "Finds the requester's own earlier goals of the same kind that ended with an outcome, with their plan, outcome and checks, to consult when writing a new plan.",
+  },
   list_goal_unresolved_actions: {
     zh: '查看目标待核对的动作',
     en: 'List goal actions to check',
@@ -1077,6 +1106,21 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       '统计一个 Worker 各版本的运行次数、Task 结果、达成率和失败分组，按运行环境和按组合（原样或带某个步骤调整）分开列。',
     enHint:
       "Counts a Worker's runs, Task results, attainment and failure groups per version, by run environment and by combination (as defined, or with a step's adjustments).",
+  },
+  get_combination_candidates: {
+    zh: '查看可沉淀的组合',
+    en: 'See combinations worth keeping',
+    zhHint:
+      '列出一个 Worker 已发布版本带着某份步骤调整、近 90 天一直达成的组合，以及它们的证据；调整内容只给能看到那些目标的人。',
+    enHint:
+      "Lists the combinations of a Worker's published versions with one step's adjustments that kept being achieved over the last 90 days, with their evidence; what the adjustments say only for those who can see those goals.",
+  },
+  propose_definition_from_combination: {
+    zh: '沉淀为定义',
+    en: 'Keep as a definition',
+    zhHint: '把一个可沉淀的组合写成一个新 Worker 的私有草稿，并记下它的来历；发布后全工作区可见。',
+    enHint:
+      'Writes a combination worth keeping as a new Worker’s private draft and records where it came from; once published, the whole workspace sees it.',
   },
 
   // -----------------------------------------------------------------------------------------
@@ -1450,6 +1494,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '撤销平台对一个自己接入的门的暂停，它已发布的 Operation 恢复可调用。',
     enHint:
       "Lifts the platform's suspension of a self-connected gate; its published Operations run again.",
+  },
+  list_gate_address_changes: {
+    zh: '查看门地址申请',
+    en: 'List gate address changes',
+    zhHint: '列出各工作区更换自己接入的门地址的申请（待审批的和已结束的），以及会跟着门走的授权。',
+    enHint:
+      'Lists workspaces’ proposals to move their self-connected gates, awaiting a decision or ended, with what follows each gate.',
+  },
+  approve_gate_address_change: {
+    zh: '批准更换门地址',
+    en: 'Approve gate address change',
+    zhHint: '再读一次新主机的接口清单，和申请时一致才把门和它的连接换到新地址。',
+    enHint:
+      'Reads the new host’s manifest again and, if it is the one proposed, moves the gate and its connection there.',
+  },
+  reject_gate_address_change: {
+    zh: '驳回更换门地址',
+    en: 'Reject gate address change',
+    zhHint: '驳回申请，门留在原地址；申请用过的连接密钥作废。',
+    enHint:
+      'Rejects the proposal; the gate stays where it is and the proposal’s secret is used up.',
   },
   issue_llm_admin_token: {
     zh: '签发模型管理令牌',
@@ -2437,6 +2502,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '操作的模式与影响面已按门的公告更新。',
     enHint: "An operation's mode and blast radius were aligned to the gate.",
   },
+  'gatekeeper.address_changed': {
+    zh: '门已换到新地址',
+    en: 'Gate moved to a new address',
+    zhHint: '平台管理员批准后，门和它的连接换到了新地址；旧主机上的账号凭证由所有者自己清除。',
+    enHint:
+      'Approved by a platform administrator: the gate and its connection moved; account credentials on the old host are the owner’s to clear.',
+  },
   'gatekeeper.self_connection_linked': {
     zh: '门已改由平台实例接入',
     en: 'Gate moved to a platform instance',
@@ -2488,6 +2560,20 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '升级时吊销了放在容器环境变量里的旧凭证。',
     enHint: "An upgrade revoked old Handles kept in a container's environment.",
   },
+  'principal.revoked_session_handles_revoked': {
+    zh: '已结束会话的凭证已吊销',
+    en: 'Ended sessions’ Handles revoked',
+    zhHint: '升级时吊销了会话已结束、却仍然有效的凭证（停用工作区、换角色留下的）。',
+    enHint:
+      'An upgrade revoked Handles still valid under sessions that had ended (left by a disabled workspace or a role change).',
+  },
+  'principal.disabled_authority_handles_revoked': {
+    zh: '已停用者的凭证已吊销',
+    en: 'Disabled authority’s Handles revoked',
+    zhHint: '升级时吊销了仍然有效、却代表已停用的成员、用户或工作区的凭证。',
+    enHint:
+      'An upgrade revoked Handles still valid while acting for a member, user or workspace that had been disabled.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Platform audit events (`workspace_id` null, not capability names)
@@ -2509,6 +2595,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Membership moved',
     zhHint: '一个工作区成员身份被转到另一个用户账号。',
     enHint: 'A workspace membership moved to another user account.',
+  },
+  'platform.membership_restored': {
+    zh: '成员身份恢复可用',
+    en: 'Membership usable again',
+    zhHint:
+      '一个已停用用户被合并进启用的账号，它在这个工作区的成员身份随之恢复可用，由目标账号登录使用。',
+    enHint:
+      'A disabled user was merged into an active account, so its membership in this workspace is usable again, by the target account.',
   },
   'connector.entry_handles_revoked': {
     zh: '入口凭证已吊销',

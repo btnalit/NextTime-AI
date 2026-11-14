@@ -21,6 +21,7 @@ export {
   gateAddressOrigin,
   gateEndpointHost,
   normalizeGateEndpoint,
+  moveGatekeeperAddress,
   setGatekeeperConnectionSecretSalt,
   findGatekeeperIdByConnectionSecretSalt,
   existingGatekeeperIds,
@@ -33,6 +34,7 @@ export type {
   GatekeeperListEntry,
   GatekeeperByEndpointEntry,
 } from './registry.js';
+export { lockSelfConnectionState } from './self-connection-lock.js';
 
 export {
   importManifest,

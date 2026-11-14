@@ -68,6 +68,16 @@
 # this Linux image. Access to other systems is untouched: it is the kernel's (Handles,
 # gatekeepers, approvals). See docs/runbooks/pi-upgrade.md §2.2.
 #
+# The one exception (S11 GO18a P3, independent review N6): a Worker the kernel limits to reading
+# files — a goal reviewer, which reads what other Workers wrote and must not run any of it —
+# comes with `NEXTTIME_BUILTIN_TOOLS=read_only` (worker-supervisor `task-spawn-spec.ts`), and pi
+# then starts from `pi-settings-read-only.json` instead: read / grep / find / ls, no bash / edit /
+# write. The same file is what the platform extension restores on every session change
+# (`NEXTTIME_PI_SETTINGS`), and the agent has no tool left that could write pi's settings. Any
+# other value refuses to start (`check=builtin_tools`): never the full set by mistake. This
+# image speaks runtime contract 3 for it (Dockerfile label), so a supervisor that asks for it
+# never starts an image that would ignore it.
+#
 # Any arguments this container was started with (`docker create ... image [CMD...]`) are appended
 # after the flags above — none of the S1.5 resident-mode spawn spec sets a CMD, so ordinarily
 # there are none; this only exists so a later one-shot Worker mode (S2.8/S2.9) can extend the
@@ -143,6 +153,20 @@ if [ "${NEXTTIME_MODE:-}" = "admin" ] && [ ! -f "$PLATFORM_DIR/system-prompt.md"
 	echo "nexttime-selfcheck check=admin_prompt result=fail reason=platform_prompt_missing"
 	exit 1
 fi
+
+# The built-in tool set (header): checked before anything is written, so a container started with
+# a value this image does not know changes nothing.
+case "${NEXTTIME_BUILTIN_TOOLS:-}" in
+"") ;;
+read_only)
+	PI_SETTINGS_FILE="$ROOT/opt/nexttime/pi-settings-read-only.json"
+	echo "nexttime-selfcheck check=builtin_tools result=ok set=read_only"
+	;;
+*)
+	echo "nexttime-selfcheck check=builtin_tools result=fail reason=unknown_value"
+	exit 1
+	;;
+esac
 
 mkdir -p "$SESSION_DIR" "$ROOT/workspace/.local"
 

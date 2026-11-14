@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
+import type { DomainEvent } from '../../substrate/outbox/index.js';
 import type { CapabilityHandlerContext } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
 
@@ -94,6 +95,36 @@ function remember(key: string, answer: CachedAnswer): void {
     if (oldest !== undefined) cache.delete(oldest);
   }
   cache.set(key, { answer, expiresAt: now() + PRESENCE_TTL_MS });
+}
+
+/** Legacy 701 (review #493 E): forgets every answer about one gate — it moved to a new address
+ *  (`approve_gate_address_change`), and those answers were its old host's. Without this they would
+ *  be reused for up to {@link PRESENCE_TTL_MS}. */
+export function forgetGatekeeperPresence(workspaceId: string, gatekeeperId: string): void {
+  const prefix = `${workspaceId}\u0000`;
+  const suffix = `\u0000${gatekeeperId}`;
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix) && key.endsWith(suffix)) cache.delete(key);
+  }
+}
+
+type GatekeeperAddressChangedEvent = Extract<DomainEvent, { type: 'GatekeeperAddressChanged' }>;
+
+export interface GatekeeperAddressChangedSource {
+  subscribe(
+    eventType: 'GatekeeperAddressChanged',
+    consumer: (event: GatekeeperAddressChangedEvent) => Promise<void> | void,
+  ): () => void;
+}
+
+/** Legacy 701: {@link forgetGatekeeperPresence} on every `GatekeeperAddressChanged` — for a kernel
+ *  process other than the one that applied the change (that one forgets at once). */
+export function registerGatekeeperAddressChangedConsumer(
+  dispatcher: GatekeeperAddressChangedSource,
+): () => void {
+  return dispatcher.subscribe('GatekeeperAddressChanged', (event) => {
+    forgetGatekeeperPresence(event.workspaceId, event.gatekeeperId);
+  });
 }
 
 /**

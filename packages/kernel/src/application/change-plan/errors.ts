@@ -88,6 +88,16 @@ export interface ChangeRollbackConflict {
   readonly blockedBy: { readonly segmentId: string } | null;
   /** For `namespace_conflict`: the type names another ontology family declares now (I-P1). */
   readonly conflicts: readonly { readonly kind: 'object' | 'action'; readonly name: string }[];
+  /** For `link_endpoint_undeclared` (legacy 303): the LinkType ends that would name an ObjectType
+   *  no published family declares — `ontologyId` is the family whose LinkType it is, `family` its
+   *  stable name when a ChangePlan item recorded one (`NamedOntologyLinkEndpointProblem`). */
+  readonly linkEnds: readonly {
+    readonly ontologyId: string;
+    readonly linkType: string;
+    readonly end: 'domain' | 'range';
+    readonly objectType: string;
+    readonly family: string | null;
+  }[];
 }
 
 /** P1-B (§3.4 "逆操作遇到中间被别人改过的版本时停下不覆盖"): an item's target is not what the item left

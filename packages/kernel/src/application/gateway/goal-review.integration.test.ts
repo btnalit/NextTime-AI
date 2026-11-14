@@ -1,0 +1,1436 @@
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  type GoalDetailWire,
+  GoalDetailWireSchema,
+  type GoalPlannerMode,
+  type HandleClaims,
+  REVIEWER_OUTPUT_SCHEMA,
+  type Role,
+  reviewDerivation,
+} from '@nexttime/shared';
+import type { Pool, PoolClient } from 'pg';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runMigrations } from '../../adapters/db/migrate.js';
+import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type {
+  TaskSpawnInput,
+  TaskSpawnOutcome,
+  TaskSupervisorClientPort,
+  TaskSupervisorStatus,
+} from '../../adapters/supervisor-client/index.js';
+import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import { checkIG5 } from '../../substrate/audit/goal-invariant-checks.js';
+import { startActivity } from '../../substrate/epistemic/index.js';
+import { advanceGoalRun } from '../goal/advance.js';
+import { createGoalRun, listDueAcceptanceChecks, runAcceptanceCheck } from '../goal/index.js';
+import { REVIEW_SEALED, sameModelOf } from '../goal/review.js';
+import { REVIEWER_HANDLE_CAPABILITIES, STEP_ATTEMPT_PAUSED_DETAIL } from '../task/index.js';
+import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
+import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { dispatchCapability } from './dispatch.js';
+import type { ResolvedCaller } from './resolve-caller.js';
+
+/**
+ * Integration tests (real Postgres; auto-skip without DATABASE_URL) for S11 GO18a: a goal's
+ * acceptance holding an independent review (`application/goal/review.ts`, phase V of `advance.ts`,
+ * goal/0019, task/0014, task/0015) — through the capability gateway as the console, the steps'
+ * Workers, the reviewer and the goal planner call it, with an in-memory supervisor and every report
+ * written by the test (no model runs).
+ *
+ * What the plan and the independent review asked tests for (go18-default-plan.md,
+ * go18-independent-review.md): the review runs once every check the platform makes passed and
+ * decides on the platform's arithmetic (F3, B2); the reviewer reads the criteria but not the pass
+ * line, only its own Task, with no egress, and no other agent acting for the requester reads its
+ * Task (F5, B3); a review not passing pauses the goal for its requester and opens no planner round
+ * (F6); a review that cannot decide says why under a closed code (B3); reviews alone achieve the
+ * goal on `reviewer_assessed`, which the confirmation card says (F7, N4), and with the requester's
+ * confirmation on their word, given only after the review passed (B2); the goal planner reads a
+ * review sealed and keeps it only exactly as read (F5, N7); the database takes nothing else.
+ *
+ * Every run this file moves is left with no `next_tick_at`, so no advancer of another file claims
+ * it; the advances a test needs are driven by hand.
+ */
+
+const DATABASE_URL = process.env.DATABASE_URL;
+const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+const BUDGET = { maxTokens: 400_000, maxSteps: 10, maxRevisions: 3, maxWallClockSeconds: 3600 };
+const ALL = 100_000;
+
+const REVIEW = {
+  kind: 'review',
+  key: 'quality',
+  subjects: ['draft'],
+  criteria: [
+    { key: 'clear', description: 'A reader new to the topic follows it', weight: 3 },
+    { key: 'complete', description: 'Every section the outline names is there', weight: 1 },
+  ],
+  passAt: 75,
+} as const;
+const CONFIRM = { kind: 'requester_confirm', key: 'ok', prompt: 'Does the draft read well?' };
+/** What the reviewed step reports. */
+const DRAFT = { text: 'Q3 in review: revenue, costs, outlook.' };
+
+function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
+  return {
+    channel: 'human',
+    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+    session: {
+      workspaceId,
+      id: randomUUID(),
+      principalId,
+      kind: 'web',
+      onBehalfOf: principalId,
+      status: 'active',
+      createdAt: new Date(),
+      expiresAt: null,
+    },
+  };
+}
+
+class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
+  readonly spawnCalls: TaskSpawnInput[] = [];
+  readonly statuses = new Map<string, TaskSupervisorStatus>();
+
+  async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+    this.spawnCalls.push(input);
+    const containerId = `container-${input.workerRunId}`;
+    this.statuses.set(input.workerRunId, {
+      workerRunId: input.workerRunId,
+      status: 'running',
+      exitCode: undefined,
+      containerId,
+      ip: '198.51.100.31',
+      startedAt: new Date().toISOString(),
+      finishedAt: undefined,
+      reason: undefined,
+    });
+    return { containerId, ip: '198.51.100.31' };
+  }
+
+  async terminate(workerRunId: string): Promise<boolean> {
+    const existing = this.statuses.get(workerRunId);
+    if (!existing) return false;
+    this.statuses.set(workerRunId, { ...existing, status: 'terminated', reason: 'requested' });
+    return true;
+  }
+
+  async status(workerRunId: string): Promise<TaskSupervisorStatus | undefined> {
+    return this.statuses.get(workerRunId);
+  }
+}
+
+async function refusal(call: Promise<unknown>) {
+  let thrown: unknown;
+  try {
+    await call;
+  } catch (err) {
+    thrown = err;
+  }
+  if (thrown === undefined) throw new Error('expected the call to be refused');
+  return mapCapabilityError(thrown);
+}
+
+async function dbRefusal(write: Promise<unknown>): Promise<string> {
+  try {
+    await write;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error('expected the database to refuse the write');
+}
+
+describe.runIf(DATABASE_URL !== undefined)(
+  'goal review acceptance — S11 GO18a (integration, real Postgres)',
+  () => {
+    let pool: Pool;
+    let privateKey: Awaited<ReturnType<typeof generateEphemeralHandleKeyPair>>['privateKey'];
+    let workspaceId: string;
+    let ownerId: string;
+    let worker: { definitionId: string; version: number };
+    const supervisor = new FakeTaskSupervisorClient();
+    const roles = new Map<string, Role>();
+
+    const admin = <T>(fn: (client: PoolClient) => Promise<T>) =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
+    /** As the login role with the guards off — reads, and the few writes no path makes. */
+    const raw = <T = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) =>
+      admin(async (client) => {
+        await client.query('set local session_replication_role = replica');
+        return (await client.query(sql, [...params])).rows as T[];
+      });
+    /** As the login role with the guards on — what the database itself refuses. */
+    const guarded = (sql: string, params: readonly unknown[] = []) =>
+      admin((client) => client.query(sql, [...params]));
+    const asApp = <T>(principalId: string, fn: (client: PoolClient) => Promise<T>) =>
+      withWorkspace(pool, { workspaceId, principalId }, fn);
+
+    async function newPrincipal(role: Role): Promise<string> {
+      const id = randomUUID();
+      await admin((client) =>
+        client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', $3, $4)`,
+          [workspaceId, id, role, `${role}-${id.slice(0, 8)}`],
+        ),
+      );
+      roles.set(id, role);
+      return id;
+    }
+
+    const human = (principalId: string) =>
+      humanCaller(workspaceId, principalId, roles.get(principalId) ?? 'member');
+
+    const parkGoal = (goalRunId: string) =>
+      raw('update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2', [
+        workspaceId,
+        goalRunId,
+      ]);
+
+    async function call(caller: ResolvedCaller, name: string, params: Record<string, unknown>) {
+      try {
+        return await dispatchCapability({ pool }, caller, name, params);
+      } finally {
+        if (typeof params.goalRunId === 'string') await parkGoal(params.goalRunId);
+      }
+    }
+
+    async function advanceOnce(goalRunId: string, requesterId: string) {
+      const outcome = await advanceGoalRun(
+        {
+          pool,
+          taskRuntime: { pool, privateKey, supervisorClient: supervisor },
+          options: { retryBackoffMs: () => 0 },
+        },
+        { workspaceId, goalRunId, requesterId },
+      );
+      await parkGoal(goalRunId);
+      return outcome;
+    }
+
+    /** One step, `key`, checked by `acceptance`. */
+    const planOf = (acceptance: readonly unknown[], key = 'draft') => ({
+      steps: [{ key, worker, input: { step: key }, maxAttempts: 1 }],
+      ...(acceptance.length > 0 ? { acceptance } : {}),
+    });
+
+    async function propose(requesterId: string, plan: Record<string, unknown>) {
+      const created = await asApp(requesterId, (client) =>
+        createGoalRun(client, workspaceId, {
+          requesterId,
+          proposedBy: requesterId,
+          statement: 'write the quarterly report',
+          plan,
+          budget: BUDGET,
+        }),
+      );
+      return created.goalRunId;
+    }
+
+    /** Proposed, confirmed (with the planner's leave in mode `planner` unless it is false) and
+     *  started. */
+    async function startGoal(
+      requesterId: string,
+      plan: Record<string, unknown>,
+      planner: GoalPlannerMode | false = false,
+    ) {
+      const goalRunId = await propose(requesterId, plan);
+      await call(human(requesterId), 'confirm_goal', {
+        goalRunId,
+        revision: 1,
+        ...(planner ? { planner } : {}),
+      });
+      await advanceOnce(goalRunId, requesterId);
+      return goalRunId;
+    }
+
+    async function liveStep(goalRunId: string, key: string) {
+      const [row] = await raw<{ id: string; status: string }>(
+        `select id, status from step_runs
+          where workspace_id = $1 and goal_run_id = $2 and step_key = $3
+            and status <> 'superseded'`,
+        [workspaceId, goalRunId, key],
+      );
+      if (!row) throw new Error(`no live step ${key}`);
+      return row;
+    }
+
+    async function lastAttempt(stepRunId: string) {
+      const [row] = await raw<{ id: string; status: string }>(
+        `select id, status from tasks where workspace_id = $1 and step_run_id = $2
+          order by step_attempt desc limit 1`,
+        [workspaceId, stepRunId],
+      );
+      if (!row) throw new Error(`step ${stepRunId} has no attempt`);
+      return row;
+    }
+
+    /** A Task's Worker, as its Handle calls the gateway. */
+    async function workerOf(taskId: string): Promise<ResolvedCaller> {
+      const [row] = await raw<{
+        session_id: string;
+        jti: string;
+        on_behalf_of: string;
+        scope: HandleClaims['scope'];
+        expires_at: Date;
+      }>(
+        `select wr.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
+           from worker_runs wr
+           join capability_handles h
+             on h.workspace_id = wr.workspace_id and h.session_id = wr.session_id
+          where wr.workspace_id = $1 and wr.task_id = $2
+          order by wr.started_at desc limit 1`,
+        [workspaceId, taskId],
+      );
+      if (!row) throw new Error(`no WorkerRun Handle for Task ${taskId}`);
+      return {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: row.session_id,
+          obo: row.on_behalf_of,
+          scope: row.scope,
+          jti: row.jti,
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(new Date(row.expires_at).getTime() / 1000),
+        },
+      };
+    }
+
+    /** The step's attempt reports success with {@link DRAFT} (or no output at all) — the advance
+     *  after it enters `verifying` and starts the round's reviews, unless `beforeAdvance` changes
+     *  something first. */
+    async function succeed(
+      goalRunId: string,
+      requesterId: string,
+      beforeAdvance?: (taskId: string) => Promise<unknown>,
+      output: Record<string, unknown> | null = DRAFT,
+    ) {
+      const attempt = await lastAttempt((await liveStep(goalRunId, 'draft')).id);
+      await dispatchCapability({ pool }, await workerOf(attempt.id), 'report_task_result', {
+        summary: 'draft done',
+        ...(output ? { output } : {}),
+      });
+      if (beforeAdvance) await beforeAdvance(attempt.id);
+      await advanceOnce(goalRunId, requesterId);
+      return attempt.id;
+    }
+
+    const goalRow = async (goalRunId: string) => {
+      const [row] = await raw<{
+        status: string;
+        pause_reason: string | null;
+        outcome: string | null;
+        outcome_basis: string | null;
+        outcome_decision_id: string | null;
+      }>(
+        `select status, pause_reason, outcome, outcome_basis, outcome_decision_id from goal_runs
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, goalRunId],
+      );
+      if (!row) throw new Error(`goal run ${goalRunId} is gone`);
+      return row;
+    };
+
+    const checkRow = async (goalRunId: string, checkKey = 'quality') => {
+      const [row] = await raw<{
+        round: number;
+        status: string;
+        attempts: number;
+        last_error: string | null;
+      }>(
+        `select round, status, attempts, last_error from goal_acceptance_checks
+          where workspace_id = $1 and goal_run_id = $2 and check_key = $3
+          order by round desc limit 1`,
+        [workspaceId, goalRunId, checkKey],
+      );
+      if (!row) throw new Error(`no check ${checkKey}`);
+      return row;
+    };
+
+    async function reviewTask(goalRunId: string) {
+      const rows = await raw<{
+        id: string;
+        status: string;
+        on_behalf_of: string;
+        step_run_id: string | null;
+        review_round: number;
+        review_check_key: string;
+        output_schema: unknown;
+        input: Record<string, unknown>;
+      }>(
+        `select id, status, on_behalf_of, step_run_id, review_round, review_check_key,
+                output_schema, input
+           from tasks where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'
+          order by created_at`,
+        [workspaceId, goalRunId],
+      );
+      const [row, ...more] = rows;
+      if (!row) throw new Error(`goal run ${goalRunId} has no reviewer Task`);
+      expect(more).toEqual([]);
+      return row;
+    }
+
+    /** A second Task like `taskId` (a new id, `overrides` applied), written with the guards on —
+     *  what task/0014 refuses of a review Task that no path starts. */
+    const copyTask = (taskId: string, overrides: Record<string, unknown> = {}) =>
+      guarded(
+        `insert into tasks
+         select (jsonb_populate_record(null::tasks, to_jsonb(t) || $3::jsonb)).*
+           from tasks t where t.workspace_id = $1 and t.id = $2`,
+        [workspaceId, taskId, JSON.stringify({ id: randomUUID(), ...overrides })],
+      );
+
+    const planningRounds = (goalRunId: string) =>
+      raw<{ id: string; status: string; revision: number | null }>(
+        `select id, status, revision from goal_planning_rounds
+          where workspace_id = $1 and goal_run_id = $2 order by created_at`,
+        [workspaceId, goalRunId],
+      );
+
+    const pauseDetail = async (goalRunId: string) => {
+      const rows = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and resource_id = $2 and action = 'goal_run.pause'
+          order by created_at desc limit 1`,
+        [workspaceId, goalRunId],
+      );
+      return String(rows[0]?.payload.detail ?? '');
+    };
+
+    const scores = (clear: number | null, complete: number | null) => ({
+      scores: [
+        { criterion: 'clear', score: clear, reason: 'how plainly it reads' },
+        { criterion: 'complete', score: complete, reason: 'which sections are there' },
+      ],
+    });
+
+    const reviewerReports = async (taskId: string, output: Record<string, unknown>) =>
+      dispatchCapability({ pool }, await workerOf(taskId), 'report_task_result', {
+        summary: 'reviewed',
+        output,
+      });
+
+    const getGoal = async (goalRunId: string, by: string): Promise<GoalDetailWire> =>
+      GoalDetailWireSchema.parse(await call(human(by), 'get_goal', { goalRunId }));
+
+    /** The workspace's cap on a requester's concurrent WorkerRuns; `null` puts the default back. */
+    const setConcurrency = (value: number | null) =>
+      value === null
+        ? raw(
+            `delete from quotas where workspace_id = $1
+               and key = 'task.max_concurrent_worker_runs_per_user'`,
+            [workspaceId],
+          )
+        : raw(
+            `insert into quotas (workspace_id, key, value)
+             values ($1, 'task.max_concurrent_worker_runs_per_user', $2)
+             on conflict (workspace_id, key) do update set value = excluded.value`,
+            [workspaceId, value],
+          );
+
+    /** Moves the run's confirmation back so its wall clock ends `secondsLeft` from now (negative:
+     *  ended that long ago); returns the deadline. */
+    const wallClockLeft = async (goalRunId: string, secondsLeft: number) => {
+      const [row] = await raw<{ deadline: Date }>(
+        `update goal_runs
+            set confirmed_at = now() - make_interval(secs => $3::double precision - $4::double precision)
+          where workspace_id = $1 and id = $2
+          returning confirmed_at + make_interval(secs => $3::double precision) as deadline`,
+        [workspaceId, goalRunId, BUDGET.maxWallClockSeconds, secondsLeft],
+      );
+      if (!row) throw new Error(`goal run ${goalRunId} is gone`);
+      return row.deadline;
+    };
+
+    const reviewTasks = (goalRunId: string) =>
+      raw<{ id: string; review_round: number; review_check_key: string }>(
+        `select id, review_round, review_check_key from tasks
+          where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'
+          order by created_at`,
+        [workspaceId, goalRunId],
+      );
+
+    const loseTask = (taskId: string, requesterId: string) =>
+      failTaskAndReapWorkerRuns(
+        { pool, privateKey, supervisorClient: supervisor },
+        workspaceId,
+        requesterId,
+        taskId,
+        'spawn_lost',
+      );
+
+    /** The requester's approved outcome Decision for confirmation `checkKey` of round `round` —
+     *  what `confirm_goal_acceptance` writes, here without its checks. */
+    async function confirmationDecision(
+      goalRunId: string,
+      requesterId: string,
+      round: number,
+      checkKey: string,
+    ) {
+      const activity = await asApp(requesterId, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'goal.outcome_decision',
+          principalId: requesterId,
+          metadata: { goalRunId, outcome: 'achieved' },
+        }),
+      );
+      const [row] = await raw<{ id: string }>(
+        `insert into decisions (workspace_id, status, activity_id, summary, rationale, decided_by,
+           decided_at)
+         values ($1, 'approved', $2, 'a goal outcome', $3::jsonb, $4, now()) returning id`,
+        [
+          workspaceId,
+          activity.id,
+          JSON.stringify({
+            decision: 'goal_outcome',
+            goalRunId,
+            outcome: 'achieved',
+            round,
+            checkKey,
+          }),
+          requesterId,
+        ],
+      );
+      return row?.id as string;
+    }
+
+    const notFlaggedByIG5 = async (goalRunIds: readonly string[]) => {
+      const client = await pool.connect();
+      try {
+        const result = await checkIG5(client, ALL);
+        for (const id of goalRunIds) {
+          expect(
+            result.sample.filter((line) => line.includes(`${workspaceId}:${id} (`)),
+            id,
+          ).toEqual([]);
+        }
+      } finally {
+        client.release();
+      }
+    };
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      privateKey = (await generateEphemeralHandleKeyPair()).privateKey;
+      workspaceId = randomUUID();
+      ownerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('insert into workspaces (id, name) values ($1, $2)', [
+            workspaceId,
+            'go18a-goal-review',
+          ]);
+          await client.query(
+            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', 'owner', 'owner')",
+            [workspaceId, ownerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      roles.set(ownerId, 'owner');
+      const proposed = await asApp(ownerId, (client) =>
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
+          kind: 'worker',
+          definition: { systemPrompt: 'You draft a report.' },
+        }),
+      );
+      await asApp(ownerId, (client) =>
+        publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: proposed.id,
+          version: proposed.version,
+        }),
+      );
+      worker = { definitionId: proposed.id, version: proposed.version };
+    });
+
+    afterAll(async () => {
+      await raw(
+        `update goal_runs set status = 'cancelled', pause_reason = null, paused_by = null,
+                paused_by_authority = null, ended_at = now(), next_tick_at = null
+          where workspace_id = $1 and status not in ('completed', 'cancelled', 'failed')`,
+        [workspaceId],
+      );
+      await pool.end();
+    });
+
+    // -------------------------------------------------------------------------------------------
+
+    it('reviews alone: the card says so; the reviewer reads the criteria but not the pass line, only its own Task, with no egress; its scores achieve the goal on reviewer_assessed', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await propose(requester, planOf([REVIEW]));
+      // N4: whoever confirms it reads that a model's scores alone decide.
+      expect((await getGoal(goalRunId, requester)).planRevision.hints).toEqual([
+        { code: 'review_only', message: expect.stringContaining('on a model’s scores alone') },
+      ]);
+      await call(human(requester), 'confirm_goal', { goalRunId, revision: 1 });
+      await advanceOnce(goalRunId, requester);
+      const stepTask = await succeed(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+
+      const task = await reviewTask(goalRunId);
+      expect(task).toMatchObject({
+        status: 'running',
+        on_behalf_of: requester,
+        step_run_id: null,
+        review_round: 1,
+        review_check_key: 'quality',
+        output_schema: REVIEWER_OUTPUT_SCHEMA,
+      });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'pending', attempts: 1 });
+      expect(task.input).toMatchObject({
+        kind: 'goal_review',
+        goal: { statement: 'write the quarterly report' },
+        subjects: [{ key: 'draft', status: 'succeeded', attempt: 1, output: DRAFT, files: null }],
+        criteria: REVIEW.criteria,
+        scoreRange: { min: 0, max: 4 },
+      });
+      // F5: the line it is held to is not the reviewer's to read.
+      expect(JSON.stringify(task.input)).not.toContain('passAt');
+      const spawned = supervisor.spawnCalls.find((input) => input.taskId === task.id);
+      expect(spawned?.egressDenyAll).toBe(true);
+      // N6: and pi's built-in tools only read files.
+      expect(spawned?.builtinTools).toBe('read_only');
+      // A step's Worker keeps every built-in tool.
+      expect(supervisor.spawnCalls.find((input) => input.taskId === stepTask)?.builtinTools).toBe(
+        undefined,
+      );
+
+      const reviewer = await workerOf(task.id);
+      if (reviewer.channel !== 'handle') throw new Error('not a Handle');
+      expect(new Set(reviewer.claims.scope.capabilities)).toEqual(
+        new Set(REVIEWER_HANDLE_CAPABILITIES),
+      );
+      expect(await dispatchCapability({ pool }, reviewer, 'get_task', { taskId: task.id })).toEqual(
+        expect.objectContaining({ id: task.id }),
+      );
+      for (const [name, params] of [
+        ['get_goal', { goalRunId }],
+        ['invoke_worker', { definitionId: worker.definitionId, input: {} }],
+      ] as const) {
+        expect((await refusal(dispatchCapability({ pool }, reviewer, name, params))).status).toBe(
+          403,
+        );
+      }
+      // B3 (a): another agent acting for the requester — a step Worker of theirs — reads it as an
+      // unknown Task; the requester reads it.
+      const other = await startGoal(requester, planOf([]));
+      const otherStep = await workerOf((await lastAttempt((await liveStep(other, 'draft')).id)).id);
+      expect(
+        (await refusal(dispatchCapability({ pool }, otherStep, 'get_task', { taskId: task.id })))
+          .status,
+      ).toBe(404);
+      expect(await call(human(requester), 'get_task', { taskId: task.id })).toEqual(
+        expect.objectContaining({ id: task.id }),
+      );
+      // #493 on #1102: task/0014 starts a review Task only for an untried, pending check, acting
+      // for the run's requester — a second Task for this check, or one for someone else, is
+      // refused before the one-Task-per-check index is reached.
+      const someoneElse = await newPrincipal('member');
+      expect(await dbRefusal(copyTask(task.id))).toMatch(
+        /a review Task starts for an untried, pending review check/,
+      );
+      const [tried] = await raw<{ first_attempt_at: Date }>(
+        `select first_attempt_at from goal_acceptance_checks
+          where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+        [workspaceId, goalRunId],
+      );
+      const setTried = (attempts: number, at: Date | null) =>
+        raw(
+          `update goal_acceptance_checks set attempts = $3, first_attempt_at = $4
+            where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+          [workspaceId, goalRunId, attempts, at],
+        );
+      await setTried(0, null);
+      try {
+        expect(await dbRefusal(copyTask(task.id, { on_behalf_of: someoneElse }))).toMatch(
+          /a review Task acts for the requester of its goal run/,
+        );
+      } finally {
+        await setTried(1, tried?.first_attempt_at ?? null);
+      }
+
+      // #493 on #1108 (legacy 693), task/0015: nor is a report written before the Task completes —
+      // the running Task's `result` alone, its status left as it is, is refused.
+      expect(
+        await dbRefusal(
+          guarded(
+            `update tasks set result = jsonb_build_object('output', $3::jsonb)
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, task.id, JSON.stringify(scores(4, 4))],
+          ),
+        ),
+      ).toMatch(/what a review Task reported is written once, when it completes/);
+      expect(
+        await raw<{ status: string; result: unknown }>(
+          'select status, result from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, task.id],
+        ),
+      ).toEqual([{ status: 'running', result: null }]);
+
+      await reviewerReports(task.id, { ...scores(4, 2), comment: 'Reads well.' });
+      // N3: what the reviewer read is the record its assessment rests on; so is whom it acted for
+      // and — #493 on #1102, task/0015 — what it reported, once it completed.
+      expect(
+        await dbRefusal(
+          guarded(`update tasks set input = '{}'::jsonb where workspace_id = $1 and id = $2`, [
+            workspaceId,
+            task.id,
+          ]),
+        ),
+      ).toMatch(/what a review Task reads never changes after it is created/);
+      expect(
+        await dbRefusal(
+          guarded('update tasks set on_behalf_of = $3 where workspace_id = $1 and id = $2', [
+            workspaceId,
+            task.id,
+            someoneElse,
+          ]),
+        ),
+      ).toMatch(/a review Task acts for the requester it was created for/);
+      expect(
+        await dbRefusal(
+          guarded(
+            `update tasks set result = jsonb_set(result, '{output,scores,1,score}', '4')
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, task.id],
+          ),
+        ),
+      ).toMatch(/what a review Task reported is written once, when it completes/);
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'completed',
+        outcome: 'achieved',
+        outcome_basis: 'reviewer_assessed',
+        outcome_decision_id: null,
+      });
+      const detail = await getGoal(goalRunId, requester);
+      expect(detail).toMatchObject({ outcome: 'achieved', outcomeBasis: 'reviewer_assessed' });
+      const [check] = detail.acceptance.rounds[0]?.checks ?? [];
+      expect(check).toMatchObject({ kind: 'review', checkKey: 'quality', status: 'passed' });
+      const assessment = check?.review?.assessment;
+      // 3 × 4 + 1 × 2 of 3 × 4 + 1 × 4 points: 87.5 per cent, at or over 75.
+      expect(assessment).toMatchObject({
+        reviewTaskId: task.id,
+        points: 14,
+        maxPoints: 16,
+        passAt: 75,
+        unassessed: [],
+        verdict: 'passed',
+        comment: 'Reads well.',
+      });
+      expect(assessment?.lines.map((line) => [line.criterion, line.score])).toEqual([
+        ['clear', 4],
+        ['complete', 2],
+      ]);
+      if (!assessment) throw new Error('no assessment');
+      expect(assessment.sameModel).toBe(
+        sameModelOf(assessment.reviewerModel, assessment.executorModels),
+      );
+      expect(assessment.executorModels.map((executor) => executor.stepKey)).toEqual(['draft']);
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('a review below its line pauses the goal for its requester, naming what pulled it down — no planner round; the database takes no verdict the scores do not give', async () => {
+      const requester = await newPrincipal('member');
+      // The planner's leave: a failed review still opens no round for it (F6).
+      const goalRunId = await startGoal(requester, planOf([REVIEW]), 'propose');
+      await succeed(goalRunId, requester);
+      const task = await reviewTask(goalRunId);
+      await reviewerReports(task.id, scores(1, 4));
+
+      // B2: what a review passes on is the arithmetic of the reviewer's scores — 3 × 1 + 1 × 4 = 7
+      // of 16 points is below 75 per cent — and its check follows its assessment.
+      const derivation = reviewDerivation(REVIEW.criteria, REVIEW.passAt, scores(1, 4).scores);
+      expect(derivation).toMatchObject({ points: 7, maxPoints: 16, verdict: 'failed' });
+      expect(
+        await dbRefusal(
+          guarded(
+            `insert into goal_review_assessments (
+               workspace_id, goal_run_id, round, check_key, review_task_id, reviewer_model,
+               executor_models, same_model, lines, comment, points, max_points, pass_at,
+               unassessed, verdict
+             ) values ($1, $2, 1, 'quality', $3, null, '[]'::jsonb, null, $4::jsonb, null, $5,
+                       $6, $7, '[]'::jsonb, 'passed')`,
+            [
+              workspaceId,
+              goalRunId,
+              task.id,
+              JSON.stringify(derivation.lines),
+              derivation.points,
+              derivation.maxPoints,
+              derivation.passAt,
+            ],
+          ),
+        ),
+      ).toMatch(/the points, the line and the verdict are the arithmetic of the scores/);
+      expect(
+        await dbRefusal(
+          guarded(
+            `update goal_acceptance_checks set status = 'passed', settled_at = now()
+              where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+            [workspaceId, goalRunId],
+          ),
+        ),
+      ).toMatch(/a review passes or fails only on its assessment, with that verdict/);
+
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'failed', last_error: null });
+      const detail = await pauseDetail(goalRunId);
+      expect(detail).toContain(
+        'acceptance check quality: the review scored 7 of 16 points, below its line of 75 per cent (lowest: clear 1/4)',
+      );
+      // The pause names the platform's numbers and the criteria's keys, never the reviewer's words.
+      expect(detail).not.toContain('how plainly it reads');
+      expect(await planningRounds(goalRunId)).toEqual([]);
+      await advanceOnce(goalRunId, requester);
+      expect(await planningRounds(goalRunId)).toEqual([]);
+      const [check] = (await getGoal(goalRunId, requester)).acceptance.rounds[0]?.checks ?? [];
+      expect(check?.review?.assessment).toMatchObject({ points: 7, verdict: 'failed' });
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    // #493 on #1102: each of goal/0019's rules on an assessment refuses what it is there to refuse —
+    // the kernel's own row (the one test above writes) passes them all.
+    it('the database takes an assessment only as the reviewer reported it and the WorkerRuns record it, of a pending review, once', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, planOf([REVIEW]));
+      await succeed(goalRunId, requester);
+      const task = await reviewTask(goalRunId);
+      const reported = { ...scores(4, 2), comment: 'Reads well.' };
+      const derivation = reviewDerivation(REVIEW.criteria, REVIEW.passAt, reported.scores);
+      const modelOf = async (taskId: string) => {
+        const [row] = await raw<{ model: string | null }>(
+          `select run_spec ->> 'model' as model from worker_runs
+            where workspace_id = $1 and task_id = $2 order by started_at desc, id desc limit 1`,
+          [workspaceId, taskId],
+        );
+        return row?.model ?? null;
+      };
+      const reviewerModel = await modelOf(task.id);
+      const executor = {
+        stepKey: 'draft',
+        attempt: 1,
+        model: await modelOf((await lastAttempt((await liveStep(goalRunId, 'draft')).id)).id),
+      };
+      const sameModel = sameModelOf(reviewerModel, [executor]);
+      const row = {
+        reviewerModel,
+        executors: [executor] as Record<string, unknown>[],
+        sameModel,
+        lines: derivation.lines as readonly unknown[],
+        comment: reported.comment as string | null,
+      };
+      /** Whether the database takes `assessment` — written and rolled back, so the kernel's own
+       *  write is the one that stays. */
+      const takes = (assessment: typeof row) =>
+        admin(async (client) => {
+          await client.query('savepoint probe');
+          try {
+            await client.query(
+              `insert into goal_review_assessments (
+                 workspace_id, goal_run_id, round, check_key, review_task_id, reviewer_model,
+                 executor_models, same_model, lines, comment, points, max_points, pass_at,
+                 unassessed, verdict
+               ) values ($1, $2, 1, 'quality', $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11,
+                         '[]'::jsonb, $12)`,
+              [
+                workspaceId,
+                goalRunId,
+                task.id,
+                assessment.reviewerModel,
+                JSON.stringify(assessment.executors),
+                assessment.sameModel,
+                JSON.stringify(assessment.lines),
+                assessment.comment,
+                derivation.points,
+                derivation.maxPoints,
+                derivation.passAt,
+                derivation.verdict,
+              ],
+            );
+            return 'taken';
+          } catch (err) {
+            return err instanceof Error ? err.message : String(err);
+          } finally {
+            await client.query('rollback to savepoint probe');
+          }
+        });
+
+      // Not before the reviewer's Task completed.
+      expect(await takes(row)).toMatch(
+        /an assessment rests on the completed reviewer Task of its review/,
+      );
+      await reviewerReports(task.id, reported);
+      expect(await takes(row)).toBe('taken');
+      for (const [tampered, refused] of [
+        [
+          { ...row, reviewerModel: `${reviewerModel ?? 'default'}-other` },
+          /the reviewer model is the one its WorkerRun records/,
+        ],
+        [
+          { ...row, executors: [] },
+          /the executors are the reviewed steps that succeeded, each once/,
+        ],
+        [
+          { ...row, executors: [executor, executor] },
+          /the executors are the reviewed steps that succeeded, each once/,
+        ],
+        [
+          { ...row, executors: [{ ...executor, model: `${executor.model ?? 'default'}-other` }] },
+          /executor draft is a reviewed step's accepted attempt, with the model its WorkerRun records/,
+        ],
+        [
+          { ...row, sameModel: sameModel !== true },
+          /same_model says whether a reviewed step ran on the reviewer's model/,
+        ],
+        [{ ...row, comment: 'Reads wonderfully.' }, /the comment is the reviewer's, as reported/],
+        [{ ...row, comment: null }, /the comment is the reviewer's, as reported/],
+        [
+          { ...row, lines: [...derivation.lines].reverse() },
+          /line 0 is not criterion clear, weighed and scored as the reviewer scored it/,
+        ],
+      ] satisfies [typeof row, RegExp][]) {
+        expect(await takes(tampered), JSON.stringify(tampered)).toMatch(refused);
+      }
+
+      await advanceOnce(goalRunId, requester);
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'passed' });
+      // Settled: no second assessment, and the kernel's is never changed or removed.
+      expect(await takes(row)).toMatch(/an assessment is of a pending review/);
+      for (const write of [
+        `update goal_review_assessments set comment = 'Reads wonderfully.'
+          where workspace_id = $1 and goal_run_id = $2`,
+        'delete from goal_review_assessments where workspace_id = $1 and goal_run_id = $2',
+      ]) {
+        expect(await dbRefusal(guarded(write, [workspaceId, goalRunId]))).toMatch(
+          /an assessment is written once and never changed/,
+        );
+      }
+    });
+
+    it('a review that cannot decide says why under a closed code: a criterion the reviewer could not judge, a reviewer that failed, a step that left nothing to review, a goal with too few tokens left', async () => {
+      const requester = await newPrincipal('member');
+
+      const unjudged = await startGoal(requester, planOf([REVIEW]));
+      await succeed(unjudged, requester);
+      await reviewerReports((await reviewTask(unjudged)).id, scores(null, 4));
+      await advanceOnce(unjudged, requester);
+      expect(await checkRow(unjudged)).toMatchObject({
+        status: 'unavailable',
+        last_error: 'criteria_unassessed',
+      });
+      expect(await goalRow(unjudged)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await pauseDetail(unjudged)).toContain(
+        'acceptance check quality: the reviewer could not judge clear, so the review decided nothing',
+      );
+
+      const lost = await startGoal(requester, planOf([REVIEW]));
+      await succeed(lost, requester);
+      await loseTask((await reviewTask(lost)).id, requester);
+      await advanceOnce(lost, requester);
+      expect(await checkRow(lost)).toMatchObject({
+        status: 'unavailable',
+        last_error: 'reviewer_failed',
+      });
+      expect(await pauseDetail(lost)).toContain(
+        'acceptance check quality: the review did not run to a verdict (reviewer_failed)',
+      );
+
+      // §3.8: a reviewed step that left nothing to read — no output, no files — is never reviewed.
+      const empty = await startGoal(requester, planOf([REVIEW]));
+      await succeed(empty, requester, undefined, null);
+      expect(await checkRow(empty)).toMatchObject({
+        status: 'unavailable',
+        attempts: 0,
+        last_error: 'subject_missing',
+      });
+      expect(await pauseDetail(empty)).toContain('(subject_missing)');
+
+      // F8: the reviewer's tokens come out of the goal's budget; too few left, it never starts.
+      const spent = await startGoal(requester, planOf([REVIEW]));
+      await succeed(spent, requester, (taskId) =>
+        raw(
+          `update tasks set tokens_used = $2, token_budget = greatest(token_budget, $2)
+            where workspace_id = $1 and id = $3`,
+          [workspaceId, BUDGET.maxTokens - 5_000, taskId],
+        ),
+      );
+      expect(await checkRow(spent)).toMatchObject({
+        status: 'unavailable',
+        attempts: 0,
+        last_error: 'no_budget',
+      });
+      expect(
+        await raw(
+          `select id from tasks where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'`,
+          [workspaceId, spent],
+        ),
+      ).toEqual([]);
+      expect(await goalRow(spent)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      await notFlaggedByIG5([unjudged, lost, empty, spent]);
+    });
+
+    it('a review waits for every check the platform makes: none starts while one is pending, nor once one did not pass (F6)', async () => {
+      const requester = await newPrincipal('member');
+      // A Fact of types no one declared: the platform's check of it cannot pass.
+      const RUNS = {
+        kind: 'fact_predicate',
+        key: 'runs',
+        fact: {
+          linkType: 'runs_on',
+          source: { objectType: 'Service', identity: { name: 'report-site' } },
+          target: { objectType: 'Host', identity: { name: 'host-1' } },
+        },
+      };
+      const goalRunId = await startGoal(requester, planOf([REVIEW, RUNS]));
+      await succeed(goalRunId, requester);
+      // The platform's check is pending: the round is verifying, the review not started.
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'verifying' });
+      expect(await checkRow(goalRunId, 'runs')).toMatchObject({ status: 'pending' });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'pending', attempts: 0 });
+      const spawned = supervisor.spawnCalls.length;
+      expect((await advanceOnce(goalRunId, requester)).status).toBe('verifying');
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+
+      // The platform's check settles without passing: the run pauses on it, and the review
+      // never starts.
+      await raw(
+        `update goal_acceptance_checks set next_attempt_at = now()
+          where workspace_id = $1 and goal_run_id = $2 and check_key = 'runs'`,
+        [workspaceId, goalRunId],
+      );
+      const due = (await listDueAcceptanceChecks(pool, 1000)).find(
+        (candidate) => candidate.goalRunId === goalRunId && candidate.checkKey === 'runs',
+      );
+      if (!due) throw new Error('the fact check is not due');
+      await runAcceptanceCheck(
+        {
+          pool,
+          // A fact check reads the graph, never a gate.
+          gatekeeperClient: {} as Parameters<typeof runAcceptanceCheck>[0]['gatekeeperClient'],
+          // Its one attempt: no retry for the Fact to appear.
+          options: { maxAttempts: 1 },
+        },
+        due,
+      );
+      expect(await checkRow(goalRunId, 'runs')).toMatchObject({ status: 'unavailable' });
+      expect(await advanceOnce(goalRunId, requester)).toMatchObject({ status: 'paused' });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'paused' });
+      expect(await checkRow(goalRunId)).toMatchObject({
+        round: 1,
+        status: 'superseded',
+        attempts: 0,
+      });
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+      expect(supervisor.spawnCalls).toHaveLength(spawned);
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('a reviewer is held to the goal’s budget: a wait for the requester’s quota ends with the wall clock, which pauses the goal budget_exhausted before any reviewer starts; too few tokens end it at once (GO18a P3)', async () => {
+      const requester = await newPrincipal('member');
+      try {
+        // The requester's concurrency quota holds the reviewer back: it is tried again, never
+        // later than the wall clock's end.
+        const waits = await startGoal(requester, planOf([REVIEW]));
+        let deadline = new Date(0);
+        await succeed(waits, requester, async () => {
+          await setConcurrency(0);
+          deadline = await wallClockLeft(waits, 10);
+        });
+        expect(await goalRow(waits)).toMatchObject({ status: 'verifying' });
+        expect(await checkRow(waits)).toMatchObject({ status: 'pending', attempts: 0 });
+        expect(await reviewTasks(waits)).toEqual([]);
+        const again = await advanceOnce(waits, requester);
+        expect(again.status).toBe('verifying');
+        expect(again.nextTickAt?.getTime()).toBe(deadline.getTime());
+
+        // The wall clock ended: no reviewer starts, even one the quota would let start now.
+        await setConcurrency(null);
+        await wallClockLeft(waits, -1);
+        const spawned = supervisor.spawnCalls.length;
+        const ended = await advanceOnce(waits, requester);
+        expect(ended).toMatchObject({ status: 'paused', nextTickAt: null });
+        expect(await goalRow(waits)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'budget_exhausted',
+        });
+        expect(await pauseDetail(waits)).toBe(
+          `wall clock: ${BUDGET.maxWallClockSeconds} s since confirmation; review quality not started`,
+        );
+        expect(await checkRow(waits)).toMatchObject({
+          round: 1,
+          status: 'superseded',
+          attempts: 0,
+        });
+        expect(await reviewTasks(waits)).toEqual([]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+
+        // So is a review whose goal enters `verifying` past its wall clock.
+        const late = await startGoal(requester, planOf([REVIEW]));
+        await succeed(late, requester, () => wallClockLeft(late, -60));
+        expect(await goalRow(late)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'budget_exhausted',
+        });
+        expect(await reviewTasks(late)).toEqual([]);
+
+        // Review #493 on #1123: a reviewer started with little of the wall clock left runs no
+        // longer than what is left, as a step's attempt does — not its own 600 s.
+        const close = await startGoal(requester, planOf([REVIEW]));
+        await succeed(close, requester, () => wallClockLeft(close, 90));
+        const durations = await raw<{ duration_limit_sec: number }>(
+          `select duration_limit_sec from tasks
+            where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'`,
+          [workspaceId, close],
+        );
+        expect(durations).toHaveLength(1);
+        expect(durations[0]?.duration_limit_sec).toBeGreaterThan(0);
+        expect(durations[0]?.duration_limit_sec).toBeLessThanOrEqual(90);
+
+        // F8: too few tokens left end the review at once — not after the quota let it try.
+        const spent = await startGoal(requester, planOf([REVIEW]));
+        await succeed(spent, requester, async (taskId) => {
+          await setConcurrency(0);
+          await raw(
+            `update tasks set tokens_used = $2, token_budget = greatest(token_budget, $2)
+              where workspace_id = $1 and id = $3`,
+            [workspaceId, BUDGET.maxTokens - 5_000, taskId],
+          );
+        });
+        expect(await checkRow(spent)).toMatchObject({
+          status: 'unavailable',
+          attempts: 0,
+          last_error: 'no_budget',
+        });
+        expect(await goalRow(spent)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect(await pauseDetail(spent)).toContain(
+          'acceptance check quality: the review did not run to a verdict (no_budget)',
+        );
+        expect(await reviewTasks(spent)).toEqual([]);
+        await notFlaggedByIG5([waits, late, close, spent]);
+      } finally {
+        await setConcurrency(null);
+      }
+    });
+
+    it('the evaluation seal’s pause of the requester’s agents pauses the goal for a person instead of starting its reviewer; a resume once released reviews in a new round', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, planOf([REVIEW]));
+      let holdId = '';
+      await succeed(goalRunId, requester, async () => {
+        const [hold] = await raw<{ id: string }>(
+          `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+           values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')
+           returning id`,
+          [workspaceId, requester],
+        );
+        holdId = hold?.id as string;
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await pauseDetail(goalRunId)).toBe(`review quality: ${STEP_ATTEMPT_PAUSED_DETAIL}`);
+      expect(await checkRow(goalRunId)).toMatchObject({ round: 1, status: 'superseded' });
+      expect(await reviewTasks(goalRunId)).toEqual([]);
+      expect(
+        await raw(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'evaluation.seal_hold_refused'
+              and actor_principal_id = $2`,
+          [workspaceId, requester],
+        ),
+      ).toEqual([{ payload: { onBehalfOf: requester, path: 'worker_start', outcome: 'refused' } }]);
+
+      await raw(
+        `update eval_seal_holds
+            set status = 'released', released_at = now(), released_by = $3,
+                release_reason = 'cleared in a test'
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, holdId, ownerId],
+      );
+      // Released, the run still waits for its requester: nothing resumes by itself.
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('paused');
+      await call(human(requester), 'resume_goal', { goalRunId });
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'verifying' });
+      expect(await reviewTasks(goalRunId)).toEqual([
+        expect.objectContaining({ review_round: 2, review_check_key: 'quality' }),
+      ]);
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('a review that did not pass starts no other reviewer: one held back by the quota is not started beside a run that pauses', async () => {
+      const requester = await newPrincipal('member');
+      const second = { ...REVIEW, key: 'tone' };
+      try {
+        await setConcurrency(1);
+        const goalRunId = await startGoal(requester, planOf([REVIEW, second]));
+        await succeed(goalRunId, requester);
+        const [first, ...others] = await reviewTasks(goalRunId);
+        expect(first).toMatchObject({ review_check_key: 'quality' });
+        expect(others).toEqual([]);
+        expect(await checkRow(goalRunId, 'tone')).toMatchObject({ status: 'pending', attempts: 0 });
+
+        await reviewerReports(first?.id as string, scores(1, 1));
+        const spawned = supervisor.spawnCalls.length;
+        await advanceOnce(goalRunId, requester);
+        expect(await checkRow(goalRunId)).toMatchObject({ status: 'failed' });
+        expect(await goalRow(goalRunId)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect(await checkRow(goalRunId, 'tone')).toMatchObject({
+          status: 'superseded',
+          attempts: 0,
+        });
+        expect((await reviewTasks(goalRunId)).map((task) => task.review_check_key)).toEqual([
+          'quality',
+        ]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+        await notFlaggedByIG5([goalRunId]);
+      } finally {
+        await setConcurrency(null);
+      }
+    });
+
+    it('a reviewer report that writes anything but its scores, or misses a criterion, is refused and the review keeps waiting', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, planOf([REVIEW]));
+      await succeed(goalRunId, requester);
+      const task = await reviewTask(goalRunId);
+      const writes = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'reviewed',
+          output: scores(4, 4),
+          findings: ['the step looks fine'],
+          factsToAssert: [
+            {
+              linkType: 'reviewed',
+              source: { objectType: 'Document', identity: { name: 'draft' } },
+              target: { objectType: 'Document', identity: { name: 'outline' } },
+            },
+          ],
+          evidence: [{ kind: 'note', content: { text: 'the step looks fine' } }],
+        }),
+      );
+      expect(writes.status).toBe(400);
+      expect(writes.message).toContain("what the goal reviewer's report must be");
+      expect(writes.message).toContain('findings:');
+      expect(writes.message).toContain('factsToAssert:');
+      expect(writes.message).toContain('evidence:');
+      const missing = await refusal(
+        reviewerReports(task.id, {
+          scores: [{ criterion: 'clear', score: 4, reason: 'reads plainly' }],
+        }),
+      );
+      expect(missing.status).toBe(400);
+      expect(missing.message).toContain('complete');
+      expect((await reviewTask(goalRunId)).status).toBe('running');
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'pending', attempts: 1 });
+
+      // Independent review of #1102: the run leaves `verifying` (here the requester pauses it) and
+      // its checks are superseded in that commit; the reviewer's Task is stopped only after it. A
+      // report landing in between is still held to what a reviewer may write.
+      await call(human(requester), 'pause_goal', { goalRunId });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'superseded' });
+      expect((await reviewTask(goalRunId)).status).toBe('running');
+      const late = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'reviewed',
+          output: scores(4, 4),
+          factsToAssert: [
+            {
+              linkType: 'reviewed',
+              source: { objectType: 'Document', identity: { name: 'draft' } },
+              target: { objectType: 'Document', identity: { name: 'outline' } },
+            },
+          ],
+          proposedSkill: {
+            name: 'grading',
+            description: 'how this goal is graded',
+            markdown: 'clear weighs 3, complete 1',
+          },
+        }),
+      );
+      expect(late.status).toBe(400);
+      expect(late.message).toContain('factsToAssert:');
+      expect(late.message).toContain('proposedSkill:');
+      // Its scores alone are kept on the Task and move nothing (§3.4).
+      await reviewerReports(task.id, scores(4, 4));
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'superseded' });
+      expect(
+        await raw(
+          'select 1 from goal_review_assessments where workspace_id = $1 and goal_run_id = $2',
+          [workspaceId, goalRunId],
+        ),
+      ).toEqual([]);
+    });
+
+    it('a review and the requester’s confirmation: they confirm only once the review passed, and the goal is achieved on their word', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await propose(requester, planOf([REVIEW, CONFIRM]));
+      // UX acceptance of #1102: not 「only on the requester's word」 — the review must pass first.
+      expect(
+        (await getGoal(goalRunId, requester)).planRevision.hints.map((hint) => hint.code),
+      ).toEqual(['review_and_confirm']);
+      await call(human(requester), 'confirm_goal', { goalRunId, revision: 1 });
+      await advanceOnce(goalRunId, requester);
+      await succeed(goalRunId, requester);
+      const task = await reviewTask(goalRunId);
+
+      // B2: not before the review passed — not through the gateway, not in the database.
+      const early = await refusal(
+        call(human(requester), 'confirm_goal_acceptance', { goalRunId, checkKey: 'ok' }),
+      );
+      expect(early.status).toBe(409);
+      expect(early.message).toContain('the requester confirms after them');
+      const decision = await confirmationDecision(goalRunId, requester, 1, 'ok');
+      expect(
+        await dbRefusal(
+          guarded(
+            `update goal_acceptance_checks
+                set status = 'passed', decision_id = $3, settled_at = now()
+              where workspace_id = $1 and goal_run_id = $2 and check_key = 'ok'`,
+            [workspaceId, goalRunId, decision],
+          ),
+        ),
+      ).toMatch(/a confirmation passes only after every review of its round passed/);
+      // B3 (b): a review that cannot decide says so under a code of the closed list only.
+      expect(
+        await dbRefusal(
+          guarded(
+            `update goal_acceptance_checks
+                set status = 'unavailable', last_error = 'the reviewer said so', settled_at = now()
+              where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+            [workspaceId, goalRunId],
+          ),
+        ),
+      ).toMatch(/violates check constraint/);
+
+      await reviewerReports(task.id, scores(4, 4));
+      await advanceOnce(goalRunId, requester);
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'passed' });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'verifying' });
+      expect(
+        await call(human(requester), 'confirm_goal_acceptance', { goalRunId, checkKey: 'ok' }),
+      ).toMatchObject({ changed: true });
+      // F7: every check passed, a review and a confirmation among them — never by check, nor on
+      // the review alone.
+      for (const basis of ['verified_by_check', 'reviewer_assessed']) {
+        expect(
+          await dbRefusal(
+            guarded(
+              `update goal_runs set status = 'completed', outcome = 'achieved',
+                      outcome_basis = $3, ended_at = now()
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, goalRunId, basis],
+            ),
+          ),
+        ).toMatch(
+          basis === 'verified_by_check'
+            ? /none of them a review \(I-G5\)/
+            : /none the requester's confirmation \(I-G5\)/,
+        );
+      }
+      await advanceOnce(goalRunId, requester);
+      const done = await goalRow(goalRunId);
+      expect(done).toMatchObject({
+        status: 'completed',
+        outcome: 'achieved',
+        outcome_basis: 'requester',
+      });
+      expect(done.outcome_decision_id).not.toBeNull();
+      await notFlaggedByIG5([goalRunId]);
+    });
+
+    it('the goal planner reads a review sealed — in its plan and in a precedent’s — and keeps it only exactly as read; the revision holds the requester’s review', async () => {
+      const requester = await newPrincipal('member');
+      // #493 on #1102: an earlier goal of theirs, achieved on the same review — a precedent the
+      // planner reads.
+      const earlier = await startGoal(requester, planOf([REVIEW]));
+      await succeed(earlier, requester);
+      await reviewerReports((await reviewTask(earlier)).id, scores(4, 4));
+      await advanceOnce(earlier, requester);
+      expect(await goalRow(earlier)).toMatchObject({ outcome_basis: 'reviewer_assessed' });
+
+      const goalRunId = await startGoal(requester, planOf([REVIEW]), 'propose');
+      const step = await liveStep(goalRunId, 'draft');
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [round] = await planningRounds(goalRunId);
+      if (!round) throw new Error('no planning round');
+      const [planner] = await raw<{ id: string; input: Record<string, unknown> }>(
+        'select id, input from tasks where workspace_id = $1 and planning_round_id = $2',
+        [workspaceId, round.id],
+      );
+      if (!planner) throw new Error('no planner Task');
+      const read = planner.input.plan as {
+        steps: Record<string, unknown>[];
+        acceptance: unknown[];
+      };
+      const sealed = { ...REVIEW, criteria: REVIEW_SEALED, passAt: REVIEW_SEALED };
+      expect(read.acceptance).toEqual([sealed]);
+      const precedents = planner.input.precedents as {
+        goalRunId: string;
+        plan: { acceptance?: unknown[] };
+      }[];
+      expect(
+        precedents.find((precedent) => precedent.goalRunId === earlier)?.plan.acceptance,
+      ).toEqual([sealed]);
+      expect(JSON.stringify(planner.input)).not.toContain('A reader new to the topic');
+
+      const proposal = async (acceptance: readonly unknown[]) =>
+        dispatchCapability({ pool }, await workerOf(planner.id), 'report_task_result', {
+          summary: 'planned',
+          output: {
+            decision: 'revise',
+            plan: { steps: read.steps.map((entry) => ({ ...entry, maxAttempts: 2 })), acceptance },
+            reason: 'The draft lost its run; one more attempt is enough.',
+          },
+        });
+      for (const changed of [
+        { ...sealed, passAt: 10 },
+        { ...sealed, subjects: [] },
+        REVIEW,
+        { ...REVIEW, key: 'mine' },
+      ]) {
+        const refused = await refusal(proposal([changed]));
+        expect(refused.status).toBe(400);
+        expect(refused.message).toContain('output.plan.acceptance.0');
+      }
+      await proposal([sealed]);
+      await advanceOnce(goalRunId, requester);
+      expect(await planningRounds(goalRunId)).toMatchObject([{ status: 'proposed', revision: 2 }]);
+      const [revision] = await raw<{ plan: { acceptance: unknown[] } }>(
+        `select plan from plan_revisions
+          where workspace_id = $1 and goal_run_id = $2 and revision = 2`,
+        [workspaceId, goalRunId],
+      );
+      expect(revision?.plan.acceptance).toEqual([REVIEW]);
+    });
+  },
+);

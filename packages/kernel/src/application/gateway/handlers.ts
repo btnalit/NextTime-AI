@@ -7,7 +7,7 @@ import type {
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { getCapability, storableValue } from '@nexttime/shared';
+import { GOAL_PRECEDENT_CONTEXT_LIMIT, getCapability, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   adminAgentRefusal,
@@ -54,6 +54,7 @@ import {
   type TaskViewer,
   type WorkerRunRow,
   findGoalPlannerFamily,
+  findGoalReviewerFamily,
   findOperations,
   findProcedures,
   findWorkerRunBySessionId,
@@ -64,6 +65,8 @@ import {
   invokeWorkerCreate,
   listQuotas,
   listTasksForPrincipal,
+  proposeDefinitionFromCombination,
+  readCombinationCandidates,
   readHandleObserveExclusions,
   readProcedureOutcomeHints,
   readTaskAttributions,
@@ -154,7 +157,7 @@ import {
   SqlGraphStore,
   objectDisplayName,
 } from '../../substrate/graph/index.js';
-import { goalVisibleTo } from '../goal/index.js';
+import { goalVisibleTo, readRecentGoalPrecedents } from '../goal/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -210,7 +213,11 @@ import {
 } from './attribution-handlers.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { ForbiddenError } from './authorize.js';
-import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import {
+  type CapabilityHandler,
+  type CapabilityHandlerContext,
+  requirePresentedCredential,
+} from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 // S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
 import {
@@ -284,6 +291,14 @@ import { executionReadinessHandler } from './execution-readiness-handler.js';
 import { exportProvHandler } from './export-prov-handler.js';
 import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
+  approveGateAddressChangeHandler,
+  listGateAddressChangesHandler,
+  previewGateAddressChangeHandler,
+  proposeGateAddressChangeHandler,
+  rejectGateAddressChangeHandler,
+  withdrawGateAddressChangeHandler,
+} from './gate-address-change-handlers.js';
+import {
   enableGateInstanceHandler,
   issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
@@ -306,6 +321,7 @@ import {
   confirmGoalHandler,
   decidePlanRevisionHandler,
   endGoalHandler,
+  findGoalPrecedentsHandler,
   getGoalHandler,
   getGoalRevisionHandler,
   goalViewer,
@@ -970,8 +986,10 @@ const renameChatHandler: CapabilityHandler = async (client, workspaceId, params,
  * `tasks`/`pendingApprovals` are populated from `application/linkage`'s `pending_context_items` —
  * Task outcomes, budget warnings (≥80%) and `waiting_approval` notices (`tasks` bucket), and
  * ActionRequest status changes this principal is the requester of (`pendingApprovals` bucket).
- * `precedents` remains S3 scope (no Procedure/Skill graph content exists yet to precedent-match
- * against).
+ * S11 GO17: `precedents` are the principal's most recently ended goals (`application/goal`
+ * `precedents.ts` — only their own, whatever their role), as references; `find_goal_precedents`
+ * reads the records. They change only when one of their goals ends, so a mid-Turn update rarely
+ * carries them.
  *
  * Delivery (2026-10-02 review R-57, maintainer decision D-23): pi's `context` event fires before
  * every LLM call and its injection is not persisted, so a read must not consume.
@@ -1014,7 +1032,12 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, pa
       tasks: items.tasks,
       facts: facts.map(toWireFact),
       factCountsByLinkType,
-      precedents: [],
+      precedents: await readRecentGoalPrecedents(
+        client,
+        workspaceId,
+        (await goalViewer(client, ctx)).principalId,
+        GOAL_PRECEDENT_CONTEXT_LIMIT,
+      ),
     },
   };
 };
@@ -1216,9 +1239,27 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
 // fields are projected to ISO strings for the wire, same convention as `toWireChatMessage` above.
 // -------------------------------------------------------------------------------------------
 
-/** `plannerFamily`: the workspace's goal planner family (`findGoalPlannerFamily`), so a version of
- *  it reads as the planner's (S11 GO9a). */
-function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string | null) {
+/** The workspace's kernel Worker families: the goal planner's (S11 GO9a) and the goal reviewer's
+ *  (S11 GO18) — a version of either reads as the platform's (`toWireWorkerDefinition`). */
+interface KernelWorkerFamilies {
+  readonly planner: string | null;
+  readonly reviewer: string | null;
+}
+
+async function kernelWorkerFamilies(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<KernelWorkerFamilies> {
+  return {
+    planner: await findGoalPlannerFamily(client, workspaceId),
+    reviewer: await findGoalReviewerFamily(client, workspaceId),
+  };
+}
+
+/** `families`: the workspace's kernel Worker families ({@link kernelWorkerFamilies}), so a version
+ *  of the planner's reads as the planner's (S11 GO9a) and one of the reviewer's as the reviewer's
+ *  (S11 GO18). */
+function toWireWorkerDefinition(row: WorkerDefinitionRow, families: KernelWorkerFamilies) {
   return {
     id: row.id,
     version: row.version,
@@ -1230,7 +1271,9 @@ function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string 
     publishedBy: row.publishedBy,
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
-    goalPlanner: row.id === plannerFamily,
+    goalPlanner: row.id === families.planner,
+    ...(row.id === families.reviewer ? { goalReviewer: true } : {}),
+    ...(row.derivedFrom !== null ? { derivedFrom: row.derivedFrom } : {}),
   };
 }
 
@@ -1253,7 +1296,7 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (
     origin: draftOriginOf(ctx),
   });
   return {
-    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
+    result: toWireWorkerDefinition(row, await kernelWorkerFamilies(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
   };
@@ -1308,10 +1351,7 @@ const proposeEntryTemplateUpgradeHandler: CapabilityHandler = async (
   );
   return {
     result: {
-      draft: toWireWorkerDefinition(
-        upgrade.draft,
-        await findGoalPlannerFamily(client, workspaceId),
-      ),
+      draft: toWireWorkerDefinition(upgrade.draft, await kernelWorkerFamilies(client, workspaceId)),
       templateDigest: upgrade.templateDigest,
       basedOn: upgrade.basedOn,
       differs: [...upgrade.differs],
@@ -1355,7 +1395,7 @@ const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     },
   );
   return {
-    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
+    result: toWireWorkerDefinition(row, await kernelWorkerFamilies(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
     auditPayload: credentialReviewAudit(
@@ -1374,7 +1414,7 @@ const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, works
     { principalId: caller.id, role: caller.role },
   );
   return {
-    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
+    result: toWireWorkerDefinition(row, await kernelWorkerFamilies(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
   };
@@ -1401,10 +1441,10 @@ const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspace
     cursor,
     includeOwnDrafts,
   });
-  const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
+  const families = await kernelWorkerFamilies(client, workspaceId);
   return {
     result: {
-      items: page.items.map((row) => toWireWorkerDefinition(row, plannerFamily)),
+      items: page.items.map((row) => toWireWorkerDefinition(row, families)),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
@@ -1422,7 +1462,7 @@ const getWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId
   const row = await getWorkerDefinition(client, workspaceId, { definitionId, version });
   if (!row || (row.status === 'draft' && row.proposedBy !== principalId)) return { result: null };
   return {
-    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
+    result: toWireWorkerDefinition(row, await kernelWorkerFamilies(client, workspaceId)),
   };
 };
 
@@ -1447,7 +1487,8 @@ const getWorkerDefinitionStatsHandler: CapabilityHandler = async (
 
 // A WorkerSpec's digest is shown only to a caller who can read a goal it ran in — `goalVisibleTo`
 // with their goal viewer (the requester, or the owner on the human channel), the rule the goal
-// reads apply (review #493 on #1064).
+// reads apply (review #493 on #1064); GO16b's candidates read a WorkerSpec's content by the same
+// rule (F7 = A).
 async function goalReaderOf(
   client: PoolClient,
   ctx: CapabilityHandlerContext | undefined,
@@ -1458,6 +1499,58 @@ async function goalReaderOf(
     canReadGoal: (goal) => goalVisibleTo(viewer, goal),
   };
 }
+
+const getCombinationCandidatesHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { definitionId } = params as { definitionId: string };
+  const candidates = await readCombinationCandidates(
+    client,
+    workspaceId,
+    definitionId,
+    await goalReaderOf(client, ctx),
+  );
+  return { result: candidates, resourceType: 'worker_definition', resourceId: definitionId };
+};
+
+const proposeDefinitionFromCombinationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as {
+    definitionId: string;
+    version: number;
+    specDigest: string;
+    name: string;
+  };
+  const proposed = await proposeDefinitionFromCombination(
+    client,
+    workspaceId,
+    await goalReaderOf(client, ctx),
+    input,
+  );
+  return {
+    result: toWireWorkerDefinition(proposed.row, await kernelWorkerFamilies(client, workspaceId)),
+    resourceType: 'worker_definition',
+    resourceId: proposed.row.id,
+    // The combination, its evidence now, and where its WorkerSpec was read from (coordinator,
+    // GO16 F7): the goal, the plan revision and the step.
+    auditPayload: {
+      derivedFrom: {
+        definitionId: input.definitionId,
+        version: input.version,
+        specDigest: input.specDigest,
+      },
+      evidence: proposed.evidence,
+      source: proposed.source,
+    },
+  };
+};
 
 // -------------------------------------------------------------------------------------------
 // S3.3: `assert_fact`/`supersede_fact`/`invalidate_fact` are now real handlers
@@ -2206,6 +2299,12 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
       claims: ctx?.claims,
       turnId,
       ...(adminAgentSessionId !== undefined ? { adminAgentSessionId } : {}),
+      // Legacy 712: a person's own call (the human channel) names the cookie or API key it came
+      // with; the Worker's Handle is issued only while that is still live. A Handle caller's
+      // Worker is issued on its parent Handle instead.
+      ...(ctx?.channel === 'human'
+        ? { credential: requirePresentedCredential('invoke_worker', ctx) }
+        : {}),
     },
     { ...input, idempotencyKey },
     getConfiguredTaskRuntime(),
@@ -2637,6 +2736,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_self_connections', listSelfConnectionsHandler],
   ['suspend_self_connection', suspendSelfConnectionHandler],
   ['resume_self_connection', resumeSelfConnectionHandler],
+  // Legacy 701: the administrator decides a workspace's proposal to move a self-connected gate.
+  ['list_gate_address_changes', listGateAddressChangesHandler],
+  ['approve_gate_address_change', approveGateAddressChangeHandler],
+  ['reject_gate_address_change', rejectGateAddressChangeHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
@@ -2666,6 +2769,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S11 GO5a goal reads (goal-handlers.ts)
   ['get_goal', getGoalHandler],
   ['list_goals', listGoalsHandler],
+  ['find_goal_precedents', findGoalPrecedentsHandler],
   ['get_goal_revision', getGoalRevisionHandler],
   ['list_goal_unresolved_actions', listGoalUnresolvedActionsHandler],
   // S11 GO5c proposing a goal run (goal-handlers.ts)
@@ -2754,6 +2858,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['get_worker_definition', getWorkerDefinitionHandler],
   ['get_worker_definition_stats', getWorkerDefinitionStatsHandler],
+  ['get_combination_candidates', getCombinationCandidatesHandler],
+  ['propose_definition_from_combination', proposeDefinitionFromCombinationHandler],
   ['get_entry_template_status', getEntryTemplateStatusHandler],
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
@@ -2830,6 +2936,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // R-01 (maintainer decision D-01) — a self-connected gate's own secret, connection-handlers.ts.
   ['mint_connection_secret', mintConnectionSecretHandler],
   ['rotate_connection_secret', rotateConnectionSecretHandler],
+  // Legacy 701: an owner proposes moving a self-connected gate to a new address.
+  ['preview_gate_address_change', previewGateAddressChangeHandler],
+  ['propose_gate_address_change', proposeGateAddressChangeHandler],
+  ['withdraw_gate_address_change', withdrawGateAddressChangeHandler],
   ['publish_manifest', publishManifestHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
   ['list_gatekeepers', listGatekeepersHandler],

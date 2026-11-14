@@ -16,7 +16,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { readPlatformSettings } from '../platform/settings.js';
 import { revokeAllUserSessions } from './console-session.js';
@@ -74,16 +74,19 @@ export async function revokeUserAdminAgentSessions(
     "select current_setting('app.workspace_id', true) as workspace_id",
   );
   const revoked: string[] = [];
+  // The lock order (governance/capability/handles.ts): every live admin session of the user's, in
+  // every workspace, in one statement ordered by id, before the first is revoked.
+  await lockLiveSessionsActingFor(
+    client,
+    principals.rows.map((row) => row.id),
+    { kind: 'admin_agent' },
+  );
   try {
     for (const principal of principals.rows) {
       await client.query("select set_config('app.workspace_id', $1, true)", [
         principal.workspace_id,
       ]);
-      const sessions = await client.query<{ id: string }>(
-        `select id from sessions
-          where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'`,
-        [principal.workspace_id, principal.id],
-      );
+      // governance 0042's trigger revokes their Handles; a session revoked before has none (I-H1).
       const moved = await client.query<{ id: string }>(
         `update sessions set status = 'revoked', expires_at = least(expires_at, now())
           where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'
@@ -91,8 +94,6 @@ export async function revokeUserAdminAgentSessions(
           returning id`,
         [principal.workspace_id, principal.id],
       );
-      // Every Handle under any of its admin sessions, revoked or not — idempotent.
-      for (const session of sessions.rows) await revokeSession(client, session.id);
       revoked.push(...moved.rows.map((row) => row.id));
     }
   } finally {
@@ -109,21 +110,26 @@ export async function revokeUserAdminAgentSessions(
  * to one workspace) `remove_membership` all call this, and nothing else revokes a user's access in
  * bulk. For each of the user's human membership Principals: its API key is cleared, every session
  * on its behalf is marked revoked, and every Handle minted under those sessions is revoked
- * (`revokeSession` per session — what `revokeOnBehalfOfSessionHandles`, the primitive
- * `disable_principal` uses, does — and llm-proxy picks the revocations up through its sync).
- * Plus the console sessions; `keepWorkerRuns` spares the `worker_run` sessions (see the options).
+ * (governance 0042's trigger, as each session is marked; llm-proxy picks the revocations up through
+ * its sync). Their rows are taken first, all in one statement ordered by id (the lock order,
+ * governance/capability/handles.ts). Plus the console sessions; `keepWorkerRuns` spares the
+ * `worker_run` sessions (see the options).
  *
  * Works on a platform transaction (`nexttime_app` with `app.platform = on`: `user_sessions`,
  * `principals` and `sessions` through their `*_platform_admin` policies) and on the admin client.
- * `capability_handles` carries only the workspace-isolation policy (governance 0001), so each
- * Principal's statements run with `app.workspace_id` set to its workspace; the caller's own value
- * is restored afterwards, so nothing the caller does next is scoped by accident.
+ * Each Principal's statements run with `app.workspace_id` set to its workspace; the caller's own
+ * value is restored afterwards, so nothing the caller does next is scoped by accident.
  */
 export async function revokeUserCredentials(
   client: PoolClient,
   userId: string,
   options: RevokeUserCredentialsOptions = {},
 ): Promise<UserCredentialRevocation> {
+  // Legacy 702 (governance 0043): the user's authority lock before any session of theirs is
+  // touched, so an issuer for one of their memberships that holds it commits first and its Handle
+  // is revoked below. A caller that also changes a Principal of the user has taken this lock
+  // before that Principal's (the global order); taking it again is free.
+  await lockAuthoritiesForChange(client, { userIds: [userId] });
   const consoleSessionIds =
     options.workspaceId === undefined
       ? await revokeAllUserSessions(client, userId, {
@@ -138,6 +144,13 @@ export async function revokeUserCredentials(
   const previous = await client.query<{ workspace_id: string | null }>(
     "select current_setting('app.workspace_id', true) as workspace_id",
   );
+  // The lock order (governance/capability/handles.ts): every live session of theirs, in every
+  // workspace, in one statement ordered by id, before the first is revoked.
+  await lockLiveSessionsActingFor(
+    client,
+    principals.rows.map((row) => row.id),
+    options.keepWorkerRuns === true ? { exceptKind: 'worker_run' } : {},
+  );
   try {
     for (const principal of principals.rows) {
       await client.query("select set_config('app.workspace_id', $1, true)", [
@@ -148,22 +161,13 @@ export async function revokeUserCredentials(
           where workspace_id = $1 and id = $2 and api_key_hash is not null`,
         [principal.workspace_id, principal.id],
       );
-      const params = [principal.workspace_id, principal.id, options.keepWorkerRuns === true];
-      // Every session's Handles — a session already marked revoked included: its status never
-      // stopped a Handle, and `revokeSession` is idempotent.
-      const sessions = await client.query<{ id: string }>(
-        `select id from sessions
-          where workspace_id = $1 and on_behalf_of = $2
-            and ($3::boolean is false or kind <> 'worker_run')`,
-        params,
-      );
+      // governance 0042's trigger revokes their Handles; a session revoked before has none (I-H1).
       await client.query(
         `update sessions set status = 'revoked', expires_at = least(expires_at, now())
           where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'
             and ($3::boolean is false or kind <> 'worker_run')`,
-        params,
+        [principal.workspace_id, principal.id, options.keepWorkerRuns === true],
       );
-      for (const session of sessions.rows) await revokeSession(client, session.id);
     }
   } finally {
     await client.query("select set_config('app.workspace_id', $1, true)", [
@@ -259,4 +263,26 @@ export async function changeOwnPassword(
   const updated = await findUserById(pool, user.id);
   if (!updated) throw new IdentityError('user_not_found', 'user not found');
   return { ok: true, user: updated, revoked };
+}
+
+/**
+ * The lock order (governance/capability/handles.ts, module comment): the live sessions acting for
+ * any of `principalIds`, in one statement ordered by id. They may sit in several workspaces: the
+ * callers run on a platform transaction (`sessions_platform_admin`) or the admin client, which see
+ * them all. `kind` keeps the sessions of one kind; `exceptKind` leaves one out.
+ */
+async function lockLiveSessionsActingFor(
+  client: PoolClient,
+  principalIds: readonly string[],
+  filter: { readonly kind?: string; readonly exceptKind?: string },
+): Promise<void> {
+  if (principalIds.length === 0) return;
+  await client.query(
+    `select 1 from sessions
+      where on_behalf_of = any($1::uuid[]) and status <> 'revoked'
+        and ($2::text is null or kind = $2) and ($3::text is null or kind <> $3)
+      order by id
+      for no key update`,
+    [[...principalIds], filter.kind ?? null, filter.exceptKind ?? null],
+  );
 }

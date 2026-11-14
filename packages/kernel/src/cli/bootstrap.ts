@@ -14,6 +14,7 @@ import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
+import { serviceHandleResources } from '../application/gates/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import {
   createPlatformAdmin,
@@ -35,7 +36,11 @@ import {
   createWorkspaceWithOwner,
 } from '../application/workspace/index.js';
 import type { WorkspacePurpose } from '../application/workspace/index.js';
-import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
+import {
+  issueOperatorHandle,
+  loadHandleKeyPair,
+  lockIssuingAuthority,
+} from '../governance/capability/index.js';
 import { writeAudit } from '../substrate/audit/index.js';
 import {
   publishOntologyDomainPack,
@@ -400,6 +405,9 @@ export async function issueServiceHandleFromCli(
     { workspaceId: input.workspaceId, principalId: randomUUID() },
     async (client) => {
       const principalId = await getOrCreateServicePrincipal(client, input.workspaceId, input.name);
+      // Legacy 702 (governance 0043): the authority locks before the session row below references
+      // the Principal. A disabled service Principal of that name is refused (I-H2).
+      await lockIssuingAuthority(client, input.workspaceId, principalId);
 
       const sessionResult = await client.query<{ id: string }>(
         `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -412,9 +420,18 @@ export async function issueServiceHandleFromCli(
         throw new Error('issue-service-handle: session INSERT ... RETURNING produced no row');
       }
 
-      const issued = await issueHandle(client, {
+      // Legacy 690: the same gates `issue_service_handle` gives a service Handle — this Principal's
+      // own gate Grants now (none for one just created), when a capability reads them.
+      const resources = await serviceHandleResources(
+        client,
+        input.workspaceId,
+        principalId,
+        input.scope,
+      );
+
+      const issued = await issueOperatorHandle(client, {
         sessionId: sessionRow.id,
-        scope: { capabilities: [...input.scope], resources: {} },
+        scope: { capabilities: [...input.scope], resources },
         ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
         privateKey: keyPair.privateKey,
       });

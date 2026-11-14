@@ -5,7 +5,10 @@
  * `/opt/nexttime/models.json` (`host-paths.ts`), and nothing under `/workspace/.pi/agent`. An
  * image built before that reads all three from the workspace: started by this supervisor it
  * would come up without models and with a stale or default prompt — a broken agent that only
- * shows itself at its first prompt. So every image this supervisor starts must say, in its own
+ * shows itself at its first prompt. Version 3 (S11 GO18a P3) adds `NEXTTIME_BUILTIN_TOOLS`
+ * (`task-spawn-spec.ts`): an image from before it ignores the variable and would run a goal
+ * reviewer with every built-in tool instead of only those that read files. So every image this
+ * supervisor starts must say, in its own
  * `IMAGE_RUNTIME_CONTRACT_LABEL` (`deploy/worker-runtime/Dockerfile`), that it speaks this
  * layout; one that doesn't is refused with `runtime_image_incompatible` before any container is
  * touched (`server.ts` maps it to 409). Bump `RUNTIME_CONTRACT_VERSION` together with the
@@ -22,7 +25,7 @@
 import type { DockerClient } from './docker-client.js';
 
 export const IMAGE_RUNTIME_CONTRACT_LABEL = 'ai.nexttime.runtime-contract';
-export const RUNTIME_CONTRACT_VERSION = '2';
+export const RUNTIME_CONTRACT_VERSION = '3';
 
 export class RuntimeImageIncompatibleError extends Error {
   readonly code = 'runtime_image_incompatible';

@@ -711,6 +711,31 @@ function childPath(
   return path === '' ? written : `${path}.${written}`;
 }
 
+/**
+ * Legacy 444: an object's key, as the walk writes it. A key is content too — an agent's call
+ * arguments, a gate's output, a Procedure's start parameters can carry `{"Bearer …": 1}` as easily
+ * as `{"note": "Bearer …"}` — so the value patterns run over it and every match is counted like a
+ * value's (so a count, a refusal and a masked read all see it). A key that changes is reported at
+ * its shown spelling; the original is never reported. Two keys that come out the same (two
+ * different tokens behind one `Bearer [redacted]`) stay two fields: the later one gets ` (2)`,
+ * ` (3)`, … — a key is never merged into another, so no value is lost from the copy. Keys are not
+ * charged to `maxChars`: what bounds a key is what bounds the value it sits in.
+ */
+function shownKey(
+  key: string,
+  taken: Record<string, unknown>,
+  state: WalkState,
+  path: string | undefined,
+  options: RedactSecretsOptions,
+): string {
+  const before = state.count;
+  const scrubbed = scrubInto(key, state);
+  let shown = scrubbed;
+  for (let n = 2; Object.hasOwn(taken, shown); n += 1) shown = `${scrubbed} (${n})`;
+  noted(state, childPath(path, shown, options), before);
+  return shown;
+}
+
 function redactInto(
   value: unknown,
   options: RedactSecretsOptions,
@@ -767,10 +792,11 @@ function redactInto(
     else
       innerWithin =
         options.schemaLiterals === true && namesASecretField(key) ? 'property' : 'plain';
+    const written = shownKey(key, out, state, path, options);
     // Defined as an own property: assigning `out[key]` with a `"__proto__"` key would swap the
     // prototype instead of keeping a field.
-    Object.defineProperty(out, key, {
-      value: redactInto(inner, options, state, innerWithin, childPath(path, key, options)),
+    Object.defineProperty(out, written, {
+      value: redactInto(inner, options, state, innerWithin, childPath(path, written, options)),
       enumerable: true,
       writable: true,
       configurable: true,
@@ -779,8 +805,9 @@ function redactInto(
   return out;
 }
 
-/** A structured value with every string in it scrubbed (and, with `isSecretKey`, secret-named
- *  keys replaced whole), within the bounds `options` sets. */
+/** A structured value with every string in it scrubbed — object keys included (legacy 444,
+ *  `shownKey`) — and, with `isSecretKey`, the values under secret-named keys replaced whole,
+ *  within the bounds `options` sets. */
 export function redactSecrets(value: unknown, options: RedactSecretsOptions = {}): RedactedValue {
   const state = freshState(options);
   const redacted = redactInto(

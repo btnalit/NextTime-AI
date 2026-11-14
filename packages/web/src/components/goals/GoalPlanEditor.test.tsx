@@ -1377,6 +1377,303 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
   });
 });
 
+describe('S11 GO18b: an independent review, edited in the plan editor', () => {
+  const models: Record<string, (params: unknown) => unknown> = {
+    list_models: () => ({
+      items: [
+        { id: 'model-a', provider: 'p', model: 'a' },
+        { id: 'model-b', provider: 'p', model: 'b' },
+        { id: 'model-c', provider: 'p', model: 'c' },
+      ],
+    }),
+    get_agent_policy: () => ({
+      workspaceId: 'ws-1',
+      allowedModels: ['model-a', 'model-b'],
+      defaultModel: null,
+      memberCanEditProfile: true,
+      maxPromptAddendumChars: 1000,
+      allowedSkills: [],
+      allowedGatekeepers: [],
+      allowMemberAutoApproveLow: false,
+      updatedAt: null,
+      updatedBy: null,
+    }),
+  };
+  const revised = {
+    revise_goal: () => ({
+      goalRunId: 'goal-1',
+      status: 'paused',
+      changed: true,
+      revision: 2,
+      planRevisionId: 'rev-2',
+      supersededStepRunIds: [],
+      createdStepRunIds: [],
+      withdrawnActionRequestIds: [],
+      releasedActionRequestIds: [],
+      hints: [],
+    }),
+  };
+  const REVIEW = {
+    kind: 'review' as const,
+    key: 'quality',
+    subjects: ['apply'],
+    criteria: [
+      { key: 'complete', description: 'Every expiring certificate is renewed', weight: 3 },
+      { key: 'clear', description: 'The report says what changed on each host', weight: 1 },
+    ],
+    passAt: 75,
+    model: 'model-a',
+  };
+  /** The plan with a review of `apply`, which sets `model-a` for its Worker. */
+  const reviewed = () => {
+    const base = goalDetail().planRevision;
+    return paused({
+      planRevision: {
+        ...base,
+        plan: {
+          steps: base.plan.steps.map((item) =>
+            item.key === 'apply' ? { ...item, spec: { model: 'model-a' } } : item,
+          ),
+          acceptance: [...(base.plan.acceptance ?? []), REVIEW],
+        },
+      },
+    });
+  };
+  const sentAcceptance = (http: { calls: { name: string; params: unknown }[] }) =>
+    (
+      http.calls.find((call) => call.name === 'revise_goal')?.params as {
+        plan: GoalDetailWire['planRevision']['plan'];
+      }
+    ).plan.acceptance;
+  const reviewCheck = () =>
+    screen
+      .getAllByTestId('goal-plan-check')
+      .find((element) => within(element).queryByTestId('goal-plan-review')) as HTMLElement;
+  const subject = (element: HTMLElement, key: string) =>
+    within(within(element).getByTestId('goal-plan-review-subjects'))
+      .getAllByRole('checkbox')
+      .find((box) => box.closest('label')?.textContent === key) as HTMLInputElement;
+
+  it('adds a review with nothing typed but what each criterion asks, and sends it', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), { ...models, ...revised }),
+    );
+    renderPage(http);
+    await openEditor();
+    fireEvent.click(screen.getByTestId('goal-plan-add-review'));
+    const check = reviewCheck();
+    // The first thing to write takes the focus: the first criterion.
+    expect(document.activeElement).toBe(
+      within(check).getByTestId('goal-plan-review-criterion-description'),
+    );
+    // What the plan ends with is ticked; every step of the plan may be.
+    expect(subject(check, 'apply').checked).toBe(true);
+    expect(subject(check, 'fetch').checked).toBe(false);
+    // Not the requester's confirmation: that one is still offered.
+    expect(screen.getByTestId('goal-plan-add-confirm')).toBeTruthy();
+    expect(alerts(check)).toMatch(/写上这条标准/);
+
+    fireEvent.click(subject(check, 'fetch'));
+    fireEvent.change(within(check).getByTestId('goal-plan-review-criterion-description'), {
+      target: { value: 'Every expiring certificate is renewed' },
+    });
+    fireEvent.click(within(check).getByTestId('goal-plan-review-add-criterion'));
+    const criteria = within(check).getAllByTestId('goal-plan-review-criterion');
+    expect(criteria).toHaveLength(2);
+    expect(criteria.map((element) => element.getAttribute('data-criterion'))).toEqual(['c1', 'c2']);
+    const second = criteria[1] as HTMLElement;
+    expect(second.contains(document.activeElement)).toBe(true);
+    fireEvent.change(within(second).getByTestId('goal-plan-review-criterion-description'), {
+      target: { value: 'The report says what changed on each host' },
+    });
+    const weights = within(check).getAllByTestId(
+      'goal-plan-review-criterion-weight',
+    ) as HTMLSelectElement[];
+    expect([...(weights[0] as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+    ]);
+    fireEvent.change(weights[0] as HTMLSelectElement, { target: { value: '3' } });
+    const passAt = within(check).getByTestId('goal-plan-review-pass-at') as HTMLSelectElement;
+    expect(passAt.value).toBe('75');
+    fireEvent.change(passAt, { target: { value: '80' } });
+    // The line in points, with these weights: 4 × (3 + 1) = 16, 80% of it is 13 (rounded up).
+    expect(within(check).getByText(/至少 13 分（满分 16 的 80%）算通过/)).toBeTruthy();
+    // The models the catalog offers and the workspace allows; the requester's by default.
+    const model = within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...model.options].map((option) => option.value)).toEqual(['', 'model-a', 'model-b']),
+    );
+    expect(model.value).toBe('');
+    // Neither side names a model: they may well be the same one.
+    expect(within(check).getByTestId('goal-plan-review-model-note').textContent).toMatch(
+      /可能用同一个模型/,
+    );
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    expect(within(check).getByTestId('goal-plan-review-model-note').textContent).toMatch(
+      /可能用同一个模型/,
+    );
+    expect(within(check).getByTestId('goal-plan-review-proxy').textContent).toMatch(/代理指标/);
+    expect(alerts(check)).toBe('');
+
+    await send();
+    await waitFor(() =>
+      expect(sentAcceptance(http)).toEqual([
+        goalDetail().planRevision.plan.acceptance?.[0],
+        {
+          kind: 'review',
+          key: 'review',
+          // In the plan's order (fetch, then apply), not the order they were ticked in.
+          subjects: ['fetch', 'apply'],
+          criteria: [
+            { key: 'c1', description: 'Every expiring certificate is renewed', weight: 3 },
+            { key: 'c2', description: 'The report says what changed on each host', weight: 1 },
+          ],
+          passAt: 80,
+          model: 'model-b',
+        },
+      ]),
+    );
+  });
+
+  it('a review of the plan reads as it is, rides along untouched, and says when it would score its own step’s work', async () => {
+    const http = scriptedHttp(
+      handlers(reviewed(), workspace('p-alice', 'member'), { ...models, ...revised }),
+    );
+    renderPage(http);
+    await openEditor();
+    const check = reviewCheck();
+    expect(check.getAttribute('data-check-key')).toBe('quality');
+    expect(subject(check, 'apply').checked).toBe(true);
+    expect(
+      within(check)
+        .getAllByTestId('goal-plan-review-criterion-description')
+        .map((element) => (element as HTMLTextAreaElement).value),
+    ).toEqual([
+      'Every expiring certificate is renewed',
+      'The report says what changed on each host',
+    ]);
+    await waitFor(() =>
+      expect((within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).value).toBe(
+        'model-a',
+      ),
+    );
+    // `apply` sets model-a too: a model scoring its own work.
+    expect(within(check).getByTestId('goal-plan-review-model-note').textContent).toMatch(
+      /和被评步骤的一样.*可以给评审换一个模型/,
+    );
+    fireEvent.change(within(check).getByTestId('goal-plan-review-model'), {
+      target: { value: 'model-b' },
+    });
+    // Every reviewed step sets another model: nothing to say.
+    expect(within(check).queryByTestId('goal-plan-review-model-note')).toBeNull();
+    fireEvent.change(within(check).getByTestId('goal-plan-review-model'), {
+      target: { value: 'model-a' },
+    });
+
+    // Changed elsewhere, the review goes back as the plan has it.
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-version'), {
+      target: { value: '3' },
+    });
+    await send();
+    await waitFor(() => expect(sentAcceptance(http)?.[1]).toEqual(REVIEW));
+  });
+
+  it('takes a criterion out, keeps the last one, and shows the kernel’s word on the field it names', async () => {
+    const http = scriptedHttp(
+      handlers(reviewed(), workspace('p-alice', 'member'), {
+        ...models,
+        revise_goal: () => {
+          throw new HttpError('capability_error', 'plan: invalid', 'invalid_params', {
+            problems: [
+              'acceptance[1] "quality": criteria[0] "complete": the description looks like it carries a credential (1 suspected) — a plan does not carry credentials',
+              'acceptance[1] "quality": model — one this workspace does not allow: "model-a"',
+            ],
+          });
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const check = reviewCheck();
+    const [, clear] = within(check).getAllByTestId('goal-plan-review-criterion') as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    fireEvent.click(within(clear).getByTestId('goal-plan-review-criterion-remove'));
+    const left = within(check).getAllByTestId('goal-plan-review-criterion');
+    expect(left.map((element) => element.getAttribute('data-criterion'))).toEqual(['complete']);
+    // Gone: focus to what is left.
+    expect(left[0]?.contains(document.activeElement)).toBe(true);
+    // The last criterion cannot go: a review scores something.
+    expect(within(check).queryByTestId('goal-plan-review-criterion-remove')).toBeNull();
+    // Leaves the plan as it is: 'quality' still passes at 75%, now 9 of 12.
+    expect(within(check).getByText(/至少 9 分（满分 12 的 75%）算通过/)).toBeTruthy();
+
+    await send();
+    await waitFor(() =>
+      expect(errorOf('goal-plan-review-criterion-description')).toMatch(/carries a credential/),
+    );
+    expect(errorOf('goal-plan-review-model')).toMatch(/does not allow/);
+  });
+
+  it('says so when the model catalog cannot be read, and reads it again on asking', async () => {
+    let offline = true;
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        ...models,
+        list_models: (params) => {
+          if (offline) throw new HttpError('capability_error', 'catalog down', 'internal', {});
+          return models.list_models?.(params);
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    fireEvent.click(screen.getByTestId('goal-plan-add-review'));
+    const check = reviewCheck();
+    const note = await within(check).findByTestId('goal-plan-review-models-error');
+    expect(note.textContent).toContain('读不到模型目录');
+    // The usual "pick from the catalog" hint would contradict it: gone while the catalog is out.
+    expect(check.textContent).not.toContain('从模型目录里这个工作区允许的模型中选');
+    // The requester's model is still there to pick.
+    expect((within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).value).toBe(
+      '',
+    );
+    offline = false;
+    fireEvent.click(within(note).getByRole('button', { name: '重新读取' }));
+    await waitFor(() =>
+      expect(within(check).queryByTestId('goal-plan-review-models-error')).toBeNull(),
+    );
+    expect(
+      [...(within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).options].map(
+        (option) => option.value,
+      ),
+    ).toEqual(['', 'model-a', 'model-b']);
+    expect(check.textContent).toContain('从模型目录里这个工作区允许的模型中选');
+  });
+
+  it('removes a new review and gives the focus back to 加一条独立评审, which goes at the plan’s limit', async () => {
+    const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member'), models));
+    renderPage(http);
+    await openEditor();
+    const add = () => screen.queryByTestId('goal-plan-add-review');
+    fireEvent.click(add() as HTMLElement);
+    fireEvent.click(within(reviewCheck()).getByTestId('goal-plan-check-remove'));
+    expect(document.activeElement).toBe(add());
+    for (let n = 0; n < 4; n += 1) fireEvent.click(add() as HTMLElement);
+    expect(add()).toBeNull();
+    expect(
+      screen
+        .getAllByTestId('goal-plan-check')
+        .map((element) => element.getAttribute('data-check-key')),
+    ).toEqual(['certs', 'review', 'review-2', 'review-3', 'review-4']);
+  });
+});
+
 // Legacy 662: a session that expires under the plan editor unmounts the page; the requester
 // signing in again lands on the goal with the editor open and their changes back.
 describe('the plan editor across an unmount (legacy 662)', () => {

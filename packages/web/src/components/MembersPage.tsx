@@ -140,6 +140,10 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
     principals.state.status === 'ready'
       ? principals.state.data.items.filter((row) => !row.internal)
       : [];
+  // Legacy 729: the disabled ones (removed memberships, disabled service accounts) fold away below
+  // the active ones, each group in `list_principals`' order.
+  const activeRows = rows.filter((row) => !row.disabledAt);
+  const disabledRows = rows.filter((row) => row.disabledAt);
   // D3: unfiltered — `IssueServiceHandleSection` does its own `kind === 'service'` (+ internal /
   // disabled) filtering, same as it did fed from `AccessPage`'s own `principals`.
   const allPrincipals = principals.state.status === 'ready' ? principals.state.data.items : [];
@@ -157,6 +161,44 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
       ? (activeHumanOwners[0]?.id ?? null)
       : null;
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
+  // #1198 UX P2: the open drawer follows the list once it is read again (after a refusal that
+  // says the member changed meanwhile), not only the row it was opened with.
+  const detailPrincipal =
+    drawer.kind === 'detail'
+      ? (allPrincipals.find((row) => row.id === drawer.principal.id) ?? drawer.principal)
+      : null;
+
+  const renderRow = (row: PrincipalRow) => (
+    <ListRow
+      key={row.id}
+      testId="member-row"
+      onSelect={() => setDrawer({ kind: 'detail', principal: row })}
+      leading={<StatusChip machine="role" status={row.role} size="s" />}
+    >
+      {/* Row rhythm (console redesign P3-4): role chip leading, then name + 「你」 tag /
+       *  kind · id · key state — the id is plain text, never a `kit/ref-chip` (a row is
+       *  itself a `<button>`; a chip's own copy control would be a second, nested
+       *  interactive element, the exact bug part A found and fixed for the approvals row). */}
+      <span className="row-wrap">
+        <span className="truncate">{row.displayName}</span>
+        {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
+         *  principal id, once `get_workspace` resolves it. */}
+        {ownPrincipalId !== null && row.id === ownPrincipalId ? (
+          <span className="tag" data-testid="member-row-you">
+            {t('你', 'You')}
+          </span>
+        ) : null}
+        {row.disabledAt ? <span className="tag text-danger">{t('已停用', 'disabled')}</span> : null}
+      </span>
+      <span className="row-wrap text-3">
+        <span>{principalKindLabel(row.kind, t)}</span>
+        <span className="meta-sep" />
+        <span className="mono">{shortId(row.id)}</span>
+        <span className="meta-sep" />
+        <span>{row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}</span>
+      </span>
+    </ListRow>
+  );
 
   return (
     <div className="page">
@@ -237,51 +279,47 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
           testId="members-empty"
         />
       ) : (
-        <DashboardCard padded={false}>
-          <List ariaLabel="Members" testId="members-list">
-            {rows.map((row) => (
-              <ListRow
-                key={row.id}
-                testId="member-row"
-                onSelect={() => setDrawer({ kind: 'detail', principal: row })}
-                leading={<StatusChip machine="role" status={row.role} size="s" />}
-              >
-                {/* Row rhythm (console redesign P3-4): role chip leading, then name + 「你」 tag /
-                 *  kind · id · key state — the id is plain text, never a `kit/ref-chip` (a row is
-                 *  itself a `<button>`; a chip's own copy control would be a second, nested
-                 *  interactive element, the exact bug part A found and fixed for the approvals row). */}
-                <span className="row-wrap">
-                  <span className="truncate">{row.displayName}</span>
-                  {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
-                   *  principal id, once `get_workspace` resolves it. */}
-                  {ownPrincipalId !== null && row.id === ownPrincipalId ? (
-                    <span className="tag" data-testid="member-row-you">
-                      {t('你', 'You')}
-                    </span>
-                  ) : null}
-                  {row.disabledAt ? (
-                    <span className="tag text-danger">{t('已停用', 'disabled')}</span>
-                  ) : null}
-                </span>
-                <span className="row-wrap text-3">
-                  <span>{principalKindLabel(row.kind, t)}</span>
-                  <span className="meta-sep" />
-                  <span className="mono">{shortId(row.id)}</span>
-                  <span className="meta-sep" />
-                  <span>
-                    {row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}
-                  </span>
-                </span>
-              </ListRow>
-            ))}
-          </List>
-        </DashboardCard>
+        <>
+          {activeRows.length > 0 ? (
+            <DashboardCard padded={false}>
+              <List ariaLabel="Members" testId="members-list">
+                {activeRows.map(renderRow)}
+              </List>
+            </DashboardCard>
+          ) : null}
+          {disabledRows.length > 0 ? (
+            // Legacy 729 (#1193 UX): a disabled member is history — a person added back after a
+            // removal has a new membership above, and the old one would read as a duplicate of it
+            // (same name, another short id). Folded by default, still one click away.
+            <details className="disclosure" data-testid="members-disabled">
+              <summary>
+                {t(
+                  `已停用的成员（${disabledRows.length}）`,
+                  `Disabled members (${disabledRows.length})`,
+                )}
+              </summary>
+              <div className="stack-s disclosure-body">
+                <p className="text-3 text-small">
+                  {t(
+                    '停用的成员留作审计溯源，不能再改角色，也不会再启用。有人被加回来的话，上面是新的那条成员资格，这里是之前的那条。',
+                    'Disabled members are kept for audit lineage: their role cannot change and they are not enabled again. When someone was added back, their new membership is above and the one they had before is here.',
+                  )}
+                </p>
+                <DashboardCard padded={false}>
+                  <List ariaLabel="Disabled members" testId="members-disabled-list">
+                    {disabledRows.map(renderRow)}
+                  </List>
+                </DashboardCard>
+              </div>
+            </details>
+          ) : null}
+        </>
       )}
       {canManage &&
       principals.state.status === 'ready' &&
       principals.state.data.nextCursor === undefined &&
-      rows.length > 0 &&
-      rows.length <= 2 ? (
+      activeRows.length > 0 &&
+      activeRows.length <= 2 ? (
         // S8 W4 (audit L11 "成员...只有 1-2 行时，下方空白像没做完"): points back at the page's own
         // primary action instead of leaving bare canvas below a short list.
         <Notice testId="members-short-list-hint">
@@ -424,16 +462,17 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               {drawer.kind === 'detail' ? drawer.principal.displayName : t('成员', 'Member')}
             </SheetTitle>
           </SheetHeader>
-          {drawer.kind === 'detail' ? (
+          {detailPrincipal ? (
             <PrincipalDetail
-              key={drawer.principal.id}
+              key={detailPrincipal.id}
               http={http}
-              principal={drawer.principal}
+              principal={detailPrincipal}
               canManage={canManage}
-              isSelf={ownPrincipalId !== null && drawer.principal.id === ownPrincipalId}
-              lastActiveOwner={lastActiveOwnerId === drawer.principal.id}
+              isSelf={ownPrincipalId !== null && detailPrincipal.id === ownPrincipalId}
+              lastActiveOwner={lastActiveOwnerId === detailPrincipal.id}
               onChanged={handlePrincipalChanged}
               onForbidden={permissions.markDenied}
+              onStale={refreshList}
             />
           ) : null}
         </SheetContent>

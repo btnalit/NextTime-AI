@@ -8,6 +8,7 @@ import {
 } from '../enums.js';
 import { ProcedureStepSchema } from '../procedure.js';
 import { SkillApplicableSchema } from '../skill.js';
+import { WorkerDefinitionDerivationWireSchema } from './combination-candidates.js';
 
 /**
  * wire/worker: WorkerDefinition / Skill / Procedure wire shapes (docs/wire-contract-conventions.md
@@ -33,6 +34,12 @@ export const WorkerDefinitionWireSchema = z
     /** S11 GO9a: a version of the workspace's goal planner family — the platform's, run for a
      *  goal's planning rounds only; a plan does not run it as a step. */
     goalPlanner: z.boolean(),
+    /** S11 GO18: a version of the workspace's goal reviewer family — the platform's, run for a
+     *  goal's review checks only; a plan does not run it as a step. Absent for every other. */
+    goalReviewer: z.literal(true).optional(),
+    /** S11 GO16b: the combination a person derived this family from (every version of it says
+     *  so); absent for a family written any other way. */
+    derivedFrom: WorkerDefinitionDerivationWireSchema.optional(),
   })
   .strict();
 export type WorkerDefinitionWire = z.infer<typeof WorkerDefinitionWireSchema>;

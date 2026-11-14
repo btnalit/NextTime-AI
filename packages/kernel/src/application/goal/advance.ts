@@ -77,6 +77,7 @@ import {
 } from './planner.js';
 import { readGoalPlannerMode } from './planning-rounds.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
+import { readRunReviews, reviewTasksToStop, reviewUnmetDetail, runReviews } from './review.js';
 import { lockGoalRun } from './service.js';
 import { type StepFilesPort, checkStepFiles, resolveStepFilesSources } from './step-files.js';
 import { nameTrialStepRun, trialApprovalCandidates } from './trial-approvals.js';
@@ -216,11 +217,23 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      the confirmation pending → wait; every check passed → `completed(achieved)`, on
  *      `verified_by_check` when the platform checked anything, else on the requester's word
  *      (`requester`, their confirmation's Decision). The database refuses any other way to
- *      `achieved` (goal/0005, goal/0007). Leaving
+ *      `achieved` (goal/0005, goal/0007). A round with a review (S11 GO18, `review.ts`) runs it
+ *      once every check the platform makes passed and before the confirmation is asked (F6): its
+ *      reviewer Task is created here and started after the commit, and settled by the advance
+ *      after it ends; one that does not pass pauses the run like a failed check, naming what
+ *      pulled it down. Such a round ends on `reviewer_assessed` — a proxy indicator, never
+ *      `verified_by_check` — or, when the requester confirmed after the review, on their word
+ *      (`requester`, F7). The reviewer Task of a review that stopped waiting on it (the run left
+ *      `verifying`) is terminated after the commit, whatever the run's status. Leaving
  *      `verifying` supersedes the round's pending checks (`moves.ts`), so a paused, held or
- *      cancelled run observes nothing, and a resume verifies in a new round. No budget is checked
- *      while verifying: an observation is bounded by its own attempts and duration, and waiting
- *      for the requester spends nothing.
+ *      cancelled run observes nothing, and a resume verifies in a new round. The goal's budget
+ *      binds a reviewer, a Worker of the goal (`review.ts`): none starts past the wall clock (the
+ *      run pauses `budget_exhausted`, as in phase D) or while the evaluation seal pauses the
+ *      requester's agents (`needs_decision`, as in phase D); too few tokens left settle the review
+ *      `unavailable` (`no_budget`); and one held back by the requester's concurrency quota or a
+ *      reviewed step's container still exiting is tried again no later than the wall clock's end.
+ *      Nothing else is checked against the budget while verifying: an observation is bounded by
+ *      its own attempts and duration, and waiting for the requester spends nothing.
  *
  *   P. **Planning** (running, paused or verifying; S11 GO9a, `planner.ts`). Last: a planning round
  *      the run is no longer paused for is abandoned — its Task terminated after the commit, like
@@ -338,6 +351,8 @@ export interface GoalAdvanceDeps {
   readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
   /** S11 GO9a: the goal planner's template (`planner.ts`); default `ontology/goal-planner.yaml`. */
   readonly plannerTemplate?: () => Promise<PlannerTemplate>;
+  /** S11 GO18: the goal reviewer's template (`review.ts`); default `ontology/goal-reviewer.yaml`. */
+  readonly reviewerTemplate?: () => Promise<PlannerTemplate>;
 }
 
 export interface GoalAdvanceTarget {
@@ -358,6 +373,8 @@ export interface GoalAdvanceOutcome {
   /** S11 GO9a: the planner Task of the planning round this advance opened (started after the
    *  commit), if it opened one. */
   readonly planningTaskId?: string;
+  /** S11 GO18: the reviewer Tasks this advance created (started after the commit), if any. */
+  readonly reviewTaskIds?: readonly string[];
   readonly nextTickAt: Date | null;
 }
 
@@ -511,6 +528,7 @@ export async function advanceGoalRun(
         stepFiles: deps.taskRuntime.supervisorClient,
         ...(deps.modelCatalog ? { modelCatalog: deps.modelCatalog } : {}),
         ...(deps.plannerTemplate ? { plannerTemplate: deps.plannerTemplate } : {}),
+        ...(deps.reviewerTemplate ? { reviewerTemplate: deps.reviewerTemplate } : {}),
       });
       return advance.run();
     },
@@ -575,8 +593,13 @@ class Advance {
   private liveTasks: readonly LiveGoalTask[] = [];
   private readonly modelCatalog: (() => Promise<ReadonlySet<string>>) | undefined;
   private readonly plannerTemplate: (() => Promise<PlannerTemplate>) | undefined;
+  private readonly reviewerTemplate: (() => Promise<PlannerTemplate>) | undefined;
   private readonly stepFiles: StepFilesPort | undefined;
   private readonly stepFilesRecheckMs: number;
+  /** S11 GO18: the reviewer Tasks phase V created, started after the commit. */
+  private readonly reviews: PreparedStepAttempt[] = [];
+  /** S11 GO18: when a review phase V held back is tried again (epoch ms), or `null`. */
+  private reviewRetryAt: number | null = null;
   /** The run's pause reason as the advance leaves it: its own, or one this advance paused it for. */
   private pauseReason: GoalRunPauseReason | null;
   /** S11 GO9a: the planner Task phase P created, started after the commit. */
@@ -592,12 +615,14 @@ class Advance {
     sources: {
       readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
       readonly plannerTemplate?: () => Promise<PlannerTemplate>;
+      readonly reviewerTemplate?: () => Promise<PlannerTemplate>;
       readonly stepFiles?: StepFilesPort;
     } = {},
   ) {
     this.client = client;
     this.modelCatalog = sources.modelCatalog;
     this.plannerTemplate = sources.plannerTemplate;
+    this.reviewerTemplate = sources.reviewerTemplate;
     this.stepFiles = sources.stepFiles;
     this.stepFilesRecheckMs = options.stepFilesRecheckMs ?? DEFAULT_STEP_FILES_RECHECK_MS;
     this.goal = goal;
@@ -655,12 +680,21 @@ class Advance {
       if (planning.due) this.timers.push(this.now.getTime());
       if (planning.retryAt !== null) this.timers.push(planning.retryAt);
     }
+    // GO18: a reviewer Task whose review no longer waits on it — the run left `verifying` — is
+    // stopped, whatever the run's status now.
+    for (const taskId of await reviewTasksToStop(this.client, this.ws, this.goal.id)) {
+      if (!this.terminated.includes(taskId)) this.terminated.push(taskId);
+    }
 
+    const waits = [
+      ...(planning.retryAt !== null ? [planning.retryAt] : []),
+      ...(this.status === 'verifying' && this.reviewRetryAt !== null ? [this.reviewRetryAt] : []),
+    ];
     const nextTickAt =
       this.status === 'running'
         ? new Date(Math.min(this.deadline, ...this.timers))
-        : planning.retryAt !== null
-          ? new Date(planning.retryAt)
+        : waits.length > 0
+          ? new Date(Math.min(...waits))
           : null;
     await writeNextTick(this.client, this.goal, nextTickAt);
     return {
@@ -669,9 +703,12 @@ class Advance {
         startedTaskIds: this.started.map((attempt) => attempt.task.id),
         terminatedTaskIds: this.terminated,
         ...(this.planning ? { planningTaskId: this.planning.task.id } : {}),
+        ...(this.reviews.length > 0
+          ? { reviewTaskIds: this.reviews.map((review) => review.task.id) }
+          : {}),
         nextTickAt,
       },
-      attempts: this.planning ? [...this.started, this.planning] : this.started,
+      attempts: [...this.started, ...this.reviews, ...(this.planning ? [this.planning] : [])],
     };
   }
 
@@ -1528,34 +1565,89 @@ class Advance {
     }
     const platformChecks = round.filter((check) => isPlatformAcceptanceCheck(check.kind));
     if (platformChecks.some((check) => check.status === 'pending')) return;
+    if (await this.pauseOnUnmet(round)) return;
+    // GO18 (F6): every check the platform makes passed — the round's reviews now, before the
+    // requester is asked.
+    if (round.some((check) => check.kind === 'review' && check.status === 'pending')) {
+      const reviews = await runReviews({
+        client: this.client,
+        goal: this.goal,
+        round,
+        steps: await this.lockSteps(),
+        now: this.now,
+        deadline: this.deadline,
+        quotaRetryMs: this.quotaRetryMs,
+        stepFilesRecheckMs: this.stepFilesRecheckMs,
+        ...(this.reviewerTemplate ? { reviewerTemplate: this.reviewerTemplate } : {}),
+        ...(this.stepFiles ? { stepFiles: this.stepFiles } : {}),
+        ...(this.modelCatalog ? { modelCatalog: this.modelCatalog } : {}),
+      });
+      this.reviews.push(...reviews.start);
+      this.reviewRetryAt = reviews.retryAt;
+      round = await readCurrentAcceptanceRound(
+        this.client,
+        this.ws,
+        this.goal.id,
+        this.goal.updatedAt,
+      );
+      if (await this.pauseOnUnmet(round)) return;
+      // A reviewer is held to the goal's wall clock, and to the evaluation seal, like a step.
+      if (reviews.pause) {
+        await this.pause(reviews.pause.reason, reviews.pause.detail);
+        return;
+      }
+    }
+    // Every check the platform makes and every review passed: what is left is the requester's
+    // confirmation, if the round asks.
+    if (round.some((check) => check.status === 'pending')) return;
+    const confirmation = round.find((check) => check.kind === 'requester_confirm');
+    // F7: a review is a proxy indicator — a round with one ends on it, or on the requester's word
+    // when they confirmed after it; never on `verified_by_check`.
+    const reviewed = round.some((check) => check.kind === 'review');
+    const basis = reviewed
+      ? confirmation
+        ? 'requester'
+        : 'reviewer_assessed'
+      : platformChecks.length > 0
+        ? 'verified_by_check'
+        : 'requester';
+    this.status = await moveGoalRun(this.client, this.actor, this.goal, 'verifying', 'complete', {
+      outcome: {
+        outcome: 'achieved',
+        basis,
+        ...(basis === 'requester' && confirmation?.decisionId
+          ? { decisionId: confirmation.decisionId }
+          : {}),
+      },
+      audit: { round: round[0]?.round, checks: round.map((check) => check.checkKey) },
+    });
+  }
+
+  /** Pauses the run (`needs_decision`) when a check of `round` settled without passing, naming
+   *  each and its evidence — a review by what pulled it down (`review.ts`). Whether it did. */
+  private async pauseOnUnmet(round: readonly AcceptanceCheckRow[]): Promise<boolean> {
     const unmet = round.filter((check) => check.status !== 'passed' && check.status !== 'pending');
-    if (unmet.length > 0) {
-      const named = unmet.map((check) =>
-        check.status === 'failed'
+    if (unmet.length === 0) return false;
+    const reviews = unmet.some((check) => check.kind === 'review')
+      ? await readRunReviews(this.client, this.ws, this.goal.id)
+      : null;
+    const named = unmet.map((check) =>
+      check.kind === 'review'
+        ? reviewUnmetDetail(
+            check,
+            reviews?.get(`${check.round}:${check.checkKey}`)?.assessment ?? null,
+          )
+        : check.status === 'failed'
           ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)}`
           : (noFactSeen(check) ??
             neverSeenPresent(check) ??
             `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`),
-      );
-      await this.pause(
-        'needs_decision',
-        `round ${round[0]?.round}: ${named.join('; ')}; end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel`,
-      );
-      return;
-    }
-    // Every check the platform makes passed: what is left is the requester's confirmation, if the
-    // round asks.
-    if (round.some((check) => check.status === 'pending')) return;
-    const confirmation = round.find((check) => check.kind === 'requester_confirm');
-    const byCheck = platformChecks.length > 0;
-    this.status = await moveGoalRun(this.client, this.actor, this.goal, 'verifying', 'complete', {
-      outcome: {
-        outcome: 'achieved',
-        basis: byCheck ? 'verified_by_check' : 'requester',
-        ...(!byCheck && confirmation?.decisionId ? { decisionId: confirmation.decisionId } : {}),
-      },
-      audit: { round: round[0]?.round, checks: round.map((check) => check.checkKey) },
-    });
+    );
+    await this.pause(
+      'needs_decision',
+      `round ${round[0]?.round}: ${named.join('; ')}; end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel`,
+    );
+    return true;
   }
 
   /** Opens a round on the plan in force — or pauses the run when the plan's acceptance cannot be

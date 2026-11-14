@@ -38,6 +38,7 @@ import {
 } from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
 import { findGoalPlannerFamily } from './planning-task.js';
+import { findGoalReviewerFamily } from './review-task.js';
 import { type TaskRuntimeDeps, getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
@@ -128,9 +129,15 @@ export function taskVisibleTo(
   workerRuns: readonly WorkerRunRow[],
 ): boolean {
   if (viewer.seesEveryTask) return true;
-  if (task.onBehalfOf === viewer.principalId) return true;
   const sessionId = viewer.sessionId;
-  return sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
+  const ownRun = sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
+  // S11 GO18 (F5, I-E4 「对人透明、对 agent 封闭」): a goal reviewer's Task — the criteria in its
+  // input, the scores in its report — is closed to every agent but the reviewer: on the handle
+  // channel only its own WorkerRun's Handle reads it, never another Handle acting for the
+  // requester (a step Worker of the same goal acts for them too). People read it as before.
+  if (task.purpose === 'review' && sessionId !== undefined) return ownRun;
+  if (task.onBehalfOf === viewer.principalId) return true;
+  return ownRun;
 }
 
 /** `get_task`: `getTaskWithWorkerRuns` narrowed by `taskVisibleTo`. A Task the viewer may not see
@@ -316,8 +323,8 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
 
 /** `cancel_task`'s service half: transitions the Task to `cancelled`, then terminates every
  *  non-terminated WorkerRun under it (revoking their Handles). Idempotent — a Task already in a
- *  terminal status is a no-op, not an error (matches `terminateWorkerRunRow`'s own idempotency
- *  contract).
+ *  terminal status keeps it, not an error (matches `terminateWorkerRunRow`'s own idempotency
+ *  contract); only a run still live under it is ended.
  *
  *  Decide the Task first, then reap its runs — the same order as `failTaskAndReapWorkerRuns`
  *  (2026-10-10 review of #534). Reaping first left two windows: a crash reaction that saw the
@@ -327,7 +334,14 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
  *  first, a reaction's `failTaskRow` no-ops on the cancelled row, and `spawnWorkerRun`'s
  *  `for share` read either sees `cancelled` and refuses, or commits its WorkerRun before the
  *  cancel can, so the sweep below finds and terminates it. The sweep runs even when another
- *  writer decided the Task first: no live WorkerRun belongs under a terminal Task. */
+ *  writer decided the Task first, or the Task was already terminal when called (legacy 206): no
+ *  live WorkerRun belongs under a terminal Task.
+ *
+ *  The cancel and the sweep stay two transactions: ending the runs inside the cancel would lock
+ *  the Task's row before the runs', the reverse of every crash reaction (`lifecycle.ts`'s
+ *  `reactToSupervisorStatus`), and the two could deadlock. A kernel that dies between them leaves
+ *  a live run under the cancelled Task; the reaper ends it on its next tick (`reaper.ts`,
+ *  legacy 206). */
 export async function terminateTask(
   workspaceId: string,
   actorPrincipalId: string,
@@ -344,16 +358,8 @@ export async function terminateTaskWith(
   actorPrincipalId: string,
   taskId: string,
 ): Promise<TaskRow> {
-  const task = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: actorPrincipalId },
-    (client) => readTaskRow(client, workspaceId, taskId),
-  );
-  if (!task) throw new TaskNotFoundError(workspaceId, taskId);
-  if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-    return task;
-  }
-
+  // Legacy 206: no early return for a Task already decided — the sweep below still runs for it, so
+  // a run a crash left live under it is ended by the next cancel too, not only by the reaper.
   const decided = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: actorPrincipalId },
@@ -676,6 +682,7 @@ export async function findWorkers(
   // Nothing asked for, nothing read — and so no reason for an empty result either.
   if (limit !== undefined && limit <= 0) return { items: [] };
   let plannerFamily: string | null | undefined;
+  let reviewerFamily: string | null | undefined;
   // S11 GO13: why a match was not usable, counted as the candidates are read — exact when the
   // result is empty (every candidate was read); the planner's family, an entry definition and a
   // version no longer published are not matches at all.
@@ -697,6 +704,9 @@ export async function findWorkers(
       // a workspace owner's too (review #488 on #864).
       plannerFamily ??= await findGoalPlannerFamily(client, workspaceId);
       if (plannerFamily !== null && match.definitionId === plannerFamily) return undefined;
+      // S11 GO18: so is the goal reviewer's, run only for a review check (`review-task.ts`).
+      reviewerFamily ??= await findGoalReviewerFamily(client, workspaceId);
+      if (reviewerFamily !== null && match.definitionId === reviewerFamily) return undefined;
       if (!isWorkerDefinitionEnabledForCaller(caller, match.definitionId)) {
         excludedByProfile += 1;
         return undefined;

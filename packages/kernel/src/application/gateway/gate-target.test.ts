@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
+import { normalizeGateEndpoint } from '../../governance/gatekeepers/index.js';
 import { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
 
 /** A `PoolClient` stand-in whose only query (`gate_instances`) answers with `catalog`. */
@@ -23,6 +24,7 @@ describe('gate-target (R-01 / D-01: which credential a registered Gatekeeper get
       resolveGateTarget(client, WORKSPACE, { endpoint: 'http://gatekeeper-docker:8083/' }),
     ).resolves.toEqual({
       endpoint: 'http://gatekeeper-docker:8083/',
+      endpointKey: normalizeGateEndpoint('http://gatekeeper-docker:8083/'),
       credential: { kind: 'platform' },
     });
     // Every /i/* under an announced gate-host covers hosted ids not announced yet.
@@ -47,6 +49,7 @@ describe('gate-target (R-01 / D-01: which credential a registered Gatekeeper get
       }),
     ).resolves.toEqual({
       endpoint: 'https://gate.owner.example',
+      endpointKey: normalizeGateEndpoint('https://gate.owner.example'),
       credential: { kind: 'connection', workspaceId: WORKSPACE, salt: SALT },
     });
     await expect(
@@ -59,6 +62,20 @@ describe('gate-target (R-01 / D-01: which credential a registered Gatekeeper get
         connectionSecretSalt: 'not-a-salt',
       }),
     ).resolves.toMatchObject({ credential: { kind: 'none' } });
+  });
+
+  // Legacy 701 (I-A3): the address a request is bound to and compared with, in one spelling — a
+  // trailing slash or a host's case is not another address.
+  it('keys the address the way a request records it', async () => {
+    const client = catalogClient([]);
+    const one = await resolveGateTarget(client, WORKSPACE, {
+      endpoint: 'https://Gate.Owner.example/',
+    });
+    const other = await resolveGateTarget(client, WORKSPACE, {
+      endpoint: 'https://gate.owner.example',
+    });
+    expect(one.endpointKey).toBe(other.endpointKey);
+    expect(one.endpointKey).toBe(normalizeGateEndpoint('https://gate.owner.example'));
   });
 
   it('never matches an endpoint that is not a URL', async () => {

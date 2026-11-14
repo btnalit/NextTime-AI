@@ -20,6 +20,7 @@ import {
   planHints,
   planShape,
   planStep,
+  procedureParametersAsRead,
   refusePlanCredentials,
   reviewRevisedPlan,
   roundAcceptance,
@@ -684,9 +685,10 @@ describe('parsePlan — absence is never proof, wherever a predicate sits (S11 G
 
   it('covers reconcile and every acceptance check kind that carries a predicate, on the goal and on a step', () => {
     // The requester's word carries none, nor does an absence check (S11 「门确认不存在」 B): the
-    // gate's answer is the check, and its schema refuses a predicate (`predicate.test.ts`).
+    // gate's answer is the check, and its schema refuses a predicate (`predicate.test.ts`); nor
+    // does a review (S11 GO18): the platform's arithmetic over a reviewer's scores is its verdict.
     const judged = GOAL_ACCEPTANCE_CHECK_KIND_VALUES.filter(
-      (kind) => kind !== 'requester_confirm' && kind !== 'observe_absent',
+      (kind) => kind !== 'requester_confirm' && kind !== 'observe_absent' && kind !== 'review',
     );
     expect(Object.keys(PLACES).sort()).toEqual(
       ['reconcile', ...judged.flatMap((kind) => [`goal ${kind}`, `step ${kind}`])].sort(),
@@ -800,6 +802,29 @@ describe('refusePlanCredentials', () => {
       field: 'plan.steps.0.input.schema.apiKey.default',
       suspectedSecretValues: 1,
       suspectedSecretPaths: ['plan.steps.0.input.schema.apiKey.default'],
+    });
+  });
+
+  it('refuses a credential written as a key, not a value (legacy 444), naming the key only as shown', () => {
+    const refused = refusalOf({
+      steps: [step('a', { input: { headers: { [`Bearer ${FAKE}`]: true } } })],
+      acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: 'Is it done?' }],
+    });
+    expect(refused).toBeInstanceOf(TextCarriesCredentialsError);
+    expect(refused.details).toEqual({
+      field: 'plan.steps.0.input.headers.Bearer [redacted]',
+      suspectedSecretValues: 1,
+      suspectedSecretPaths: ['plan.steps.0.input.headers.Bearer [redacted]'],
+    });
+    expect(JSON.stringify(refused)).not.toContain(FAKE);
+  });
+
+  it('reads a plan or start parameters stored before that with the key masked (legacy 444)', () => {
+    const stored = planShape({ steps: [step('a', { input: { [`Bearer ${FAKE}`]: 'x' } })] });
+    expect(planAsRead(stored).steps[0]?.input).toEqual({ 'Bearer [redacted]': 'x' });
+    expect(procedureParametersAsRead({ site: 'main', [`sk-ant-${FAKE}`]: 1 })).toEqual({
+      site: 'main',
+      '[redacted]': 1,
     });
   });
 
@@ -1041,6 +1066,37 @@ describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
         calls,
       ).steps,
     ).toEqual(calls.steps.map((entry) => ({ ...entry, maxAttempts: 2 })));
+  });
+
+  it('a key the read masked (legacy 444): sent back as read it is the stored call; changed, it is refused where it stands', () => {
+    // Stored before keys were checked: a credential written as a field name.
+    const keyed = planShape({
+      steps: [step('k', { input: { host: 'db1', headers: { [`Bearer ${FAKE}`]: true } } })],
+    });
+    const [readK] = planAsRead(keyed).steps as [PlanStep];
+    expect(readK.input).toEqual({ host: 'db1', headers: { 'Bearer [redacted]': true } });
+    // The writer wrote nothing new there: the stored call, never refused for the mask a read showed.
+    expect(reviewRevisedPlan(planShape({ steps: [readK] }), keyed)).toEqual(keyed);
+    expect(
+      reviewRevisedPlan(planShape({ steps: [{ ...readK, maxAttempts: 2 }] }), keyed).steps,
+    ).toEqual([{ ...keyed.steps[0], maxAttempts: 2 }]);
+    // Changed anywhere, the input is as sent: the masked key left in it is refused at its place.
+    let refused: { name: string; details: unknown } | undefined;
+    try {
+      reviewRevisedPlan(
+        planShape({ steps: [{ ...readK, input: { ...(readK.input as object), host: 'db2' } }] }),
+        keyed,
+      );
+    } catch (err) {
+      refused = { name: (err as Error).name, details: (err as { details: unknown }).details };
+    }
+    expect(refused).toEqual({
+      name: 'RedactedTextSubmittedError',
+      details: {
+        field: 'plan.steps.0.input.headers.Bearer [redacted]',
+        paths: ['plan.steps.0.input.headers.Bearer [redacted]'],
+      },
+    });
   });
 
   it('never brings one entry’s original along with another’s read', () => {

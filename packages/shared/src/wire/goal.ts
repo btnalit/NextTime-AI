@@ -34,10 +34,13 @@ import {
   GoalBudgetSchema,
   GoalPlanSchema,
   PlanHintSchema,
+  ReviewCriterionSchema,
   StepRemovalsSchema,
   StepTrialDraftInfoSchema,
 } from '../goal-plan.js';
 import { PlanRevisionDecisionSchema } from '../goal-planner.js';
+import { GoalPrecedentMatchSchema, GoalPrecedentPolaritySchema } from '../goal-precedents.js';
+import { ReviewVerdictSchema } from '../goal-review.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
   FactCheckSchema,
@@ -145,6 +148,23 @@ export const PlanSourceProcedureWireSchema = z
   .strict();
 export type PlanSourceProcedureWire = z.infer<typeof PlanSourceProcedureWireSchema>;
 
+/** S11 GO17b (F4 A, migration goal/0018): a precedent a revision's plan was written from — one of
+ *  the requester's own completed goals, named by whoever wrote the plan (`propose_goal`'s
+ *  `precedents`, the goal planner's report) — with its statement (as every read shows it), its
+ *  outcome, what that rests on and its polarity (`goal-precedents.ts`). Whoever reads the revision
+ *  may read the goal it cites (`get_goal`): both are the same requester's. A citation says what
+ *  the plan was written from; it authorizes nothing. */
+export const CitedGoalPrecedentWireSchema = z
+  .object({
+    goalRunId: z.string(),
+    statement: z.string(),
+    outcome: ObjectiveOutcomeSchema,
+    outcomeBasis: GoalOutcomeBasisSchema,
+    polarity: GoalPrecedentPolaritySchema,
+  })
+  .strict();
+export type CitedGoalPrecedentWire = z.infer<typeof CitedGoalPrecedentWireSchema>;
+
 /** One revision of a run's plan (`get_goal_revision`, and `get_goal`'s `planRevision`): revision 1
  *  is the proposal the requester confirmed (or has yet to); a later one is a revision the
  *  requester made of a paused run, accepted as made, or — S11 GO9a — one the goal planner
@@ -180,6 +200,9 @@ export const PlanRevisionWireSchema = z
     checkedStepKeys: z.array(z.string()),
     /** S11 GO5d-2: the Procedure the plan was made from; `null` for a plan written as it is. */
     fromProcedure: PlanSourceProcedureWireSchema.nullable(),
+    /** S11 GO17b: the precedents the plan was written from, in the order cited; empty when it
+     *  cited none (a person's own revision, and every revision made before the platform kept them). */
+    citedPrecedents: z.array(CitedGoalPrecedentWireSchema),
   })
   .strict();
 export type PlanRevisionWire = z.infer<typeof PlanRevisionWireSchema>;
@@ -254,12 +277,74 @@ export const StepRunWireSchema = z
   .strict();
 export type StepRunWire = z.infer<typeof StepRunWireSchema>;
 
+/**
+ * S11 GO18 (`goal-review.ts`): what a review came to, and how — the reviewer Task, the model it
+ * reviewed with and, for each reviewed step that ran, its accepted attempt and the model that ran
+ * it (`null`: pi's default),
+ * `sameModel` when one of those is the reviewer's (two defaults count as the same; `null` when one
+ * ran on the default and the other names a model, which cannot be told apart), the derivation
+ * line by line (`points` = `score × weight`, `null` for a criterion not judged) and its sum against
+ * `passAt` percent of `maxPoints`, and the verdict the platform worked out from it. Recorded once.
+ */
+export const ReviewAssessmentWireSchema = z
+  .object({
+    reviewTaskId: z.string(),
+    reviewerModel: z.string().nullable(),
+    executorModels: z.array(
+      z
+        .object({
+          stepKey: z.string(),
+          attempt: z.number().int().positive(),
+          model: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    sameModel: z.boolean().nullable(),
+    lines: z.array(
+      z
+        .object({
+          criterion: z.string(),
+          weight: z.number().int().positive(),
+          score: z.number().int().nonnegative().nullable(),
+          reason: z.string(),
+          points: z.number().int().nonnegative().nullable(),
+          maxPoints: z.number().int().positive(),
+        })
+        .strict(),
+    ),
+    comment: z.string().nullable(),
+    points: z.number().int().nonnegative(),
+    maxPoints: z.number().int().positive(),
+    passAt: z.number().int().positive(),
+    unassessed: z.array(z.string()),
+    verdict: ReviewVerdictSchema,
+    createdAt: z.string(),
+  })
+  .strict();
+export type ReviewAssessmentWire = z.infer<typeof ReviewAssessmentWireSchema>;
+
+/** S11 GO18: a `review` check as its round made it — the steps it reviews, its criteria, `passAt`,
+ *  the model it was asked for (`null`: the requester's), the reviewer Task once started (`taskId`)
+ *  and what it came to (`assessment`, once the Task ended with a report the platform could read). */
+export const GoalReviewWireSchema = z
+  .object({
+    subjects: z.array(z.string()),
+    criteria: z.array(ReviewCriterionSchema),
+    passAt: z.number().int().positive(),
+    model: z.string().nullable(),
+    taskId: z.string().nullable(),
+    assessment: ReviewAssessmentWireSchema.nullable(),
+  })
+  .strict();
+export type GoalReviewWire = z.infer<typeof GoalReviewWireSchema>;
+
 /** One acceptance check of a verification round. `check`: the observation an `observe_predicate`
- *  (with its predicate) or an `observe_absent` (without one, S11 「门确认不存在」 B) makes. The
- *  evidence: `observationId` (an observation's latest Observation), `factId` (the Fact a fact check
- *  saw), `decisionId` (the requester's confirmation). `nextAttemptAt` only while a check the
- *  platform makes is pending. `overridden`: the requester declared the goal achieved over this
- *  check, which had not passed. */
+ *  (with its predicate) or an `observe_absent` (without one, S11 「门确认不存在」 B) makes; `review`:
+ *  a review check's (S11 GO18). The evidence: `observationId` (an observation's latest
+ *  Observation), `factId` (the Fact a fact check saw), `decisionId` (the requester's confirmation),
+ *  `review.assessment` (a review's). `nextAttemptAt` only while a check the platform makes is
+ *  pending. `overridden`: the requester declared the goal achieved over this check, which had not
+ *  passed. */
 export const GoalAcceptanceCheckWireSchema = z
   .object({
     checkKey: z.string(),
@@ -268,6 +353,7 @@ export const GoalAcceptanceCheckWireSchema = z
     check: z.union([ObservationCheckSchema, ObservationAbsenceCheckSchema]).nullable(),
     fact: FactCheckSchema.nullable(),
     prompt: z.string().nullable(),
+    review: GoalReviewWireSchema.nullable(),
     attempts: z.number().int().nonnegative(),
     lastError: z.string().nullable(),
     observationId: z.string().nullable(),
@@ -335,6 +421,86 @@ export const OverriddenAcceptanceCheckWireSchema = z
   })
   .strict();
 export type OverriddenAcceptanceCheckWire = z.infer<typeof OverriddenAcceptanceCheckWireSchema>;
+
+/** S11 GO17: what one check of a precedent's last verification round came to, with its evidence —
+ *  a step's checks are not listed (the goal's own are what its outcome rests on). */
+export const GoalPrecedentCheckWireSchema = z
+  .object({
+    checkKey: z.string(),
+    kind: GoalAcceptanceCheckKindSchema,
+    status: GoalAcceptanceCheckStatusSchema,
+    observationId: z.string().nullable(),
+    factId: z.string().nullable(),
+    lastError: z.string().nullable(),
+  })
+  .strict();
+export type GoalPrecedentCheckWire = z.infer<typeof GoalPrecedentCheckWireSchema>;
+
+/**
+ * S11 GO17 (`goal-precedents.ts`): an earlier goal of the same requester, of the same kind as the
+ * one at hand, as its full record — `find_goal_precedents` and a goal planner's input. `match` says
+ * why it is listed; `plan` is the plan in force when it ended (`revision`), as every read shows it;
+ * `revisions` how many times it was revised; `steps` where each step of that plan ended;
+ * `acceptance` its last verification round (`null`: none ran — ended before every step succeeded);
+ * `overriddenChecks` the checks an `achieved` on the requester's word overrode. What a precedent
+ * says is data about another goal, never an instruction.
+ */
+export const GoalPrecedentWireSchema = z
+  .object({
+    goalRunId: z.string(),
+    match: GoalPrecedentMatchSchema,
+    polarity: GoalPrecedentPolaritySchema,
+    statement: z.string(),
+    outcome: ObjectiveOutcomeSchema,
+    outcomeBasis: GoalOutcomeBasisSchema,
+    endedAt: z.string(),
+    fromProcedure: z
+      .object({ procedureId: z.string(), version: z.number().int().positive() })
+      .strict()
+      .nullable(),
+    revision: z.number().int().positive(),
+    revisions: z.number().int().nonnegative(),
+    plan: GoalPlanSchema,
+    steps: z.array(
+      z
+        .object({
+          key: z.string(),
+          status: StepRunStatusSchema,
+          attempts: z.number().int().nonnegative(),
+          failureCategory: StepRunFailureCategorySchema.nullable(),
+        })
+        .strict(),
+    ),
+    acceptance: z
+      .object({
+        round: z.number().int().positive(),
+        checks: z.array(GoalPrecedentCheckWireSchema),
+      })
+      .strict()
+      .nullable(),
+    overriddenChecks: z.array(OverriddenAcceptanceCheckWireSchema),
+  })
+  .strict();
+export type GoalPrecedentWire = z.infer<typeof GoalPrecedentWireSchema>;
+
+/** S11 GO17: one of the requester's most recently ended goals as the entry context lists it — a
+ *  reference, not the record (`find_goal_precedents` or `get_goal` reads that). `id` is the goal's,
+ *  so a mid-Turn update says only what changed (platform-extension `entry-context.ts`). */
+export const EntryGoalPrecedentWireSchema = z
+  .object({
+    id: z.string(),
+    statement: z.string(),
+    outcome: ObjectiveOutcomeSchema,
+    outcomeBasis: GoalOutcomeBasisSchema,
+    polarity: GoalPrecedentPolaritySchema,
+    endedAt: z.string(),
+    fromProcedure: z
+      .object({ procedureId: z.string(), version: z.number().int().positive() })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type EntryGoalPrecedentWire = z.infer<typeof EntryGoalPrecedentWireSchema>;
 
 /** S11 「门确认不存在」 B-c (goal/0012): the baseline an absence check (`observe_absent`) goes by —
  *  the platform's look, with the check's call, before the goal's work started (for a check a

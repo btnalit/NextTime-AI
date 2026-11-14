@@ -3,6 +3,7 @@ import type { PlatformWorkspaceWire, UserWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { UserMembershipsPanel } from './UserMembershipsPanel.js';
 
 afterEach(cleanup);
@@ -70,6 +71,14 @@ function user(overrides: Partial<UserWire> = {}): UserWire {
     ],
     ...overrides,
   };
+}
+
+/** Alice, an active member of Acme (the default `user()` was removed from it). */
+function memberOfAcme(): UserWire {
+  const removed = user();
+  return user({
+    memberships: removed.memberships.map((membership) => ({ ...membership, disabled: false })),
+  });
 }
 
 function renderPanel(http: CapabilityCaller, row: UserWire = user()) {
@@ -152,14 +161,14 @@ describe('UserMembershipsPanel', () => {
       }),
       add_membership: () => ({}),
     });
-    const { onChanged } = renderPanel(http);
+    const { onChanged } = renderPanel(http, memberOfAcme());
     const select = screen.getByLabelText(/加入工作区/) as HTMLSelectElement;
     await waitFor(() => expect(select.options.length).toBe(3));
     expect(http.calls[0]).toEqual({
       name: 'list_workspaces',
       params: { status: 'active', includeExpired: false },
     });
-    // Acme is already held (even as a disabled membership) — not offered; no typed-id option.
+    // Acme is already held — not offered; no typed-id option.
     expect([...select.options].map((option) => option.textContent)).toEqual([
       '选择工作区',
       'Beta',
@@ -180,11 +189,194 @@ describe('UserMembershipsPanel', () => {
       workspaceId: 'ws-3',
       role: 'builder',
     });
+    expect(screen.queryByTestId('user-membership-readd')).toBeNull();
+  });
+
+  // Legacy 725: `add_membership` adds a removed member back, as a new membership.
+  it('offers a workspace the user was removed from, and says the drafts and goals from before stay behind', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [workspace(), workspace({ id: 'ws-2', name: 'Beta' })] }),
+      add_membership: () => ({}),
+    });
+    const { onChanged } = renderPanel(http);
+    const select = screen.getByLabelText(/加入工作区/) as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...select.options].map((option) => option.textContent)).toEqual([
+        '选择工作区',
+        'Acme',
+        'Beta',
+      ]),
+    );
+    fireEvent.change(select, { target: { value: 'ws-2' } });
+    expect(screen.queryByTestId('user-membership-readd')).toBeNull();
+    fireEvent.change(select, { target: { value: 'ws-1' } });
+    expect(screen.getByTestId('user-membership-readd').textContent).toBe(
+      `这位用户曾被移出「${'Acme'}」。加入会新建一条成员资格，原来那条留着供审计溯源；这位用户看不到移出前的草稿和目标。`,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '加入' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(http.calls.find((call) => call.name === 'add_membership')?.params).toEqual({
+      userId: 'u-1',
+      workspaceId: 'ws-1',
+      role: 'member',
+    });
+  });
+
+  // Legacy 730 (687): `set_membership_role` refuses a removed membership and removing it again
+  // changes nothing, so its row offers neither, and says how the person comes back.
+  it('a removed membership is read-only: its role as it was, no role change or 移出, and the way back; active ones come first', async () => {
+    const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
+    renderPanel(
+      http,
+      user({
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'operator',
+            disabled: true,
+          },
+          {
+            workspaceId: 'ws-2',
+            workspaceName: 'Beta',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-2',
+            role: 'builder',
+            disabled: false,
+          },
+        ],
+      }),
+    );
+    const rows = screen.getAllByTestId('user-membership-row');
+    expect(rows.map((row) => within(row).getByText(/Acme|Beta/).textContent)).toEqual([
+      'Beta',
+      'Acme',
+    ]);
+    const [active, removed] = rows as [HTMLElement, HTMLElement];
+    expect(within(active).getByRole('combobox')).toBeTruthy();
+    expect(within(active).getByRole('button', { name: '移出' })).toBeTruthy();
+
+    expect(within(removed).getByText('已停用')).toBeTruthy();
+    expect(within(removed).queryByRole('combobox')).toBeNull();
+    expect(within(removed).queryByRole('button', { name: '移出' })).toBeNull();
+    const note = within(removed).getByTestId('user-membership-removed');
+    expect(note.textContent).toContain('停用时的角色操作员');
+    expect(note.textContent).toContain('在下面「加入工作区」里重新加入，会新建一条成员资格');
+    await screen.findByTestId('user-memberships-workspace-empty');
+    expect(http.calls.map((call) => call.name)).toEqual(['list_workspaces']);
+  });
+
+  // #1198 UX P2: removed after the drawer read it — the refusal reads the user again, so the row
+  // turns read-only and the workspace is back in the picker; the refusal stays on the row.
+  it('a role change refused as membership_removed reads the user again; the refusal stays on the now read-only row', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [workspace()] }),
+      set_membership_role: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'membership is removed', 'membership_removed'),
+        ),
+    });
+    const onChanged = vi.fn();
+    const { rerender } = render(
+      <UserMembershipsPanel
+        http={http}
+        user={memberOfAcme()}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'builder' } });
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(within(row).getByText(/角色不能再改/)).toBeTruthy();
+
+    // What the re-read gives: the membership removed.
+    rerender(
+      <UserMembershipsPanel http={http} user={user()} onChanged={onChanged} onBack={vi.fn()} />,
+    );
+    const after = screen.getByTestId('user-membership-row');
+    expect(within(after).queryByRole('combobox')).toBeNull();
+    expect(within(after).getByTestId('user-membership-removed')).toBeTruthy();
+    expect(within(after).getByText(/角色不能再改，什么也没有改/)).toBeTruthy();
+  });
+
+  it('a removal refused as membership_replaced reads the user again and shows the new membership with its own role', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+      remove_membership: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'removed and added back', 'membership_replaced'),
+        ),
+    });
+    const onChanged = vi.fn();
+    const { rerender } = render(
+      <UserMembershipsPanel
+        http={http}
+        user={memberOfAcme()}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.click(within(row).getByRole('button', { name: '移出' }));
+    fireEvent.click(within(row).getByRole('button', { name: '确认移出' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(within(row).queryByRole('button', { name: '确认移出' })).toBeNull();
+    expect(within(row).getByText(/又被重新加入了这个工作区/)).toBeTruthy();
+
+    const replaced = memberOfAcme();
+    rerender(
+      <UserMembershipsPanel
+        http={http}
+        user={{
+          ...replaced,
+          memberships: replaced.memberships.map((membership) => ({
+            ...membership,
+            principalId: 'p-new',
+            role: 'auditor',
+          })),
+        }}
+        onChanged={onChanged}
+        onBack={vi.fn()}
+      />,
+    );
+    const after = screen.getByTestId('user-membership-row');
+    expect((within(after).getByRole('combobox') as HTMLSelectElement).value).toBe('auditor');
+    expect(within(after).getByText(/又被重新加入了这个工作区/)).toBeTruthy();
+  });
+
+  it('other refusals do not read the user again', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+      set_membership_role: () =>
+        Promise.reject(new HttpError('capability_error', 'last owner', 'last_owner')),
+    });
+    const { onChanged } = renderPanel(http, memberOfAcme());
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'builder' } });
+    await screen.findByText(/最后一位有效的所有者/);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('removing a membership says the person can be added back, as a new membership', async () => {
+    const http = scriptedHttp({ list_workspaces: () => ({ items: [] }) });
+    const what = '草稿和目标';
+    renderPanel(http, memberOfAcme());
+    const row = screen.getByTestId('user-membership-row');
+    fireEvent.click(within(row).getByRole('button', { name: '移出' }));
+    expect(row.textContent).toContain(
+      `之后可以再加入，但那是一条新的成员资格，看不到移出前的${what}。`,
+    );
+    await screen.findByTestId('user-memberships-workspace-empty');
   });
 
   it('says so when the user already belongs to every active workspace', async () => {
     const http = scriptedHttp({ list_workspaces: () => ({ items: [workspace()] }) });
-    renderPanel(http);
+    renderPanel(http, memberOfAcme());
     expect(await screen.findByTestId('user-memberships-workspace-empty')).toBeTruthy();
     expect(screen.getByText(/已加入所有可用的工作区/)).toBeTruthy();
   });
@@ -221,13 +413,13 @@ describe('UserMembershipsPanel', () => {
             workspaceStatus: 'disabled',
             principalId: 'p-1',
             role: 'operator',
-            disabled: true,
+            disabled: false,
           },
         ],
       }),
     );
     const row = screen.getByTestId('user-membership-row');
-    expect(within(row).getByText('已停用')).toBeTruthy();
+    expect(within(row).queryByText('已停用')).toBeNull();
     expect(within(row).getByText('工作区已停用')).toBeTruthy();
     const rowRole = within(row).getByLabelText(/角色/) as HTMLSelectElement;
     const addRole = screen.getByLabelText(/^角色/, { selector: '#um-role' }) as HTMLSelectElement;

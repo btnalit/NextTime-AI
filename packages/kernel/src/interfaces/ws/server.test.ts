@@ -774,6 +774,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },
@@ -814,6 +815,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },
@@ -863,6 +865,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       let consoleLogin: string;
       const consolePassword = 'correct horse battery staple';
       let secondWorkspaceId: string;
+      /** The console user's Principal in `secondWorkspaceId`, a `member`. */
+      let secondPrincipalId: string;
       let unrelatedWorkspaceId: string;
 
       beforeAll(async () => {
@@ -904,7 +908,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         // Membership 2: a second Principal in a second workspace — two active memberships total,
         // so `authenticate {}` with no workspaceId hint cannot resolve one on its own.
-        const secondPrincipalId = randomUUID();
+        secondPrincipalId = randomUUID();
         await withWorkspace(
           pool,
           { workspaceId: secondWorkspaceId, principalId: secondPrincipalId },
@@ -950,6 +954,52 @@ describe.runIf(DATABASE_URL !== undefined)(
         const chats = await client.call<{ items: unknown[] }>('list_chats', {});
         expect(Array.isArray(chats.items)).toBe(true);
         client.close();
+      });
+
+      it('legacy 699: a role changed after connect applies from the next call on, and the socket stays open', async () => {
+        const setRole = (role: string) =>
+          withWorkspace(
+            pool,
+            { workspaceId: secondWorkspaceId, principalId: secondPrincipalId },
+            (client) =>
+              client.query('update principals set role = $3 where workspace_id = $1 and id = $2', [
+                secondWorkspaceId,
+                secondPrincipalId,
+                role,
+              ]),
+            { skipRoleSwitch: true },
+          );
+        const token = await loginForCookie();
+        const client = await WsRpcClient.connect(keyWsUrl, {
+          cookie: `${CONSOLE_SESSION_COOKIE}=${token}`,
+        });
+        try {
+          await client.call('authenticate', { workspaceId: secondWorkspaceId });
+          // `mark_turn_outcome` is a member's, not an auditor's (D-07). Dispatch authorizes before
+          // it reads the params, so `{}` tells the two apart: a member gets INVALID_PARAMS, an
+          // auditor FORBIDDEN.
+          await expect(client.call('mark_turn_outcome', {})).rejects.toMatchObject({
+            code: WS_ERROR_CODES.INVALID_PARAMS,
+          });
+
+          // What `set_principal_role` writes (members-flow.integration.test.ts drives the
+          // capability itself); the socket was authenticated as a member before it.
+          await setRole('auditor');
+          await expect(client.call('mark_turn_outcome', {})).rejects.toMatchObject({
+            code: WS_ERROR_CODES.FORBIDDEN,
+          });
+          // An auditor still reads its chats: the socket is open and serving.
+          const chats = await client.call<{ items: unknown[] }>('list_chats', {});
+          expect(Array.isArray(chats.items)).toBe(true);
+
+          await setRole('member');
+          await expect(client.call('mark_turn_outcome', {})).rejects.toMatchObject({
+            code: WS_ERROR_CODES.INVALID_PARAMS,
+          });
+        } finally {
+          await setRole('member');
+          client.close();
+        }
       });
 
       it('authenticate {workspaceId} for a workspace the user is not a member of → FORBIDDEN', async () => {

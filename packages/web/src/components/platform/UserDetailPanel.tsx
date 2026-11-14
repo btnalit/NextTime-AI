@@ -123,6 +123,26 @@ export function UserDetailPanel({
   const directory = useUserDirectoryTap(http, (candidate) =>
     sameDisplayName(candidate.displayName, user.displayName) ? 0 : 1,
   );
+  // UX acceptance of #1185 (P2): only two memberships in one workspace that are not removed
+  // clash (`merge_user` refuses them, `already_member`); where one is removed, that one is let go
+  // and the other stays or moves. Said before the merge instead of after a refusal.
+  const pairs =
+    mergeTarget === undefined
+      ? []
+      : user.memberships.flatMap((ours) => {
+          const theirs = mergeTarget.memberships.find((m) => m.workspaceId === ours.workspaceId);
+          return theirs === undefined ? [] : [{ ours, theirs }];
+        });
+  const clashes = pairs.filter(({ ours, theirs }) => !ours.disabled && !theirs.disabled);
+  // Legacy 725 (UX on #1189): and where each of the two is removed — this account's from this
+  // drawer's 「管理成员资格」, the target's from the target's own drawer.
+  const clashReason =
+    clashes.length === 0 || mergeTarget === undefined
+      ? undefined
+      : t(
+          `两个账户在工作区 ${clashes.map(({ ours }) => ours.workspaceName).join('、')} 都有没停用的成员资格：先在那里移出其中一个（${user.login} 的在本页「管理成员资格」里移出，${mergeTarget.login} 的在 ${mergeTarget.login} 的用户详情里移出）`,
+          `Both accounts hold a membership that is not disabled in workspace ${clashes.map(({ ours }) => ours.workspaceName).join(', ')}: remove one of them there first (${user.login}'s under “Manage memberships” on this page, ${mergeTarget.login}'s in ${mergeTarget.login}'s user details)`,
+        );
   const sameNameCandidates = directory.rows.filter(
     (candidate) =>
       candidate.id !== user.id &&
@@ -507,7 +527,7 @@ export function UserDetailPanel({
           />
           <Confirm
             tier="irreversible"
-            open={confirmingMerge && mergeTarget !== undefined}
+            open={confirmingMerge && mergeTarget !== undefined && clashReason === undefined}
             onOpenChange={setConfirmingMerge}
             anchor={
               <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -517,12 +537,13 @@ export function UserDetailPanel({
                       ? [t('选择要合并到的账户', 'pick the account to merge into')]
                       : []
                   }
+                  reason={clashReason}
                   testId="user-merge-missing"
                 />
                 <Button
                   variant="secondary"
                   onClick={() => setConfirmingMerge(true)}
-                  disabled={mergeTarget === undefined}
+                  disabled={mergeTarget === undefined || clashReason !== undefined}
                 >
                   {t('合并', 'Merge')}
                 </Button>
@@ -540,12 +561,40 @@ export function UserDetailPanel({
             impact={
               user.memberships.length === 0
                 ? [t('没有要转移的成员资格', 'No memberships to move')]
-                : user.memberships.map((membership) =>
-                    t(
-                      `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''} → ${mergeTarget?.login ?? ''}`,
-                      `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''} → ${mergeTarget?.login ?? ''}`,
-                    ),
-                  )
+                : [
+                    // Legacy 719: a disabled account's memberships were held back only by its
+                    // status; under an active target they act again — say so before the merge.
+                    ...(user.status === 'disabled' && user.memberships.some((m) => !m.disabled)
+                      ? [
+                          t(
+                            `${user.login} 已停用：合并后，下面没有停用的成员资格会以 ${mergeTarget?.login ?? ''} 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」`,
+                            `${user.login} is disabled: after the merge, the memberships below that are not disabled are usable again as ${mergeTarget?.login ?? ''}, and the platform audit records each one as “Membership usable again”`,
+                          ),
+                        ]
+                      : []),
+                    ...user.memberships.map((membership) => {
+                      const line = t(
+                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''}`,
+                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''}`,
+                      );
+                      const theirs = pairs.find(({ ours }) => ours === membership)?.theirs;
+                      const to = mergeTarget?.login ?? '';
+                      if (theirs === undefined) return `${line} → ${to}`;
+                      // One of the two is disabled here (two that are not clash, above): that
+                      // one no longer belongs to any account; the platform audit says whose it was.
+                      // Legacy 725 (UX on #1189): where it is the target's, the target is a member
+                      // here again, by this membership.
+                      return membership.disabled
+                        ? t(
+                            `${line}：${to} 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line}: ${to} already holds a membership here, so this one no longer belongs to any account (the platform audit records whose it was)`,
+                          )
+                        : t(
+                            `${line} → ${to}：${to} 曾被移出这里，合并后以这一条的角色重新成为这里的成员；${to} 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line} → ${to}: ${to} was removed from here, and after the merge is a member here again with this membership's role; ${to}'s disabled one no longer belongs to any account (the platform audit records whose it was)`,
+                          );
+                    }),
+                  ]
             }
             confirmLabel={t('确认合并', 'Confirm merge')}
             onConfirm={merge}

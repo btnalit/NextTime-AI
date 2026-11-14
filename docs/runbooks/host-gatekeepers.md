@@ -179,12 +179,17 @@ OWNER_KEY=<owner-api-key>
    API key 做这一步）。
 2. **owner** 在工作区「系统与授权 → 接入一个系统」里选中它点「启用」（控制台会先给出
    `preview_gate_instance_enable` 的预览再确认），或者直接调 capability。`enable_gate_instance` 注册 Gatekeeper、导入**并发布**它公布
-   的 Operation，不需要再 `publish_manifest`：
+   的 Operation，不需要再 `publish_manifest`。直接调时也要先预览：`enable_gate_instance` 必须带预览返回的
+   `manifestDigest`（遗留 311），实例公布的清单在预览之后变了会 409 `manifest_changed`，重新预览再启用：
 
 ```bash
-curl -s http://kernel:8080/api/cap/enable_gate_instance \
+curl -s http://kernel:8080/api/cap/preview_gate_instance_enable \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
   -d '{"gateId":"gatekeeper-docker"}'
+# {"ok":true,"result":{...,"manifestDigest":"<digest>",...}}
+curl -s http://kernel:8080/api/cap/enable_gate_instance \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"gateId":"gatekeeper-docker","manifestDigest":"<digest>"}'
 # {"ok":true,"result":{"gatekeeperId":"<gatekeeper-uuid>",...}}
 ```
 
@@ -408,11 +413,18 @@ Operation，不需要 `publish_manifest`），之后照常 `connect_gatekeeper`�
 接入的自连门拿到的是它**自己的**连接密钥，内核绝不把 `gate_token` 发给 owner 填的地址。owner 先调
 `mint_connection_secret`（控制台"直接注册门"表单打开时自动做，只显示一次），把返回的 `connectionSecret`
 写进门的 `GATE_KERNEL_TOKEN_FILE` 指向的文件并重启门，再 `create_connection` 带上同一把
-`connectionSecret`；内核只存它的非秘密 salt、每次调用时重新派生。换密钥：`rotate_connection_secret`
+`connectionSecret`；内核只存它的非秘密 salt、每次调用时重新派生。一把密钥只用一次（遗留 711）：签出后
+24 小时内用于一次 `create_connection` 或一次换地址申请，用过的、轮换下来的再拿来接入会得到 `409
+connection_secret_in_use`，过期的（包括升级到 core 0058 之前签出、还没用的）得到 `409
+connection_secret_expired`，重新签一把即可。换密钥：`rotate_connection_secret`
 （控制台"系统与授权 → ⋯ → 重新签发连接密钥"），旧密钥立即失效。`endpoint` 与 `manifestSource` 都要过
 内核的出站目标判定（R-27）：裸服务名 / `localhost` / 回环 / 链路本地 / 平台两个子网一律
 `400 connection_target_refused`；确需把自连门跑在平台网络上时，由操作员把主机名加进 `.env` 的
-`NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel（更好的做法是把它做成打包门）。
+`NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel（更好的做法是把它做成打包门）。**公网地址必须用
+`https://`**（遗留 413）：每次调用自连门都带着它的连接密钥，`connected_account` 方式还会把凭证发给它，
+`http://` 连公网地址会让这些明文经过互联网，所以同样 `400 connection_target_refused`
+（`details.reason` 为 `plaintext-public`）；已经接入的这类门，内核之后对它的每次调用都以 `target_refused`
+失败，不发出任何请求。内网地址（RFC 1918、CGNAT、IPv6 ULA）照旧可以用 `http://`；名字只要解析出一个公网地址就按公网算。
 
 下面用一个**不在目录里**的门演示 S2.13 的流程（例如你自己在 `control` 网络之外起的一个 `http` 门；
 把 `<gate-endpoint>` 换成它的地址）：
