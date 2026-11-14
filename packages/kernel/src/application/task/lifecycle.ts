@@ -70,19 +70,65 @@ export async function readWorkerRunRow(
   return row ? mapWorkerRunRow(row) : null;
 }
 
+/** How many times {@link revokeWorkerRunAndDescendants} takes the whole tree again after it grew
+ *  during the wait, before it goes on in rounds. Each retry needs a spawn under the tree that
+ *  committed while the last attempt waited. */
+export const WORKER_TREE_REVOKE_ATTEMPTS = 3;
+
 /** Revokes `workerRunId`'s own Handle (its session's Handle(s), `governance/capability`'s
  *  `revokeSessions`) and every descendant WorkerRun's Handle (the `par` chain, walked via
  *  `worker_runs.parent_worker_run_id` — bounded by I18's depth ≤ 3, so this recursion is always
  *  shallow). The whole tree's sessions are gathered first and taken in one statement ordered by id
  *  (the lock order, governance/capability/handles.ts). Idempotent: revoking an already-revoked
  *  Handle is a no-op (`governance/capability/handles.ts`'s `revokeHandle`/`revokeSession` doc
- *  comments). */
+ *  comments).
+ *
+ *  Legacy 713: a Worker spawning a child (`spawn.ts`) holds its own Handle `for share` while it
+ *  writes the child's run, session and Handle; revoking that Handle waits for the spawn to commit,
+ *  and the child was not in the tree gathered before the wait. So the tree is gathered again after
+ *  the revocation (a new statement, READ COMMITTED: it sees the child). If it grew, the revocation
+ *  rolls back to a savepoint, which lets go of the session rows it took, and takes the whole tree
+ *  again in one statement. Taking only the new sessions in a later statement would break the lock
+ *  order: a second revoker of the same tree that began after the spawn may already hold the child's
+ *  session (its id can sort first) and wait on one this revocation holds — 40P01 (#1172 review).
+ *
+ *  A tree that grows again during each of {@link WORKER_TREE_REVOKE_ATTEMPTS} attempts is then
+ *  revoked in rounds, each later round taking the sessions new to it in a statement of its own. A
+ *  spawn on the authority of a Handle revoked here that comes later waits for this transaction and
+ *  is then refused (`parent_revoked`), so each round only finds what was spawned while the last one
+ *  waited — at most one round per level of the tree. Against a second revoker of the same tree such
+ *  a round can end in a deadlock error (40P01): one of the two transactions rolls back whole and its
+ *  caller sees the error; neither commits with a Handle of its tree left valid. */
 export async function revokeWorkerRunAndDescendants(
   client: PoolClient,
   workspaceId: string,
   workerRunId: string,
 ): Promise<void> {
-  await revokeSessions(client, await workerRunTreeSessionIds(client, workspaceId, workerRunId));
+  for (let attempt = 0; attempt < WORKER_TREE_REVOKE_ATTEMPTS; attempt += 1) {
+    const tree = await workerRunTreeSessionIds(client, workspaceId, workerRunId);
+    if (tree.length === 0) return;
+    await client.query('savepoint worker_tree_revoke');
+    await revokeSessions(client, tree);
+    const taken = new Set(tree);
+    const grown = (await workerRunTreeSessionIds(client, workspaceId, workerRunId)).some(
+      (sessionId) => !taken.has(sessionId),
+    );
+    if (!grown) {
+      await client.query('release savepoint worker_tree_revoke');
+      return;
+    }
+    await client.query('rollback to savepoint worker_tree_revoke');
+    await client.query('release savepoint worker_tree_revoke');
+  }
+  const revoked = new Set<string>();
+  for (;;) {
+    const sessionIds = (await workerRunTreeSessionIds(client, workspaceId, workerRunId)).filter(
+      (sessionId) => !revoked.has(sessionId),
+    );
+    if (sessionIds.length === 0) return;
+    await revokeSessions(client, sessionIds);
+    for (const sessionId of sessionIds) revoked.add(sessionId);
+  }
 }
 
 /** The session of `workerRunId` and of every descendant WorkerRun (descendants first). */

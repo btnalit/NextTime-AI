@@ -99,7 +99,11 @@ export type { CapabilityScope, HandleClaims };
  *     already revoked; a session inserted without an authority lock (`ensureEntrySession`) and
  *     committed between the two statements is taken in scan order — a cycle through it needs a
  *     third revoker on it as well, and ends at worst in a deadlock error (40P01), never in a
- *     Handle left valid.
+ *     Handle left valid. Revoking a Worker tree (`application/task/lifecycle.ts`) finds sessions
+ *     new to it after it waited, children spawned meanwhile; it rolls back to a savepoint and
+ *     takes the whole tree again in one statement. Only a tree that keeps growing past its
+ *     attempts gets a later round in a statement of its own, and there two revokers of the same
+ *     tree are enough for a cycle; it ends the same way, in 40P01 and one transaction rolled back.
  */
 
 // -------------------------------------------------------------------------------------------
