@@ -7,7 +7,7 @@ import {
 } from '../../governance/capability/index.js';
 import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
 import {
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -72,7 +72,12 @@ async function requireServicePrincipal(
   return row.role;
 }
 
-export const issueServiceHandleHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const issueServiceHandleHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { privateKey } = getConfiguredTaskRuntime();
   const input = params as { principalId: string; scope: string[]; ttlSeconds?: number };
   // Legacy 702 (governance 0043): the authority locks before the service Principal is read, and
@@ -120,7 +125,15 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
     scope: { capabilities, resources },
     ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
     privateKey,
-    basis: { kind: 'role', role },
+    // Legacy 712: and only while the cookie or API key of the person issuing it is still live —
+    // checked under the service Principal's locks: revoking the person's credentials does not
+    // revoke a service Handle (it is not theirs), so a revocation that commits after this check
+    // orders after the issue either way.
+    basis: {
+      kind: 'role',
+      role,
+      credential: requirePresentedCredential('issue_service_handle', ctx),
+    },
   });
   return {
     result: {

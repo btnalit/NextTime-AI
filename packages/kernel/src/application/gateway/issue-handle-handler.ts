@@ -6,7 +6,7 @@ import {
 } from '../../governance/capability/index.js';
 import { entryGatekeeperIds, readExecuteAccess } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
 
 /**
  * application/gateway/issue-handle-handler: `issue_handle` (design doc §5.1.4, §9.2 "mcp_session
@@ -131,7 +131,12 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
     scope,
     ttlSeconds: input.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     privateKey,
-    basis: { kind: 'role', role: principal.role },
+    // Legacy 712: and only while the cookie or API key this call came with is still live.
+    basis: {
+      kind: 'role',
+      role: principal.role,
+      credential: requirePresentedCredential('issue_handle', ctx),
+    },
   });
   // Review 2026-10-02 R-12: the session lives exactly as long as its Handle, so the platform's
   // external-runtime inventory (`list_external_runtimes`, application/gates/store.ts) lists it

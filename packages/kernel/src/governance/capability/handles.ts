@@ -75,6 +75,14 @@ export type { CapabilityScope, HandleClaims };
  * CLI issues on no basis (`issueOperatorHandle`, `src/cli/` only — a ci:guards check), still
  * refused for a disabled Principal, user or workspace.
  *
+ * The caller's credential (legacy 712): a role basis issued for a person's own request names the
+ * credential that request was authenticated with ({@link PresentedCredential} — their console
+ * session, or their API key), and `issueHandle` checks it is still live under the same locks. A
+ * password reset, a disable or a removal revokes credentials under the user's lock exclusive
+ * (`revokeUserCredentials`), so it either waits for the Handle and revokes it, or commits first
+ * and the issue is refused (`credential_revoked`) — never a Handle issued on a credential revoked
+ * before it.
+ *
  * Lock order (legacy 702, #1150 review). Whoever issues or revokes takes its locks in one global
  * order, so two of them never wait on each other in a cycle (Postgres would end one with 40P01):
  *
@@ -808,12 +816,14 @@ export class AttenuationError extends Error {
  *  changed before it could be issued (`authority_changed`: the Principal holds another role than
  *  the role basis, or belongs to another user than when the issue began) — legacy 702. A parent
  *  Handle revoked meanwhile is `parent_revoked`; one that expired is refused by its remaining
- *  lifetime, with no code. */
+ *  lifetime, with no code. The console session or API key the request was made with, revoked or
+ *  expired since it was authenticated, is `credential_revoked` (legacy 712). */
 export type HandleIssuanceRefusal =
   | 'session_revoked'
   | 'parent_revoked'
   | 'acting_principal_disabled'
-  | 'authority_changed';
+  | 'authority_changed'
+  | 'credential_revoked';
 
 /** Thrown by `issueHandle` for an invalid issuance request (unknown session, non-positive ttl) or,
  *  with a `code`, for a session, parent Handle or authority that no longer allows it. */
@@ -844,6 +854,11 @@ export class HandleIssuanceError extends Error {
  *     the issue is refused (`authority_changed`) and the caller's next attempt is computed from the
  *     new role. Never relaxed to "either role". An admin agent's caller also runs its own I-A3
  *     check (the platform role) after taking the locks (`lockIssuingAuthority`).
+ *     `credential` (legacy 712): the credential the person's own request was authenticated with
+ *     ({@link PresentedCredential}), issued only while it is still live (`credential_revoked`) —
+ *     `issue_handle`, `issue_service_handle`, `invoke_worker` from the human channel; `null` when
+ *     the platform issues on the person's standing authority with no request of theirs in hand
+ *     (a Turn, a goal step, a planner, reviewer or evaluation Task, a crash retry, an admin agent).
  *   - `parent`: the scope was narrowed from a caller's Handle (`attenuate`, `invoke_worker` from a
  *     Handle). Issued only while that Handle is not revoked (`parent_revoked`).
  *
@@ -852,8 +867,28 @@ export class HandleIssuanceError extends Error {
  * allows under `src/cli/` only.
  */
 export type IssuanceBasis =
-  | { readonly kind: 'role'; readonly role: Role }
+  | {
+      readonly kind: 'role';
+      readonly role: Role;
+      readonly credential: PresentedCredential | null;
+    }
   | { readonly kind: 'parent'; readonly parentJti: string };
+
+/**
+ * Legacy 712: the human-channel credential a request was authenticated with
+ * (application/gateway/resolve-caller.ts) — a console session (`user_sessions`, the cookie's) or,
+ * with no console login behind it, the API key of the calling Principal (`principals.api_key_hash`;
+ * the caller does not carry the key, so "live" is "the Principal still has one", as `/ws`'s
+ * per-call re-check reads it — a reset, a disable or a password change clears it). Checked under
+ * the issuance locks ({@link IssuanceBasis}).
+ */
+export type PresentedCredential =
+  | {
+      readonly kind: 'console_session';
+      readonly userId: string;
+      readonly consoleSessionId: string;
+    }
+  | { readonly kind: 'api_key'; readonly principalId: string };
 
 export interface IssueHandleParams extends OperatorIssueHandleParams {
   /** What the Handle is issued under ({@link IssuanceBasis}). */
@@ -1048,6 +1083,9 @@ async function assertIssuingAuthority(
       'acting_principal_disabled',
     );
   }
+  if (basis?.kind === 'role' && basis.credential !== null) {
+    await assertPresentedCredentialLive(client, at.workspaceId, basis.credential);
+  }
   if (row.user_id !== at.lockedUserId) {
     throw new HandleIssuanceError(
       `the Principal "${at.principalId}" belongs to another user since this issue began`,
@@ -1064,6 +1102,36 @@ async function assertIssuingAuthority(
     throw new HandleIssuanceError(
       `parent Handle "${basis.parentJti}" is revoked; no Handle is issued on its authority`,
       'parent_revoked',
+    );
+  }
+}
+
+/** Legacy 712: refuses a credential revoked or expired since the request was authenticated — a
+ *  console session by `console_session_is_live` (governance 0045: the application role reads no
+ *  `user_sessions` in a workspace transaction), an API key by the calling Principal still having
+ *  one. A missing row is not live. The message names no id: it goes back to the caller. */
+async function assertPresentedCredentialLive(
+  client: PoolClient,
+  workspaceId: string,
+  credential: PresentedCredential,
+): Promise<void> {
+  const result =
+    credential.kind === 'console_session'
+      ? await client.query<{ live: boolean }>('select console_session_is_live($1, $2) as live', [
+          credential.userId,
+          credential.consoleSessionId,
+        ])
+      : await client.query<{ live: boolean }>(
+          `select api_key_hash is not null as live from principals
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, credential.principalId],
+        );
+  if (result.rows[0]?.live !== true) {
+    throw new HandleIssuanceError(
+      credential.kind === 'console_session'
+        ? 'the console session this call was made with was signed out, revoked or expired while it ran; sign in again'
+        : 'the API key this call was made with was revoked while it ran',
+      'credential_revoked',
     );
   }
 }

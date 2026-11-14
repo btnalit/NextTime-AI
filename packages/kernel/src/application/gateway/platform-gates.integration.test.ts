@@ -344,6 +344,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       workspaceId = created.workspaceId;
       ownerPrincipalId = created.ownerPrincipalId;
+      // Legacy 712: `humanCaller` has no console login behind it — an API-key call, whose Handle
+      // (`issue_handle`, `issue_service_handle`) is issued only while the owner has a key.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, ownerPrincipalId],
+        ),
+      );
     }, 180_000);
 
     afterAll(async () => {
@@ -805,7 +814,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope,
               ttlSeconds: 3600,
               privateKey,
-              basis: { kind: 'role', role: 'owner' },
+              basis: { kind: 'role', role: 'owner', credential: null },
             }),
         );
 
@@ -2530,7 +2539,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 },
                 ttlSeconds: 3600,
                 privateKey,
-                basis: { kind: 'role', role: 'owner' },
+                basis: { kind: 'role', role: 'owner', credential: null },
               }),
           );
           const entryHandleRevokedAt = (): Promise<Date | null> =>

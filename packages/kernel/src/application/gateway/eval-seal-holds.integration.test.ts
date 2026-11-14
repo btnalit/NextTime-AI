@@ -145,7 +145,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 600,
           privateKey,
-          basis: { kind: 'role', role: who },
+          basis: { kind: 'role', role: who, credential: null },
         }),
       );
       const claims: HandleClaims = {

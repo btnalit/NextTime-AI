@@ -5,6 +5,7 @@ import {
   type CapabilityScope,
   type IssuanceBasis,
   type IssuedHandle,
+  type PresentedCredential,
   WORKER_CEILING_CAPABILITIES,
   WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
   assertScopeIsSubset,
@@ -339,6 +340,9 @@ export async function resolveParentAuthorityWithBasis(
     readonly principalId: string;
     readonly channel: CapabilityChannel;
     readonly claims?: HandleClaims;
+    /** Legacy 712: the human-channel request's credential; absent when the platform calls on the
+     *  person's behalf with no request of theirs in hand (fake-invoke-worker's scripted Turn). */
+    readonly credential?: PresentedCredential;
   },
 ): Promise<{ readonly authority: ParentAuthority; readonly basis: IssuanceBasis }> {
   if (caller.claims) {
@@ -355,7 +359,8 @@ export async function resolveParentAuthorityWithBasis(
   }
   return {
     authority: role === 'owner' ? 'unconstrained' : EMPTY_CAPABILITY_SCOPE,
-    basis: { kind: 'role', role },
+    // Legacy 712: and only while the cookie or API key the call came with is still live.
+    basis: { kind: 'role', role, credential: caller.credential ?? null },
   };
 }
 

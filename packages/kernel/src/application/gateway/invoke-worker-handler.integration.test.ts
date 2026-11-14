@@ -169,7 +169,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 3600,
           privateKey,
-          basis: { kind: 'role', role },
+          basis: { kind: 'role', role, credential: null },
         }),
       );
     }
@@ -514,6 +514,36 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(invoked.status).toBe('running');
         }
       });
+    });
+
+    it('legacy 712: a person’s own invoke_worker (the human channel) carries the credential it came with to the Worker’s Handle — refused (credential_revoked) while the Principal has no API key, started once it has one', async () => {
+      const supervisorClient = new NeverFinishingSupervisorClient(pool, workspaceId);
+      configureTaskRuntime({ pool, privateKey, supervisorClient });
+      const personId = await adminInsertPrincipal('owner', 'owner-712');
+      const call = () =>
+        dispatchCapability({ pool }, humanCaller(personId, 'owner'), 'invoke_worker', {
+          definitionId: workerDefinitionId,
+          version: 1,
+          input: {},
+        });
+
+      await expect(call()).rejects.toMatchObject({
+        name: 'HandleIssuanceError',
+        code: 'credential_revoked',
+      });
+
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: personId },
+        (client) =>
+          client.query(
+            `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, personId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      await expect(call()).resolves.toMatchObject({ status: 'running' });
     });
   },
 );

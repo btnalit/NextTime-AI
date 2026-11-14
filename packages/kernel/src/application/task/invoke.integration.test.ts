@@ -177,7 +177,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         scope,
         ttlSeconds,
         privateKey,
-        basis: { kind: 'role', role },
+        basis: { kind: 'role', role, credential: null },
       }),
     );
   }
@@ -263,6 +263,46 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(workerRun?.status).toBe('running');
     expect(workerRun?.depth).toBe(1);
     expect(workerRun?.activityId).not.toBeNull();
+  });
+
+  it('legacy 712: a person’s own invoke_worker (the human channel) starts a Worker only while the API key it came with is live — refused (credential_revoked) without one: no container is asked for, and the Task it opened ends failed: spawn_failed, as any refused issue does', async () => {
+    const personId = await adminInsertPrincipal('owner', 'owner-712');
+    const call = () =>
+      invokeWorker(
+        workspaceId,
+        {
+          principalId: personId,
+          channel: 'human',
+          credential: { kind: 'api_key', principalId: personId },
+        },
+        { definitionId: workerDefinitionId, version: 1, input: { foo: 'bar' }, wait: false },
+        deps(supervisorClient),
+      );
+    const supervisorClient = new FakeTaskSupervisorClient();
+
+    await expect(call()).rejects.toMatchObject({
+      name: 'HandleIssuanceError',
+      code: 'credential_revoked',
+    });
+    expect(supervisorClient.spawnCalls).toHaveLength(0);
+    const refused = await withAdminClient(pool, (client) =>
+      client.query<{ status: string; failure_reason: string | null }>(
+        'select status, failure_reason from tasks where workspace_id = $1 and on_behalf_of = $2',
+        [workspaceId, personId],
+      ),
+    );
+    expect(refused.rows).toEqual([{ status: 'failed', failure_reason: 'spawn_failed' }]);
+
+    await withAdminClient(pool, (client) =>
+      client.query(
+        `update principals set api_key_hash = md5(random()::text) || md5(random()::text)
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, personId],
+      ),
+    );
+    const started = await call();
+    expect(started.status).toBe('running');
+    expect(supervisorClient.spawnCalls).toHaveLength(1);
   });
 
   it('rejects the 4th derivation level with a readable depth_exceeded error — S2.7 acceptance', async () => {
@@ -1076,7 +1116,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           onBehalfOf: principalId,
           parentAuthority: 'unconstrained',
           parentClaimsForLineage: undefined,
-          issuanceBasis: { kind: 'role', role: 'member' },
+          issuanceBasis: { kind: 'role', role: 'member', credential: null },
           declaredCapabilities: [],
           declaredGates: [],
           definitionName: 'r58-spawn-for-share',
@@ -1536,7 +1576,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           onBehalfOf: principalId,
           parentAuthority: 'unconstrained',
           parentClaimsForLineage: undefined,
-          issuanceBasis: { kind: 'role', role: 'member' },
+          issuanceBasis: { kind: 'role', role: 'member', credential: null },
           declaredCapabilities: [],
           declaredGates: [],
           definitionName: 'r58-spawn-terminal',
@@ -2055,7 +2095,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         parentAuthority: 'unconstrained',
         parentClaimsForLineage: undefined,
         // Both callers seed a `freshPrincipal` — a member.
-        issuanceBasis: { kind: 'role', role: 'member' },
+        issuanceBasis: { kind: 'role', role: 'member', credential: null },
         declaredCapabilities: [],
         declaredGates: [],
         definitionName: 'r09-spawn-lost',

@@ -13,7 +13,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * rows. Not used by any production path.
  */
 
-/** A human console caller of `role` in `workspaceId`, as resolve-caller.ts builds one for a web session. */
+/** A human caller of `role` in `workspaceId`, as resolve-caller.ts builds one for an API key (no
+ *  console login behind it: legacy 712 re-checks the Principal's key when it issues a Handle, so
+ *  {@link newWorkspace} gives every Principal one). */
 export function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
     channel: 'human',
@@ -31,7 +33,8 @@ export function humanCaller(workspaceId: string, principalId: string, role: Role
   };
 }
 
-/** A new workspace with one human Principal per role given (the first is its owner). */
+/** A new workspace with one human Principal per role given (the first is its owner), each with an
+ *  API key (a synthetic hash; the key itself exists nowhere). */
 export async function newWorkspace(
   pool: Pool,
   name: string,
@@ -46,7 +49,8 @@ export async function newWorkspace(
       await client.query('insert into workspaces (id, name) values ($1, $2)', [workspaceId, name]);
       for (const [role, id] of principals) {
         await client.query(
-          "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', $3, $4)",
+          `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
+           values ($1, $2, 'human', $3, $4, md5(random()::text) || md5(random()::text))`,
           [workspaceId, id, role, `${name} ${role}`],
         );
       }

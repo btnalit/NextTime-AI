@@ -613,7 +613,7 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 3600, // >= the parent's remaining ttl — the worst case for this race
       privateKey,
-      basis: { kind: 'role', role: 'owner' },
+      basis: { kind: 'role', role: 'owner', credential: null },
     };
 
     // Same monotonically-advancing fake clock as handles.test.ts's `attenuate` race test: every
@@ -667,7 +667,7 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 300,
       privateKey,
-      basis: { kind: 'role', role: 'owner' },
+      basis: { kind: 'role', role: 'owner', credential: null },
     };
 
     await expect(mintWorkerRunHandle(client, workspaceId, input)).rejects.toThrow(
@@ -720,7 +720,10 @@ describe('resolveParentAuthorityWithBasis — what a Worker minted by invoke_wor
       principalId: randomUUID(),
       channel: 'human',
     });
-    expect(owner).toEqual({ authority: 'unconstrained', basis: { kind: 'role', role: 'owner' } });
+    expect(owner).toEqual({
+      authority: 'unconstrained',
+      basis: { kind: 'role', role: 'owner', credential: null },
+    });
 
     const builder = await resolveParentAuthorityWithBasis(
       roleClient('builder').client,
@@ -729,7 +732,7 @@ describe('resolveParentAuthorityWithBasis — what a Worker minted by invoke_wor
     );
     expect(builder).toEqual({
       authority: EMPTY_CAPABILITY_SCOPE,
-      basis: { kind: 'role', role: 'builder' },
+      basis: { kind: 'role', role: 'builder', credential: null },
     });
   });
 

@@ -1264,7 +1264,8 @@ export class AgentHostRuntime implements AgentRuntime {
         // Legacy 702: issued only while the role this scope was computed from is still the
         // Principal's, and nothing above them is disabled, under governance 0043's locks — a
         // change committed since `readHandleFreshness` fails this Turn; the next one reads it.
-        basis: { kind: 'role', role },
+        // Legacy 712: a Turn is not the request that sent its message — no credential to re-check.
+        basis: { kind: 'role', role, credential: null },
       }),
     );
     this.handleCache.set(principalId, {

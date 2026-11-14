@@ -164,7 +164,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
-            basis: { kind: 'role', role },
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -537,7 +537,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['search'], resources: {} },
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
-            basis: { kind: 'role', role: 'member' },
+            basis: { kind: 'role', role: 'member', credential: null },
           });
         },
         { skipRoleSwitch: true },
@@ -661,7 +661,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
-            basis: { kind: 'role', role },
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -694,7 +694,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
-            basis: { kind: 'role', role },
+            basis: { kind: 'role', role, credential: null },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -834,7 +834,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities, resources: {} },
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
-            basis: { kind: 'role', role: 'builder' },
+            basis: { kind: 'role', role: 'builder', credential: null },
           });
           return { sessionId, jti: issued.jti };
         });
@@ -898,7 +898,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities, resources: {} },
               ttlSeconds: 3600,
               privateKey: keyPair.privateKey,
-              basis: { kind: 'role', role: 'builder' },
+              basis: { kind: 'role', role: 'builder', credential: null },
             });
             return { sessionId, jti: issued.jti };
           },

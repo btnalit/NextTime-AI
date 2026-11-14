@@ -138,7 +138,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 3600,
           privateKey,
-          basis: { kind: 'role', role },
+          basis: { kind: 'role', role, credential: null },
         }),
       );
       return {

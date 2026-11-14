@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { Role } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -61,6 +61,11 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
+/** A stand-in for `principals.api_key_hash` (64 hex characters, like the sha256 it stores). */
+function syntheticApiKeyHash(): string {
+  return randomUUID().replaceAll('-', '').repeat(2);
+}
+
 function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
     channel: 'human',
@@ -106,10 +111,12 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
       pool,
       { workspaceId, principalId: id },
       async (client) => {
+        // Legacy 712: `humanCaller` has no console login behind it, so it reads as an API-key
+        // call, and a Handle is issued only while the Principal still has a key (a synthetic hash).
         await client.query(
-          `insert into principals (workspace_id, id, kind, role, display_name)
-           values ($1, $2, 'human', $3, $4)`,
-          [workspaceId, id, role, displayName],
+          `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
+           values ($1, $2, 'human', $3, $4, $5)`,
+          [workspaceId, id, role, displayName, syntheticApiKeyHash()],
         );
       },
       { skipRoleSwitch: true },
@@ -336,5 +343,90 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
     await expect(
       authenticateHandle(pool, issued.handle, { publicKey: handlePublicKey }),
     ).rejects.toThrow(HandleRevoked);
+  });
+
+  it('legacy 712: a Handle is issued only while the console login or API key the call came with is live — a signed-out login or a cleared key is refused (credential_revoked) and nothing is issued', async () => {
+    const asOwnerRole = <T>(fn: (client: PoolClient) => Promise<T>) =>
+      withWorkspace(pool, { workspaceId, principalId: randomUUID() }, fn, { skipRoleSwitch: true });
+    const user = await asOwnerRole((client) =>
+      client.query<{ id: string; login: string }>(
+        `insert into users (login, display_name) values ($1, 'Console Owner') returning id, login`,
+        [`issue-handle-712-${randomUUID()}`],
+      ),
+    );
+    const userRow = user.rows[0];
+    if (!userRow) throw new Error('no user');
+    const principalId = randomUUID();
+    await asOwnerRole((client) =>
+      client.query(
+        `insert into principals (workspace_id, id, kind, role, display_name, user_id)
+         values ($1, $2, 'human', 'owner', 'console-owner', $3)`,
+        [workspaceId, principalId, userRow.id],
+      ),
+    );
+    const login = async (): Promise<string> => {
+      const result = await asOwnerRole((client) =>
+        client.query<{ id: string }>(
+          `insert into user_sessions (user_id, expires_at)
+           values ($1, now() + interval '1 hour') returning id`,
+          [userRow.id],
+        ),
+      );
+      const id = result.rows[0]?.id;
+      if (!id) throw new Error('no console session');
+      return id;
+    };
+    const viaConsole = (consoleSessionId: string): ResolvedCaller => {
+      const caller = humanCaller(workspaceId, principalId, 'owner');
+      if (caller.channel !== 'human') throw new Error('humanCaller: not the human channel');
+      return {
+        ...caller,
+        user: {
+          id: userRow.id,
+          login: userRow.login,
+          displayName: 'Console Owner',
+          platformRole: 'user',
+          mustChangePassword: false,
+          consoleSessionId,
+        },
+      };
+    };
+    const handlesOf = async (): Promise<number> => {
+      const result = await asOwnerRole((client) =>
+        client.query<{ n: number }>(
+          `select count(*)::int as n from capability_handles h
+             join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+            where s.workspace_id = $1 and s.on_behalf_of = $2`,
+          [workspaceId, principalId],
+        ),
+      );
+      return result.rows[0]?.n ?? 0;
+    };
+
+    const live = await login();
+    await dispatchCapability({ pool }, viaConsole(live), 'issue_handle', {
+      sessionKind: 'interactive',
+    });
+    expect(await handlesOf()).toBe(1);
+
+    // Signed out (the logout route marks the row) after the call was authenticated.
+    const signedOut = await login();
+    await asOwnerRole((client) =>
+      client.query('update user_sessions set revoked_at = now() where id = $1', [signedOut]),
+    );
+    await expect(
+      dispatchCapability({ pool }, viaConsole(signedOut), 'issue_handle', {
+        sessionKind: 'interactive',
+      }),
+    ).rejects.toMatchObject({ name: 'HandleIssuanceError', code: 'credential_revoked' });
+
+    // The same Principal with no console login behind the call, and no API key (a reset cleared
+    // it, or it never had one).
+    await expect(
+      dispatchCapability({ pool }, humanCaller(workspaceId, principalId, 'owner'), 'issue_handle', {
+        sessionKind: 'interactive',
+      }),
+    ).rejects.toMatchObject({ name: 'HandleIssuanceError', code: 'credential_revoked' });
+    expect(await handlesOf()).toBe(1);
   });
 });

@@ -133,7 +133,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey,
-            basis: { kind: 'role', role },
+            basis: { kind: 'role', role, credential: null },
           }),
         ),
       );
@@ -414,7 +414,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities: ['invoke_worker', 'get_task'], resources: {} },
               ttlSeconds: 600,
               privateKey,
-              basis: { kind: 'role', role: 'owner' },
+              basis: { kind: 'role', role: 'owner', credential: null },
             }),
           ),
         );

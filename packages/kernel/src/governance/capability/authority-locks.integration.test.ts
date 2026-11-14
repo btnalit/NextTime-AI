@@ -128,7 +128,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       client: PoolClient,
       at: Member,
       sessionId: string,
-      basis: IssuanceBasis = { kind: 'role', role: at.role },
+      basis: IssuanceBasis = { kind: 'role', role: at.role, credential: null },
     ): Promise<IssuedHandle> {
       return issueHandle(client, { sessionId, scope: SCOPE, ttlSeconds: 3600, privateKey, basis });
     }
@@ -162,14 +162,15 @@ describe.runIf(DATABASE_URL !== undefined)(
     }
 
     /** Polls until a backend of this database waits on a lock while running a statement that
-     *  contains `fragment`. */
-    async function waitUntilBlocked(fragment: string): Promise<void> {
+     *  contains `fragment` (or one of them). */
+    async function waitUntilBlocked(fragment: string | readonly string[]): Promise<void> {
+      const fragments = typeof fragment === 'string' ? [fragment] : [...fragment];
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const { rows } = await pool.query<{ waiting: number }>(
           `select count(*)::int as waiting from pg_stat_activity
             where datname = current_database() and wait_event_type = 'Lock'
-              and position($1 in query) > 0`,
-          [fragment],
+              and exists (select 1 from unnest($1::text[]) f where position(f in query) > 0)`,
+          [fragments],
         );
         if ((rows[0]?.waiting ?? 0) > 0) return;
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -252,7 +253,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const sessionId = await openSession(at, 'worker_run');
 
         const thrown = await refusal(() =>
-          asApp(at, (client) => issue(client, at, sessionId, { kind: 'role', role: 'owner' })),
+          asApp(at, (client) =>
+            issue(client, at, sessionId, { kind: 'role', role: 'owner', credential: null }),
+          ),
         );
         expect(refusalCode(thrown)).toBe('authority_changed');
 
@@ -292,7 +295,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ttlSeconds: 1800,
             privateKey,
             parentJti: parent.jti,
-            basis: { kind: 'role', role: at.role },
+            basis: { kind: 'role', role: at.role, credential: null },
           }),
         );
         expect(await handleState(at, retry.jti)).toBe('valid');
@@ -580,6 +583,203 @@ describe.runIf(DATABASE_URL !== undefined)(
         await writer;
 
         expect(refusalCode(await issuer)).toBe('authority_changed');
+      });
+    });
+
+    describe("legacy 712: a person's request gets a Handle only while the credential it came with is live", () => {
+      /** A console login of `userId` (`user_sessions`), as the cookie carries it. */
+      async function consoleSession(
+        userId: string,
+        state: 'live' | 'signed_out' | 'expired' = 'live',
+      ): Promise<string> {
+        const result = await asOwner(randomUUID(), (client) =>
+          client.query<{ id: string }>(
+            `insert into user_sessions (user_id, expires_at, revoked_at)
+             values ($1,
+                     now() + case when $2::text = 'expired' then interval '-1 minute'
+                                  else interval '1 hour' end,
+                     case when $2::text = 'signed_out' then now() end)
+             returning id`,
+            [userId, state],
+          ),
+        );
+        const id = result.rows[0]?.id;
+        if (!id) throw new Error('consoleSession: no row');
+        return id;
+      }
+
+      /** An API key on `at`'s Principal (a synthetic hash; the check reads only that one is set). */
+      async function giveApiKey(at: Member): Promise<void> {
+        await asOwner(at.workspaceId, (client) =>
+          client.query(
+            'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+            [at.workspaceId, at.principalId, randomUUID().replaceAll('-', '').repeat(2)],
+          ),
+        );
+      }
+
+      const viaConsole = (at: Member, consoleSessionId: string): IssuanceBasis => ({
+        kind: 'role',
+        role: at.role,
+        credential: { kind: 'console_session', userId: at.userId, consoleSessionId },
+      });
+      const viaApiKey = (at: Member): IssuanceBasis => ({
+        kind: 'role',
+        role: at.role,
+        credential: { kind: 'api_key', principalId: at.principalId },
+      });
+
+      /** Issues in one transaction on a session it opens itself first — as `issue_handle` and
+       *  `invoke_worker` do — so a revocation that commits while it waits leaves that session
+       *  alone and only the credential is left to refuse. */
+      function issueOnNewSession(at: Member, basis: IssuanceBasis): Promise<IssuedHandle> {
+        return asApp(at, async (client) => {
+          const opened = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'mcp_session', $2, 'active') returning id`,
+            [at.workspaceId, at.principalId],
+          );
+          const sessionId = opened.rows[0]?.id;
+          if (!sessionId) throw new Error('issueOnNewSession: no session');
+          return issue(client, at, sessionId, basis);
+        });
+      }
+
+      it('issues on a live console session, and refuses one signed out, expired, unknown or another user’s (credential_revoked)', async () => {
+        const at = await member();
+        const issued = await issueOnNewSession(at, viaConsole(at, await consoleSession(at.userId)));
+        expect(await handleState(at, issued.jti)).toBe('valid');
+
+        const someoneElse = await user();
+        for (const consoleSessionId of [
+          await consoleSession(at.userId, 'signed_out'),
+          await consoleSession(at.userId, 'expired'),
+          randomUUID(),
+          await consoleSession(someoneElse),
+        ]) {
+          const thrown = await refusal(() =>
+            issueOnNewSession(at, viaConsole(at, consoleSessionId)),
+          );
+          expect(refusalCode(thrown)).toBe('credential_revoked');
+          // The message goes back to the caller: it names no session, user or Principal.
+          expect((thrown as Error).message).not.toContain(consoleSessionId);
+          expect((thrown as Error).message).not.toContain(at.userId);
+        }
+      });
+
+      it('issues while the Principal has an API key, and refuses once it is cleared (credential_revoked); a system issuer names no credential and is not asked', async () => {
+        const at = await member();
+        await giveApiKey(at);
+        const issued = await issueOnNewSession(at, viaApiKey(at));
+        expect(await handleState(at, issued.jti)).toBe('valid');
+
+        await asOwner(at.workspaceId, (client) =>
+          client.query(
+            'update principals set api_key_hash = null where workspace_id = $1 and id = $2',
+            [at.workspaceId, at.principalId],
+          ),
+        );
+        const thrown = await refusal(() => issueOnNewSession(at, viaApiKey(at)));
+        expect(refusalCode(thrown)).toBe('credential_revoked');
+        expect((thrown as Error).message).not.toContain(at.principalId);
+
+        const system = await issueOnNewSession(at, {
+          kind: 'role',
+          role: at.role,
+          credential: null,
+        });
+        expect(await handleState(at, system.jti)).toBe('valid');
+      });
+
+      it.each(['console session', 'API key'] as const)(
+        'a password reset that comes first makes the issuer wait, and the issuer then refuses its %s (credential_revoked)',
+        async (credential) => {
+          const at = await member();
+          await giveApiKey(at);
+          const basis =
+            credential === 'console session'
+              ? viaConsole(at, await consoleSession(at.userId))
+              : viaApiKey(at);
+          const revoked = latch();
+          const commit = latch();
+          const reset = asPlatform(async (client) => {
+            await revokeUserCredentials(client, at.userId);
+            revoked.open();
+            await commit.wait;
+          });
+          await revoked.wait;
+
+          // It waits on the reset's user lock — or, before that, opening its session waits on
+          // the Principal row the reset re-keyed (`api_key_hash` is unique: a key update).
+          const issuer = refusal(() => issueOnNewSession(at, basis));
+          await waitUntilBlocked(['lock_issuing_authority', "'mcp_session', $2, 'active'"]);
+          commit.open();
+          await reset;
+
+          expect(refusalCode(await issuer)).toBe('credential_revoked');
+          const { rows } = await asOwner(at.workspaceId, (client) =>
+            client.query<{ n: number }>(
+              `select count(*)::int as n from capability_handles h
+                 join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+                where s.workspace_id = $1 and s.on_behalf_of = $2`,
+              [at.workspaceId, at.principalId],
+            ),
+          );
+          expect(rows[0]?.n).toBe(0);
+        },
+      );
+
+      it('an issuer that comes first makes the reset wait, and the reset then revokes the Handle it issued', async () => {
+        const at = await member();
+        const basis = viaConsole(at, await consoleSession(at.userId));
+        const issued = latch();
+        const release = latch();
+        let handle: IssuedHandle | undefined;
+        const issuer = asApp(at, async (client) => {
+          const opened = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'mcp_session', $2, 'active') returning id`,
+            [at.workspaceId, at.principalId],
+          );
+          handle = await issue(client, at, opened.rows[0]?.id ?? '', basis);
+          issued.open();
+          await release.wait;
+        });
+        await Promise.race([issued.wait, issuer]);
+
+        const reset = asPlatform((client) => revokeUserCredentials(client, at.userId));
+        await waitUntilBlocked('lock_authorities');
+        release.open();
+        await issuer;
+        await reset;
+
+        if (!handle) throw new Error('no Handle issued');
+        expect(await handleState(at, handle.jti)).toBe('revoked');
+      });
+
+      it('console_session_is_live (governance 0045) runs as its owner for nexttime_app only, and the application role still reads no console session in a workspace transaction', async () => {
+        const at = await member();
+        const live = await consoleSession(at.userId);
+        const { rows } = await asOwner(at.workspaceId, (client) =>
+          client.query<{ definer: boolean; app: boolean; public_execute: boolean }>(
+            `select p.prosecdef as definer,
+                    has_function_privilege('nexttime_app', p.oid, 'execute') as app,
+                    exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                             where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_execute
+               from pg_proc p where p.proname = 'console_session_is_live'`,
+          ),
+        );
+        expect(rows).toEqual([{ definer: true, app: true, public_execute: false }]);
+
+        const seen = await asApp(at, async (client) => {
+          const answer = await client.query<{ live: boolean }>(
+            'select console_session_is_live($1, $2) as live',
+            [at.userId, live],
+          );
+          const direct = await client.query('select id from user_sessions where id = $1', [live]);
+          return { live: answer.rows[0]?.live, direct: direct.rowCount };
+        });
+        expect(seen).toEqual({ live: true, direct: 0 });
       });
     });
 

@@ -972,7 +972,8 @@ export async function createStepAttemptTask(
         // Legacy 702: issued only while the requester's role is still the one `parent.scope` was
         // computed from (a change since this attempt was prepared fails its start `spawn_failed`,
         // and the next attempt reads the new role).
-        issuanceBasis: { kind: 'role', role: parent.viewer.role },
+        // Legacy 712: a goal step runs on the requester's confirmed authority — no credential.
+        issuanceBasis: { kind: 'role', role: parent.viewer.role, credential: null },
         declaredCapabilities,
         declaredGates,
         model,

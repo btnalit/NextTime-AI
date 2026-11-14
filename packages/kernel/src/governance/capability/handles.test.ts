@@ -212,8 +212,8 @@ function createFakeCapabilityClient() {
 
 /** Legacy 702: what this file's Handles are issued under — the fake reads every Principal back as
  *  an enabled owner; the integration block's fixture has an owner and a member. */
-const OWNER_BASIS: IssuanceBasis = { kind: 'role', role: 'owner' };
-const MEMBER_BASIS: IssuanceBasis = { kind: 'role', role: 'member' };
+const OWNER_BASIS: IssuanceBasis = { kind: 'role', role: 'owner', credential: null };
+const MEMBER_BASIS: IssuanceBasis = { kind: 'role', role: 'member', credential: null };
 
 function neverRevoked(): boolean {
   return false;

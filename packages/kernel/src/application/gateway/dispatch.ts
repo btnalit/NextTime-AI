@@ -1189,6 +1189,20 @@ async function dispatchInActingContext(
           : {}),
         // S11 AA2: an admin agent's session and its administrator, checked above.
         ...(adminAgent ? { adminAgent } : {}),
+        // Legacy 712: what this human-channel call was authenticated with — the cookie's console
+        // session, or (no console login behind it) the Principal's API key. A Handle issued for
+        // this call is refused under the authority locks once it is revoked.
+        ...(caller.channel === 'human'
+          ? {
+              presentedCredential: caller.user
+                ? {
+                    kind: 'console_session' as const,
+                    userId: caller.user.id,
+                    consoleSessionId: caller.user.consoleSessionId,
+                  }
+                : { kind: 'api_key' as const, principalId: caller.principal.id },
+            }
+          : {}),
       };
       // An evaluation session's call is answered by application/eval-session, except `get_task`
       // of its own Task, which the capability's own handler answers like any other call.

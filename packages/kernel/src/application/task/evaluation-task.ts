@@ -167,7 +167,8 @@ export async function createEvaluationTask(
         onBehalfOf: input.evaluationPrincipalId,
         parentAuthority: handleScope,
         parentClaimsForLineage: undefined,
-        issuanceBasis: { kind: 'role', role: evaluationRole },
+        // Legacy 712: the evaluation Principal's own Task — no person's credential.
+        issuanceBasis: { kind: 'role', role: evaluationRole, credential: null },
         declaredCapabilities: EVALUATION_HANDLE_CAPABILITIES,
         declaredGates: [],
         model,
