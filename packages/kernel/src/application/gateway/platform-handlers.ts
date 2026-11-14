@@ -866,10 +866,9 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   // workspace's own `disable_principal`, which takes this Principal's lock — is left as it is,
   // nothing written and the audit row saying the call changed nothing (legacy 696). Nothing left
   // works for it: its sessions and their Handles ended when it was disabled (governance 0043's
-  // trigger, 0042), and none can be issued for it again. A legacy API key a workspace-side disable
-  // left on the row before legacy 734 (which now clears it) stays there (`has_api_key` still says
-  // so) but no longer authenticates: key lookups skip a disabled Principal
-  // (`lookupPrincipalByApiKeyHash`).
+  // trigger, 0042), and none can be issued for it again. Nor does it hold an API key: the write
+  // that disabled it cleared the key (core 0059's trigger), and core 0059 cleared the keys earlier
+  // disables had left (legacy 738).
   const membership = await loadMembership(client, input.userId, input.workspaceId);
   assertSameMembership(seen, membership, input.workspaceId);
   const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };

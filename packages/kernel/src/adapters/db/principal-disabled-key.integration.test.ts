@@ -132,6 +132,21 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).toEqual({ code: '23514', constraint: CONSTRAINT });
+      // Nor does disabling a Principal set a new key in the same statement (#1210 review): only
+      // the key the row already held is cleared; a new one is refused, not dropped.
+      const active = await serviceWithKey('Disabled with a new key');
+      expect(
+        await refusal(() =>
+          asApp((client) =>
+            client.query(
+              `update principals set disabled_at = now(), api_key_hash = $3
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, active.id, newKeyHash()],
+            ),
+          ),
+        ),
+      ).toEqual({ code: '23514', constraint: CONSTRAINT });
+      expect(await rowOf(active.id)).toEqual({ api_key_hash: active.hash, disabled: false });
       // Nor is a Principal inserted disabled with a key.
       expect(
         await refusal(() =>

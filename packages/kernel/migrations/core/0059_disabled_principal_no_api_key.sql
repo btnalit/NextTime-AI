@@ -21,9 +21,18 @@
 --      `principals_disabled_revokes_sessions` revokes its sessions. Disabling is never refused for
 --      the key it carries: `remove_membership`, which clears a person's key only after it disables
 --      the membership, and the previous release's `disable_principal`, which never cleared it, both
---      keep working. Only the disabling write itself (`disabled_at` going from null to a time) is
---      rewritten; any other write that would leave a disabled Principal with a key is refused by
---      the constraint, never silently dropped.
+--      keep working. Only the disabling write itself (`disabled_at` going from null to a time) that
+--      leaves the key as it was is rewritten; any other write that would leave a disabled Principal
+--      with a key — one that sets a key on a disabled Principal, or one that disables a Principal
+--      and sets a new key in the same statement (#1210 review) — is refused by the constraint,
+--      never silently dropped.
+--
+-- The table is locked for the whole migration first (#1210 review): the previous release may still
+-- be running while it applies, and its `disable_principal` leaves the key on the row; one landing
+-- between step 1 and step 2 would make adding the constraint fail. ACCESS EXCLUSIVE, the lock step 2
+-- takes anyway, from the start: taking a weaker one first and upgrading it at step 2 could deadlock
+-- with a transaction that read `principals` and then waits to write it. The migration's writes are
+-- a few rows; readers wait for them, as they would for step 2 alone.
 --
 -- Rolling back (release.md §6): the previous release runs on this schema. The trigger clears the
 -- key its `disable_principal` leaves; its `rotate_api_key` on a disabled service account, the bug
@@ -36,6 +45,8 @@
 --
 -- Runner ordering / advisory lock: same module (`core`), same key as every other core migration.
 select pg_advisory_xact_lock(7241000101);
+
+lock table principals in access exclusive mode;
 
 -- ---------------------------------------------------------------------------------------------
 -- 1. Remediation: keys left on disabled Principals
@@ -86,5 +97,10 @@ revoke all on function principals_disabled_clears_api_key() from public;
 create or replace trigger principals_disabled_clears_api_key
   before update of disabled_at on principals
   for each row
-  when (old.disabled_at is null and new.disabled_at is not null and new.api_key_hash is not null)
+  when (
+    old.disabled_at is null
+    and new.disabled_at is not null
+    and new.api_key_hash is not null
+    and new.api_key_hash is not distinct from old.api_key_hash
+  )
   execute function principals_disabled_clears_api_key();
