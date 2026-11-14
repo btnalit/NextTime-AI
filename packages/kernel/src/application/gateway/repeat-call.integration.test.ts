@@ -150,27 +150,39 @@ const RUNTIME_CONTRACT = 'repeat-contract';
 const RUNTIME_IMAGES = ['repeat-runtime:one', 'repeat-runtime:two'] as const;
 /** The resident entry containers the supervisor stub lists; `stopResident` stops (drops) one. */
 const RESIDENTS: ResidentInventoryEntry[] = [];
-/** The active runtime image before a case changed it (`restoreActiveRuntimeImage`). */
-let activeRuntimeImageBefore: unknown;
+/** A platform setting as it was before a case changed it (`restoreSetting`): its key, and its
+ *  JSON value — absent when the settings had no such key. */
+let settingKept:
+  | { readonly key: string; readonly present: boolean; readonly value: unknown }
+  | undefined;
 
-async function keepActiveRuntimeImage(pool: Pool): Promise<void> {
-  const result = await pool.query<{ image: unknown }>(
-    "select settings -> 'activeRuntimeImage' as image from platform_settings where singleton",
+async function keepSetting(pool: Pool, key: string): Promise<void> {
+  const result = await pool.query<{ present: boolean; value: unknown }>(
+    'select settings ? $1 as present, settings -> $1 as value from platform_settings where singleton',
+    [key],
   );
-  activeRuntimeImageBefore = result.rows[0]?.image ?? null;
+  const row = result.rows[0];
+  settingKept = { key, present: row?.present === true, value: row?.value ?? null };
 }
 
-/** Test-only, outside any capability (as platform-runtime.integration.test.ts resets it): the
- *  setting as it was, so the files after this one spawn from what they always did. */
-async function restoreActiveRuntimeImage(pool: Pool): Promise<void> {
-  await pool.query(
-    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
-      ? "update platform_settings set settings = settings - 'activeRuntimeImage' where singleton"
-      : "update platform_settings set settings = jsonb_set(settings, '{activeRuntimeImage}', $1::jsonb) where singleton",
-    activeRuntimeImageBefore === null || activeRuntimeImageBefore === undefined
-      ? []
-      : [JSON.stringify(activeRuntimeImageBefore)],
-  );
+/** Test-only, outside any capability (as platform-runtime.integration.test.ts resets the active
+ *  runtime image): the setting as it was, so the files after this one see what they always did —
+ *  the image they spawn from, the model a new workspace takes. */
+async function restoreSetting(pool: Pool): Promise<void> {
+  const kept = settingKept;
+  settingKept = undefined;
+  if (kept === undefined) return;
+  if (kept.present) {
+    await pool.query(
+      'update platform_settings set settings = jsonb_set(settings, array[$1], $2::jsonb) where singleton',
+      [kept.key, JSON.stringify(kept.value)],
+    );
+  } else {
+    await pool.query(
+      'update platform_settings set settings = settings - $1::text where singleton',
+      [kept.key],
+    );
+  }
 }
 
 const activeRuntimeImage = async (ctx: RecipeContext): Promise<unknown> =>
@@ -2629,6 +2641,29 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       by: heldAdminAgent,
     },
   },
+  propose_pack_install: {
+    // Each call is another proposal (a new id) to install the same pack in the same workspace.
+    "a shipped pack at its latest version, for the case's workspace": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ authority: 'workspace', status: 'proposed' })],
+      }),
+      setUp: async (ctx) => {
+        caseAdminAgent = await adminAgent(ctx);
+        await withPlatformMeta(ctx);
+        const preview = await as<{ targetVersion: number }>(ctx, 'preview_pack_install', {
+          name: 'ops-assets',
+        });
+        return {
+          pack: 'ops-assets',
+          version: preview.targetVersion,
+          targetWorkspaceIds: [ctx.seed.workspaceId],
+          title: 'Track assets',
+          description: 'The trial workspace settled on it.',
+        };
+      },
+      by: heldAdminAgent,
+    },
+  },
   agent_withdraw_admin_proposal: {
     // Withdrawn by the first call, so the same call again finds nothing still proposed (409
     // admin_proposal_not_open), nothing written.
@@ -2650,12 +2685,12 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'an image built, allowlisted and carrying the runtime contract': {
       first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[1] }),
       setUp: async (ctx) => {
-        await keepActiveRuntimeImage(ctx.pool);
+        await keepSetting(ctx.pool, 'activeRuntimeImage');
         return { image: RUNTIME_IMAGES[1] };
       },
       entity: () => 'platform_settings',
       moves: platformSettingsVersionNow,
-      restore: restoreActiveRuntimeImage,
+      restore: restoreSetting,
     },
   },
   rollback_runtime_image: {
@@ -2664,14 +2699,14 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'after the active image was set to one, then two': {
       first: expect.objectContaining({ activeRuntimeImage: RUNTIME_IMAGES[0] }),
       setUp: async (ctx) => {
-        await keepActiveRuntimeImage(ctx.pool);
+        await keepSetting(ctx.pool, 'activeRuntimeImage');
         await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[0] });
         await as(ctx, 'set_active_runtime_image', { image: RUNTIME_IMAGES[1] });
         return {};
       },
       entity: () => 'platform_settings',
       moves: activeRuntimeImage,
-      restore: restoreActiveRuntimeImage,
+      restore: restoreSetting,
     },
   },
   roll_entry_containers: {
@@ -2742,6 +2777,22 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         });
         return { gateId, manifestDigest: preview.manifestDigest };
       },
+      // The result names both the gate and its link; the link is what the repeat must not change.
+      entity: (result) => (result as { gatekeeperId?: string }).gatekeeperId,
+    },
+  },
+  set_platform_default_model: {
+    // The settings are one row: each call keeps the version it replaces in the history and takes
+    // the next, the same model again. null (pi's own default) needs no llm-proxy catalog.
+    "pi's own default": {
+      first: expect.objectContaining({ defaultEntryModel: null }),
+      setUp: async (ctx) => {
+        await keepSetting(ctx.pool, 'defaultEntryModel');
+        return { model: null };
+      },
+      entity: () => 'platform_settings',
+      moves: platformSettingsVersionNow,
+      restore: restoreSetting,
     },
   },
   revoke_external_runtime: {
@@ -3010,6 +3061,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'withdraw_admin_proposal',
   'propose_admin_proposal',
   'agent_withdraw_admin_proposal',
+  'propose_pack_install',
+  'set_platform_default_model',
   'set_active_runtime_image',
   'rollback_runtime_image',
   'roll_entry_containers',
