@@ -3002,6 +3002,28 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **staging 注意**：0058 在合并前就地改过（插入时拒绝 `issued_at > now()`）。跑过 PR 分支旧版 0058 的 staging 库，迁移 checksum 对不上会被拒，需要重建。主机没跑过 0058，不受影响。
 - 下一次主机升级的提示要带上本节。
 
+### 3.176 不变量巡检 I6 不再把同一事务里的状态变化读乱（#1182，遗留 720，0.68.0 之后的下一版）
+
+没有迁移，只改内核巡检代码和测试。
+
+- **行为变化**：同一事务里写下的多条 action_request 审计行时间戳相同。以前 I6 在同一时刻内按随机 id 排序，会把合法路径（例如批准、开始执行、失败）读成 approved→failed、failed→executing 这类非法边，报出误报。现在同一时刻内按状态在生命周期里的深度排序：合法路径不再报，跳过的边或不可能的边仍然报违规。
+- **主机影响**：主机巡检的 I6 结果里如果有这类同事务误报，升级后不再出现。升级前的 I6 报告里可能混有这类误报，升级后重跑巡检，以新结果为准。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
+### 3.177 人类通道签发 Handle 时复查调用方凭证（#1180，遗留 712，governance 0045，0.68.0 之后的下一版）
+
+**迁移 governance 0045**：纯新增一个 `security definer` 函数 `console_session_is_live(user_id, console_session_id)`，只回答「这个用户的这个控制台会话还在不在」，不带出行里的任何列；`search_path` 固定，revoke public，只授给 `nexttime_app`。
+
+- **行为变化**：
+  - 一个人自己发起的签发（`issue_handle`、`issue_service_handle`、人类通道的 `invoke_worker`），在权威锁下复查这次调用带来的凭证。控制台会话已登出或过期，或 API key 已清掉或已轮换（不再是这次出示的那把），就拒绝签发，HTTP 401 / WS `UNAUTHORIZED`，拒绝码 `credential_revoked`，消息不含 id。
+  - 控制台不用改：401 本来就回登录页。服务主体在 `/ws` 上轮换自己的 key 后，同一连接再申请 Handle 会被拒，用新 key 重连即可（口径差异见遗留 722）。
+- **升级后只读核对**（`psql -U nexttime`）：
+  - governance 迁移版本为 45；
+  - `select p.prosecdef, has_function_privilege('nexttime_app', p.oid, 'execute'), has_function_privilege('public', p.oid, 'execute') from pg_proc p where p.proname = 'console_session_is_live';` 返回一行 `t | t | f`。
+- **回滚**：回退代码即可，函数可以留着，旧代码不调用它。要连迁移一起撤：`drop function console_session_is_live(uuid, uuid)`，再 `delete from schema_migrations where module = 'governance' and version = 45`。
+- 主机无其他手工步骤。下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
