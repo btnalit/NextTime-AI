@@ -1668,6 +1668,7 @@
     （超级用户路径：`workspaces` 插入、元本体种子、入口 WorkerDefinition）。因此若第二步失败，调用方
     收到错误、审计里留下一条没有对应工作区的 `create_workspace`——接受这一点，换来平台事务不持有超级
     用户权限。
+  - **第二阶段失败的结果行（#1206，遗留 735，92b023f）**：第二阶段失败时补写 `workspace.create_failed`（同一工作区 id，`details.code` 为调用者收到的平台错误码或 `null`，`details.error` 为错误类名，`details.sqlState` 为数据库错误的 SQLSTATE 或 `null`），控制台显示「工作区创建失败」。没有对应工作区的 `create_workspace` 审计行从此都有一行结果。
   - **禁用工作区**：不许禁用默认工作区（409 `default_workspace`）；禁用即吊销该工作区全部活跃
     `sessions`（entry / worker_run / mcp_session / service，`sessions_platform_admin` 策略），API key 查找
     与 Handle 校验（`lookupPrincipalByApiKeyHash` / `isPrincipalDisabled`）新增 join `workspaces.status`
@@ -4309,7 +4310,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 实现说明（遗留 464 第二步：事实检查的表单编辑器，#746，2026-10-24 合入，4a76699；只改 `packages/web`；关闭 464）：`lib/fact-check-draft` 是事实检查在表单上的投影，`FactCheckEditor` 编辑它，`ProcedureStepForm.checkFactText` 换成 `checkFact: FactCheckDraft`；值的读写与校验从 `predicate-draft` 抽出共用。关系类型从本体选；两端可以「按类型和身份」（对象类型只列这个关系类型在这一端允许的类型，声明了身份字段时字段名只读列出，缺或多都就地提示，可以从图谱里找一个对象按原样填入身份）或「就是图谱里已有的这一个对象」（只列这一端能接的类型，显示「名字 · 类型」，重开草稿时按 ID 读出）；属性条件复用 `PredicateEditor` 并列出这类事实已有的属性名；身份值按文本填了数字时提示（身份按 jsonb 全等匹配，发布时校验身份字段与 identityKey 是遗留 466）。`kit/Combobox`：调用方接管输入文字后高亮跟着显示的文字走，新增 kit 单测。不在本 PR：检查句子里的对象写法（遗留 470）。
 - 实现说明（遗留 145：已有工作区的入口定义对齐平台模板，#747，2026-10-24 合入，a9d2e83；无迁移）：
   - **能力**：`get_entry_template_status`（observe）返回镜像自带模板（`systemPrompt`、`capabilities`、`digest`）、当前生效的入口版本（`definitionId`、`version`、`digest`）与不同的字段（`differs`）；`propose_entry_template_upgrade`（propose）带 `templateDigest` 与 `basedOn`，生成入口家族下一版的私有草稿。两者都是 human channel、构建者起，入口 agent 与 worker 都拿不到。
-  - **相同草稿（#1200，遗留 691，ebd1e6a）**：工作区还没有已发布的 entry 定义时，`propose_entry_template_upgrade` 带 `basedOn: null` 再调一次，也返回调用者相同的那份草稿，不再建第二份。查找仍在注册表锁之前，同一调用者并发调两次的情况登记为遗留 736。
+  - **相同草稿（#1200，遗留 691，ebd1e6a）**：工作区还没有已发布的 entry 定义时，`propose_entry_template_upgrade` 带 `basedOn: null` 再调一次，也返回调用者相同的那份草稿，不再建第二份。#1206（遗留 736，92b023f）起先拿 WorkerDefinition 注册表锁，再读已发布的 entry 和查相同草稿，同一调用者并发调两次也只有一份。
   - **摘要**：`sha256:` 加两字段规范 JSON 的哈希，能力按集合比；模板每次调用时从 `ONTOLOGY_DIR` 读，发版后不用重启。读模板的函数从 `workspace/create.ts` 挪到 `worker/entry-template.ts`，创建工作区与比对共用。
   - **草稿**：模板的 `systemPrompt` 与 `capabilities` 覆盖上去，保留工作区自己的 `model`、`egressDeny`、`name`、`description`；模板或入口版本在调用方看过之后变了 409 `entry_template_changed`，已一致 409 `entry_template_current`，调用方已有一模一样的草稿时原样返回（`created: false`）；审计记模板摘要、`basedOn`、草稿版本、`differs`、`created`。发布仍走 `publish_worker_definition`（所有者，带疑似凭据核对）。
   - **Handle 上限**：入口与 worker 的 Handle 上限按「名字以 `propose_` 开头」收能力时，先排除 human channel 能力（`assertValidScope` 本来就不让它们进 Handle）；全注册表目前只有 `propose_entry_template_upgrade` 受影响。
