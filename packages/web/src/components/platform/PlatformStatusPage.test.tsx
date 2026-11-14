@@ -239,6 +239,40 @@ describe('PlatformStatusPage', () => {
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
+  it('legacy 731: a recent change that changed nothing says 未改变; a changed or refused one does not', async () => {
+    const base = {
+      id: 'a-1',
+      action: 'set_active_runtime_image',
+      actorUserId: 'u-1',
+      actorLogin: 'admin',
+      resourceType: 'platform_settings',
+      resourceId: null,
+      payload: {},
+      createdAt: '2026-09-22T00:00:00.000Z',
+      actingThrough: null,
+      actingSessionId: null,
+    };
+    const http = scriptedHttp({
+      platform_status: () =>
+        status({
+          recentAudit: [
+            base,
+            { ...base, id: 'a-2', payload: { unchanged: true } },
+            { ...base, id: 'a-3', payload: { outcome: 'refused', unchanged: true } },
+          ],
+        }),
+    });
+    renderPage(http);
+
+    await screen.findByTestId('status-audit-list');
+    const [changed, unchanged, refused] = screen.getAllByTestId('status-audit-row');
+    if (!changed || !unchanged || !refused) throw new Error('three rows');
+    expect(within(changed).queryByTestId('audit-unchanged')).toBeNull();
+    expect(within(unchanged).getByTestId('audit-unchanged').textContent).toBe('未改变');
+    expect(within(refused).queryByTestId('audit-unchanged')).toBeNull();
+    expect(within(refused).getByTestId('audit-refused')).toBeTruthy();
+  });
+
   it('a load error shows ErrorBanner with retry', async () => {
     const http = scriptedHttp({
       platform_status: () => Promise.reject(new Error('kernel unreachable')),
