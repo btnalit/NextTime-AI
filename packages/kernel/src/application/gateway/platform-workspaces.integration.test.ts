@@ -767,6 +767,70 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      // Legacy 726: the owner membership is made under the user's authority lock, and the user read
+      // again under it — a deletion (binding an API key to another account, `purge_user`) or a
+      // disable that held the lock first is a refusal, not the owner insert's foreign-key 500.
+      it('waits for the owner user’s lock: an owner deleted or disabled meanwhile is refused, and no workspace is made', async () => {
+        for (const change of ['deleted', 'disabled'] as const) {
+          const owner = await createUser(pool, {
+            login: `ws-owner-meanwhile-${randomUUID().slice(0, 8)}`,
+            displayName: 'Owner Meanwhile',
+          });
+          const name = `owner-meanwhile-${randomUUID().slice(0, 8)}`;
+          let go!: () => void;
+          const going = new Promise<void>((resolve) => {
+            go = resolve;
+          });
+          let locked!: () => void;
+          const holding = new Promise<void>((resolve) => {
+            locked = resolve;
+          });
+          const writer = withAdminClient(pool, async (client) => {
+            await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+              [],
+              [owner.id],
+              [],
+            ]);
+            locked();
+            await going;
+            await client.query(
+              change === 'deleted'
+                ? 'delete from users where id = $1'
+                : `update users set status = 'disabled' where id = $1`,
+              [owner.id],
+            );
+          });
+          await holding;
+          const outcome = callAsAdmin('create_workspace', { name, ownerUserId: owner.id }).then(
+            () => undefined,
+            (err: unknown) => err,
+          );
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ waiting: number }>(
+              `select count(*)::int as waiting from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            if ((rows[0]?.waiting ?? 0) > 0) break;
+            if (attempt > 200) throw new Error('create_workspace never waited on the owner’s lock');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          go();
+          await writer;
+          await expectPlatformError(
+            async () => {
+              const err = await outcome;
+              if (err !== undefined) throw err;
+            },
+            change === 'deleted' ? 'user_not_found' : 'user_disabled',
+          );
+          const made = await withAdminClient(pool, (client) =>
+            client.query('select 1 from workspaces where name = $1', [name]),
+          );
+          expect(made.rowCount).toBe(0);
+        }
+      });
+
       // S11 AA3a (plan §3.1 "试验工作区", I-A6; migration core 0050): `purpose: 'admin_trial'`
       // makes a trial workspace — the only kind an admin agent acts in — for good, and never the
       // platform default.

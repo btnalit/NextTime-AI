@@ -671,7 +671,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: idempotent # returns the caller's identical draft (created: false); with no published entry a second call is another entry family (legacy 691)
+    repeat: idempotent # returns the caller's identical draft (created: false), with no published entry too (legacy 691)
   propose_gate_address_change:
     console: required
     agents: []

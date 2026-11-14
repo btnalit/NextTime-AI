@@ -346,6 +346,67 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    // Legacy 691: with no published entry the draft is the first version of a new entry family;
+    // asked again, the caller gets that draft back rather than a second family.
+    it('no published entry: asked again, the caller gets their own first draft back; another person gets their own', async () => {
+      const bare = randomUUID();
+      const bareOwner = randomUUID();
+      const bareBuilder = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: bare, principalId: bareOwner },
+        async (client) => {
+          await client.query('insert into workspaces (id, name) values ($1, $2)', [
+            bare,
+            `entry-template-bare-${bare.slice(0, 8)}`,
+          ]);
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'bare owner'), ($1, $3, 'human', 'builder', 'bare builder')`,
+            [bare, bareOwner, bareBuilder],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      const ask = async (principalId: string, role: Role) => {
+        const caller = humanCaller(bare, principalId, role);
+        const read = EntryTemplateStatusWireSchema.parse(
+          await dispatchCapability({ pool }, caller, 'get_entry_template_status', {}),
+        );
+        expect(read.current).toBeNull();
+        return EntryTemplateUpgradeWireSchema.parse(
+          await dispatchCapability({ pool }, caller, 'propose_entry_template_upgrade', {
+            templateDigest: read.template.digest,
+            basedOn: null,
+          }),
+        );
+      };
+      const first = await ask(bareOwner, 'owner');
+      expect(first).toMatchObject({ created: true, basedOn: null });
+      const again = await ask(bareOwner, 'owner');
+      expect(again).toMatchObject({ created: false, basedOn: null });
+      expect(again.draft).toMatchObject({ id: first.draft.id, version: first.draft.version });
+      const theirs = await ask(bareBuilder, 'builder');
+      expect(theirs.created).toBe(true);
+      expect(theirs.draft.id).not.toBe(first.draft.id);
+
+      const families = await withWorkspace(
+        pool,
+        { workspaceId: bare, principalId: bareOwner },
+        async (client) =>
+          (
+            await client.query<{ proposed_by: string; n: number }>(
+              `select proposed_by, count(*)::int as n from worker_definitions
+                where workspace_id = $1 and kind = 'entry' group by proposed_by order by n`,
+              [bare],
+            )
+          ).rows,
+        { skipRoleSwitch: true },
+      );
+      expect(families).toHaveLength(2);
+      expect(families.every((row) => row.n === 1)).toBe(true);
+    });
+
     it('is the people’s: a member cannot ask, and an agent cannot reach either', async () => {
       const now = await status();
       const member = await refusal(

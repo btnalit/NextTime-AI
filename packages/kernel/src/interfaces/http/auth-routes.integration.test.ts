@@ -536,6 +536,118 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(await findUserByLogin(pool, movedLogin)).toMatchObject({ id: movedToId });
       }, 30_000);
+
+      // Legacy 727: a key that keeps moving to yet another user, on every try, is refused with
+      // its own code — not `already_claimed`, which says the account it belongs to has a
+      // password (none of these do) — and nothing is written.
+      it('a key that moved again on every try is refused with bind_contended, nothing written', async () => {
+        const created = await createWorkspace(pool, `auth-bind-churn-${randomUUID()}`, 'Owner');
+        const firstUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!firstUser) throw new Error('createWorkspace linked no user');
+        const others = await withAdminClient(pool, async (client) => {
+          const ids: string[] = [];
+          for (let index = 0; index < 3; index += 1) {
+            const inserted = await client.query<{ id: string }>(
+              'insert into users (login, display_name) values ($1, $1) returning id',
+              [`bind-churn-${index}-${randomUUID().slice(0, 8)}`],
+            );
+            const id = inserted.rows[0]?.id;
+            if (!id) throw new Error('no user inserted');
+            ids.push(id);
+          }
+          return ids;
+        });
+        const chain = [firstUser.id, ...others];
+        const login = `bind-churn-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login, displayName: 'Bind Churn', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        const gate = () => {
+          let open!: () => void;
+          const opened = new Promise<void>((resolve) => {
+            open = resolve;
+          });
+          return { open, opened };
+        };
+        // Mover i holds the lock of the user the key belongs to on try i + 1, and moves the key
+        // on to the next user once that try waits for it.
+        const movers = chain.slice(0, 3).map((holder, index) => {
+          const held = gate();
+          const release = gate();
+          const done = withAdminClient(pool, async (client) => {
+            await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+              [],
+              [holder],
+              [],
+            ]);
+            held.open();
+            await release.opened;
+            await client.query(
+              'update principals set user_id = $3 where workspace_id = $1 and id = $2',
+              [created.workspaceId, created.ownerPrincipalId, chain[index + 1]],
+            );
+          });
+          return { held, release, done };
+        });
+        await Promise.all(movers.map((mover) => mover.held.opened));
+
+        // `xact_start` as text keeps its microseconds: each try is a new transaction, maybe on
+        // the same connection.
+        const waiting = async (seen: ReadonlySet<string>) => {
+          for (let attempt = 0; ; attempt += 1) {
+            const { rows } = await pool.query<{ tx: string }>(
+              `select pid::text || '/' || xact_start::text as tx from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and position('lock_authorities' in query) > 0`,
+            );
+            const found = rows.find((row) => !seen.has(row.tx));
+            if (found) return found.tx;
+            if (attempt > 200) throw new Error('the bind never waited on the next user’s lock');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const bound = app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        const seen = new Set<string>();
+        try {
+          for (const mover of movers) {
+            seen.add(await waiting(seen));
+            mover.release.open();
+            await mover.done;
+          }
+        } finally {
+          for (const mover of movers) mover.release.open();
+        }
+        const response = await bound;
+        expect(seen.size).toBe(3);
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'bind_contended' } });
+
+        const principal = await withAdminClient(pool, (client) =>
+          client.query<{ user_id: string }>(
+            'select user_id from principals where workspace_id = $1 and id = $2',
+            [created.workspaceId, created.ownerPrincipalId],
+          ),
+        );
+        expect(principal.rows[0]?.user_id).toBe(others[2]);
+        const audit = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rowCount).toBe(0);
+        const users = await withAdminClient(pool, (client) =>
+          client.query<{ id: string }>('select id from users where id = any($1::uuid[])', [chain]),
+        );
+        expect(users.rows.map((row) => row.id).sort()).toEqual([...chain].sort());
+      }, 30_000);
     });
 
     // ---- POST /api/auth/claim -------------------------------------------------------------------

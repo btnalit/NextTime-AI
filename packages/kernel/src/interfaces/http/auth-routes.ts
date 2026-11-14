@@ -160,6 +160,7 @@ function mapAuthError(request: FastifyRequest, reply: FastifyReply, err: unknown
         return fail(reply, 401, err.kind, err.message);
       case 'already_claimed':
       case 'already_member':
+      case 'bind_contended':
       case 'last_admin':
         return fail(reply, 409, err.kind, err.message);
       default:
