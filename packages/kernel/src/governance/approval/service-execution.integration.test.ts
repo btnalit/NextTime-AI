@@ -176,18 +176,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         // *and* still exercise the "only overdue rows" cutoff, this row is deliberately backdated
         // (`requested_at` moved 2 hours into the past) rather than relying on a negative timeoutMs
         // that would sweep every pending row in the database, including ones from other files.
+        // Ten years back, against a cutoff of nine (legacy 721): a database a full run has filled,
+        // or one kept between runs, holds thousands of pending rows other files left behind, hours
+        // or days old — a 1-hour cutoff expired every one of them, each in its own transaction,
+        // past this test's timeout. No other test backdates a request by years.
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           client.query(
-            `update action_requests set requested_at = now() - interval '2 hours'
+            `update action_requests set requested_at = now() - interval '10 years'
            where workspace_id = $1 and id = $2`,
             [workspaceId, pending.id],
           ),
         );
 
-        // A 1-hour cutoff cannot match a row any other concurrently-running test just created
-        // (fresh rows are seconds old, not hours), only this deliberately-backdated one.
+        // A 9-year cutoff cannot match a row any other test created (minutes, hours or days old),
+        // only this deliberately-backdated one.
         const expiredCount = await expireOverduePendingApprovals(pool, {
-          timeoutMs: 60 * 60 * 1000,
+          timeoutMs: 9 * 365 * 24 * 60 * 60 * 1000,
         });
         expect(expiredCount).toBeGreaterThanOrEqual(1);
         const nowExpired = await withWorkspace(

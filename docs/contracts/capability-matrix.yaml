@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 4
+  repeat_unclear: 1
 capabilities:
   add_eval_case:
     console: required
@@ -84,7 +84,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # an approval already applying to the same step, WorkerSpec and drafts is returned as it is (changed: false)
   archive_chat:
     console: required
     agents: []
@@ -178,7 +178,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same decision again changes nothing (changed: false)
   decision_impact:
     console: required
     agents: []
@@ -418,7 +418,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates  # each call mints another token (a new jti), stored nowhere: its issuance audit row is its record
   issue_service_handle:
     console: required
     agents: []
