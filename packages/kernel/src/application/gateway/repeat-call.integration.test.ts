@@ -43,6 +43,7 @@ import { manifestDigest, upsertAnnouncement } from '../gates/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
+import { getOrCreateGoalPlannerPrincipal } from '../task/index.js';
 import {
   configureTaskRuntime,
   getConfiguredTaskRuntime,
@@ -139,6 +140,10 @@ interface Recipe {
   /** Puts back, once the case ends however it ends, what its calls changed that is shared with
    *  the files after this one (the platform's active runtime image). */
   readonly restore?: (pool: Pool) => Promise<void>;
+  /** For a `creates` row whose entity is kept nowhere but its own audit row (a short-lived token,
+   *  minted, never stored): that row's action. The second call then stores nothing and writes one
+   *  such row naming the entity it made — what shows a second entity in place of a stored row. */
+  readonly recordedBy?: string;
 }
 
 /** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
@@ -514,6 +519,90 @@ async function goalRun(
   if (confirm) await by(byRequester, 'confirm_goal', { goalRunId, revision: 1 });
   if (pause) await by(pausedBy ?? byRequester, 'pause_goal', { goalRunId });
   return goalRunId;
+}
+
+/** decide_plan_revision's case: a paused run whose revision 2 the goal planner proposed on the
+ *  revision in force — written with the guards off, since no planner Task runs in this file. */
+async function plannerRevision(ctx: RecipeContext): Promise<string> {
+  const goalRunId = await goalRun(ctx, { confirm: true, pause: true });
+  const { workspaceId, ownerId } = ctx.seed;
+  const worker = await workerV1(ctx, true);
+  await withWorkspace(
+    ctx.pool,
+    { workspaceId, principalId: ownerId },
+    async (client) => {
+      await client.query('set local session_replication_role = replica');
+      const plannerId = await getOrCreateGoalPlannerPrincipal(client, workspaceId);
+      const plan = {
+        steps: [
+          { key: 'b', worker: { definitionId: worker.id, version: 1 }, input: { step: 'b' } },
+        ],
+      };
+      await client.query(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, status,
+           based_on_revision, plan, proposed_by, reason)
+         values ($1, $2, 2, 'proposed', 1, $3, $4, 'step b does it another way')`,
+        [workspaceId, goalRunId, JSON.stringify(plan), plannerId],
+      );
+    },
+    { skipRoleSwitch: true },
+  );
+  return goalRunId;
+}
+
+/** approve_step_trial's case: a proposed run whose one step mounts a Skill that is only the
+ *  owner's draft, and the trial its proposal hints. */
+async function draftTrialParams(ctx: RecipeContext): Promise<Record<string, unknown>> {
+  const { workspaceId, ownerId } = ctx.seed;
+  GOAL_WORKSPACES.add(workspaceId);
+  const worker = await workerV1(ctx, true);
+  const skill = skillBody();
+  await as<Proposed>(ctx, 'propose_skill', { skill });
+  const created = await withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, (client) =>
+    createGoalRun(client, workspaceId, {
+      requesterId: ownerId,
+      proposedBy: ownerId,
+      statement: 'Restart web-1 the way the draft says.',
+      plan: {
+        steps: [
+          {
+            key: 'a',
+            worker: { definitionId: worker.id, version: 1 },
+            input: { step: 'a' },
+            spec: { skills: [skill.name] },
+          },
+        ],
+      },
+      budget: GOAL_BUDGET,
+    }),
+  );
+  const goalRunId = created.goalRunId;
+  const detail = await as<{
+    planRevision: {
+      hints: {
+        code: string;
+        stepKey?: string;
+        trial?: {
+          specDigest: string;
+          drafts: { skillId: string; version: number; draftDigest: string }[];
+        };
+      }[];
+    };
+  }>(ctx, 'get_goal', { goalRunId });
+  const trial = detail.planRevision.hints.find(
+    (hint) => hint.code === 'step_skill_draft' && hint.stepKey === 'a',
+  )?.trial;
+  if (!trial) throw new Error(`goal run ${goalRunId} hints no trial for step a`);
+  return {
+    goalRunId,
+    stepKey: 'a',
+    specDigest: trial.specDigest,
+    drafts: trial.drafts.map(({ skillId, version, draftDigest }) => ({
+      skillId,
+      version,
+      draftDigest,
+    })),
+  };
 }
 
 const graphStore = new SqlGraphStore();
@@ -1770,6 +1859,29 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       }),
     },
   },
+  decide_plan_revision: {
+    // The same decision again changes nothing (`changed: false`) and writes nothing but its own
+    // audit row.
+    "the goal planner's revision of a paused run, rejected": {
+      first: expect.objectContaining({ changed: true, decision: 'reject' }),
+      second: expect.objectContaining({ changed: false, decision: 'reject' }),
+      setUp: async (ctx) => ({
+        goalRunId: await plannerRevision(ctx),
+        revision: 2,
+        decision: 'reject',
+      }),
+    },
+  },
+  approve_step_trial: {
+    // An approval that already applies to the same step, WorkerSpec and drafts is returned as it
+    // is (`changed: false`).
+    "a proposed run's step that mounts the owner's draft": {
+      first: expect.objectContaining({ changed: true, status: 'proposed' }),
+      second: expect.objectContaining({ changed: false, status: 'proposed' }),
+      setUp: draftTrialParams,
+      entity: (result) => (result as { approvalId?: string }).approvalId,
+    },
+  },
   revise_goal: {
     // The second call is based on the revision the first replaced: stale.
     'a paused run': {
@@ -2789,6 +2901,16 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       entity: (result) => (result as { gatekeeperId?: string }).gatekeeperId,
     },
   },
+  issue_llm_admin_token: {
+    // Each call mints another 5-minute token (a new jti), stored nowhere: its issuance audit row
+    // is its only record.
+    'a token for the administrator': {
+      first: expect.objectContaining({ url: '/api/llm-admin', jti: expect.any(String) }),
+      setUp: async () => ({}),
+      entity: (result) => (result as { jti?: string }).jti,
+      recordedBy: 'platform.llm_admin_token_issued',
+    },
+  },
   set_platform_default_model: {
     // The settings are one row: each call keeps the version it replaces in the history and takes
     // the next, the same model again. null (pi's own default) needs no llm-proxy catalog.
@@ -3071,6 +3193,9 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'withdraw_admin_proposal',
   'propose_admin_proposal',
   'agent_withdraw_admin_proposal',
+  'approve_step_trial',
+  'decide_plan_revision',
+  'issue_llm_admin_token',
   'propose_pack_install',
   'set_platform_default_model',
   'set_active_runtime_image',
@@ -3260,6 +3385,7 @@ interface AuditRow {
   readonly action: string;
   readonly actor_principal_id: string | null;
   readonly actor_user_id: string | null;
+  readonly resource_id: string | null;
   readonly payload: Record<string, unknown>;
 }
 
@@ -3385,12 +3511,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const result =
         since === null
           ? await pool.query<AuditRow>(
-              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+              `select id, action, actor_principal_id, actor_user_id, resource_id, payload from audit_records
                 where workspace_id = $1`,
               [workspaceId],
             )
           : await pool.query<AuditRow>(
-              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+              `select id, action, actor_principal_id, actor_user_id, resource_id, payload from audit_records
                 where created_at >= $1`,
               [since],
             );
@@ -3548,9 +3674,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         } else if (repeat === 'creates') {
           const firstId = entityOf(first, params);
           expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-          expect(entityOf(second, params)).not.toBe(firstId);
-          // A new id with nothing stored for it would not be a second entity (per #488).
-          expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+          const secondId = entityOf(second, params);
+          expect(secondId).not.toBe(firstId);
+          if (chosen?.recordedBy === undefined) {
+            // A new id with nothing stored for it would not be a second entity (per #488).
+            expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+          } else {
+            expect(rowsAfterSecond).toEqual(rowsAfterFirst);
+            expect(
+              newAudit.filter((row) => row.action === chosen.recordedBy).map((r) => r.resource_id),
+              'creates: the second entity is on its own record',
+            ).toEqual([secondId]);
+          }
         } else if (repeat === 'repeats') {
           const firstId = entityOf(first, params);
           expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
