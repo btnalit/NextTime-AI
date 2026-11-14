@@ -367,6 +367,26 @@ describe.runIf(DATABASE_URL !== undefined)(
           code: 'draft_pending',
           details: { familyId: v1.id, draftVersion: handEditedVersion },
         });
+        // Review #493 on #1218: an agent acting for the owner (a Handle proposes as them) does not
+        // replace the draft the owner wrote — refused as their pending draft, which stays (the
+        // owner's own replace below takes it, under the next number).
+        const agent = handleCaller(workspaceId, ownerId, {
+          capabilities: ['propose_worker_definition'],
+          resources: {},
+        });
+        const overPerson = await refusal(
+          dispatchCapability({ pool }, agent, 'propose_worker_definition', {
+            definitionId: v1.id,
+            replacesDraft: handEditedVersion,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['agent.example'] },
+          }),
+        );
+        expect(overPerson).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: handEditedVersion },
+        });
         // Editing that draft replaces it, in one call and under the next number; the audit record
         // of the call names the draft it replaced.
         const reEdited = await dispatchCapability(
@@ -419,6 +439,30 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 409,
           code: 'draft_changed',
           details: { familyId: v1.id, draftVersion: reEditedVersion },
+        });
+        // A draft the agent wrote, the agent replaces (then the owner discards it).
+        const agentDraft = (await dispatchCapability({ pool }, agent, 'propose_worker_definition', {
+          definitionId: v1.id,
+          kind: 'entry',
+          definition: { ...v1.definition, egressDeny: ['agent.example'] },
+        })) as { version: number; origin?: string };
+        expect(agentDraft.origin).toBe('agent');
+        const agentRedraft = (await dispatchCapability(
+          { pool },
+          agent,
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            replacesDraft: agentDraft.version,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['agent-edited.example'] },
+          },
+        )) as { version: number; origin?: string };
+        expect(agentRedraft).toMatchObject({ version: agentDraft.version + 1, origin: 'agent' });
+        await dispatchCapability({ pool }, human(ownerId, 'owner'), 'discard_draft', {
+          kind: 'worker_definition',
+          id: v1.id,
+          version: agentRedraft.version,
         });
 
         // Nothing runs differently until it is published — by the owner (the live version is

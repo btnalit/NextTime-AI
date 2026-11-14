@@ -231,7 +231,13 @@ export interface ProposeWorkerDefinitionInput {
    *  refusal above would name: another pending draft of theirs is `FamilyDraftPendingError` naming
    *  it; none at all is `ReplacedDraftNotPendingError` (409 `draft_changed`). The new version is
    *  the family's next number, not the replaced draft's: whoever holds the old draft's
-   *  `id@version` never finds other content under it. Not with `ownPendingDraft: 'beside'`. */
+   *  `id@version` never finds other content under it. Not with `ownPendingDraft: 'beside'`.
+   *  Review #493 on #1218: an agent (`origin: 'agent'`) replaces only a draft an agent wrote. A
+   *  Handle proposes as the person it acts for, so their own draft is "the caller's" too; one no
+   *  agent wrote (`origin` `human`, `platform` — the template draft they asked for — or none, from
+   *  before origins were recorded) is theirs to publish, discard or edit: deleting it is
+   *  `discard_draft`'s, which is the human channel's alone. Refused as the pending draft it is
+   *  (`FamilyDraftPendingError`, naming it). */
   readonly replacesDraft?: number;
   readonly kind: WorkerDefinitionKind;
   readonly definition: Record<string, unknown>;
@@ -327,15 +333,19 @@ export async function proposeWorkerDefinition(
     const pending =
       input.ownPendingDraft === 'beside'
         ? null
-        : await client.query<{ version: number; name: string | null }>(
-            `select version, definition ->> 'name' as name from worker_definitions
+        : await client.query<{ version: number; name: string | null; origin: DraftOrigin | null }>(
+            `select version, definition ->> 'name' as name, origin from worker_definitions
               where workspace_id = $1 and id = $2 and status = 'draft' and proposed_by = $3
               order by version desc
               limit 1`,
             [workspaceId, input.definitionId, proposerPrincipalId],
           );
     const own = pending?.rows[0];
-    if (input.replacesDraft !== undefined && own?.version === input.replacesDraft) {
+    if (
+      input.replacesDraft !== undefined &&
+      own?.version === input.replacesDraft &&
+      (input.origin !== 'agent' || own.origin === 'agent')
+    ) {
       replaced = own.version;
     } else if (own) {
       throw new FamilyDraftPendingError(
@@ -343,6 +353,7 @@ export async function proposeWorkerDefinition(
         input.definitionId,
         own.version,
         own.name ?? undefined,
+        input.replacesDraft === own.version ? 'person_wrote' : undefined,
       );
     } else if (input.replacesDraft !== undefined) {
       throw new ReplacedDraftNotPendingError(input.definitionId, input.replacesDraft);
@@ -355,10 +366,13 @@ export async function proposeWorkerDefinition(
     // Held by `lockWorkerRegistry` against another proposal, and by the row's own lock against a
     // publish or discard_draft that read it first (either changes or deletes the row, and this
     // delete then finds nothing): nothing is proposed then, as if it was gone when we looked.
+    // The origin condition repeats the one above, so this delete never takes a person's draft for
+    // an agent whatever led here.
     const gone = await client.query(
       `delete from worker_definitions
-        where workspace_id = $1 and id = $2 and version = $3 and status = 'draft' and proposed_by = $4`,
-      [workspaceId, input.definitionId, replaced, proposerPrincipalId],
+        where workspace_id = $1 and id = $2 and version = $3 and status = 'draft' and proposed_by = $4
+          and ($5::text <> 'agent' or origin = 'agent')`,
+      [workspaceId, input.definitionId, replaced, proposerPrincipalId, input.origin],
     );
     if ((gone.rowCount ?? 0) !== 1) {
       throw new ReplacedDraftNotPendingError(input.definitionId as string, replaced);

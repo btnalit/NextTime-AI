@@ -460,6 +460,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(WorkerDefinitionValidationError);
       });
 
+      it('review #493 on #1218: an agent replaces only a draft an agent wrote — the person’s own draft stays theirs, and they may replace an agent’s', async () => {
+        const propose = (origin: 'human' | 'agent', extra: Record<string, unknown> = {}) =>
+          inTx(builderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, builderId, {
+              origin,
+              kind: 'worker',
+              definition: { ...VALID_WORKER_DEFINITION, name: `By ${origin}` },
+              ...extra,
+            }),
+          );
+        const versionOf = (id: string, version: number) =>
+          inTx(builderId, (client) =>
+            getWorkerDefinition(client, workspaceId, { definitionId: id, version }),
+          );
+
+        // The person wrote v1; an agent acting for them (proposed_by is theirs) names it.
+        const written = await propose('human');
+        const refused = await propose('agent', {
+          definitionId: written.id,
+          replacesDraft: 1,
+        }).catch((caught: unknown) => caught);
+        expect(refused).toBeInstanceOf(FamilyDraftPendingError);
+        expect(refused).toMatchObject({
+          code: 'draft_pending',
+          familyId: written.id,
+          draftVersion: 1,
+        });
+        expect((refused as Error).message).toMatch(/no agent wrote/);
+        expect(await versionOf(written.id, 1)).toMatchObject({ status: 'draft', origin: 'human' });
+        expect(await versionOf(written.id, 2)).toBeNull();
+
+        // A draft an agent wrote, the agent replaces; and the person replaces the agent's.
+        const drafted = await propose('agent');
+        const redrafted = await propose('agent', { definitionId: drafted.id, replacesDraft: 1 });
+        expect(redrafted).toMatchObject({ version: 2, origin: 'agent' });
+        const taken = await propose('human', { definitionId: drafted.id, replacesDraft: 2 });
+        expect(taken).toMatchObject({ version: 3, origin: 'human' });
+        expect(await versionOf(drafted.id, 2)).toBeNull();
+      });
+
       it('legacy 492: a family only someone else has drafted is not found, as an id nothing has', async () => {
         const theirs = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {

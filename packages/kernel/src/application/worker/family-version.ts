@@ -30,18 +30,28 @@ import type { PoolClient } from 'pg';
 export type FamilyKind = 'skill' | 'procedure' | 'worker_definition';
 
 /** The family's latest version is a draft: publish, discard or reject it before proposing another.
- *  For a WorkerDefinition: the caller's own draft of the family — publish or discard it first. */
+ *  For a WorkerDefinition: the caller's own draft of the family — publish or discard it first.
+ *  `personWrote`: an agent named that draft to replace (`replacesDraft`), and no agent wrote it —
+ *  the person it acts for's, to publish, discard or edit (review #493 on #1218). */
 export class FamilyDraftPendingError extends Error {
   readonly code = 'draft_pending' as const;
   readonly kind: FamilyKind;
   readonly familyId: string;
   readonly draftVersion: number;
-  constructor(kind: FamilyKind, familyId: string, draftVersion: number, draftName?: string) {
+  constructor(
+    kind: FamilyKind,
+    familyId: string,
+    draftVersion: number,
+    draftName?: string,
+    personWrote?: 'person_wrote',
+  ) {
     const named = draftName === undefined ? '' : ` "${draftName}"`;
     super(
-      kind === 'worker_definition'
-        ? `WorkerDefinition${named} ${familyId}@${draftVersion} is your draft that has not been published or discarded — a family holds one pending draft of yours at a time, so the next version would sit beside it. Publish it, or discard it (discard_draft), then propose the next version. Nothing was proposed`
-        : `${kind === 'skill' ? 'Skill' : 'Procedure'}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
+      personWrote
+        ? `WorkerDefinition${named} ${familyId}@${draftVersion} is a draft of the person you act for that no agent wrote — an agent replaces only a draft an agent wrote, and this one is theirs to publish, discard or edit. Nothing was proposed or discarded; ask them`
+        : kind === 'worker_definition'
+          ? `WorkerDefinition${named} ${familyId}@${draftVersion} is your draft that has not been published or discarded — a family holds one pending draft of yours at a time, so the next version would sit beside it. Publish it, or discard it (discard_draft), then propose the next version. Nothing was proposed`
+          : `${kind === 'skill' ? 'Skill' : 'Procedure'}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
     );
     this.name = 'FamilyDraftPendingError';
     this.kind = kind;
