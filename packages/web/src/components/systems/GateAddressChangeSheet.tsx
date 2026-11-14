@@ -1,4 +1,5 @@
 import type {
+  GateAddressChangeOutcomeWire,
   GateAddressChangePreviewWire,
   GateAddressChangeWire,
   MintConnectionSecretResultWire,
@@ -27,6 +28,7 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { Field, describedBy } from '../kit/field.js';
 import { KeyValue } from '../kit/key-value.js';
 import { Notice } from '../kit/notice.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StillNeeded } from '../kit/still-needed.js';
@@ -143,16 +145,23 @@ function GateAddressChangeBody({
           }}
         />
       ) : (
-        // Unmounted while a proposal is open, so after one is withdrawn the steps start again
-        // with a new secret: the last one is spent.
-        <ProposeGateAddressChange
-          http={http}
-          gatekeeperId={gatekeeperId}
-          onProposed={(change) => {
-            setProposed(change);
-            void detail.reload();
-          }}
-        />
+        <>
+          {/* Legacy 715: why the last one did not take, before proposing again — only once the
+              read no longer has an open one, so a proposal just withdrawn here shows nothing. */}
+          {stored === null && gate.lastAddressChangeOutcome ? (
+            <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} />
+          ) : null}
+          {/* Unmounted while a proposal is open, so after one is withdrawn the steps start again
+              with a new secret: the last one is spent. */}
+          <ProposeGateAddressChange
+            http={http}
+            gatekeeperId={gatekeeperId}
+            onProposed={(change) => {
+              setProposed(change);
+              void detail.reload();
+            }}
+          />
+        </>
       )}
     </div>
   );
@@ -424,6 +433,102 @@ export interface PendingGateAddressChangeProps {
   readonly http: CapabilityCaller;
   readonly change: GateAddressChangeWire;
   readonly onWithdrawn: () => void;
+}
+
+/** Legacy 715: how the gate's latest proposal to move ended, as its owner reads it
+ *  (`get_gatekeeper`'s `lastAddressChangeOutcome`, owners only). Withdrawn is the owner's own act
+ *  and shows nothing; applied says what stays at the old address; rejected gives the platform
+ *  administrator's reason (never who); expired says nobody decided it. Rejected and expired end
+ *  with the way back for a gate that already took the new secret at the same host. Shown in
+ *  「健康与操作」 and above 「更换地址」's steps while no proposal is open. */
+export function GateAddressChangeOutcome({
+  outcome,
+}: {
+  readonly outcome: GateAddressChangeOutcomeWire;
+}) {
+  const t = useT();
+  if (outcome.status === 'withdrawn') return null;
+  const ended = (
+    <time dateTime={outcome.endedAt} title={formatDateTime(outcome.endedAt)}>
+      {formatRelative(outcome.endedAt)}
+    </time>
+  );
+  const sameGateWayBack = t(
+    '新旧地址是同一扇门、门已经换上新密钥的话：在 ⋯ 里「重新签发连接密钥」，放进门并重启，门才恢复。',
+    'If both addresses reach the same gate and it already holds the new secret: use ⋯ → “Issue a new connection secret” and put that in the gate, restarting it, to bring it back.',
+  );
+  const proposeAgain = t(
+    '门留在现在的地址。要换就在 ⋯ 里「更换地址」重新申请，用新生成的连接密钥。',
+    'The gate stays at its current address. To move it, propose again from ⋯ → “Move to a new address”, with a new connection secret.',
+  );
+  if (outcome.status === 'applied') {
+    return (
+      <Notice tone="info" testId="gate-address-change-outcome">
+        <div className="stack-s">
+          <strong>
+            {t('门已换到新地址', 'The gate moved to its new address')}
+            {' · '}
+            {ended}
+          </strong>
+          <KeyValue
+            items={[
+              { label: t('原来', 'Was at'), value: outcome.fromEndpoint, mono: true },
+              { label: t('现在', 'Now at'), value: outcome.toEndpoint, mono: true },
+            ]}
+          />
+          {outcome.accountCredentialsLeftOnOldHost ? (
+            <p className="text-small">
+              {t(
+                '账号凭证不跟着门换地址。门用到成员自己的账号的话，成员要在新地址上重新连接；原来地址上的门如果还留着这些账号凭证，请到那台主机上清除。',
+                'Account credentials do not move with the gate. If it uses members’ own accounts, members connect them again at the new address; if the gate at the old address still holds those credentials, clear them on that host.',
+              )}
+            </p>
+          ) : null}
+        </div>
+      </Notice>
+    );
+  }
+  return (
+    <Notice tone="warn" testId="gate-address-change-outcome">
+      <div className="stack-s">
+        <strong>
+          {outcome.status === 'rejected'
+            ? t('换地址的申请被平台管理员驳回了', 'A platform administrator rejected the move')
+            : t('换地址的申请过期了，没有生效', 'The move expired without taking effect')}
+          {' · '}
+          {ended}
+        </strong>
+        <KeyValue
+          items={[{ label: t('申请换到', 'Proposed'), value: outcome.toEndpoint, mono: true }]}
+        />
+        {outcome.status === 'rejected' ? (
+          <>
+            <p
+              className="text-small wrap-anywhere"
+              data-testid="gate-address-change-outcome-reason"
+            >
+              {outcome.rejectionReason
+                ? t(`原因：${outcome.rejectionReason}`, `Reason: ${outcome.rejectionReason}`)
+                : t('平台管理员没有写原因。', 'The platform administrator gave no reason.')}
+            </p>
+            <RedactedNote
+              value={outcome.rejectionReason}
+              testId="gate-address-change-outcome-redacted"
+            />
+          </>
+        ) : (
+          <p className="text-small">
+            {t(
+              '24 小时内没有平台管理员处理。',
+              'No platform administrator decided it within 24 hours.',
+            )}
+          </p>
+        )}
+        <p className="text-small">{proposeAgain}</p>
+        <p className="text-small">{sameGateWayBack}</p>
+      </div>
+    </Notice>
+  );
 }
 
 /** An open proposal to move this gate, as its owner sees it: from where to where, until when a

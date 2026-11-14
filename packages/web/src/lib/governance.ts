@@ -171,6 +171,8 @@ export interface GatekeeperDetail extends GatekeeperListRow {
   readonly endpoint?: GatekeeperDetailWire['endpoint'];
   /** Legacy 701, for a workspace owner only: the open proposal to move it to a new address. */
   readonly pendingAddressChange?: GatekeeperDetailWire['pendingAddressChange'];
+  /** Legacy 715: how the gate's latest proposal to move ended — owners only. */
+  readonly lastAddressChangeOutcome?: GatekeeperDetailWire['lastAddressChangeOutcome'];
 }
 
 // -------------------------------------------------------------------------------------------

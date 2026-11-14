@@ -115,8 +115,9 @@ export const GateAddressChangeOutcomeWireSchema = z
      *  Who decided stays on the platform side. */
     rejectionReason: z.string().nullable(),
     /** `applied` only: no account credential moves with a gate, so any connected at the old
-     *  address (`fromEndpoint`) are still there, to be cleared by the owner — the term the applied
-     *  change's audit row uses. */
+     *  address (`fromEndpoint`) were left there when the change was applied, for the owner to
+     *  clear — the term the applied change's audit row uses. A fact of that moment: the kernel
+     *  does not know whether they were cleared since. */
     accountCredentialsLeftOnOldHost: z.boolean(),
   })
   .strict();
