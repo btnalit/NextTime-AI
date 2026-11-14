@@ -345,6 +345,59 @@ describe('UserDetailPanel', () => {
     await waitFor(() => expect(onMerged).toHaveBeenCalledTimes(1));
   });
 
+  it.each([
+    { status: 'disabled' as const, removedOnly: false, says: true },
+    { status: 'disabled' as const, removedOnly: true, says: false },
+    { status: 'active' as const, removedOnly: false, says: false },
+  ])(
+    'legacy 719: merging a $status source (only removed memberships: $removedOnly) says the memberships are usable again: $says',
+    async ({ status, removedOnly, says }) => {
+      const source = user({
+        status,
+        hasPassword: false,
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'member',
+            disabled: removedOnly,
+          },
+          {
+            workspaceId: 'ws-2',
+            workspaceName: 'Beta',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-2',
+            role: 'member',
+            disabled: true,
+          },
+        ],
+      });
+      const http = scriptedHttp({
+        list_users: () => ({
+          items: [source, user({ id: 'u-2', login: 'bob', displayName: 'Bob' })],
+        }),
+      });
+      renderPanel(http, source);
+      const target = screen.getByLabelText(/合并到/);
+      await findComboboxOption(target, 'bob — Bob');
+      await pickComboboxOption(target, 'bob — Bob');
+      fireEvent.click(screen.getByRole('button', { name: '合并' }));
+
+      const confirm = await screen.findByTestId('user-merge-confirm');
+      const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+      const line =
+        '已停用：合并后，下面没有停用的成员资格会以 bob 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」';
+      if (says) expect(impact).toContain(line);
+      else expect(impact).not.toContain('恢复可用');
+      expect(impact).toContain('Acme');
+      expect(impact).toContain('Beta');
+    },
+  );
+
   it('merge picker: searches the whole directory and ranks accounts with the same display name first', async () => {
     const source = user({
       id: 'u-9',

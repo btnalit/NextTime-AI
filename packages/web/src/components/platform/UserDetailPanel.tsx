@@ -540,12 +540,24 @@ export function UserDetailPanel({
             impact={
               user.memberships.length === 0
                 ? [t('没有要转移的成员资格', 'No memberships to move')]
-                : user.memberships.map((membership) =>
-                    t(
-                      `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''} → ${mergeTarget?.login ?? ''}`,
-                      `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''} → ${mergeTarget?.login ?? ''}`,
+                : [
+                    // Legacy 719: a disabled account's memberships were held back only by its
+                    // status; under an active target they act again — say so before the merge.
+                    ...(user.status === 'disabled' && user.memberships.some((m) => !m.disabled)
+                      ? [
+                          t(
+                            `${user.login} 已停用：合并后，下面没有停用的成员资格会以 ${mergeTarget?.login ?? ''} 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」`,
+                            `${user.login} is disabled: after the merge, the memberships below that are not disabled are usable again as ${mergeTarget?.login ?? ''}, and the platform audit records each one as “Membership usable again”`,
+                          ),
+                        ]
+                      : []),
+                    ...user.memberships.map((membership) =>
+                      t(
+                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''} → ${mergeTarget?.login ?? ''}`,
+                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''} → ${mergeTarget?.login ?? ''}`,
+                      ),
                     ),
-                  )
+                  ]
             }
             confirmLabel={t('确认合并', 'Confirm merge')}
             onConfirm={merge}

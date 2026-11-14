@@ -2596,6 +2596,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '一个工作区成员身份被转到另一个用户账号。',
     enHint: 'A workspace membership moved to another user account.',
   },
+  'platform.membership_restored': {
+    zh: '成员身份恢复可用',
+    en: 'Membership usable again',
+    zhHint:
+      '一个已停用用户被合并进启用的账号，它在这个工作区的成员身份随之恢复可用，由目标账号登录使用。',
+    enHint:
+      'A disabled user was merged into an active account, so its membership in this workspace is usable again, by the target account.',
+  },
   'connector.entry_handles_revoked': {
     zh: '入口凭证已吊销',
     en: 'Entry Handles revoked',
