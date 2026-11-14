@@ -302,7 +302,8 @@ describe('UserDetailPanel', () => {
       list_users: () => ({
         items: [
           source,
-          user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
+          // No membership where the source has one: two that are not removed would clash.
+          user({ id: 'u-2', login: 'bob', displayName: 'Bob', memberships: [] }),
           user({ id: 'u-3', login: 'carol', displayName: 'Carol', status: 'disabled' }),
         ],
       }),
@@ -378,7 +379,7 @@ describe('UserDetailPanel', () => {
       });
       const http = scriptedHttp({
         list_users: () => ({
-          items: [source, user({ id: 'u-2', login: 'bob', displayName: 'Bob' })],
+          items: [source, user({ id: 'u-2', login: 'bob', displayName: 'Bob', memberships: [] })],
         }),
       });
       renderPanel(http, source);
@@ -398,6 +399,76 @@ describe('UserDetailPanel', () => {
     },
   );
 
+  // UX acceptance of #1185 (P2): only two memberships that are not removed clash; a removed one
+  // is let go, said in the impact list.
+  it('a membership in a workspace the target is also in: a clash is said before the merge, a disabled one is let go', async () => {
+    const membership = (
+      workspaceId: string,
+      workspaceName: string,
+      principalId: string,
+      disabled: boolean,
+    ) => ({
+      workspaceId,
+      workspaceName,
+      workspacePurpose: 'standard' as const,
+      workspaceStatus: 'active' as const,
+      principalId,
+      role: 'member' as const,
+      disabled,
+    });
+    const source = user({
+      hasPassword: false,
+      memberships: [
+        membership('ws-1', 'Acme', 'p-1', true),
+        membership('ws-2', 'Beta', 'p-2', false),
+        membership('ws-3', 'Gamma', 'p-3', false),
+      ],
+    });
+    const clashing = user({
+      id: 'u-2',
+      login: 'bob',
+      displayName: 'Bob',
+      memberships: [membership('ws-3', 'Gamma', 'p-9', false)],
+    });
+    const fine = user({
+      id: 'u-3',
+      login: 'carol',
+      displayName: 'Carol',
+      memberships: [
+        membership('ws-1', 'Acme', 'p-7', false),
+        membership('ws-2', 'Beta', 'p-8', true),
+      ],
+    });
+    const http = scriptedHttp({ list_users: () => ({ items: [source, clashing, fine] }) });
+    renderPanel(http, source);
+    const target = screen.getByLabelText(/合并到/);
+    const merge = screen.getByRole('button', { name: '合并' });
+
+    await findComboboxOption(target, 'bob — Bob');
+    await pickComboboxOption(target, 'bob — Bob');
+    expect(merge.hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('user-merge-missing').textContent).toBe(
+      '两个账户在工作区 Gamma 都有没停用的成员资格：先在那里移出其中一个',
+    );
+    fireEvent.click(merge);
+    expect(screen.queryByTestId('user-merge-confirm')).toBeNull();
+
+    await pickComboboxOption(target, 'carol — Carol');
+    expect(merge.hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByTestId('user-merge-missing')).toBeNull();
+    fireEvent.click(merge);
+    const confirm = await screen.findByTestId('user-merge-confirm');
+    const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+    expect(impact).toContain(
+      '工作区 Acme · 成员（已停用）：carol 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）',
+    );
+    expect(impact).toContain(
+      '工作区 Beta · 成员 → carol；carol 在这里已停用的那条成员资格不再属于任何账户（平台审计记下它原来属于谁）',
+    );
+    const to = 'carol';
+    expect(impact).toContain(`工作区 Gamma · 成员 → ${to}`);
+  });
+
   it('merge picker: searches the whole directory and ranks accounts with the same display name first', async () => {
     const source = user({
       id: 'u-9',
@@ -409,7 +480,9 @@ describe('UserDetailPanel', () => {
       list_users: (params) => {
         const query = (params as { query?: string }).query;
         if (query === 'zed')
-          return { items: [user({ id: 'u-7', login: 'zed', displayName: 'Zed' })] };
+          return {
+            items: [user({ id: 'u-7', login: 'zed', displayName: 'Zed', memberships: [] })],
+          };
         return {
           items: [
             user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),

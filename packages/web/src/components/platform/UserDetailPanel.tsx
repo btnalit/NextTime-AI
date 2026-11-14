@@ -123,6 +123,24 @@ export function UserDetailPanel({
   const directory = useUserDirectoryTap(http, (candidate) =>
     sameDisplayName(candidate.displayName, user.displayName) ? 0 : 1,
   );
+  // UX acceptance of #1185 (P2): only two memberships in one workspace that are not removed
+  // clash (`merge_user` refuses them, `already_member`); where one is removed, that one is let go
+  // and the other stays or moves. Said before the merge instead of after a refusal.
+  const pairs =
+    mergeTarget === undefined
+      ? []
+      : user.memberships.flatMap((ours) => {
+          const theirs = mergeTarget.memberships.find((m) => m.workspaceId === ours.workspaceId);
+          return theirs === undefined ? [] : [{ ours, theirs }];
+        });
+  const clashes = pairs.filter(({ ours, theirs }) => !ours.disabled && !theirs.disabled);
+  const clashReason =
+    clashes.length === 0
+      ? undefined
+      : t(
+          `两个账户在工作区 ${clashes.map(({ ours }) => ours.workspaceName).join('、')} 都有没停用的成员资格：先在那里移出其中一个`,
+          `Both accounts hold a membership that is not disabled in workspace ${clashes.map(({ ours }) => ours.workspaceName).join(', ')}: remove one of them there first`,
+        );
   const sameNameCandidates = directory.rows.filter(
     (candidate) =>
       candidate.id !== user.id &&
@@ -507,7 +525,7 @@ export function UserDetailPanel({
           />
           <Confirm
             tier="irreversible"
-            open={confirmingMerge && mergeTarget !== undefined}
+            open={confirmingMerge && mergeTarget !== undefined && clashReason === undefined}
             onOpenChange={setConfirmingMerge}
             anchor={
               <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -517,12 +535,13 @@ export function UserDetailPanel({
                       ? [t('选择要合并到的账户', 'pick the account to merge into')]
                       : []
                   }
+                  reason={clashReason}
                   testId="user-merge-missing"
                 />
                 <Button
                   variant="secondary"
                   onClick={() => setConfirmingMerge(true)}
-                  disabled={mergeTarget === undefined}
+                  disabled={mergeTarget === undefined || clashReason !== undefined}
                 >
                   {t('合并', 'Merge')}
                 </Button>
@@ -551,12 +570,26 @@ export function UserDetailPanel({
                           ),
                         ]
                       : []),
-                    ...user.memberships.map((membership) =>
-                      t(
-                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''} → ${mergeTarget?.login ?? ''}`,
-                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''} → ${mergeTarget?.login ?? ''}`,
-                      ),
-                    ),
+                    ...user.memberships.map((membership) => {
+                      const line = t(
+                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''}`,
+                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''}`,
+                      );
+                      const theirs = pairs.find(({ ours }) => ours === membership)?.theirs;
+                      const to = mergeTarget?.login ?? '';
+                      if (theirs === undefined) return `${line} → ${to}`;
+                      // One of the two is disabled here (two that are not clash, above): that
+                      // one no longer belongs to any account; the platform audit says whose it was.
+                      return membership.disabled
+                        ? t(
+                            `${line}：${to} 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line}: ${to} already holds a membership here, so this one no longer belongs to any account (the platform audit records whose it was)`,
+                          )
+                        : t(
+                            `${line} → ${to}；${to} 在这里已停用的那条成员资格不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line} → ${to}; ${to}'s disabled membership here no longer belongs to any account (the platform audit records whose it was)`,
+                          );
+                    }),
                   ]
             }
             confirmLabel={t('确认合并', 'Confirm merge')}

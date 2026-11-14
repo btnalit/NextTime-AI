@@ -31,6 +31,27 @@ function namesAt(record: Readonly<Record<string, unknown>>, key: string): string
   return names.length > 0 ? names : undefined;
 }
 
+/** Legacy 719 (`merge_user`, `platform.membership_restored`): the merge deletes the source user
+ *  row, so the two logins are what still say whose memberships these were; the workspace's name,
+ *  when the row is about one; how many removed memberships no longer belong to any account. */
+function mergeNote(record: Readonly<Record<string, unknown>>):
+  | {
+      readonly source: string;
+      readonly target: string;
+      readonly workspaceName: string | undefined;
+      readonly detached: number;
+    }
+  | undefined {
+  const { sourceLogin, targetLogin, workspaceName, detachedPrincipals } = record;
+  if (typeof sourceLogin !== 'string' || typeof targetLogin !== 'string') return undefined;
+  return {
+    source: sourceLogin,
+    target: targetLogin,
+    workspaceName: typeof workspaceName === 'string' ? workspaceName : undefined,
+    detached: Array.isArray(detachedPrincipals) ? detachedPrincipals.length : 0,
+  };
+}
+
 /** S10 E3-1c: where the evaluation seal stopped content on its way to an agent
  *  (`evaluation.content_withheld`'s `where`, kernel `application/eval-seal`) and what that left. */
 function sealNote(
@@ -225,6 +246,7 @@ export function AuditPayloadNotes({
   const withheld = namesAt(record, 'withheldParams');
   const sealed = sealNote(record);
   const breaker = breakerNote(record);
+  const merge = mergeNote(record);
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -235,6 +257,7 @@ export function AuditPayloadNotes({
     withheld === undefined &&
     sealed === undefined &&
     breaker === undefined &&
+    merge === undefined &&
     !masked
   ) {
     return null;
@@ -283,6 +306,20 @@ export function AuditPayloadNotes({
       ) : null}
       {breaker !== undefined ? (
         <BreakerNoteItem note={breaker} workspaceNames={workspaceNames} />
+      ) : null}
+      {merge !== undefined ? (
+        <li data-testid="audit-merge">
+          {t(
+            `账户 ${merge.source} → ${merge.target}${merge.workspaceName !== undefined ? ` · 工作区 ${merge.workspaceName}` : ''}`,
+            `Account ${merge.source} → ${merge.target}${merge.workspaceName !== undefined ? ` · workspace ${merge.workspaceName}` : ''}`,
+          )}
+          {merge.detached > 0
+            ? t(
+                `；${merge.detached} 条已停用的成员资格因为另一个账户在同一工作区也有成员资格，不再属于任何账户（原来属于谁见负载）。`,
+                `; ${merge.detached} disabled membership(s) no longer belong to any account, as the other account holds one in the same workspace (whose they were is in the payload).`,
+              )
+            : null}
+        </li>
       ) : null}
       {revokedHandles !== undefined ? (
         <li data-testid="audit-revoked-handles">

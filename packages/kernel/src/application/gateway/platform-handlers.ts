@@ -819,9 +819,6 @@ export const mergeUserHandler: CapabilityHandler = async (
   // moved memberships.
   await lockAuthoritiesForChange(client, { userIds: [input.sourceUserId, input.targetUserId] });
   const source = await loadUser(client, input.sourceUserId);
-  await lockAuthoritiesForChange(client, {
-    principalIds: source.memberships.map((membership) => membership.principalId),
-  });
   const target = await loadUser(client, input.targetUserId);
   if (source.hasPassword) {
     throw new PlatformAdminError(
@@ -839,13 +836,59 @@ export const mergeUserHandler: CapabilityHandler = async (
       'the target user is disabled: the moved memberships would act for a disabled user — enable it first, or merge into another user',
     );
   }
-  const targetWorkspaces = new Set(target.memberships.map((m) => m.workspaceId));
-  const clash = source.memberships.find((m) => targetWorkspaces.has(m.workspaceId));
+  // A user holds one membership per workspace (`principals_workspace_user_key`). Where both hold
+  // one, only two that are not removed clash; otherwise the removed one is detached
+  // (`user_id = null`, as `purge_user` detaches a purged user's removed memberships: the Principal
+  // row stays for the audit lineage, and the `merge_user` row says whose it was), and the other
+  // stays or moves. Counting removed ones too made "remove one first" a dead end: a removed
+  // membership is never deleted, and every new user joins the default workspace.
+  const targetByWorkspace = new Map(target.memberships.map((m) => [m.workspaceId, m]));
+  const clash = source.memberships.find((m) => {
+    const theirs = targetByWorkspace.get(m.workspaceId);
+    return theirs !== undefined && !m.disabled && !theirs.disabled;
+  });
   if (clash) {
     throw new PlatformAdminError(
       'already_member',
-      `both users hold a membership in workspace "${clash.workspaceName}"; remove one first`,
+      `both users hold a membership in workspace "${clash.workspaceName}" that is not removed: remove one of them there first`,
     );
+  }
+  const detached: { workspaceId: string; principalId: string; userId: string }[] = [];
+  for (const membership of source.memberships) {
+    const theirs = targetByWorkspace.get(membership.workspaceId);
+    if (theirs === undefined) continue;
+    // The source's when it is removed (both removed: the target keeps its own); else the target's.
+    const gone = membership.disabled
+      ? { membership, userId: source.id }
+      : { membership: theirs, userId: target.id };
+    detached.push({
+      workspaceId: gone.membership.workspaceId,
+      principalId: gone.membership.principalId,
+      userId: gone.userId,
+    });
+  }
+  // Legacy 702 (governance 0043): every Principal this changes — the source's, which move or are
+  // detached, and the target's detached ones — in one ordered call, after the users' locks.
+  await lockAuthoritiesForChange(client, {
+    principalIds: [
+      ...source.memberships.map((membership) => membership.principalId),
+      ...detached.filter((gone) => gone.userId === target.id).map((gone) => gone.principalId),
+    ],
+  });
+  for (const gone of detached) {
+    // Only a removed one, still that user's. Under both users' locks nothing can change that
+    // (nothing re-enables a removed membership), so a miss is a broken invariant: fail loudly.
+    const result = await client.query(
+      `update principals set user_id = null
+        where workspace_id = $1 and id = $2 and user_id = $3 and kind = 'human'
+          and disabled_at is not null`,
+      [gone.workspaceId, gone.principalId, gone.userId],
+    );
+    if ((result.rowCount ?? 0) !== 1) {
+      throw new Error(
+        `merge_user: the removed membership ${gone.principalId} to detach is no longer removed or no longer that user's`,
+      );
+    }
   }
   await client.query(`update principals set user_id = $2 where user_id = $1 and kind = 'human'`, [
     source.id,
@@ -883,6 +926,7 @@ export const mergeUserHandler: CapabilityHandler = async (
           targetLogin: target.login,
           reason: 'merged_from_disabled_user',
           role: membership.role,
+          workspaceName: membership.workspaceName,
           workspaceStatus: membership.workspaceStatus,
         },
       });
@@ -893,7 +937,11 @@ export const mergeUserHandler: CapabilityHandler = async (
     resourceType: 'user',
     resourceId: target.id,
     // On the `merge_user` row too, for every merge: `params.sourceUserId` names a deleted user.
-    auditPayload: { sourceLogin: source.login, targetLogin: target.login },
+    auditPayload: {
+      sourceLogin: source.login,
+      targetLogin: target.login,
+      ...(detached.length > 0 ? { detachedPrincipals: detached } : {}),
+    },
   };
 };
 

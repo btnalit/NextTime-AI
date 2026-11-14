@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LangProvider } from '../../lib/i18n.js';
 import { Confirm, type ConfirmLevel, type ConfirmProps } from './confirm.js';
 
 afterEach(cleanup);
@@ -442,6 +443,36 @@ describe('kit/Confirm — irreversible', () => {
     fireEvent.click(button);
     await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels the typed name as one sentence in either language (UX acceptance of #1185)', async () => {
+    renderTier('irreversible', { target: 'acme-prod' });
+    fireEvent.click(screen.getByTestId('trigger'));
+    expect(
+      (await screen.findByLabelText('键入 "acme-prod" 以确认')).getAttribute('data-testid'),
+    ).toBe('confirm-typed-name');
+    cleanup();
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <Harness
+            tier="irreversible"
+            title="Purge"
+            target="acme-prod"
+            confirmLabel="Purge"
+            testId="confirm"
+            onConfirm={vi.fn(async () => undefined)}
+          />
+        </LangProvider>,
+      );
+      fireEvent.click(screen.getByTestId('trigger'));
+      const label = await screen.findByLabelText('Type "acme-prod" to confirm');
+      expect(label.getAttribute('data-testid')).toBe('confirm-typed-name');
+      expect(document.body.textContent).not.toContain('键入');
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 
   it('legacy 347: the typed name, the acknowledgement and the button they unlock stay pinned under the scrolling body', async () => {
