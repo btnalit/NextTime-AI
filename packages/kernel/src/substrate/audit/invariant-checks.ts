@@ -229,8 +229,11 @@ const VALID_ACTION_REQUEST_EDGES = new Set(
  *  transaction writes share its `now()` as `created_at`, so their order there is not recorded —
  *  an approval, its execution's start and its failure, written together, would otherwise be
  *  compared in the random order of their ids and read as illegal edges. Ordered by depth within
- *  one `created_at`, a legal path is compared as the path it is; a skipped or impossible edge
- *  stays illegal in any order. */
+ *  one `created_at`, a legal path is compared as the path it is, and an edge that skips a status
+ *  or joins two siblings stays illegal in any order. What one transaction's rows cannot show is
+ *  their order: one that wrote a backward step (`executing` then `approved`) or came back to a
+ *  status it had left reads as the forward path — as it read under the ids, by luck. Across
+ *  `created_at` values the order is the recorded one, and a step back is a violation. */
 export const ACTION_REQUEST_STATUS_DEPTH: Readonly<Record<string, number>> = (() => {
   const depth: Record<string, number> = {};
   for (const edge of ACTION_REQUEST_EDGES) depth[edge.from] ??= 0;
