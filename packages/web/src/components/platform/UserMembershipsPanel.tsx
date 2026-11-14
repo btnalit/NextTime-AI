@@ -34,12 +34,16 @@ export interface UserMembershipsPanelProps {
  * fight over Tab and Esc.
  *
  * The workspace picker lists every active workspace (`list_workspaces`, via
- * `lib/users-workspace-picker.tsx`) minus the ones this user already holds a membership in —
- * disabled memberships included, since `add_membership` would refuse those as duplicates.
+ * `lib/users-workspace-picker.tsx`) minus the ones this user is an active member of. Legacy 725: a
+ * workspace this user was removed from stays pickable — `add_membership` adds them back as a new
+ * membership (the removed one stays behind for audit lineage, with its drafts and goals), and the
+ * form says so before 加入.
  */
 export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMembershipsPanelProps) {
   const t = useT();
-  const held = user.memberships.map((membership) => membership.workspaceId);
+  const held = user.memberships
+    .filter((membership) => !membership.disabled)
+    .map((membership) => membership.workspaceId);
   const workspaces = useActiveWorkspaces(http);
   const [workspaceChoice, setWorkspaceChoice] = useState('');
   const [role, setRole] = useState<Role>('member');
@@ -47,6 +51,9 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
   const [addError, setAddError] = useState<unknown | null>(null);
 
   const workspaceId = workspaceChoice;
+  const removedHere = user.memberships.find(
+    (membership) => membership.disabled && membership.workspaceId === workspaceId,
+  );
   // Legacy 353 (#614): a change the kernel is bound to refuse (`last_owner`) is not offered.
   const soleOwnerOf = new Set(soleOwnedWorkspaces(workspaces, user.id).map((ws) => ws.id));
 
@@ -116,6 +123,15 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
         emptyText={t('已加入所有可用的工作区。', 'Already a member of every active workspace.')}
         testId="user-memberships-workspace"
       />
+
+      {removedHere !== undefined ? (
+        <Notice testId="user-membership-readd">
+          {t(
+            `这位用户曾被移出「${removedHere.workspaceName}」。加入会新建一条成员资格，原来那条留着供审计溯源；这位用户看不到移出前的草稿和目标。`,
+            `This user was removed from “${removedHere.workspaceName}”. Adding them creates a new membership and the removed one is kept for audit lineage; they will not see their drafts and goals from before the removal.`,
+          )}
+        </Notice>
+      ) : null}
 
       <Field
         id="um-role"
@@ -290,8 +306,8 @@ function MembershipRow({
         {confirmingRemove ? (
           <Notice tone="warn">
             {t(
-              '移出会停用这位用户在该工作区的成员身份并吊销其会话；成员记录保留，供审计溯源。',
-              'Removing disables their member identity in this workspace and revokes its sessions; the member record is kept for audit lineage.',
+              '移出会停用这位用户在该工作区的成员身份并吊销其会话；成员记录保留，供审计溯源。之后可以再加入，但那是一条新的成员资格，看不到移出前的草稿和目标。',
+              'Removing disables their member identity in this workspace and revokes its sessions; the member record is kept for audit lineage. They can be added again later, but as a new membership that does not see the drafts and goals from before the removal.',
             )}
           </Notice>
         ) : null}

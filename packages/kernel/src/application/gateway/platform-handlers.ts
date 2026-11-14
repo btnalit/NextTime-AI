@@ -25,6 +25,7 @@ import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { ADMIN_TRIAL_WORKSPACE_PURPOSE } from '../admin-agent/index.js';
 import { revokeUserAdminAgentSessions, revokeUserCredentials } from '../identity/credentials.js';
+import { type ReleasedMembership, freeMembershipSlot } from '../identity/memberships.js';
 import { hashPassword, passwordPolicyViolation } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
@@ -366,20 +367,25 @@ async function loadWorkspace(client: PoolClient, workspaceId: string): Promise<W
   return row;
 }
 
-/** Creates the membership Principal (no API key) under the workspace GUC + platform policy. */
+/**
+ * Creates the membership Principal (no API key) under the workspace GUC + platform policy.
+ * Legacy 725: only an active membership makes the user "already a member"; a removed one is let go
+ * of the user (`freeMembershipSlot`) and the new Principal takes its place — returned as
+ * `released` for the audit row. The caller holds the user's authority lock.
+ */
 async function insertMembership(
   client: PoolClient,
   input: { userId: string; workspaceId: string; role: Role; displayName: string },
-): Promise<UserMembershipWire> {
+): Promise<{ membership: UserMembershipWire; released: ReleasedMembership | null }> {
   const workspace = await loadWorkspace(client, input.workspaceId);
   if (workspace.status !== 'active') {
     throw new PlatformAdminError('workspace_disabled', 'that workspace is disabled');
   }
-  const existing = await client.query(
-    `select 1 from principals where workspace_id = $1 and user_id = $2 and kind = 'human'`,
-    [input.workspaceId, input.userId],
-  );
-  if ((existing.rowCount ?? 0) > 0) {
+  const slot = await freeMembershipSlot(client, {
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+  });
+  if (slot.state === 'held') {
     throw new PlatformAdminError(
       'already_member',
       'the user is already a member of that workspace',
@@ -394,13 +400,16 @@ async function insertMembership(
   const row = inserted.rows[0];
   if (!row) throw new Error('add_membership: INSERT ... RETURNING produced no row');
   return {
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    workspaceStatus: workspace.status,
-    workspacePurpose: workspace.purpose,
-    principalId: row.id,
-    role: input.role,
-    disabled: false,
+    membership: {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      workspaceStatus: workspace.status,
+      workspacePurpose: workspace.purpose,
+      principalId: row.id,
+      role: input.role,
+      disabled: false,
+    },
+    released: slot.released,
   };
 }
 
@@ -443,6 +452,7 @@ export const createUserHandler: CapabilityHandler = async (client, _workspaceId,
   const workspaceId =
     input.workspaceId === undefined ? settings.defaultWorkspaceId : input.workspaceId;
   if (workspaceId) {
+    // A user created just now: no membership to clash with or to let go, no one else holds its id.
     await insertMembership(client, {
       userId: created.id,
       workspaceId,
@@ -688,14 +698,34 @@ export const setUserBudgetHandler: CapabilityHandler = async (client, _workspace
 
 export const addMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
+  // Legacy 725 (#493 on #1189): the user's authority lock before any row is read, as every path
+  // that changes a user's memberships takes it (`merge_user`, binding an API key, the workspace's
+  // `add_member`): two adds of the same user no longer race to the unique index (a 500), and a
+  // merge never meets a membership added after it read the user's.
+  await lockAuthoritiesForChange(client, { userIds: [input.userId] });
   const user = await loadUser(client, input.userId);
-  const membership = await insertMembership(client, {
+  const { membership, released } = await insertMembership(client, {
     userId: user.id,
     workspaceId: input.workspaceId,
     role: input.role,
     displayName: user.displayName,
   });
-  return { result: membership, resourceType: 'principal', resourceId: membership.principalId };
+  return {
+    result: membership,
+    resourceType: 'principal',
+    resourceId: membership.principalId,
+    // Legacy 725: the removed membership this one replaces, as `merge_user` lists the ones it
+    // lets go — whose it was and where, so the row says it without a lookup.
+    ...(released !== null
+      ? {
+          auditPayload: {
+            detachedPrincipals: [
+              { ...released, login: user.login, workspaceName: membership.workspaceName },
+            ],
+          },
+        }
+      : {}),
+  };
 };
 
 async function loadMembership(
@@ -877,18 +907,22 @@ export const mergeUserHandler: CapabilityHandler = async (
       `both users hold a membership in workspace "${clash.workspaceName}" that is not removed: remove one of them there first`,
     );
   }
-  const detached: { workspaceId: string; principalId: string; userId: string }[] = [];
+  const detached: (ReleasedMembership & { login: string; workspaceName: string })[] = [];
   for (const membership of source.memberships) {
     const theirs = targetByWorkspace.get(membership.workspaceId);
     if (theirs === undefined) continue;
     // The source's when it is removed (both removed: the target keeps its own); else the target's.
     const gone = membership.disabled
-      ? { membership, userId: source.id }
-      : { membership: theirs, userId: target.id };
+      ? { membership, user: source }
+      : { membership: theirs, user: target };
+    // Legacy 725 (UX on #1189): the login and the workspace's name too, so the platform audit
+    // says "Y's membership in W" — the source user row is deleted below.
     detached.push({
       workspaceId: gone.membership.workspaceId,
       principalId: gone.membership.principalId,
-      userId: gone.userId,
+      userId: gone.user.id,
+      login: gone.user.login,
+      workspaceName: gone.membership.workspaceName,
     });
   }
   for (const gone of detached) {

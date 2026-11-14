@@ -362,6 +362,13 @@ export function PrincipalDetail({
                     '停用会吊销该成员持有的全部 Handle 与入口会话，且不能从这里撤销。',
                     'Disabling revokes every Handle and entry session this member holds. This cannot be undone from here.',
                   )}
+                  {/* Legacy 725: a person can be added back, as a new membership. */}
+                  {principal.kind === 'human'
+                    ? t(
+                        '之后可以按登录名把这个人再加回来，但那是一条新的成员资格，看不到停用前的草稿和目标。',
+                        ' The person can be added back by login later, but as a new membership that does not see the drafts and goals from before.',
+                      )
+                    : null}
                 </Notice>
                 {disableError !== null ? (
                   <ErrorBanner

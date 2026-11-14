@@ -31,24 +31,70 @@ function namesAt(record: Readonly<Record<string, unknown>>, key: string): string
   return names.length > 0 ? names : undefined;
 }
 
+/** A removed membership an audit row says no longer belongs to any account
+ *  (`detachedPrincipals`), with whose it was (`login`) and where (`workspaceName`) when the row
+ *  names them — legacy 725 rows do; a `merge_user` row from before them gives ids only. */
+interface DetachedMembership {
+  readonly login: string | undefined;
+  readonly workspaceName: string | undefined;
+}
+
+function detachedAt(record: Readonly<Record<string, unknown>>): DetachedMembership[] {
+  const value = record.detachedPrincipals;
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const entry = asRecord(item);
+    return {
+      login: typeof entry?.login === 'string' ? entry.login : undefined,
+      workspaceName: typeof entry?.workspaceName === 'string' ? entry.workspaceName : undefined,
+    };
+  });
+}
+
+/** Legacy 725: the rows of the paths that give a person a membership and let go of a removed one
+ *  of theirs there for it (`identity/memberships.ts`). `platform.user_purged` lists
+ *  `detachedPrincipals` too, for another reason (the account is gone), and says nothing here. */
+const READDED_ACTIONS: ReadonlySet<string> = new Set([
+  'add_membership',
+  'add_member',
+  'principal.user_rebound',
+]);
+
 /** Legacy 719 (`merge_user`, `platform.membership_restored`): the merge deletes the source user
  *  row, so the two logins are what still say whose memberships these were; the workspace's name,
- *  when the row is about one; how many removed memberships no longer belong to any account. */
+ *  when the row is about one; the removed memberships that no longer belong to any account —
+ *  legacy 725 (UX on #1189): named as whose and where, when the row says so. */
 function mergeNote(record: Readonly<Record<string, unknown>>):
   | {
       readonly source: string;
       readonly target: string;
       readonly workspaceName: string | undefined;
-      readonly detached: number;
+      readonly detached: readonly DetachedMembership[];
     }
   | undefined {
-  const { sourceLogin, targetLogin, workspaceName, detachedPrincipals } = record;
+  const { sourceLogin, targetLogin, workspaceName } = record;
   if (typeof sourceLogin !== 'string' || typeof targetLogin !== 'string') return undefined;
   return {
     source: sourceLogin,
     target: targetLogin,
     workspaceName: typeof workspaceName === 'string' ? workspaceName : undefined,
-    detached: Array.isArray(detachedPrincipals) ? detachedPrincipals.length : 0,
+    detached: detachedAt(record),
+  };
+}
+
+/** Whose and where each of `detached` was, or `undefined` when any of them is not named. */
+function namedDetached(
+  detached: readonly DetachedMembership[],
+): { readonly zh: string; readonly en: string } | undefined {
+  const named = detached.flatMap((entry) =>
+    entry.login !== undefined && entry.workspaceName !== undefined
+      ? [{ login: entry.login, workspaceName: entry.workspaceName }]
+      : [],
+  );
+  if (named.length === 0 || named.length < detached.length) return undefined;
+  return {
+    zh: named.map((entry) => `${entry.login} 在 ${entry.workspaceName} 的那条`).join('、'),
+    en: named.map((entry) => `${entry.login}'s in ${entry.workspaceName}`).join(', '),
   };
 }
 
@@ -209,6 +255,34 @@ function BreakerNoteItem({
   );
 }
 
+/** The memberships a merge let go of: whose and where when the row names them (legacy 725, UX on
+ *  #1189), else how many. */
+function MergeDetached({ detached }: { readonly detached: readonly DetachedMembership[] }) {
+  const t = useT();
+  const named = namedDetached(detached);
+  return named !== undefined
+    ? t(
+        `；${detached.length} 条已停用的成员资格因为另一个账户在同一工作区也有成员资格，不再属于任何账户：${named.zh}。`,
+        `; ${detached.length} disabled membership(s) no longer belong to any account, as the other account holds one in the same workspace: ${named.en}.`,
+      )
+    : t(
+        `；${detached.length} 条已停用的成员资格因为另一个账户在同一工作区也有成员资格，不再属于任何账户（原来属于谁见负载）。`,
+        `; ${detached.length} disabled membership(s) no longer belong to any account, as the other account holds one in the same workspace (whose they were is in the payload).`,
+      );
+}
+
+/** Legacy 725: a person given a membership where a removed one of theirs was — the removed one no
+ *  longer belongs to any account, and its drafts and goals stay with it. */
+function ReaddedNote({ entry }: { readonly entry: DetachedMembership }) {
+  const t = useT();
+  const zhWho = entry.login !== undefined ? `${entry.login} ` : '这个账户';
+  const zhWhere = entry.workspaceName !== undefined ? ` ${entry.workspaceName} ` : '这个工作区';
+  return t(
+    `${zhWho}之前在${zhWhere}被移出的那条成员资格不再属于任何账户（那条的行和审计历史都留着）；现在在那里的是另一条成员资格，移出前那条的草稿和目标不会跟过来。`,
+    `The membership ${entry.login ?? 'this account'} had in ${entry.workspaceName ?? 'this workspace'} before being removed no longer belongs to any account (its row and audit history stay); the one there now is another membership, and the removed one's drafts and goals do not come with it.`,
+  );
+}
+
 /**
  * What an audit row's payload says about credentials, in words above the raw payload (legacy 159,
  * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for a
@@ -224,14 +298,20 @@ function BreakerNoteItem({
  * and, on an `evaluation.content_withheld` row, where the seal stopped the content and what that
  * left. S11 AA5a-2: and, on an admin agent's proposal refused because its target workspace kept
  * rejecting this administrator's proposals, which target, the rule, the count, when the target
- * opens again and the rejected proposals.
+ * opens again and the rejected proposals. Legacy 719 / 725: and, on a `merge_user` row, the two
+ * accounts and the removed memberships it let go of; on a row that gave a person a membership where
+ * a removed one of theirs was (`action`), that the removed one stays behind with its drafts and
+ * goals.
  * Renders nothing when the payload has none of them.
  */
 export function AuditPayloadNotes({
   payload,
+  action,
   workspaceNames,
 }: {
   readonly payload: unknown;
+  /** The row's action: what a payload's `detachedPrincipals` means depends on it (legacy 725). */
+  readonly action?: string;
   /** Names of workspaces the reader can see, by id — a breaker row's target is named by it, else
    *  by a short id. */
   readonly workspaceNames?: ReadonlyMap<string, string>;
@@ -247,6 +327,7 @@ export function AuditPayloadNotes({
   const sealed = sealNote(record);
   const breaker = breakerNote(record);
   const merge = mergeNote(record);
+  const readded = action !== undefined && READDED_ACTIONS.has(action) ? detachedAt(record) : [];
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -258,6 +339,7 @@ export function AuditPayloadNotes({
     sealed === undefined &&
     breaker === undefined &&
     merge === undefined &&
+    readded.length === 0 &&
     !masked
   ) {
     return null;
@@ -313,12 +395,15 @@ export function AuditPayloadNotes({
             `账户 ${merge.source} → ${merge.target}${merge.workspaceName !== undefined ? ` · 工作区 ${merge.workspaceName}` : ''}`,
             `Account ${merge.source} → ${merge.target}${merge.workspaceName !== undefined ? ` · workspace ${merge.workspaceName}` : ''}`,
           )}
-          {merge.detached > 0
-            ? t(
-                `；${merge.detached} 条已停用的成员资格因为另一个账户在同一工作区也有成员资格，不再属于任何账户（原来属于谁见负载）。`,
-                `; ${merge.detached} disabled membership(s) no longer belong to any account, as the other account holds one in the same workspace (whose they were is in the payload).`,
-              )
-            : null}
+          {merge.detached.length > 0 ? <MergeDetached detached={merge.detached} /> : null}
+        </li>
+      ) : null}
+      {readded.length > 0 ? (
+        <li data-testid="audit-readded">
+          {readded.map((entry, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a row's entries never reorder.
+            <ReaddedNote key={index} entry={entry} />
+          ))}
         </li>
       ) : null}
       {revokedHandles !== undefined ? (

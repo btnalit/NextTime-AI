@@ -134,12 +134,14 @@ export function UserDetailPanel({
           return theirs === undefined ? [] : [{ ours, theirs }];
         });
   const clashes = pairs.filter(({ ours, theirs }) => !ours.disabled && !theirs.disabled);
+  // Legacy 725 (UX on #1189): and where each of the two is removed — this account's from this
+  // drawer's 「管理成员资格」, the target's from the target's own drawer.
   const clashReason =
-    clashes.length === 0
+    clashes.length === 0 || mergeTarget === undefined
       ? undefined
       : t(
-          `两个账户在工作区 ${clashes.map(({ ours }) => ours.workspaceName).join('、')} 都有没停用的成员资格：先在那里移出其中一个`,
-          `Both accounts hold a membership that is not disabled in workspace ${clashes.map(({ ours }) => ours.workspaceName).join(', ')}: remove one of them there first`,
+          `两个账户在工作区 ${clashes.map(({ ours }) => ours.workspaceName).join('、')} 都有没停用的成员资格：先在那里移出其中一个（${user.login} 的在本页「管理成员资格」里移出，${mergeTarget.login} 的在 ${mergeTarget.login} 的用户详情里移出）`,
+          `Both accounts hold a membership that is not disabled in workspace ${clashes.map(({ ours }) => ours.workspaceName).join(', ')}: remove one of them there first (${user.login}'s under “Manage memberships” on this page, ${mergeTarget.login}'s in ${mergeTarget.login}'s user details)`,
         );
   const sameNameCandidates = directory.rows.filter(
     (candidate) =>
@@ -580,14 +582,16 @@ export function UserDetailPanel({
                       if (theirs === undefined) return `${line} → ${to}`;
                       // One of the two is disabled here (two that are not clash, above): that
                       // one no longer belongs to any account; the platform audit says whose it was.
+                      // Legacy 725 (UX on #1189): where it is the target's, the target is a member
+                      // here again, by this membership.
                       return membership.disabled
                         ? t(
                             `${line}：${to} 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）`,
                             `${line}: ${to} already holds a membership here, so this one no longer belongs to any account (the platform audit records whose it was)`,
                           )
                         : t(
-                            `${line} → ${to}；${to} 在这里已停用的那条成员资格不再属于任何账户（平台审计记下它原来属于谁）`,
-                            `${line} → ${to}; ${to}'s disabled membership here no longer belongs to any account (the platform audit records whose it was)`,
+                            `${line} → ${to}：${to} 曾被移出这里，合并后以这一条的角色重新成为这里的成员；${to} 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line} → ${to}: ${to} was removed from here, and after the merge is a member here again with this membership's role; ${to}'s disabled one no longer belongs to any account (the platform audit records whose it was)`,
                           );
                     }),
                   ]

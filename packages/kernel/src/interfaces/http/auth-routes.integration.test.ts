@@ -275,6 +275,69 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: { workspaceId: created.workspaceId, from: formerUser.id, to: caller.id },
         });
       }, 30_000);
+
+      // Legacy 725: only an active membership of the caller's in that workspace clashes; a removed
+      // one stops belonging to the caller and the bound key's membership takes its place.
+      it('a removed membership of the caller’s there no longer blocks the bind; an active one does (already_member)', async () => {
+        const login = `bind-back-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Back', password });
+        const removedThere = await createWorkspace(pool, `auth-bind-rm-${randomUUID()}`, 'Owner');
+        const activeThere = await createWorkspace(pool, `auth-bind-on-${randomUUID()}`, 'Owner');
+        const theirs = await withAdminClient(pool, async (client) => {
+          const insert = (workspace: string, removed: boolean) =>
+            client.query<{ id: string }>(
+              `insert into principals (workspace_id, kind, role, display_name, user_id, disabled_at)
+               values ($1, 'human', 'member', 'Bind Back', $2, case when $3 then now() end)
+               returning id`,
+              [workspace, caller.id, removed],
+            );
+          return {
+            removed: (await insert(removedThere.workspaceId, true)).rows[0]?.id,
+            active: (await insert(activeThere.workspaceId, false)).rows[0]?.id,
+          };
+        });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+        const bind = (apiKey: string) =>
+          app.inject({
+            method: 'POST',
+            url: '/api/auth/bind-api-key',
+            headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+            payload: { apiKey },
+          });
+
+        const bound = await bind(removedThere.apiKey);
+        expect(bound.statusCode).toBe(200);
+        const rows = await withAdminClient(pool, (client) =>
+          client.query<{ id: string; user_id: string | null; disabled: boolean }>(
+            `select id, user_id, disabled_at is not null as disabled from principals
+              where workspace_id = $1 and id = any($2::uuid[])`,
+            [removedThere.workspaceId, [theirs.removed, removedThere.ownerPrincipalId]],
+          ),
+        );
+        expect(rows.rows.find((row) => row.id === theirs.removed)).toMatchObject({
+          user_id: null,
+          disabled: true,
+        });
+        expect(rows.rows.find((row) => row.id === removedThere.ownerPrincipalId)).toMatchObject({
+          user_id: caller.id,
+          disabled: false,
+        });
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [removedThere.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows[0]?.payload.detachedPrincipals).toEqual([
+          { workspaceId: removedThere.workspaceId, principalId: theirs.removed, userId: caller.id },
+        ]);
+
+        const refused = await bind(activeThere.apiKey);
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json().error.code).toBe('already_member');
+      }, 30_000);
     });
 
     // ---- POST /api/auth/claim -------------------------------------------------------------------

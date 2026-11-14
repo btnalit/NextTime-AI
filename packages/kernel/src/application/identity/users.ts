@@ -17,6 +17,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { freeMembershipSlot } from './memberships.js';
 import {
   MIN_PASSWORD_LENGTH,
   hashPassword,
@@ -386,8 +387,9 @@ export interface BindPrincipalInput {
  * changes, and the Principal's former passwordless user row is deleted when nothing else points
  * at it. Refused when that former user has a password (`already_claimed`: it is somebody's
  * account, and a workspace key must never absorb a platform account) or when the caller already
- * has a membership in that workspace (`already_member`, the `(workspace_id, user_id)` unique
- * index). Binding a Principal that is already the caller's own is a no-op.
+ * has an active membership in that workspace (`already_member`, the `(workspace_id, user_id)`
+ * unique index); a removed one of the caller's there is let go instead (legacy 725). Binding a
+ * Principal that is already the caller's own is a no-op.
  */
 export async function bindPrincipalToUser(
   pool: PoolLike,
@@ -398,9 +400,18 @@ export async function bindPrincipalToUser(
     // Principal's authority locks before the row lock below. An issuer for the Principal either
     // commits first or re-reads the new user and refuses; a disable of the caller's user waits, so
     // its revocation sees the moved membership.
+    //
+    // Legacy 725: with the caller's own membership in that workspace, if any — a removed one is let
+    // go below (`freeMembershipSlot`), under its lock, and one lock call keeps the global order.
+    // Read before the user's lock, so `freeMembershipSlot` reads it again under it.
+    const theirs = await client.query<{ id: string }>(
+      `select id from principals
+        where workspace_id = $1 and user_id = $2 and kind = 'human' and id <> $3`,
+      [input.workspaceId, input.userId, input.principalId],
+    );
     await lockAuthoritiesForChange(client, {
       userIds: [input.userId],
-      principalIds: [input.principalId],
+      principalIds: [input.principalId, ...theirs.rows.map((row) => row.id)],
     });
     const current = await client.query<{ user_id: string | null }>(
       `select user_id from principals
@@ -413,11 +424,14 @@ export async function bindPrincipalToUser(
       throw new IdentityError('invalid_api_key', 'that API key does not belong to a person');
     const formerUserId = row.user_id;
     if (formerUserId === input.userId) return;
-    const clash = await client.query(
-      'select 1 from principals where workspace_id = $1 and user_id = $2 and id <> $3',
-      [input.workspaceId, input.userId, input.principalId],
-    );
-    if ((clash.rowCount ?? 0) > 0) {
+    // Legacy 725: only an active membership of the caller's there clashes; a removed one stops
+    // belonging to the caller (identity/memberships.ts) and the bound Principal takes its place.
+    const slot = await freeMembershipSlot(client, {
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      exceptPrincipalId: input.principalId,
+    });
+    if (slot.state === 'held') {
       throw new IdentityError('already_member', 'you already have a membership in that workspace');
     }
     if (formerUserId) {
@@ -464,6 +478,8 @@ export async function bindPrincipalToUser(
         from: formerUserId,
         to: input.userId,
         formerUserDeleted,
+        // Legacy 725: the caller's removed membership there, let go for this one.
+        ...(slot.released !== null ? { detachedPrincipals: [slot.released] } : {}),
       },
     });
   });

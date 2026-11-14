@@ -170,6 +170,53 @@ describe('AddMemberForm', () => {
     expect(screen.getByRole('button', { name: '添加' }).hasAttribute('disabled')).toBe(false);
   });
 
+  // Legacy 725: `add_member` adds a person removed from this workspace back, as a new membership.
+  it('legacy 725: a user removed from this workspace can be picked, and the form says what that adds', async () => {
+    const removed = user({
+      memberships: [
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Default',
+          workspacePurpose: 'standard',
+          workspaceStatus: 'active',
+          principalId: 'p-2',
+          role: 'member',
+          disabled: true,
+        },
+      ],
+    });
+    const carol = user({ id: 'u-3', login: 'carol', displayName: 'Carol' });
+    const http = scriptedHttp({
+      list_users: () => ({ items: [removed, carol] }),
+      add_member: () => added,
+    });
+    const onDone = vi.fn();
+    render(
+      <PermissionsProvider>
+        <AddMemberForm
+          http={http}
+          onDone={onDone}
+          onCancel={vi.fn()}
+          platformAdmin
+          workspaceId="ws-1"
+        />
+      </PermissionsProvider>,
+    );
+    const picker = screen.getByTestId('add-member-user');
+    const option = await findComboboxOption(picker, 'bob — Bob');
+    expect(option.getAttribute('aria-disabled')).not.toBe('true');
+    expect(option.textContent).toContain('曾被移出本工作区');
+    await pickComboboxOption(picker, 'carol — Carol');
+    expect(screen.queryByTestId('add-member-readd')).toBeNull();
+    await pickComboboxOption(picker, 'bob — Bob');
+    expect(screen.getByTestId('add-member-readd').textContent).toBe(
+      `这个人曾被移出本工作区。添加会新建一条成员资格，原来那条留着供审计溯源；这个人看不到移出前的${'草稿和目标'}。`,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(addParams(http)).toEqual({ login: 'bob', role: 'member' });
+  });
+
   it('platformAdmin: the directory opens at once; "改为手动输入" carries the picked login over', async () => {
     const http = scriptedHttp({ list_users: () => ({ items: [user()] }), add_member: () => added });
     renderForm(http, true);
