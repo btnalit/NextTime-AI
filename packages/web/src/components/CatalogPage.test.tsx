@@ -4448,7 +4448,11 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     deprecate.focus();
     fireEvent.click(deprecate);
     const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
-    expect(confirm.textContent).toMatch(/弃用不能撤销：以后要再用，需要重新提议并发布/);
+    // Legacy 749: a deprecated Operation takes no new version — proposing or importing it is refused.
+    expect(confirm.textContent).toMatch(
+      /除非它已有一份待发布的草稿，弃用后同名的提议和导入都会被拒绝，不能再开新版本/,
+    );
+    expect(confirm.textContent).not.toMatch(/重新提议并发布/);
     expect(confirm.textContent).not.toMatch(/随时可以重新发布恢复/);
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
@@ -4458,8 +4462,11 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     );
     expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
     expect(screen.getAllByTestId('catalog-row')[0]?.getAttribute('aria-current')).toBe('true');
-    // Legacy 501: no way back is offered, and the detail says what brings it back.
-    expect(screen.getByTestId('operation-deprecated-note').textContent).toMatch(/弃用不能撤销/);
+    // Legacy 501: no way back is offered. Legacy 749: and none under this name either.
+    const note = screen.getByTestId('operation-deprecated-note');
+    expect(note.textContent).toMatch(/弃用不能撤销/);
+    expect(note.textContent).toMatch(/版本都已弃用，同名的提议和导入都会被拒绝，不能再开新版本/);
+    expect(note.textContent).not.toMatch(/会作为新版本出现/);
     await waitFor(() =>
       expect(document.activeElement).toBe(
         screen.getByTestId('operation-detail').querySelector('.catalog-detail-title'),
@@ -4512,6 +4519,40 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
       'gk-1::docker.restart',
     );
+    // Legacy 750: and its title says it is v2 now.
+    await waitFor(() =>
+      expect(screen.getByTestId('operation-detail-version').textContent).toBe('v2'),
+    );
+  });
+
+  it('legacy 749: a deprecated version of an Operation still published or drafted under another version says that version is unaffected', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'deprecated', version: 1 },
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', version: 2 },
+          { gatekeeperId: 'gk-1', name: 'docker.stop', status: 'deprecated', version: 1 },
+          { gatekeeperId: 'gk-1', name: 'docker.stop', status: 'draft', version: 2 },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    const noteOf = async (key: string) => {
+      const row = rows.find((el) =>
+        el.querySelector(`[data-testid="catalog-row-description-${key}"]`),
+      );
+      if (!row) throw new Error(`no row ${key}`);
+      const detail = await selectRow(row);
+      expect(within(detail).getByTestId('operation-detail-version').textContent).toBe('v1');
+      return within(detail).getByTestId('operation-deprecated-note').textContent ?? '';
+    };
+    const restart = await noteOf('gk-1::docker.restart@v1');
+    expect(restart).toMatch(/这个 Operation 的 v2（已发布）不受影响/);
+    expect(restart).not.toMatch(/版本都已弃用/);
+    const stop = await noteOf('gk-1::docker.stop@v1');
+    expect(stop).toMatch(/这个 Operation 的 v2（草稿）不受影响/);
   });
 
   it('legacy 423: a deprecate of the version shown names that version in the toast', async () => {
