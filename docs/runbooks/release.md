@@ -2687,7 +2687,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：目标计划里可以加一条「独立评审」：写几条标准和通过线，平台在其他验收检查都过了以后起一个评审 Worker 打分，过不过由平台按分数算。只靠评审达成的目标记为「评审评估」，确认卡事先提示这一点。评审没过或判断不了，目标停下等请求人决定。控制台的计划编辑与逐条分数在 GO18b。
 - **回滚**：先让正在验收的目标的评审跑完（`select count(*) from tasks where purpose = 'review' and status in ('created', 'queued', 'running');` 为 0），再数一下已按评审达成的目标（`select count(*) from goal_runs where outcome_basis = 'reviewer_assessed';`）。之后只回退代码即可：上一版不认带评审的计划，遇到会把目标停下等人（`needs_decision`），已经达成的目标保留原样。要连 schema 一起撤，在内核停着时按两个迁移文件头的说明恢复 goal/0011 的两个函数，表与列可以留着。
 
-### 3.156 评审员只读、受目标预算约束；运行时契约升到 3（#1123，S11 GO18a 两条 P3，0.68.0 之后的下一版）
+### 3.156 评审员只读、受目标预算约束；运行时契约升到 3（#1123，S11 GO18a 两条 P3，0.69.0 起）
 
 无迁移，线上契约不变。worker-runtime 镜像与 worker-supervisor 随本版一起换，**运行时契约 2 → 3**。和 §3.48（遗留 422）是同一类边界：主机从 v0.63.0 升上来会跨过它。
 
@@ -2707,7 +2707,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：只能整版做，代码、worker-runtime 镜像、worker-supervisor 一起回。只回滚运行时镜像不可行：新 supervisor 拒绝契约 2 及更早的镜像，控制台也不让设为活动；只回滚 supervisor，它会拒绝契约 3 的镜像，并对评审 spawn 回 400。内核部分本身没有迁移。`pi-upgrade.md` 的回滚一节已写明。
 - **演练**：下一次主机大版本升级的 staging 演练（起点等于主机当前版本）把「label 3、selfcheck 日志行、入口容器收敛」列进验收项。
 
-### 3.157 公网门必须 https；JSON 键名里的凭据也拒收和遮蔽（#1129，遗留 413、444，0.68.0 之后的下一版）
+### 3.157 公网门必须 https；JSON 键名里的凭据也拒收和遮蔽（#1129，遗留 413、444，0.69.0 起）
 
 无迁移。线上契约只多了 `400 connection_target_refused` 的 `details.reason` 和 `details.field`（`contract:check` 快照不变）。这是一次**收紧**：主机上已经接入、endpoint 是 `http://` 公网地址的自连门，升级后会立刻失效。
 
@@ -2726,7 +2726,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回代码即可，没有迁移。
 - **演练**：下一次主机大版本升级的 staging 演练把「升级前核对 SQL 用超级用户跑、对 http 公网门调用以 `target_refused` 失败」列进验收项。
 
-### 3.158 门的地址不允许调用时回 424 `target_refused`（#1131，遗留 700，0.68.0 之后的下一版）
+### 3.158 门的地址不允许调用时回 424 `target_refused`（#1131，遗留 700，0.69.0 起）
 
 无迁移，**无主机动作**。线上契约变化：门的地址不是允许的目标时，调用的错误由 502 `gatekeeper_error` 变为 424 `target_refused`，带 `details.reason`。控制台与内核同版发布，不会出现旧控制台遇到新码。
 
@@ -2734,7 +2734,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级前后**：§3.157 的升级前只读核对照旧执行；查到的门，升级后由工作区所有者用 https:// 重新接入。自接门不能改地址（遗留 701），重新接入会成为一扇新门，操作要重新导入、发布，引用旧门的目标和流程要改。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.159 reaper 结束已决 Task 下的活 WorkerRun（#1133，遗留 206、207，0.68.0 之后的下一版）
+### 3.159 reaper 结束已决 Task 下的活 WorkerRun（#1133，遗留 206、207，0.69.0 起）
 
 无迁移，线上契约不变。
 
@@ -2742,14 +2742,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级前只读核对**（可选，结果记 `docs/private/`）：想事先知道会被结束哪些，跑 §3.22 的 Q3。主机从 v0.46 起已按 §3.22 处置过，预计为空。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.160 崩溃重试按这个人现在的授权收窄（#1135，遗留 289、290、292，0.68.0 之后的下一版）
+### 3.160 崩溃重试按这个人现在的授权收窄（#1135，遗留 289、290、292，0.69.0 起）
 
 无迁移，**无主机动作**，线上契约不变。
 
 - **行为变化**：Worker 崩溃后的那一次重试，Handle 只带这个人现在还能用的能力和还能执行的门；被停用、已不存在或不能再启动 Worker 的人，Task 不再重试，直接失败为 `worker_failed`。`waiting_approval` 期间 Task 计时照常走（遗留 290 决定不暂停）。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.161 worker-runtime 镜像装 fd，pi 的 `find` 离线可用（#1137，遗留 698，0.68.0 之后的下一版）
+### 3.161 worker-runtime 镜像装 fd，pi 的 `find` 离线可用（#1137，遗留 698，0.69.0 起）
 
 无迁移，运行时契约不变（仍是 3）。
 
@@ -2764,14 +2764,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   应显示 10.5.2；或者入口 / Worker 用 pi 的 `find` 能返回结果。
 - **回滚**：回代码、重建镜像即可，没有迁移。旧镜像照旧能用，只是 `find` 不可用。
 
-### 3.162 事实检查的身份写错时当场拒绝（#1139，遗留 466，0.68.0 之后的下一版）
+### 3.162 事实检查的身份写错时当场拒绝（#1139，遗留 466，0.69.0 起）
 
 无迁移，**无主机动作**，线上契约不变（`details.problems` 里多了几种说明）。
 
 - **行为变化**：目标计划里事实检查按身份指定的对象，身份写错（字段多了或少了、类型不对，如 `"3"` 写成 `3`）时，提出就被拒绝。已提出、还没确认的目标，确认时会复核，写错的确认不了，需要重新提出。已经在跑的目标不受影响，要改只能修订。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.163 LinkType 端点必须指向已声明的 ObjectType（#1141，遗留 303，0.68.0 之后的下一版）
+### 3.163 LinkType 端点必须指向已声明的 ObjectType（#1141，遗留 303，0.69.0 起）
 
 无迁移，不改已有数据。线上契约：撤销预览的 `blocker` 枚举加 `link_endpoint_undeclared`，本体撤销项加 `linkEnds`（控制台同版更新）。
 
@@ -2809,7 +2809,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   预期为空：本仓库自带的本体和验收脚本发布的本体都能解析；手工发布过的本体以查询结果为准。不为空时，那些版本照常可用，也不挡别的本体发布，但它们所在的族下一次发布必须先改正；升级后巡检会把它们报为 I-P1-LINK。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.164 启用门必须带预览给出的清单摘要（#1143，遗留 311，0.68.0 之后的下一版）
+### 3.164 启用门必须带预览给出的清单摘要（#1143，遗留 311，0.69.0 起）
 
 无迁移，无主机动作。线上契约：`enable_gate_instance` 的 `manifestDigest` 由可选改为必填。
 
@@ -2817,14 +2817,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级前**：主机上自己写的脚本或集成如果直接调 `enable_gate_instance`，升级前改成先预览再带摘要。仓库自带的 `demo.sh`、`accept_s2.sh`、`accept_s4.sh` 已改。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.165 事实检查读对象按发起人过滤 Operation 草稿（#1146，遗留 704，0.68.0 之后的下一版）
+### 3.165 事实检查读对象按发起人过滤 Operation 草稿（#1146，遗留 704，0.69.0 起）
 
 无迁移，无主机动作，线上契约不变。
 
 - **行为变化**：事实验收检查在提议时（按 id、按身份、按类型取样）和判定时（解析两端）读 Object，都按发起人过滤 Operation 草稿，和图上其它读取一致。发起人看不到的草稿，在检查里当作不存在：提议时引用会被拒，提议后发起人被降级的，判定报 `fact_not_observed` 并重试。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.166 目标规划器的 pi 工具改为只读（#1148，遗留 697，0.68.0 之后的下一版）
+### 3.166 目标规划器的 pi 工具改为只读（#1148，遗留 697，0.69.0 起）
 
 无迁移，无主机动作，运行时契约不变（仍为 3）。
 
@@ -2832,7 +2832,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级后确认**：规划 Task 的容器日志里应有 `nexttime-selfcheck check=builtin_tools result=ok set=read_only`。
 - **回滚**：回代码即可，没有迁移。
 
-### 3.167 已撤销的会话下没有有效 Handle（#1150，遗留 699、707，0.68.0 之后的下一版）
+### 3.167 已撤销的会话下没有有效 Handle（#1150，遗留 699、707，0.69.0 起）
 
 迁移 governance 0042：`sessions` 上新触发器（会话转为 revoked 时撤销它的 Handle）、部分索引、重写 0008 的签发触发器（已撤销的会话或父 Handle 拒签），并补救存量。可逆，回退代码即可。没有主机手工步骤。
 
@@ -2857,7 +2857,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 已撤销的会话或父 Handle 在 HTTP 与 WS 上都返回 401。
 - **回滚**：回退代码即可；迁移已撤销的 Handle 不会恢复（撤销是单向的）。
 
-### 3.168 签发与改权限串行，停用的权威名下没有有效 Handle（#1152，遗留 702，0.68.0 之后的下一版）
+### 3.168 签发与改权限串行，停用的权威名下没有有效 Handle（#1152，遗留 702，0.69.0 起）
 
 迁移 governance 0043：权威锁函数、6 个触发器（停用工作区、用户、主体时撤销其会话，连带 0042 撤 Handle），并补救存量。可逆，回退代码即可。没有主机手工步骤。
 
@@ -2882,7 +2882,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 改权限和签发并发时，后到的一方会短暂等待；签发只在 READ COMMITTED 下进行。
 - **回滚**：回退代码即可；迁移已撤销的会话与 Handle 不会恢复。
 
-### 3.169 包的 LinkType 端点只能指向它依赖的族；本体族有权威名字（#1154，遗留 705、706，0.68.0 之后的下一版）
+### 3.169 包的 LinkType 端点只能指向它依赖的族；本体族有权威名字（#1154，遗留 705、706，0.69.0 起）
 
 迁移 core 0056：新表 `ontology_families`（族名的唯一来源）并一次性补名（元本体、ChangePlan 装过的族、`ops-assets`），纯增量。线上契约：新拒绝码 409 `ontology_link_endpoint_outside_requires`。
 
@@ -2916,7 +2916,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，`ontology_families` 留着不影响旧代码。回滚期间新建的工作区，回到本版后要重跑 `0056` 第 2 步（补名，幂等）。
 - 除上面的预检外，无主机动作。
 
-### 3.170 自接门经平台审批换地址；请求绑定创建时的门地址（#1156，遗留 701 内核部分，0.68.0 之后的下一版）
+### 3.170 自接门经平台审批换地址；请求绑定创建时的门地址（#1156，遗留 701 内核部分，0.69.0 起）
 
 迁移 core 0057：新表 `gate_address_changes`（含 RLS、触发器、索引），纯增量。governance 0044：`action_requests` 新列 `gate_endpoint_key`（写一次，触发器守），并给自接门上的在途请求回填当前地址键。两个迁移都可回退，语句写在各自文件头部。
 
@@ -2938,7 +2938,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。上一版不读写 `gate_address_changes`，插入时 `gate_endpoint_key` 留空，执行器不比较地址。回滚前已换过地址的门，上一版按新地址调用。
 - 除上面的核对外，无主机动作。控制台入口在 PR-b。
 
-### 3.171 控制台可提出、审批自接门换地址（#1158，遗留 701 控制台部分，0.68.0 之后的下一版）
+### 3.171 控制台可提出、审批自接门换地址（#1158，遗留 701 控制台部分，0.69.0 起）
 
 只改控制台，没有迁移和线上契约变化。内核部分见 §3.170。
 
@@ -2948,7 +2948,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级后核对**（可选）：平台管理员打开集成 →「自己接入的门」，没有申请时不出现换地址列表。
 - 无主机动作。
 
-### 3.172 所有者读得到自接门换地址申请的结局（#1166，遗留 715 内核部分，0.68.0 之后的下一版）
+### 3.172 所有者读得到自接门换地址申请的结局（#1166，遗留 715 内核部分，0.69.0 起）
 
 没有迁移，没有写路径变化。线上契约只多了一个可选读字段。
 
@@ -2961,7 +2961,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。控制台显示随遗留 715 的下一个 PR。
 
-### 3.173 控制台显示自接门换地址申请的结局（#1168，遗留 715 控制台部分，0.68.0 之后的下一版）
+### 3.173 控制台显示自接门换地址申请的结局（#1168，遗留 715 控制台部分，0.69.0 起）
 
 只改控制台，没有迁移和线上契约变化。内核部分见 §3.172。
 
@@ -2974,7 +2974,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 平台管理员驳回时，界面提示原因会给工作区所有者看到。
 - 无主机动作。
 
-### 3.174 Handle 治理的三处收尾：权限中途变化回 409、不合并进停用用户、Worker 树撤销覆盖晚到的子 Worker（#1172，遗留 708、713、714，0.68.0 之后的下一版）
+### 3.174 Handle 治理的三处收尾：权限中途变化回 409、不合并进停用用户、Worker 树撤销覆盖晚到的子 Worker（#1172，遗留 708、713、714，0.69.0 起）
 
 没有迁移。
 
@@ -2985,7 +2985,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.175 连接密钥一次性、24 小时有效（#1176，遗留 711，core 0058，0.68.0 之后的下一版）
+### 3.175 连接密钥一次性、24 小时有效（#1176，遗留 711，core 0058，0.69.0 起）
 
 **迁移 core 0058**：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥本身），带检查约束、触发器和强制 RLS。
 
@@ -3002,7 +3002,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **staging 注意**：0058 在合并前就地改过（插入时拒绝 `issued_at > now()`）。跑过 PR 分支旧版 0058 的 staging 库，迁移 checksum 对不上会被拒，需要重建。主机没跑过 0058，不受影响。
 - 下一次主机升级的提示要带上本节。
 
-### 3.176 不变量巡检 I6 不再把同一事务里的状态变化读乱（#1182，遗留 720，0.68.0 之后的下一版）
+### 3.176 不变量巡检 I6 不再把同一事务里的状态变化读乱（#1182，遗留 720，0.69.0 起）
 
 没有迁移，只改内核巡检代码和测试。
 
@@ -3011,7 +3011,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.177 人类通道签发 Handle 时复查调用方凭证（#1180，遗留 712，governance 0045，0.68.0 之后的下一版）
+### 3.177 人类通道签发 Handle 时复查调用方凭证（#1180，遗留 712，governance 0045，0.69.0 起）
 
 **迁移 governance 0045**：纯新增一个 `security definer` 函数 `console_session_is_live(user_id, console_session_id)`，只回答「这个用户的这个控制台会话还在不在」，不带出行里的任何列；`search_path` 固定，revoke public，只授给 `nexttime_app`。
 
@@ -3024,7 +3024,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，函数可以留着，旧代码不调用它。要连迁移一起撤：`drop function console_session_is_live(uuid, uuid)`，再 `delete from schema_migrations where module = 'governance' and version = 45`。
 - 主机无其他手工步骤。下一次主机升级的提示要带上本节。
 
-### 3.178 合并已停用的用户时逐条审计恢复可用的成员资格（#1185，遗留 719，0.68.0 之后的下一版）
+### 3.178 合并已停用的用户时逐条审计恢复可用的成员资格（#1185，遗留 719，0.69.0 起）
 
 没有迁移。
 
@@ -3215,6 +3215,13 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.68.0 | goal `0019_review_acceptance`（#1102，GO18a）：`goal_acceptance_checks` 加 `review_check` 列与 `review` 种类；新表 `goal_review_assessments`（只许插入，写入时按评审报告重算）；整份重写 `goal_acceptance_checks_guard` 与 `goal_runs_status_guard`（允许依据 `reviewer_assessed`，有评审的一轮不再记 `verified_by_check`） | 可逆 | 只加列、加表、重写守卫。上一版不认带评审的计划，会把这样的目标停下等人；已达成的行不受影响（守卫只看状态转换） | 只需回退代码，表与列可以留着。要撤，先让评审 Task 结束、数清按评审达成的目标（§3.155），再在内核停着时恢复 goal/0011 的两个函数 |
 | v0.68.0 | task `0014_task_review`（#1102，GO18a）：`tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`；每条检查至多一个评审 Task（唯一索引）；评审 Task 的输入建后不改 | 可逆 | 只加可空列：上一版插入与查询都写明列名，不写这两列 | 只需回退代码。回滚前让评审 Task 跑完：上一版不会重试 `purpose` 非空的 Task，留下的评审 Task 不会在出网隔离之外重启 |
 | v0.68.0 | task `0015_task_review_result`（#1108，GO18a 跟进）：触发器 `tasks_review_result_guard`（`before update of result`），评审 Task 的 `result` 只能由完成它的那次更新写，完成后不能再改 | 可逆 | 只加触发器。上一版只在完成 Task 时写 `result`，它的更新都过得了 | 只需回退代码。要撤：`drop trigger tasks_review_result_guard on tasks`、`drop function tasks_review_result_guard()`，再删 `schema_migrations` 里 task 15 那一行 |
+| v0.69.0 | core `0056_ontology_families`（#1154，遗留 705、706）：新表 `ontology_families (workspace_id, id, name)`（名字在工作区内唯一、写后不改，`nexttime_app` 无 UPDATE / DELETE，触发器 `ontology_families_name_immutable`），并为已有的 platform-meta、ChangePlan 装过的族和 `ops-assets` 一次性补名 | 可逆 | 只加新表：上一版不读也不写；它的拒绝文案照旧 | 只需回退代码，表可以留着。要删：`drop table ontology_families`、`drop function ontology_families_name_immutable()`，再删 `schema_migrations` 里 core 56 那一行 |
+| v0.69.0 | governance `0042_session_revocation_revokes_handles`（#1150，遗留 699、707）：触发器 `sessions_revoked_revokes_handles`（会话被撤销时撤它名下仍有效的 Handle，`security definer`）、部分索引 `capability_handles_live_by_session_idx`、改写 `capability_handles_enforce_inheritance`（拒绝已撤销的会话与父 Handle）；补救：撤销已撤销会话下仍有效的 Handle 并逐主体审计 | 可逆（补救不回退） | 上一版从不在已撤销的会话下签发，所以新拒绝碰不到它；补救只设 `revoked_at`（0015 单调撤销允许） | 只需回退代码。要撤迁移：删触发器与函数 `sessions_revoke_handles()`、删索引，`capability_handles_enforce_inheritance` 恢复 0008 的函数体，再删 `schema_migrations` 里 governance 42 那一行；补救撤销的 Handle 不恢复 |
+| v0.69.0 | governance `0043_authority_locks`（#1152，遗留 702）：权威 advisory 锁函数（`authority_lock_instance`、`lock_authority`、`lock_authorities`、`lock_issuing_authority`）；`principals` / `users` / `workspaces` 上的 BEFORE UPDATE 取锁触发器与 AFTER UPDATE 撤会话触发器（`security definer`）；补救：撤销停用的工作区、用户或主体名下仍有效的会话并审计 | 可逆（补救不回退） | 上一版不调这些函数；触发器取的锁没人持有，撤的也是上一版处理器本来就撤的 | 只需回退代码。要撤迁移：删 6 个触发器与 10 个函数，再删 `schema_migrations` 里 governance 43 那一行；补救撤销的会话不恢复 |
+| v0.69.0 | core `0057_gate_address_changes`（#1156，遗留 701）：新表 `gate_address_changes`（自接门的换地址申请）与守卫 `gate_address_changes_guard` | 可逆 | 只加新表：上一版不读也不写 | 只需回退代码，表可以留着。要删：`drop table gate_address_changes`、`drop function gate_address_changes_guard()`，再删 `schema_migrations` 里 core 57 那一行 |
+| v0.69.0 | governance `0044_action_request_gate_endpoint_key`（#1156，遗留 701）：`action_requests.gate_endpoint_key` 可空列与守卫触发器 `action_requests_gate_endpoint_key_guard` | 可逆 | 只加可空列：上一版插入不写这一列（为 NULL，守卫放行） | 只需回退代码。要撤：删触发器与函数 `action_requests_gate_endpoint_key_guard()`，`alter table action_requests drop column gate_endpoint_key`，再删 `schema_migrations` 里 governance 44 那一行 |
+| v0.69.0 | core `0058_connection_secret_issuances`（#1176，遗留 711）：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥），检查约束、守卫触发器、强制 RLS | 可逆 | 只加新表：上一版不读也不写。升级前签出、还没用的连接密钥升级后要重新签出（§3.175） | 只需回退代码，表可以留着。要删：`drop table connection_secret_issuances`、`drop function connection_secret_issuances_guard()`，再删 `schema_migrations` 里 core 58 那一行 |
+| v0.69.0 | governance `0045_console_session_is_live`（#1180，遗留 712）：`security definer` 函数 `console_session_is_live(uuid, uuid)`，只回答这个用户的这个控制台会话是否还在；只授给 `nexttime_app` | 可逆 | 只加函数：上一版不调它 | 只需回退代码。要撤：`drop function console_session_is_live(uuid, uuid)`，再删 `schema_migrations` 里 governance 45 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

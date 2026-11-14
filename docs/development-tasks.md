@@ -3849,6 +3849,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 换地址申请的结局（#1166，遗留 715 内核部分，7989193）：`get_gatekeeper` 给自接门的所有者加 `lastAddressChangeOutcome`，由 `findLatestEndedGateAddressChange` 读出最近创建且已结束的申请：已是终态，或仍是 proposed 但已过 `expires_at`，后者读出时标记为 lapsed。I-A2 保证一扇门的申请首尾相接，最近创建的就是最近结束的。过期的结束时间取 `expires_at`，不取懒过期落库时写的 `decided_at`。驳回原因走 `shownFreeText`。不带决定人，做法同 674 暂停原因。控制台显示随 PR-b。
 - 换地址结局的控制台显示（#1168，遗留 715 关闭，3d0265f）：所有者在「健康与操作」和「更换地址」里看到 `lastAddressChangeOutcome`。有开着的申请时不显示，撤回不显示。已批准时提示到旧主机清账号凭证，被驳回时显示原因。平台驳回框提示原因会给所有者看到。#501 与 UX 的可选项并入 668。
 - 门卡片的换地址待审批标记（#1187，遗留 716 关闭，a48f403）：`list_gatekeepers` 只对工作区所有者、只在自接门上带 `addressChangePending`（开着且没过期的申请为 true，否则 false）；系统与授权的门卡片显示「换地址待审批 · 查看 ›」，点它打开「更换地址」，关闭「更换地址」或「健康与操作」后重读；成员看不到，页面也不为成员去读。
+- 已结束换地址申请的平台历史（#1191，遗留 717 关闭，fff093d）：集成 → 自己接入的门下方新增「已结束的换地址申请」折叠历史（`integrations/GateAddressChangeHistory.tsx`，打开才读，每页 20 条，`GateAddressChanges` 的 `onDecided` 在批准、驳回后触发重读）；`list_gate_address_changes` 加 `ended`、`cursor`、`limit`，取 `limit + 1` 行判断下一页，游标是 `created_at|workspace_id|id` 的 base64url，解不开从头开始；`status` 按显示状态筛选，过期未记的算 `expired`；撤回行不写撤回人（在平台审计里）。
 - `EgressDenyListSchema`（`shared/src/worker-definition.ts`，两种 kind 共用）在列表层 transform 与校验：输出规范形式，拒绝通配符、`..`、URL、端口、路径、CIDR、空白、非 ASCII、IP 与空串，issue path 是 `egressDeny` 字段本身。内核刻意不在下发时归一化，`EGRESS_DENY_LABEL` 与下发列表保持一致，不触发容器重建。
 - 相邻发现列入遗留 148（ssh 非锚定正则）、149（子网与 IPv6 规则不一致）。
 
