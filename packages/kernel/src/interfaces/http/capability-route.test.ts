@@ -798,8 +798,27 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
 
   it('application/worker registry errors map to 400/404/409, never 500 (S2.6/S2.14 gap found on the host)', () => {
     expect(
-      mapCapabilityError(new ProcedureStepReferenceError(0, 'no such operation')),
-    ).toMatchObject({ status: 400, code: 'invalid_step_reference' });
+      mapCapabilityError(
+        new ProcedureStepReferenceError(0, 'operation_not_published', 'no such operation', {
+          gatekeeperId: 'gk-1',
+          operationName: 'orders.lookup',
+        }),
+      ),
+    ).toEqual({
+      status: 400,
+      code: 'invalid_step_reference',
+      message: 'Procedure step 0 does not resolve: no such operation',
+      // Legacy 502: which step, why and what it names.
+      details: {
+        stepIndex: 0,
+        reason: 'operation_not_published',
+        gatekeeperId: 'gk-1',
+        operationName: 'orders.lookup',
+      },
+    });
+    expect(
+      mapCapabilityError(new ProcedureStepReferenceError(-1, 'no_steps', 'no step')).details,
+    ).toEqual({ stepIndex: null, reason: 'no_steps' });
     expect(mapCapabilityError(new SkillValidationError('bad frontmatter'))).toMatchObject({
       status: 400,
       code: 'invalid_params',
@@ -1299,6 +1318,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('publish_procedure with a step referencing a nonexistent Operation → 400 invalid_step_reference (S2.14 acceptance)', async () => {
       const app = createServer({ pool });
+      const gatekeeperId = randomUUID();
       const proposed = await app.inject({
         method: 'POST',
         url: '/api/cap/propose_procedure',
@@ -1307,7 +1327,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           procedure: {
             name: 'bad-procedure',
             description: 'references a missing operation',
-            steps: [{ kind: 'operation', gatekeeperId: randomUUID(), operationName: 'nope' }],
+            steps: [{ kind: 'operation', gatekeeperId, operationName: 'nope' }],
           },
         },
       });
@@ -1325,6 +1345,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(published.statusCode).toBe(400);
       expect(published.json().error.code).toBe('invalid_step_reference');
+      // Legacy 502: on the wire too.
+      expect(published.json().error.details).toEqual({
+        stepIndex: 0,
+        reason: 'operation_not_published',
+        gatekeeperId,
+        operationName: 'nope',
+      });
     });
 
     it('legacy 300: publish_skill names the version and draft reviewed — another version is 409 version_changed, another draft 409 draft_changed, none is 400', async () => {

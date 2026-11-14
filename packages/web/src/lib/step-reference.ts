@@ -1,13 +1,19 @@
+import {
+  PROCEDURE_STEP_REFERENCE_REASON_VALUES,
+  type ProcedureStepReferenceReason,
+} from '@nexttime/shared';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 
 /**
  * Legacy 493: `propose_procedure` / `publish_procedure`'s 400 `invalid_step_reference` read as what
  * it is — which step, which Operation or Worker, and why — instead of one sentence for every case.
- * The kernel's message is `Procedure step <index> does not resolve: <reason>`
- * (`application/worker/procedures.ts`, `ProcedureStepReferenceError`); a `details.stepIndex` is
- * read first should the kernel come to send one. Anything not recognized stays `unresolved`, so
- * the kernel's own text still shows under 「技术细节」.
+ * Legacy 502: from the error's `details` (`stepIndex`, `reason` — `PROCEDURE_STEP_REFERENCE_REASON_VALUES`
+ * — and what the step names), as the kernel sends them; only a refusal without them (`details` is
+ * an addition a client must not count on, docs/wire-contract-conventions.md) is read from the
+ * kernel's message, `Procedure step <index> does not resolve: <reason>`
+ * (`application/worker/procedures.ts`, `ProcedureStepReferenceError`). Anything not recognized
+ * stays `unresolved`, so the kernel's own text still shows under 「技术细节」.
  */
 export interface StepReferenceRefusal {
   /** The step, counted from 0; `null` when the refusal is about the Procedure as a whole. */
@@ -28,6 +34,37 @@ const STEP_MESSAGE = /^Procedure step (-?\d+) does not resolve: ([\s\S]*)$/;
 
 export function stepReferenceRefusalOf(err: unknown): StepReferenceRefusal | null {
   if (!(err instanceof HttpError) || err.code !== 'invalid_step_reference') return null;
+  return refusalFromDetails(err.details) ?? refusalFromMessage(err);
+}
+
+const REASONS: ReadonlySet<string> = new Set(PROCEDURE_STEP_REFERENCE_REASON_VALUES);
+
+/** Legacy 502: the refusal as `details` says it, or `null` when it carries no reason this
+ *  console knows. */
+function refusalFromDetails(
+  details: Readonly<Record<string, unknown>> | undefined,
+): StepReferenceRefusal | null {
+  const reason = details?.reason;
+  if (typeof reason !== 'string' || !REASONS.has(reason)) return null;
+  const index = details?.stepIndex;
+  const stepIndex =
+    typeof index === 'number' && Number.isInteger(index) && index >= 0 ? index : null;
+  const known = reason as ProcedureStepReferenceReason;
+  if (known === 'no_steps') return { stepIndex: null, reason: 'no_steps' };
+  if (known === 'no_graph_projection') return { stepIndex, reason: 'unresolved' };
+  const name = details?.operationName;
+  const version = details?.version;
+  return {
+    stepIndex,
+    reason: known,
+    ...(known === 'operation_not_published' && typeof name === 'string'
+      ? { operationName: name }
+      : {}),
+    ...(known !== 'operation_not_published' && typeof version === 'number' ? { version } : {}),
+  };
+}
+
+function refusalFromMessage(err: HttpError): StepReferenceRefusal {
   const matched = STEP_MESSAGE.exec(err.message);
   const fromDetails = err.details?.stepIndex;
   const index =

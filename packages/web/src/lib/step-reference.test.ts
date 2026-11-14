@@ -56,6 +56,67 @@ describe('legacy 493: invalid_step_reference read as which step and why', () => 
     ).toEqual({ stepIndex: 4, reason: 'unresolved' });
   });
 
+  it('legacy 502: reads the refusal from details — the message is not parsed when they are there', () => {
+    const unrelated = 'Procedure step 9 does not resolve: something else entirely';
+    expect(
+      stepReferenceRefusalOf(
+        refused(unrelated, {
+          stepIndex: 1,
+          reason: 'operation_not_published',
+          gatekeeperId: '0f6d7b8e-1111-4222-8333-944445555666',
+          operationName: 'orders."lookup"',
+        }),
+      ),
+    ).toEqual({
+      stepIndex: 1,
+      reason: 'operation_not_published',
+      operationName: 'orders."lookup"',
+    });
+    expect(
+      stepReferenceRefusalOf(
+        refused(unrelated, {
+          stepIndex: 0,
+          reason: 'worker_not_published',
+          definitionId: 'd',
+          version: 3,
+        }),
+      ),
+    ).toEqual({ stepIndex: 0, reason: 'worker_not_published', version: 3 });
+    expect(
+      stepReferenceRefusalOf(
+        refused(unrelated, {
+          stepIndex: 2,
+          reason: 'not_worker_kind',
+          definitionId: 'd',
+          version: 1,
+          definitionKind: 'entry',
+        }),
+      ),
+    ).toEqual({ stepIndex: 2, reason: 'not_worker_kind', version: 1 });
+    expect(
+      stepReferenceRefusalOf(refused(unrelated, { stepIndex: null, reason: 'no_steps' })),
+    ).toEqual({ stepIndex: null, reason: 'no_steps' });
+    expect(
+      stepReferenceRefusalOf(
+        refused(unrelated, {
+          stepIndex: 4,
+          reason: 'no_graph_projection',
+          definitionId: 'd',
+          version: 1,
+        }),
+      ),
+    ).toEqual({ stepIndex: 4, reason: 'unresolved' });
+    // A reason this console does not know: read from the message, as before.
+    expect(
+      stepReferenceRefusalOf(
+        refused('Procedure step 0 does not resolve: WorkerDefinition d@2 is not published: gone', {
+          stepIndex: 0,
+          reason: 'something_new',
+        }),
+      ),
+    ).toEqual({ stepIndex: 0, reason: 'worker_not_published', version: 2 });
+  });
+
   it('reads details.stepIndex first, and is null for any other error', () => {
     expect(
       stepReferenceRefusalOf(refused('Procedure step 9 does not resolve: ?', { stepIndex: 1 }))
