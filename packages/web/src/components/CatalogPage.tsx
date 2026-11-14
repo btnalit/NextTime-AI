@@ -4129,6 +4129,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
+  // UX acceptance of #1225 (P3): the draft the open editor proposed. Legacy 747's 「用这次的内容
+  // 新建一个定义」 proposes a new definition from a draft's editor — the title then says so.
+  const [proposedFrom, setProposedFrom] = useState<{
+    readonly editor: WorkerEditorState;
+    readonly id: string;
+  } | null>(null);
   // Legacy 302: the last publish refused for naming what is not there, by `workerKey`.
   const [publishRefusal, setPublishRefusal] = useState<{
     readonly key: string;
@@ -4261,13 +4267,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const editorPane = editor ? (
     <div className="stack">
       <h2 className="catalog-detail-title">
-        {editor.kind === 'copy' && editor.row.status === 'draft'
-          ? t(`修改草稿 v${editor.row.version}`, `Edit draft v${editor.row.version}`)
-          : editor.kind === 'copy'
-            ? t('提议新版本', 'Propose a new version')
-            : editor.kind === 'template'
-              ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
-              : t('新建 Worker 定义草稿', 'New Worker definition draft')}
+        {editor.kind === 'copy' &&
+        proposedFrom?.editor === editor &&
+        proposedFrom.id !== editor.row.id
+          ? t('新建的 Worker 定义', 'A new Worker definition')
+          : editor.kind === 'copy' && editor.row.status === 'draft'
+            ? t(`修改草稿 v${editor.row.version}`, `Edit draft v${editor.row.version}`)
+            : editor.kind === 'copy'
+              ? t('提议新版本', 'Propose a new version')
+              : editor.kind === 'template'
+                ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
+                : t('新建 Worker 定义草稿', 'New Worker definition draft')}
       </h2>
       <p className="text-3 text-small">
         {t(
@@ -4299,7 +4309,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         capabilityNames={
           capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
         }
-        onProposed={() => {
+        onProposed={(draft) => {
+          setProposedFrom({ editor, id: draft.id });
           void workers.reload();
           void myDrafts.reload();
           announceReadinessChange(http);

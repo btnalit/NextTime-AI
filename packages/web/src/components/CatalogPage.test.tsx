@@ -5739,3 +5739,49 @@ describe('CatalogPage — a Worker draft below the published head (legacy 742)',
     expect(screen.queryByTestId('worker-draft-publish')).toBeNull();
   });
 });
+
+// Legacy 747 (UX acceptance of #1225, P3): a draft whose definition went is proposed as a new
+// definition from its editor — the title then says it is a new one, not 「修改草稿」.
+describe('CatalogPage — a draft whose definition went starts a new one (legacy 747)', () => {
+  it('after 「用这次的内容新建一个定义」 the editor title says a new definition', async () => {
+    let first = true;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+          ? [
+              {
+                id: 'wd-9',
+                version: 1,
+                kind: 'worker',
+                status: 'draft',
+                proposedBy: 'p-me',
+                definition: { name: 'Gone', systemPrompt: 'P' },
+              },
+            ]
+          : [],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => {
+        if (first) {
+          first = false;
+          return Promise.reject(
+            new HttpError('capability_error', 'WorkerDefinition not found', 'not_found'),
+          );
+        }
+        return { id: 'wd-new', version: 1, status: 'draft' };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-edit'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe(`修改草稿 v${1}`);
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    fireEvent.click(await within(drawer).findByTestId('worker-propose-as-new-definition'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe('新建的 Worker 定义');
+    const proposals = http.calls.filter((c) => c.name === 'propose_worker_definition');
+    expect(proposals[1]?.params).not.toHaveProperty('definitionId');
+  });
+});
