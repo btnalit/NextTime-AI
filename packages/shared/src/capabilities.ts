@@ -4108,13 +4108,18 @@ const platformCapabilities = [
     scope: 'platform',
     paramsSchema: z
       .object({
+        /** As each proposal is shown: one past `expiresAt` is `expired`, not `proposed`. */
         status: wire.GateAddressChangeStatusWireSchema.optional(),
+        /** Legacy 717: `true` keeps the ended ones (applied, rejected, withdrawn, expired) — the
+         *  platform's history; `false` the ones still awaiting a decision. Omitted = both. */
+        ended: z.boolean().optional(),
         workspaceId: z.guid().optional(),
+        ...platformCursorParams,
       })
       .strict(),
     resultSchema: listEnvelope(wire.PlatformGateAddressChangeWireSchema),
     description:
-      'Proposals to move a gate a workspace connected itself to a new address, newest first (status proposed: those awaiting a decision; one past expiresAt can no longer be approved): workspace, connector, target and both addresses (scheme, host and port only), what follows the gate to the new host as its owner previewed it, who proposed it and when.',
+      'Proposals to move a gate a workspace connected itself to a new address, newest first and cursor-paged: workspace, connector, target and both addresses (scheme, host and port only), what follows the gate to the new host as its owner previewed it, who proposed it and when, and for an ended one who decided it, when and why. status filters by the status shown — proposed: still awaiting a decision (one past expiresAt shows as expired and can no longer be approved); ended: true lists the decided, withdrawn and expired ones.',
   },
   {
     name: 'approve_gate_address_change',
