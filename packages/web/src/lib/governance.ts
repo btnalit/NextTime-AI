@@ -75,22 +75,15 @@ export function principalDisplayRole(
 }
 
 /** Legacy 734: what a member's API key line says — on the Members list (`'list'`) and in the
- *  member's drawer (`'detail'`). A disabled member authenticates with no key: disabling clears it
- *  now, and one a disable left on the row before that reads as not working, never as issued. */
+ *  member's drawer (`'detail'`). A disabled member has no key: disabling clears it, and core 0059
+ *  (legacy 738) cleared the ones earlier disables left and keeps it so. */
 export function apiKeyStatusLabel(
-  principal: Pick<PrincipalRow, 'hasApiKey' | 'disabledAt'>,
+  principal: Pick<PrincipalRow, 'hasApiKey'>,
   form: 'list' | 'detail',
   t: Translate,
 ): string {
   if (!principal.hasApiKey)
     return form === 'list' ? t('无 API key', 'No API key') : t('无', 'none');
-  if (principal.disabledAt)
-    return form === 'list'
-      ? t('API key 已失效', 'API key no longer works')
-      : t(
-          '已失效（已停用的成员不能用 key 认证）',
-          'no longer works (a disabled member cannot sign in with a key)',
-        );
   return form === 'list' ? t('已签发', 'API key issued') : t('已签发', 'issued');
 }
 

@@ -260,6 +260,8 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'principal.revoked_session_handles_revoked',
   // Legacy 702: governance 0043 revokes the Handles left valid under a disabled authority.
   'principal.disabled_authority_handles_revoked',
+  // Legacy 738: core 0059 clears the API key a disable left on a Principal.
+  'principal.disabled_api_key_cleared',
   // S10 E3-1c: evaluation content stopped on its way to an agent (`application/eval-seal`).
   'evaluation.content_withheld',
   // S10 E3-2a: an evaluation trial's fixture call (`application/eval-session`) and its end

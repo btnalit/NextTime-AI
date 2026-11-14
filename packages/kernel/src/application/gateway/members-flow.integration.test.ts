@@ -700,7 +700,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
-    it('a disabled service account gets no new key (legacy 734): disabling clears its key, rotate_api_key is refused (disabled) — also when it was disabled while the rotation waited for its lock', async () => {
+    it('a disabled service account gets no new key (legacy 734): disabling clears its key, rotate_api_key is refused (disabled) — also when another write disabled it while the rotation waited for its lock, which clears the key too (core 0059)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const keyHash = (principalId: string) =>
         withAdminClient(pool, async (client) => {
@@ -733,14 +733,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(await keyHash(serviceId)).toBeNull();
 
-      // Disabled while the rotation waited for its lock — as a disable from before legacy 734
-      // left it, key still on the row: the rotation sees it under the lock and writes nothing.
+      // Disabled while the rotation waited for its lock, by a write that sets `disabled_at` only
+      // (the previous release's `disable_principal`): core 0059's trigger clears the key in that
+      // write, and the rotation sees the Principal disabled under the lock and writes nothing.
       const other = (await dispatchCapability({ pool }, owner, 'create_principal', {
         role: 'member',
         displayName: 'Disabled meanwhile',
       })) as { principal: { id: string }; apiKey: string };
       const otherId = other.principal.id;
-      const hashBefore = await keyHash(otherId);
+      expect(await keyHash(otherId)).not.toBeNull();
       let go!: () => void;
       const going = new Promise<void>((resolve) => {
         go = resolve;
@@ -785,7 +786,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expectRefused(async () => {
         if ('err' in settled) throw settled.err;
       }, 'disabled');
-      expect(await keyHash(otherId)).toBe(hashBefore);
+      expect(await keyHash(otherId)).toBeNull();
       expect(await authenticateHuman(pool, other.apiKey)).toBeNull();
     });
 
