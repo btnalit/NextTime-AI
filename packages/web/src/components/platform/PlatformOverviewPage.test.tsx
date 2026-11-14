@@ -566,6 +566,40 @@ describe('PlatformOverviewPage', () => {
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
+  it('legacy 731: a recent change that changed nothing says 未改变; a changed or refused one does not', async () => {
+    const base = overview().recentAudit[0];
+    if (!base) throw new Error('fixture has a recent audit row');
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          recentAudit: [
+            base,
+            {
+              ...base,
+              id: 'audit-unchanged',
+              action: 'set_user_status',
+              payload: { unchanged: true },
+            },
+            {
+              ...base,
+              id: 'audit-refused-unchanged',
+              payload: { outcome: 'refused', unchanged: true },
+            },
+          ],
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    await screen.findByTestId('platform-overview-audit');
+    const [changed, unchanged, refused] = screen.getAllByTestId('platform-overview-audit-row');
+    if (!changed || !unchanged || !refused) throw new Error('three rows');
+    expect(within(changed).queryByTestId('audit-unchanged')).toBeNull();
+    expect(within(unchanged).getByTestId('audit-unchanged').textContent).toBe('未改变');
+    expect(within(refused).queryByTestId('audit-unchanged')).toBeNull();
+    expect(within(refused).getByTestId('audit-refused')).toBeTruthy();
+  });
+
   it('shows BindApiKeyForm only when there are pending-activation users, and reloads on success', async () => {
     let calls = 0;
     const http = scriptedHttp({
