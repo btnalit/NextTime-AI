@@ -105,6 +105,7 @@ import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/platform-gates.integration.test: DB-gated coverage of P-B1 (docs/platform-
@@ -230,6 +231,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(principalId),
         principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
         session: {
           workspaceId,
@@ -344,6 +346,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       workspaceId = created.workspaceId;
       ownerPrincipalId = created.ownerPrincipalId;
+      // Legacy 712: `humanCaller` has no console login behind it — an API-key call, whose Handle
+      // (`issue_handle`, `issue_service_handle`) is issued only while the owner has a key.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+          [workspaceId, ownerPrincipalId, fixtureApiKeyHash(ownerPrincipalId)],
+        ),
+      );
     }, 180_000);
 
     afterAll(async () => {
@@ -805,7 +815,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope,
               ttlSeconds: 3600,
               privateKey,
-              basis: { kind: 'role', role: 'owner' },
+              basis: { kind: 'role', role: 'owner', credential: null },
             }),
         );
 
@@ -2530,7 +2540,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 },
                 ttlSeconds: 3600,
                 privateKey,
-                basis: { kind: 'role', role: 'owner' },
+                basis: { kind: 'role', role: 'owner', credential: null },
               }),
           );
           const entryHandleRevokedAt = (): Promise<Date | null> =>

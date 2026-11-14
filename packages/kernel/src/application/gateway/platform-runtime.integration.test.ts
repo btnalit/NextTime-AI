@@ -1151,7 +1151,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: entryScope(),
               ttlSeconds: 3600,
               privateKey,
-              basis: { kind: 'role', role: 'member' },
+              basis: { kind: 'role', role: 'member', credential: null },
             });
             // Two refusals (no tokens, no cost) and one answered call.
             for (const [secondsAgo, status, scope, input, output, cost] of [

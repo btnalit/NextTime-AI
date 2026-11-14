@@ -425,7 +425,8 @@ export async function createPlanningTask(
         parentAuthority: handleScope,
         parentClaimsForLineage: undefined,
         // Legacy 702: issued only while the requester's role is still the one read above.
-        issuanceBasis: { kind: 'role', role: authority.role },
+        // Legacy 712: the advancer's Task, not a request of the requester's — no credential.
+        issuanceBasis: { kind: 'role', role: authority.role, credential: null },
         declaredCapabilities: PLANNER_HANDLE_CAPABILITIES,
         declaredGates: [],
         model,

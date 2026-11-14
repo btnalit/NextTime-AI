@@ -23,6 +23,7 @@ import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/invoke-worker-handler.integration.test: DB-gated (real Postgres; auto-skip
@@ -169,7 +170,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 3600,
           privateKey,
-          basis: { kind: 'role', role },
+          basis: { kind: 'role', role, credential: null },
         }),
       );
     }
@@ -191,6 +192,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(principalId),
         principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
         session: {
           workspaceId,
@@ -514,6 +516,35 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(invoked.status).toBe('running');
         }
       });
+    });
+
+    it('legacy 712: a person’s own invoke_worker (the human channel) carries the credential it came with to the Worker’s Handle — refused (credential_revoked) while the Principal has no API key, started once it has one', async () => {
+      const supervisorClient = new NeverFinishingSupervisorClient(pool, workspaceId);
+      configureTaskRuntime({ pool, privateKey, supervisorClient });
+      const personId = await adminInsertPrincipal('owner', 'owner-712');
+      const call = () =>
+        dispatchCapability({ pool }, humanCaller(personId, 'owner'), 'invoke_worker', {
+          definitionId: workerDefinitionId,
+          version: 1,
+          input: {},
+        });
+
+      await expect(call()).rejects.toMatchObject({
+        name: 'HandleIssuanceError',
+        code: 'credential_revoked',
+      });
+
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: personId },
+        (client) =>
+          client.query(
+            'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+            [workspaceId, personId, fixtureApiKeyHash(personId)],
+          ),
+        { skipRoleSwitch: true },
+      );
+      await expect(call()).resolves.toMatchObject({ status: 'running' });
     });
   },
 );

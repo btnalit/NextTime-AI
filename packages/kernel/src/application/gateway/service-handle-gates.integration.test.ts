@@ -34,6 +34,7 @@ import { dispatchCapability } from './dispatch.js';
 import { authenticateHandle } from './handle-auth.js';
 import { ActionRequestDeniedError, setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { fixtureApiKeyHash } from './traversal-fixture.js';
 
 /**
  * application/gateway/service-handle-gates.integration.test: legacy 690 (DB-gated, real Postgres).
@@ -122,6 +123,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     function ownerCaller(): ResolvedCaller {
       return {
         channel: 'human',
+        apiKeyHash: fixtureApiKeyHash(ownerId),
         principal: { workspaceId, id: ownerId, kind: 'human', role: 'owner', displayName: null },
         session: {
           workspaceId,
@@ -260,10 +262,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           'legacy-690-workspace',
         ]);
+        // Legacy 712: `ownerCaller` has no console login behind it — an API-key call, whose
+        // Handle is issued only while the owner's key is still the one it presents.
         await client.query(
-          `insert into principals (workspace_id, id, kind, role, display_name)
-           values ($1, $2, 'human', 'owner', 'legacy-690 owner')`,
-          [workspaceId, ownerId],
+          `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
+           values ($1, $2, 'human', 'owner', 'legacy-690 owner', $3)`,
+          [workspaceId, ownerId, fixtureApiKeyHash(ownerId)],
         );
       });
       gatekeeperId = await registerGate('legacy-690-gate');
@@ -376,6 +380,41 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const issued = await issue(serviceId, ['search', 'submit_observations']);
       expect(issued.scope.resources).toEqual({});
+    });
+
+    it('legacy 712: the owner’s call is issued only while the API key it came with is live — checked under the service Principal’s locks, refused (credential_revoked) once it is cleared', async () => {
+      const serviceId = await insertPrincipal('service', 'member');
+      const keyOf = () =>
+        admin((client) =>
+          client.query<{ hash: string | null }>(
+            'select api_key_hash as hash from principals where workspace_id = $1 and id = $2',
+            [workspaceId, ownerId],
+          ),
+        );
+      const ownerKey = (await keyOf()).rows[0]?.hash;
+      if (!ownerKey) throw new Error('the owner fixture has no API key');
+      await admin((client) =>
+        client.query(
+          'update principals set api_key_hash = null where workspace_id = $1 and id = $2',
+          [workspaceId, ownerId],
+        ),
+      );
+      try {
+        await expect(issue(serviceId, ['search'])).rejects.toMatchObject({
+          name: 'HandleIssuanceError',
+          code: 'credential_revoked',
+        });
+      } finally {
+        await admin((client) =>
+          client.query(
+            'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+            [workspaceId, ownerId, ownerKey],
+          ),
+        );
+      }
+      await expect(issue(serviceId, ['search'])).resolves.toMatchObject({
+        scope: { capabilities: ['search'] },
+      });
     });
   },
 );

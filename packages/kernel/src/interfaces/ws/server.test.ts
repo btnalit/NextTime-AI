@@ -774,7 +774,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
-            basis: { kind: 'role', role: 'member' },
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },
@@ -815,7 +815,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
-            basis: { kind: 'role', role: 'member' },
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },

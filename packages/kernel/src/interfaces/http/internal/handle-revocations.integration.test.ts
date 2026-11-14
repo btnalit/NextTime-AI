@@ -80,7 +80,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities: ['search'], resources: {} },
               ttlSeconds: 3600,
               privateKey,
-              basis: { kind: 'role', role: 'member' },
+              basis: { kind: 'role', role: 'member', credential: null },
             });
             issuedJtis.push(issued.jti);
           }

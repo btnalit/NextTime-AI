@@ -261,7 +261,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: { capabilities: [...capabilities], resources: {} },
           ttlSeconds: 3600,
           privateKey,
-          basis: { kind: 'role', role },
+          basis: { kind: 'role', role, credential: null },
         });
         return { sessionId, jti: issued.jti };
       });

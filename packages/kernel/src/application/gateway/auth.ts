@@ -55,6 +55,12 @@ export interface AuthenticatedHuman {
   readonly session: SessionRow;
 }
 
+/** {@link authenticateHuman}'s result: also the `principals.api_key_hash` the key matched
+ *  (legacy 712) — the hash, never the key. */
+export interface AuthenticatedApiKeyHuman extends AuthenticatedHuman {
+  readonly apiKeyHash: string;
+}
+
 interface PrincipalDbRow {
   workspace_id: string;
   id: string;
@@ -238,8 +244,9 @@ export async function createOrReuseWebSession(
 export async function authenticateHuman(
   pool: PoolLike,
   rawApiKey: string,
-): Promise<AuthenticatedHuman | null> {
-  const principal = await lookupPrincipalByApiKeyHash(pool, hashApiKey(rawApiKey));
+): Promise<AuthenticatedApiKeyHuman | null> {
+  const apiKeyHash = hashApiKey(rawApiKey);
+  const principal = await lookupPrincipalByApiKeyHash(pool, apiKeyHash);
   if (!principal) return null;
 
   const session = await withWorkspace(
@@ -248,7 +255,7 @@ export async function authenticateHuman(
     (client) => createOrReuseWebSession(client, principal),
   );
 
-  return { principal, session };
+  return { principal, session, apiKeyHash };
 }
 
 /**

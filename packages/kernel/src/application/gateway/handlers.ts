@@ -213,7 +213,11 @@ import {
 } from './attribution-handlers.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { ForbiddenError } from './authorize.js';
-import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import {
+  type CapabilityHandler,
+  type CapabilityHandlerContext,
+  requirePresentedCredential,
+} from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 // S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
 import {
@@ -2295,6 +2299,12 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
       claims: ctx?.claims,
       turnId,
       ...(adminAgentSessionId !== undefined ? { adminAgentSessionId } : {}),
+      // Legacy 712: a person's own call (the human channel) names the cookie or API key it came
+      // with; the Worker's Handle is issued only while that is still live. A Handle caller's
+      // Worker is issued on its parent Handle instead.
+      ...(ctx?.channel === 'human'
+        ? { credential: requirePresentedCredential('invoke_worker', ctx) }
+        : {}),
     },
     { ...input, idempotencyKey },
     getConfiguredTaskRuntime(),

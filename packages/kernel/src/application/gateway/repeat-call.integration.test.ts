@@ -64,6 +64,7 @@ import {
 } from './resolve-caller.js';
 import {
   type Seeded,
+  fixtureApiKeyHash,
   humanCaller,
   newWorkspace,
   paramsFor,
@@ -968,6 +969,12 @@ async function memberWithSession(ctx: RecipeContext): Promise<string> {
   );
   const principalId = principal.rows[0]?.id;
   if (principalId === undefined) throw new Error('memberWithSession: the member has no Principal');
+  // Legacy 712: `humanCaller` is an API-key call, and a Handle is issued only while the Principal
+  // has a key (a synthetic hash; a person created by create_user has none).
+  await ctx.pool.query(
+    'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+    [ctx.seed.workspaceId, principalId, fixtureApiKeyHash(principalId)],
+  );
   await dispatchCapability(
     { pool: ctx.pool },
     humanCaller(ctx.seed.workspaceId, principalId, 'owner'),
@@ -1068,7 +1075,7 @@ async function entryHandle(ctx: RecipeContext): Promise<string> {
         },
         ttlSeconds: 3600,
         privateKey,
-        basis: { kind: 'role', role: 'owner' },
+        basis: { kind: 'role', role: 'owner', credential: null },
       });
       return issued.jti;
     },

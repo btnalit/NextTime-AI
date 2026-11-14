@@ -798,7 +798,8 @@ async function spawnWorkerRunForRetry(
         jti: handleRow.jti,
         exp: Math.floor(new Date(handleRow.expires_at).getTime() / 1000),
       },
-      issuanceBasis: { kind: 'role', role: retryRole },
+      // Legacy 712: the platform retries on the person's authority now — no credential.
+      issuanceBasis: { kind: 'role', role: retryRole, credential: null },
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
       model,

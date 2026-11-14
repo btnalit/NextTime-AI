@@ -758,11 +758,12 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.code).toBe('invalid_params');
   });
 
-  it('legacy 699 / 702: HandleIssuanceError with a code (session or parent revoked, Principal disabled) → 401 unauthorized, message withheld', () => {
+  it('legacy 699 / 702 / 712: HandleIssuanceError with a code (session or parent revoked, Principal disabled, credential revoked) → 401 unauthorized, message withheld', () => {
     for (const code of [
       'session_revoked',
       'parent_revoked',
       'acting_principal_disabled',
+      'credential_revoked',
     ] as const) {
       const mapped = mapCapabilityError(
         new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
@@ -1484,7 +1485,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['get_object'], resources: {} },
             ttlSeconds: 3600,
             privateKey,
-            basis: { kind: 'role', role: 'member' },
+            basis: { kind: 'role', role: 'member', credential: null },
           });
           return issued.token;
         },

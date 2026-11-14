@@ -6,7 +6,10 @@ import {
   readAgentProfile,
   readEffectiveAgentProfile,
 } from '../../governance/agent-profile/index.js';
-import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import {
+  type PresentedCredential,
+  WORKER_CEILING_CAPABILITIES,
+} from '../../governance/capability/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { shownFreeTextIn } from '../../governance/redaction/index.js';
 import {
@@ -149,6 +152,13 @@ export interface InvokeWorkerCallerCtx {
    * call never has one.
    */
   readonly adminAgentSessionId?: string;
+  /**
+   * Legacy 712: on the human channel, the credential the call was authenticated with
+   * (`CapabilityHandlerContext.presentedCredential`) — the Worker's Handle is issued only while it
+   * is still live. Absent on the Handle channel (the caller's Handle is the parent basis) and on a
+   * call the platform makes on the person's behalf (fake-invoke-worker's scripted Turn).
+   */
+  readonly credential?: PresentedCredential;
 }
 
 export interface InvokeWorkerInput {

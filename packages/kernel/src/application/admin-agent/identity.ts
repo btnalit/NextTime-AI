@@ -275,7 +275,8 @@ export async function issueAdminAgentHandle(
     scope: adminAgentScope(params.resources ?? {}, { role: facts.principalRole }),
     ttlSeconds: params.ttlSeconds,
     privateKey: params.privateKey,
-    basis: { kind: 'role', role: facts.principalRole },
+    // Legacy 712: issued for a Turn, not for a request of the administrator's — no credential.
+    basis: { kind: 'role', role: facts.principalRole, credential: null },
   });
 }
 

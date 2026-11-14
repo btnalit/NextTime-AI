@@ -78,7 +78,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       client: PoolClient,
       sessionId: string,
       parentJti?: string,
-      basis: IssuanceBasis = { kind: 'role', role: 'owner' },
+      basis: IssuanceBasis = { kind: 'role', role: 'owner', credential: null },
     ): Promise<IssuedHandle> {
       return issueHandle(client, {
         sessionId,

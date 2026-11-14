@@ -1051,7 +1051,8 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
     // Legacy 699: the caller's session or the Handle it attenuates from was revoked while the call
     // ran — its credential is gone, the same generic 401 as a revoked Handle. Legacy 702's
     // `acting_principal_disabled` takes the same 401: the Principal, their user or workspace was
-    // disabled while the call ran.
+    // disabled while the call ran. Legacy 712's `credential_revoked` too: the console session or
+    // API key this call was made with was revoked (a reset, a sign-out) while it ran.
     // Legacy 714: `authority_changed` is not a lost credential — the Principal's role or user
     // changed while the call ran, and their credential is still good (a 401 would send the console
     // back to sign-in). A 409: calling again computes the Handle from what holds now, or meets a

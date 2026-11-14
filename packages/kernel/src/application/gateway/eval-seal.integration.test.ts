@@ -159,7 +159,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 600,
           privateKey,
-          basis: { kind: 'role', role: 'owner' },
+          basis: { kind: 'role', role: 'owner', credential: null },
         }),
       );
       const claims: HandleClaims = {

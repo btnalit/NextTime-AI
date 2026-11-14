@@ -31,6 +31,11 @@ export type ResolvedCaller =
       readonly principal: PrincipalRow;
       readonly session: SessionRow;
       readonly user?: ConsoleUser;
+      /** Legacy 712: on the API-key path (no `user`), the `principals.api_key_hash` the request's
+       *  key hashed to — never the key itself. A Handle issued for the call is issued only while
+       *  the Principal's key is still this one (governance/capability/handles.ts
+       *  `PresentedCredential`). */
+      readonly apiKeyHash?: string;
     }
   | { readonly channel: 'handle'; readonly claims: HandleClaims }
   /** P-A1: a console-session administrator calling a `scope: 'platform'` capability — no

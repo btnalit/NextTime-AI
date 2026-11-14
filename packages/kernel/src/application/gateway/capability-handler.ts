@@ -7,7 +7,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import type { PublishActor } from '../../governance/capability/index.js';
+import type { PresentedCredential, PublishActor } from '../../governance/capability/index.js';
 import type { PlatformRole } from '../identity/index.js';
 
 /**
@@ -110,6 +110,29 @@ export interface CapabilityHandlerContext {
    * (`application/admin-agent/platform-state.ts`) opens its platform transaction as this user.
    */
   readonly adminAgent?: { readonly sessionId: string; readonly userId: string };
+  /**
+   * Legacy 712: on every human-channel call, the credential it was authenticated with — the
+   * console session behind the cookie, or the API key it presented, by its hash (dispatch.ts,
+   * from the resolved caller). A handler that issues a Handle for this request names it in the
+   * role basis, and `issueHandle` refuses it under the authority locks once it is revoked or the
+   * key replaced (`credential_revoked`, governance/capability/handles.ts `PresentedCredential`).
+   */
+  readonly presentedCredential?: PresentedCredential;
+}
+
+/** Legacy 712: the human-channel call's credential, for a handler that issues a Handle on it —
+ *  dispatch.ts sets it for every caller resolve-caller.ts builds (a console login, or an API key's
+ *  hash), so a missing one is a wiring bug, not a caller to issue for. */
+export function requirePresentedCredential(
+  capability: string,
+  ctx: CapabilityHandlerContext | undefined,
+): PresentedCredential {
+  if (!ctx?.presentedCredential) {
+    throw new Error(
+      `${capability}: no presented credential in context (this capability is channel:"human"-only)`,
+    );
+  }
+  return ctx.presentedCredential;
 }
 
 /**

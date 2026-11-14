@@ -92,6 +92,14 @@ export async function recheckHumanSession(
   // R-12 / R-13: an API-key socket whose Principal no longer has a key (a reset, a disable or a
   // password change cleared it) has lost its credential, like an API-key socket of a disabled
   // Principal.
+  //
+  // "Has a key", not "has the key this socket presented": a service Principal that rotated its
+  // own key over this socket keeps the socket (R-06, D-05: `rotate_api_key` kicks the
+  // credential's sockets only when someone else re-keys it), and so keeps calling here with the
+  // old key. A Handle issuance on such a socket does compare the key presented
+  // (`assertPresentedCredentialLive`, legacy 712), so it is refused there — two answers on one
+  // socket, both safe. Comparing here too would close a self-rotated socket on its next call,
+  // which changes R-06; that is a decision of its own (registered from the review of #1180).
   if (row && !consoleUser && !row.has_api_key) return { verdict: 'session_invalid' };
   if (!row || !row.principal_active) {
     return { verdict: consoleUser ? 'membership_gone' : 'session_invalid' };
