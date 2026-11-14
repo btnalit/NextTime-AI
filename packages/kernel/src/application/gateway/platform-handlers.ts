@@ -13,7 +13,7 @@ import type {
   UserWire,
   WorkspaceOwnerWire,
 } from '@nexttime/shared';
-import type { PoolClient } from 'pg';
+import { DatabaseError, type PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
@@ -1547,8 +1547,11 @@ export const createWorkspaceHandler: CapabilityHandler = async (
  *  fails after phase 1 committed its rows for `workspaceId` — same platform shape and resource as
  *  `workspace.created`. `details.code` is the code the caller got for a platform refusal (the owner
  *  deleted or disabled meanwhile: `user_not_found` / `user_disabled`), `null` for any other failure;
- *  `details.error` the error's kind, never its message. The caller's error is what matters: a row
- *  that cannot be written is logged, and the call still fails with that error. */
+ *  `details.error` the error's class (`DatabaseError`, `Error`; a pg error's own `name` is the
+ *  protocol message's, `error`, so the class says more), never its message — a database message can
+ *  carry data values; `details.sqlState` a database error's SQLSTATE (`23505`, `40P01`: a class
+ *  code, no data), `null` otherwise. The caller's error is what matters: a row that cannot be
+ *  written is logged, and the call still fails with that error. */
 async function auditWorkspaceCreateFailed(
   pool: PoolLike,
   acting: { id: string; login: string },
@@ -1556,7 +1559,13 @@ async function auditWorkspaceCreateFailed(
   failure: unknown,
 ): Promise<void> {
   const code = failure instanceof PlatformAdminError ? failure.code : null;
-  const error = failure instanceof Error ? failure.name : typeof failure;
+  const error = failure instanceof Error ? failure.constructor.name : typeof failure;
+  const sqlState =
+    failure instanceof DatabaseError &&
+    typeof failure.code === 'string' &&
+    /^[0-9A-Z]{5}$/.test(failure.code)
+      ? failure.code
+      : null;
   try {
     await withPlatform(pool, { userId: acting.id }, (platformClient) =>
       writeAudit(platformClient, {
@@ -1569,7 +1578,7 @@ async function auditWorkspaceCreateFailed(
         payload: {
           channel: 'platform',
           actorLogin: acting.login,
-          details: { code, error },
+          details: { code, error, sqlState },
           triggeredBy: 'create_workspace',
         },
       }),

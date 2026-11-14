@@ -633,6 +633,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(created.allowedModels).toEqual([MODEL_A, MODEL_B]);
         expect(created.memberCount).toBe(1);
         expect(created.owners.map((entry) => entry.login)).toEqual([ownerLogin]);
+        // Legacy 735: an attempt that made its workspace has no `workspace.create_failed` row.
+        expect((await attemptRows(name)).map((row) => row.action)).toEqual([
+          'create_workspace',
+          'workspace.created',
+        ]);
 
         const ownerPrincipal = created.owners[0];
         if (!ownerPrincipal) throw new Error('create_workspace returned no owner');
@@ -861,6 +866,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               details: {
                 code: change === 'deleted' ? 'user_not_found' : 'user_disabled',
                 error: 'PlatformAdminError',
+                sqlState: null,
               },
             },
           ]);
@@ -898,7 +904,56 @@ describe.runIf(DATABASE_URL !== undefined)(
           'workspace.created',
           'workspace.create_failed',
         ]);
-        expect(rows[2]?.details).toEqual({ code: null, error: (thrown as Error).name });
+        expect(rows[2]?.details).toEqual({
+          code: null,
+          error: (thrown as Error).constructor.name,
+          sqlState: null,
+        });
+      });
+
+      // #1206 review (#501 P3-1): a database failure records the error's class and its SQLSTATE —
+      // a pg error's own `name` is just `error`, and its message may carry data values.
+      it('a bootstrap the database refuses records DatabaseError and the SQLSTATE, never the message', async () => {
+        const name = `bootstrap-db-fails-${randomUUID().slice(0, 8)}`;
+        const guard = `create_fails_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+        // A refusal for this one name only: the bootstrap's insert of the workspace row fails with
+        // a check_violation after phase 1 committed.
+        await withAdminClient(pool, async (client) => {
+          await client.query(
+            `create function ${guard}() returns trigger language plpgsql as $$
+             begin
+               raise exception 'refused for this test' using errcode = '23514';
+             end;
+             $$`,
+          );
+          await client.query(
+            `create trigger ${guard} before insert on workspaces for each row
+               when (new.name = '${name}') execute function ${guard}()`,
+          );
+        });
+        let thrown: unknown;
+        try {
+          await callAsAdmin('create_workspace', { name, ownerUserId: owner.id });
+        } catch (err) {
+          thrown = err;
+        } finally {
+          await withAdminClient(pool, async (client) => {
+            await client.query(`drop trigger if exists ${guard} on workspaces`);
+            await client.query(`drop function if exists ${guard}()`);
+          });
+        }
+        expect((thrown as { code?: unknown }).code).toBe('23514');
+        const rows = await attemptRows(name);
+        expect(rows.map((row) => row.action)).toEqual([
+          'create_workspace',
+          'workspace.created',
+          'workspace.create_failed',
+        ]);
+        expect(rows[2]?.details).toEqual({
+          code: null,
+          error: 'DatabaseError',
+          sqlState: '23514',
+        });
       });
 
       // S11 AA3a (plan §3.1 "试验工作区", I-A6; migration core 0050): `purpose: 'admin_trial'`

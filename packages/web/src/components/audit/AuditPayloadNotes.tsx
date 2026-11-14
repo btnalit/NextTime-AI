@@ -60,13 +60,10 @@ const READDED_ACTIONS: ReadonlySet<string> = new Set([
   'principal.user_rebound',
 ]);
 
-/** Legacy 719 (`merge_user`, `platform.membership_restored`): the merge deletes the source user
- *  row, so the two logins are what still say whose memberships these were; the workspace's name,
- *  when the row is about one; the removed memberships that no longer belong to any account —
- *  legacy 725 (UX on #1189): named as whose and where, when the row says so. */
 /** Legacy 735: why a `workspace.create_failed` row's attempt made no workspace — the code the
- *  caller got for a platform refusal (`details.code`), else the error's kind (`details.error`).
- *  The same workspace id's `workspace.created` row records only the attempt. */
+ *  caller got for a platform refusal (`details.code`), else the error's class (`details.error`)
+ *  and, for a database error, its SQLSTATE (`details.sqlState`). The same workspace id's
+ *  `create_workspace` and `workspace.created` rows record only the attempt. */
 function createFailedNote(
   record: Readonly<Record<string, unknown>>,
   action: string | undefined,
@@ -75,29 +72,35 @@ function createFailedNote(
   const details = asRecord(record.details);
   const code = typeof details?.code === 'string' ? details.code : undefined;
   const error = typeof details?.error === 'string' ? details.error : undefined;
+  const sqlState = typeof details?.sqlState === 'string' ? details.sqlState : undefined;
+  const kind = [error, sqlState].filter((part) => part !== undefined).join(' ');
   const reason =
     code === 'user_not_found'
       ? {
           zh: '所有者用户在创建过程中被删除了',
-          en: 'the owner user was deleted while it was being made',
+          en: 'the owner user was deleted while the workspace was being made',
         }
       : code === 'user_disabled'
         ? {
             zh: '所有者用户在创建过程中被停用了',
-            en: 'the owner user was disabled while it was being made',
+            en: 'the owner user was disabled while the workspace was being made',
           }
         : code !== undefined
           ? { zh: `创建被拒绝（${code}）`, en: `it was refused (${code})` }
           : {
-              zh: `创建过程中出错${error !== undefined ? `（${error}）` : ''}`,
-              en: `it failed while being made${error !== undefined ? ` (${error})` : ''}`,
+              zh: `创建过程中出错${kind !== '' ? `（${kind}）` : ''}`,
+              en: `it failed while being made${kind !== '' ? ` (${kind})` : ''}`,
             };
   return {
-    zh: `这次没有建出工作区：${reason.zh}。同一 id 的「工作区已创建」那条记的只是这次尝试。`,
-    en: `No workspace was made: ${reason.en}. The “Workspace created” row with the same id records only this attempt.`,
+    zh: `这次没有建出工作区：${reason.zh}。同一 id 的「创建工作区」和「工作区已创建」两条记的只是这次尝试。`,
+    en: `No workspace was made: ${reason.en}. The “Create workspace” and “Workspace created” rows with the same id record only this attempt.`,
   };
 }
 
+/** Legacy 719 (`merge_user`, `platform.membership_restored`): the merge deletes the source user
+ *  row, so the two logins are what still say whose memberships these were; the workspace's name,
+ *  when the row is about one; the removed memberships that no longer belong to any account —
+ *  legacy 725 (UX on #1189): named as whose and where, when the row says so. */
 function mergeNote(record: Readonly<Record<string, unknown>>):
   | {
       readonly source: string;
