@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.69.1](https://github.com/btnalit/NextTime-AI/compare/v0.69.0...v0.69.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kernel:** a disabled principal holds no API key, kept by the database (legacy 738) ([#1210](https://github.com/btnalit/NextTime-AI/issues/1210)) ([6ec2150](https://github.com/btnalit/NextTime-AI/commit/6ec2150c8133572ee060840998041e20bfc44faa))
+* **kernel:** a removed member can be added back to their workspace (legacy 725) ([#1193](https://github.com/btnalit/NextTime-AI/issues/1193)) ([4f651e5](https://github.com/btnalit/NextTime-AI/commit/4f651e543bb98fc4af834ea6e20b602cf8243fa4))
+* **kernel:** a removed membership stays as it was (legacy 687 / 729 / 730) ([#1198](https://github.com/btnalit/NextTime-AI/issues/1198)) ([f6b3e98](https://github.com/btnalit/NextTime-AI/commit/f6b3e98b2731fe34287bdbe42af1a32a14645718))
+* **kernel:** audit a failed create_workspace bootstrap; entry draft lookup under the registry lock (legacy 735 / 736) ([#1206](https://github.com/btnalit/NextTime-AI/issues/1206)) ([92b023f](https://github.com/btnalit/NextTime-AI/commit/92b023fd67c64717cd91fa48bf1ba0e91d68c1e6))
+* **kernel:** entry draft dedupe, owner lock on create_workspace, bind contention code (legacy 691 / 726 / 727 / 728) ([#1200](https://github.com/btnalit/NextTime-AI/issues/1200)) ([ebd1e6a](https://github.com/btnalit/NextTime-AI/commit/ebd1e6afca941a08a6b167715ab1649897657c8f))
+* **kernel:** no key for a disabled service account; platform membership writes name the membership read (legacy 734 / 732) ([#1204](https://github.com/btnalit/NextTime-AI/issues/1204)) ([e4013be](https://github.com/btnalit/NextTime-AI/commit/e4013be075995a80c2ad837a5efec09c0c6bb932))
+* **web:** audit rows that changed nothing say so, and a membership refused as removed says it once (legacy 731, 733) ([#1203](https://github.com/btnalit/NextTime-AI/issues/1203)) ([1b2b1b1](https://github.com/btnalit/NextTime-AI/commit/1b2b1b172d180fbc2ce2613d9d0c7b2022a8b6c5))
+
 ## [0.69.0](https://github.com/btnalit/NextTime-AI/compare/v0.68.0...v0.69.0) (2026-11-14)
 
 
