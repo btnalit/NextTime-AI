@@ -1151,6 +1151,47 @@ describe.runIf(DATABASE_URL !== undefined)(
           'already_claimed',
         );
       });
+
+      // Legacy 708: merged into a disabled user, the source's memberships would keep their
+      // sessions and Handles under a disabled user (I-H2).
+      it('refuses a disabled target — user_disabled — and leaves the source and its sessions as they were', async () => {
+        const source = await createUser(pool, {
+          login: `merge-live-${randomUUID().slice(0, 8)}`,
+          displayName: 'Live Source',
+        });
+        const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId,
+          role: 'member',
+        });
+        const session = await withAdminClient(pool, (client) =>
+          client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'entry', $2, 'active') returning id`,
+            [workspaceId, membership.principalId],
+          ),
+        );
+        const target = await createUser(pool, {
+          login: `merge-off-${randomUUID().slice(0, 8)}`,
+          displayName: 'Disabled Target',
+          password: PASSWORD,
+        });
+        await callAsAdmin<UserWire>('set_user_status', { userId: target.id, status: 'disabled' });
+
+        await expectPlatformError(
+          () => callAsAdmin('merge_user', { sourceUserId: source.id, targetUserId: target.id }),
+          'user_disabled',
+        );
+        const after = await withAdminClient(pool, (client) =>
+          client.query<{ user_id: string | null; status: string }>(
+            `select p.user_id, s.status from principals p
+               join sessions s on s.workspace_id = p.workspace_id and s.on_behalf_of = p.id
+              where p.workspace_id = $1 and p.id = $2 and s.id = $3`,
+            [workspaceId, membership.principalId, session.rows[0]?.id],
+          ),
+        );
+        expect(after.rows).toEqual([{ user_id: source.id, status: 'active' }]);
+      });
     });
 
     // ---- platform settings -------------------------------------------------------------------------

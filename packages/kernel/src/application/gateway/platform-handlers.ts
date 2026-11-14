@@ -824,6 +824,16 @@ export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, 
       'only a user without a password can be merged — an API key must never take over a password-protected account',
     );
   }
+  // Legacy 708: the moved memberships would act for a disabled user with their sessions and
+  // Handles still valid (I-H2) — a disable revokes only what acts for the user when it happens.
+  // Read under the target's authority lock above, so a disable of the target either committed
+  // before (refused here) or waits for the merge and then revokes the moved memberships too.
+  if (target.status === 'disabled') {
+    throw new PlatformAdminError(
+      'user_disabled',
+      'the target user is disabled: the moved memberships would act for a disabled user — enable it first, or merge into another user',
+    );
+  }
   const targetWorkspaces = new Set(target.memberships.map((m) => m.workspaceId));
   const clash = source.memberships.find((m) => targetWorkspaces.has(m.workspaceId));
   if (clash) {
