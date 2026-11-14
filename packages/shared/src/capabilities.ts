@@ -3637,7 +3637,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ sourceUserId: platformUserId, targetUserId: platformUserId }).strict(),
     resultSchema: wire.UserWireSchema,
     description:
-      'Fold a user awaiting activation (no password) into an existing account: every membership Principal is re-pointed to the target user and the empty source row is deleted. Refused when the source has a password (an API key must never take over a password-protected account), when the target is disabled (`user_disabled`: the moved memberships would act for a disabled user — enable it first, or merge into another user), or when both hold a membership in the same workspace.',
+      'Fold a user awaiting activation (no password) into an existing account: every membership Principal is re-pointed to the target user and the empty source row is deleted. When the source is disabled, each of its memberships not removed acts again, for the target: one `platform.membership_restored` row each in the platform audit; every merge’s audit rows keep both logins. Refused when the source has a password (an API key must never take over a password-protected account), when the target is disabled (`user_disabled`: the moved memberships would act for a disabled user — enable it first, or merge into another user), or when both hold a membership in the same workspace.',
   },
   {
     name: 'set_user_budget',

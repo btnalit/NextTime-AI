@@ -496,6 +496,8 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'platform.llm_provider_models_probed',
   'user.identity_claimed',
   'principal.user_rebound',
+  // Legacy 719: `merge_user` of a disabled user, one row per membership that is usable again.
+  'platform.membership_restored',
   'gate_instance.manifest_confirmed',
   // S11 AA3c-1: an admin proposal's platform part, applied and rolled back.
   'gate_instance.created',

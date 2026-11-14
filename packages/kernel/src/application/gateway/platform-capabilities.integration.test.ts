@@ -1192,6 +1192,153 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(after.rows).toEqual([{ user_id: source.id, status: 'active' }]);
       });
+
+      // Legacy 719: a disabled source's memberships act again under the active target — one
+      // `platform.membership_restored` row each, found by either user and by the workspace; a
+      // removed membership moves as it is and gets none.
+      it('a disabled source: each membership usable again gets its own platform.membership_restored row; a removed one gets none', async () => {
+        const removedWorkspaceId = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query('insert into workspaces (id, name) values ($1, $2)', [
+            removedWorkspaceId,
+            `merge-removed-${removedWorkspaceId.slice(0, 8)}`,
+          ]),
+        );
+        const sourceLogin = `merge-dis-${randomUUID().slice(0, 8)}`;
+        const source = await createUser(pool, {
+          login: sourceLogin,
+          displayName: 'Disabled Source',
+        });
+        const restored = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId,
+          role: 'member',
+        });
+        const removed = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId: removedWorkspaceId,
+          role: 'member',
+        });
+        await callAsAdmin('remove_membership', {
+          userId: source.id,
+          workspaceId: removedWorkspaceId,
+        });
+        await callAsAdmin<UserWire>('set_user_status', { userId: source.id, status: 'disabled' });
+        const targetLogin = `merge-on-${randomUUID().slice(0, 8)}`;
+        const target = await createUser(pool, {
+          login: targetLogin,
+          displayName: 'Active Target',
+          password: PASSWORD,
+        });
+
+        const merged = await callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        expect(merged.status).toBe('active');
+        expect(
+          merged.memberships.map((m) => ({ principalId: m.principalId, disabled: m.disabled })),
+        ).toEqual(
+          expect.arrayContaining([
+            { principalId: restored.principalId, disabled: false },
+            { principalId: removed.principalId, disabled: true },
+          ]),
+        );
+
+        const rows = await withAdminClient(pool, (client) =>
+          client.query<{
+            workspace_id: string | null;
+            actor_user_id: string | null;
+            resource_type: string | null;
+            resource_id: string | null;
+            payload: Record<string, unknown>;
+          }>(
+            `select workspace_id, actor_user_id, resource_type, resource_id, payload
+               from audit_records
+              where action = 'platform.membership_restored'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(rows.rows).toHaveLength(1);
+        expect(rows.rows[0]).toMatchObject({
+          workspace_id: null,
+          actor_user_id: admin.id,
+          resource_type: 'principal',
+          resource_id: restored.principalId,
+          payload: {
+            channel: 'platform',
+            actorLogin: admin.login,
+            params: { workspaceId, sourceUserId: source.id, targetUserId: target.id },
+            // The source row is gone: its login still says who it was.
+            sourceLogin,
+            targetLogin,
+            reason: 'merged_from_disabled_user',
+            role: 'member',
+            workspaceStatus: 'active',
+          },
+        });
+
+        // The platform audit finds it by the target, by the (deleted) source and by the workspace.
+        for (const filter of [
+          { targetUserId: target.id },
+          { targetUserId: source.id },
+          { targetWorkspaceId: workspaceId },
+        ]) {
+          const page = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+            'platform_audit_query',
+            { ...filter, action: 'platform.membership_restored', limit: 50 },
+          );
+          expect(page.items.map((item) => item.resourceId)).toContain(restored.principalId);
+        }
+      });
+
+      it('an active source writes no platform.membership_restored row; the merge_user row keeps both logins', async () => {
+        const sourceLogin = `merge-act-${randomUUID().slice(0, 8)}`;
+        const source = await createUser(pool, { login: sourceLogin, displayName: 'Active Source' });
+        await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: source.id,
+          workspaceId,
+          role: 'member',
+        });
+        const targetLogin = `merge-act-dst-${randomUUID().slice(0, 8)}`;
+        const target = await createUser(pool, {
+          login: targetLogin,
+          displayName: 'Active Target Two',
+          password: PASSWORD,
+        });
+
+        await callAsAdmin<UserWire>('merge_user', {
+          sourceUserId: source.id,
+          targetUserId: target.id,
+        });
+        const rows = await withAdminClient(pool, (client) =>
+          client.query(
+            `select 1 from audit_records
+              where action = 'platform.membership_restored'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(rows.rowCount).toBe(0);
+        // Every merge deletes its source: the merge_user row says who it was by login.
+        const mergeRow = await withAdminClient(pool, (client) =>
+          client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'merge_user'
+                and payload->'params'->>'sourceUserId' = $1`,
+            [source.id],
+          ),
+        );
+        expect(mergeRow.rows).toHaveLength(1);
+        expect(mergeRow.rows[0]?.payload).toMatchObject({
+          channel: 'platform',
+          actorLogin: admin.login,
+          params: { sourceUserId: source.id, targetUserId: target.id },
+          sourceLogin,
+          targetLogin,
+        });
+      });
     });
 
     // ---- platform settings -------------------------------------------------------------------------

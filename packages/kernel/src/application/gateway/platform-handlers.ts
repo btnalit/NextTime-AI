@@ -802,7 +802,12 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   };
 };
 
-export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+export const mergeUserHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
   const input = params as { sourceUserId: string; targetUserId: string };
   if (input.sourceUserId === input.targetUserId) {
     throw new PlatformAdminError('already_claimed', 'source and target are the same user');
@@ -848,7 +853,48 @@ export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, 
   ]);
   await client.query('delete from user_sessions where user_id = $1', [source.id]);
   await client.query('delete from users where id = $1', [source.id]);
-  return { result: await loadUser(client, target.id), resourceType: 'user', resourceId: target.id };
+  // Legacy 719: disabling a user leaves its memberships as they are (it revokes their sessions,
+  // Handles and API keys); what kept them unusable was the user's status. Moved onto the active
+  // target they act again, with no credential of the source's back: each one gets its own row,
+  // like an enable would, so the platform audit says when, for whom and by whom it came back.
+  // A removed membership (a disabled Principal) moves as it is and stays removed.
+  if (source.status === 'disabled') {
+    const acting = actingUser(context);
+    for (const membership of source.memberships.filter((m) => !m.disabled)) {
+      await writeAudit(client, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        actorUserId: acting.id,
+        action: 'platform.membership_restored',
+        resourceType: 'principal',
+        resourceId: membership.principalId,
+        payload: {
+          channel: 'platform',
+          actorLogin: acting.login,
+          // `params` so `platform_audit_query` finds the row by either user and by workspace.
+          params: {
+            workspaceId: membership.workspaceId,
+            sourceUserId: source.id,
+            targetUserId: target.id,
+          },
+          // The source row is deleted above: its login is what still says who it was (as
+          // `platform.user_purged` keeps the purged user's).
+          sourceLogin: source.login,
+          targetLogin: target.login,
+          reason: 'merged_from_disabled_user',
+          role: membership.role,
+          workspaceStatus: membership.workspaceStatus,
+        },
+      });
+    }
+  }
+  return {
+    result: await loadUser(client, target.id),
+    resourceType: 'user',
+    resourceId: target.id,
+    // On the `merge_user` row too, for every merge: `params.sourceUserId` names a deleted user.
+    auditPayload: { sourceLogin: source.login, targetLogin: target.login },
+  };
 };
 
 // -------------------------------------------------------------------------------------------

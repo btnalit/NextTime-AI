@@ -28,6 +28,7 @@ const OTHER_AUDIT_ACTIONS = [
   'workspace.created',
   'user.identity_claimed',
   'principal.user_rebound',
+  'platform.membership_restored',
   'connector.entry_handles_revoked',
   'connector.created',
   'self_connection.entry_handles_revoked',
