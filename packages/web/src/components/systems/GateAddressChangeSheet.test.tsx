@@ -174,6 +174,10 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
 
     expect(screen.getByRole('dialog', { name: '更换「notes」的地址' })).toBeTruthy();
     expect((await screen.findByTestId('connection-secret-value')).textContent).toBe(secretNo(1));
+    // Legacy 711 (UX acceptance of #1176): the 24 hours are said where the secret is shown.
+    expect(screen.getByTestId('connection-secret-expiry').textContent).toBe(
+      '24 小时内用它提交更换申请；过期了，关掉「更换地址」再打开会签出一把新的。',
+    );
     expect(screen.getByTestId('gate-address-change-current').textContent).toContain(FROM);
     // Nothing to preview until there is an address, and nothing to propose until a preview.
     expect(previewButton().disabled).toBe(true);

@@ -28,8 +28,9 @@
 -- Who may write what (RLS, forced; workspace transactions only — nothing on the platform plane
 -- issues or binds a connection secret): a workspace reads its own rows, inserts its own, consumes
 -- its own unconsumed rows before they expire, and deletes its own rows that expired unconsumed.
--- The trigger keeps the rest: the row's own fields never change, a consumed row never changes, and
--- a row is consumed only before `expires_at`. The workspace purge runs on the superuser login role
+-- The trigger keeps the rest: a row is never issued in the future (so its 24 hours count from no
+-- later than the write), the row's own fields never change, a consumed row never changes, and a
+-- row is consumed only before `expires_at`. The workspace purge runs on the superuser login role
 -- and is unaffected.
 --
 -- Pure addition: code without this migration never reads or writes the table. Rolling back:
@@ -76,6 +77,15 @@ create or replace function connection_secret_issuances_guard() returns trigger
   language plpgsql
 as $$
 begin
+  if tg_op = 'INSERT' then
+    -- The check bounds `expires_at` by `issued_at`; this bounds `issued_at` by the write, so no row
+    -- outlives 24 hours from when it was written. Back-dating only shortens a row's life.
+    if new.issued_at > now() then
+      raise exception 'connection_secret_issuances: salt % cannot be issued in the future (legacy 711)',
+        new.salt;
+    end if;
+    return new;
+  end if;
   if new.workspace_id is distinct from old.workspace_id
      or new.salt is distinct from old.salt
      or new.issued_via is distinct from old.issued_via
@@ -101,7 +111,7 @@ $$;
 
 drop trigger if exists connection_secret_issuances_guard on connection_secret_issuances;
 create trigger connection_secret_issuances_guard
-  before update on connection_secret_issuances
+  before insert or update on connection_secret_issuances
   for each row execute function connection_secret_issuances_guard();
 
 alter table connection_secret_issuances enable row level security;

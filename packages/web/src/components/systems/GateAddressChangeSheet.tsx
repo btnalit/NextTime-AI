@@ -309,7 +309,11 @@ function ProposeGateAddressChange({
         ) : secret === null ? (
           <SkeletonRows count={1} label={t('正在生成连接密钥…', 'Issuing a connection secret')} />
         ) : (
-          <ConnectionSecretReveal secret={secret} testId="gate-address-change-secret-value" />
+          <ConnectionSecretReveal
+            secret={secret}
+            mintedFor="move"
+            testId="gate-address-change-secret-value"
+          />
         )}
       </section>
 

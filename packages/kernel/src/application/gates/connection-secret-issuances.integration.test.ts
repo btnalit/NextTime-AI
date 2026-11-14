@@ -157,7 +157,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(/expired at .* cannot be consumed/);
     });
 
-    it('the trigger keeps a consumed row and an issued row’s own fields as they are; the check bounds the lifetime at 24 hours', async () => {
+    it('the trigger keeps a consumed row and an issued row’s own fields as they are, and dates no row ahead of its write; the check bounds the lifetime at 24 hours', async () => {
       const ws = workspaces[0] as { id: string; ownerId: string };
       const consumed = newSalt();
       await asApp(0, async (client) => {
@@ -193,6 +193,18 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).rejects.toThrow(/check constraint/);
+      // Nor does a row dated ahead of its write: the 24 hours count from no later than the insert.
+      await expect(
+        asApp(0, (client) =>
+          client.query(
+            `insert into connection_secret_issuances
+               (workspace_id, salt, issued_via, issued_by, issued_at, expires_at)
+             values ($1, $2, 'mint_connection_secret', $3,
+                     now() + interval '1 hour', now() + interval '25 hours')`,
+            [ws.id, newSalt(), ws.ownerId],
+          ),
+        ),
+      ).rejects.toThrow(/cannot be issued in the future/);
       // A minted row is never consumed by a rotation, nor a rotation's by anything else.
       await expect(
         asApp(0, (client) =>

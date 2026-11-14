@@ -416,6 +416,10 @@ describe('CompleteConnectionForm', () => {
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
     await secretShown();
     expect(screen.getByTestId('connection-secret-value').textContent).toBe(SECRET);
+    // Legacy 711 (UX acceptance of #1176): the 24 hours are said before a refusal does.
+    expect(screen.getByTestId('connection-secret-expiry').textContent).toContain(
+      '24 小时内用它注册这个门',
+    );
     expect(screen.getByRole('button', { name: '复制连接密钥' })).toBeTruthy();
     expect(vi.mocked(http.call).mock.calls.map(([name]) => name)).toEqual([
       'mint_connection_secret',
@@ -438,6 +442,74 @@ describe('CompleteConnectionForm', () => {
       true,
     );
     expect(createCalls(http)).toBe(0);
+  });
+
+  // Legacy 711 (UX acceptance of #1176): a secret refused as expired or used is the platform's
+  // refusal, and the banner mints another in place — the form has no other way to get one.
+  it.each([
+    ['connection_secret_expired', '这把连接密钥已经过期'],
+    ['connection_secret_in_use', '这把连接密钥已经用过'],
+  ])(
+    'a %s refusal says the platform refused it, and the banner mints another secret in place',
+    async (code, lead) => {
+      const second = `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`;
+      let mints = 0;
+      const sent: unknown[] = [];
+      const http: CapabilityCaller = {
+        call: vi.fn(async (name: string, params: unknown) => {
+          if (name === 'mint_connection_secret') {
+            mints += 1;
+            return { connectionSecret: mints === 1 ? SECRET : second };
+          }
+          sent.push((params as { connectionSecret: string }).connectionSecret);
+          if (sent.length === 1) {
+            throw new HttpError('capability_error', `create_connection: ${code}`, code);
+          }
+          return { gatekeeperId: 'gk-1', importedOperationNames: [], connectionRequestId: null };
+        }) as CapabilityCaller['call'],
+      };
+      const onDone = vi.fn();
+      render(<CompleteConnectionForm http={http} onDone={onDone} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标/), {
+        target: { value: 'https://inventory.example.internal' },
+      });
+      fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+
+      const banner = await screen.findByRole('alert');
+      expect(banner.textContent).toContain('平台没有接受这次连接');
+      expect(banner.textContent).not.toContain('门未接受这次连接');
+      expect(banner.textContent).toContain(lead);
+      expect(banner.textContent).toContain('平台没有调用门');
+      expect(banner.textContent).toContain('点「生成新的连接密钥」');
+
+      fireEvent.click(screen.getByTestId('cc-regenerate-secret'));
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(document.activeElement).toBe(screen.getByTestId('cc-connection-secret'));
+      await waitFor(() =>
+        expect(screen.getByTestId('connection-secret-value').textContent).toBe(second),
+      );
+      // What the owner typed stays; the next registration carries the new secret.
+      expect((screen.getByLabelText(/门端点/) as HTMLInputElement).value).toBe('http://gate:8080');
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(sent).toEqual([SECRET, second]);
+    },
+  );
+
+  it('other refusals keep the gate’s title and offer no new secret', async () => {
+    const http = httpWith(async () => {
+      throw new HttpError('capability_error', 'manifest fetch failed', 'manifest_fetch_failed');
+    });
+    render(
+      <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('门未接受这次连接');
+    expect(screen.queryByTestId('cc-regenerate-secret')).toBeNull();
   });
 
   // R-27: an endpoint aimed at the platform's own services is refused on the field it names.
