@@ -23,6 +23,8 @@ import {
   requirePublishedWorkerDefinition,
   validateWorkerDefinitionContent,
 } from './definitions.js';
+import { discardDraft } from './draft-lifecycle.js';
+import { FamilyDraftPendingError } from './family-version.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL — same pattern as
@@ -218,30 +220,38 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(row.publishedBy).toBeNull();
       });
 
-      it('a second propose under the same definitionId produces version 2', async () => {
+      it('legacy 680: a next version over the proposer’s own pending draft is refused; once it is published, anyone extends the family', async () => {
         const first = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
             origin: 'human',
             kind: 'worker',
-            definition: VALID_WORKER_DEFINITION,
+            definition: { ...VALID_WORKER_DEFINITION, name: 'Runner' },
           }),
         );
-        // The proposer's own draft family, then a published one anyone may extend.
-        const own = await inTx(builderId, (client) =>
+        // The proposer's own draft is pending: no second one beside it, and nothing written.
+        const refused = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
             origin: 'human',
             definitionId: first.id,
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
-        );
+        ).catch((caught: unknown) => caught);
+        expect(refused).toBeInstanceOf(FamilyDraftPendingError);
+        expect(refused).toMatchObject({
+          code: 'draft_pending',
+          kind: 'worker_definition',
+          familyId: first.id,
+          draftVersion: 1,
+        });
+        expect((refused as Error).message).toContain(`"Runner" ${first.id}@1 is your draft`);
         await inTx(ownerId, (client) =>
           publishWorkerDefinition(client, workspaceId, ownerId, {
             definitionId: first.id,
             version: 1,
           }),
         );
-        const third = await inTx(otherBuilderId, (client) =>
+        const second = await inTx(otherBuilderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
             origin: 'human',
             definitionId: first.id,
@@ -249,9 +259,95 @@ describe.runIf(DATABASE_URL !== undefined)(
             definition: VALID_WORKER_DEFINITION,
           }),
         );
+        // Another principal's pending draft is not there for this proposer (I16), and a
+        // WorkerDefinition is published by its version: theirs does not stop this one.
+        const third = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
+            definitionId: first.id,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        expect(second).toMatchObject({ id: first.id, version: 2, proposedBy: otherBuilderId });
+        expect(third).toMatchObject({ id: first.id, version: 3, proposedBy: builderId });
+        // Discarding the pending draft frees the proposer's next version.
+        await expect(
+          inTx(otherBuilderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+              origin: 'human',
+              definitionId: first.id,
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          ),
+        ).rejects.toMatchObject({ code: 'draft_pending', draftVersion: 2 });
+        await inTx(otherBuilderId, (client) =>
+          discardDraft(client, workspaceId, otherBuilderId, {
+            kind: 'worker_definition',
+            id: first.id,
+            version: 2,
+          }),
+        );
+        const fourth = await inTx(otherBuilderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            origin: 'human',
+            definitionId: first.id,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        expect(fourth).toMatchObject({ id: first.id, version: 4, proposedBy: otherBuilderId });
+      });
 
-        expect(own).toMatchObject({ id: first.id, version: 2, proposedBy: builderId });
-        expect(third).toMatchObject({ id: first.id, version: 3, proposedBy: otherBuilderId });
+      it('legacy 680: a pack’s install (published in the same transaction) goes in beside the installer’s own pending draft', async () => {
+        const derived = randomUUID();
+        await inTx(ownerId, async (client) => {
+          const installed = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
+            definitionId: derived,
+            onMissingFamily: 'start',
+            ownPendingDraft: 'beside',
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          });
+          await publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: derived,
+            version: installed.version,
+          });
+        });
+        const own = await inTx(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
+            definitionId: derived,
+            kind: 'worker',
+            definition: { ...VALID_WORKER_DEFINITION, systemPrompt: 'Edited by hand.' },
+          }),
+        );
+        const upgraded = await inTx(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
+            definitionId: derived,
+            onMissingFamily: 'start',
+            ownPendingDraft: 'beside',
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        expect(own).toMatchObject({ version: 2, status: 'draft' });
+        expect(upgraded).toMatchObject({ version: 3, status: 'draft' });
+        // Without it, the same call is refused.
+        await expect(
+          inTx(ownerId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, ownerId, {
+              origin: 'human',
+              definitionId: derived,
+              onMissingFamily: 'start',
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          ),
+        ).rejects.toBeInstanceOf(FamilyDraftPendingError);
       });
 
       it('legacy 492: a family only someone else has drafted is not found, as an id nothing has', async () => {

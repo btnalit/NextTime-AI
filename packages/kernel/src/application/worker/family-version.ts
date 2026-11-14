@@ -25,19 +25,23 @@ import type { PoolClient } from 'pg';
  * the pending draft reveals nothing the caller could not read.
  */
 
-export type FamilyKind = 'skill' | 'procedure';
+/** `worker_definition` (legacy 680): a WorkerDefinition family's pending draft is the
+ *  proposer's own — see `application/worker/definitions.ts`'s `proposeWorkerDefinition`. */
+export type FamilyKind = 'skill' | 'procedure' | 'worker_definition';
 
-/** The family's latest version is a draft: publish, discard or reject it before proposing another. */
+/** The family's latest version is a draft: publish, discard or reject it before proposing another.
+ *  For a WorkerDefinition: the caller's own draft of the family — publish or discard it first. */
 export class FamilyDraftPendingError extends Error {
   readonly code = 'draft_pending' as const;
   readonly kind: FamilyKind;
   readonly familyId: string;
   readonly draftVersion: number;
   constructor(kind: FamilyKind, familyId: string, draftVersion: number, draftName?: string) {
-    const label = kind === 'skill' ? 'Skill' : 'Procedure';
     const named = draftName === undefined ? '' : ` "${draftName}"`;
     super(
-      `${label}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
+      kind === 'worker_definition'
+        ? `WorkerDefinition${named} ${familyId}@${draftVersion} is your draft that has not been published or discarded — a family holds one pending draft of yours at a time, so the next version would sit beside it. Publish it, or discard it (discard_draft), then propose the next version. Nothing was proposed`
+        : `${kind === 'skill' ? 'Skill' : 'Procedure'}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
     );
     this.name = 'FamilyDraftPendingError';
     this.kind = kind;

@@ -177,10 +177,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         otherWorkspaceId,
         otherOwnerId,
       );
+      // A family of its own: the owner's draft above is pending, and a family holds one pending
+      // draft of each proposer (legacy 680).
       const withForeign = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
           origin: 'human',
-          definitionId: draft.id,
           kind: 'worker',
           definition: {
             ...draft.definition,

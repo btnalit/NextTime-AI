@@ -21,6 +21,7 @@ import {
   assertWorkerDefinitionReferencesResolve,
 } from './definition-references.js';
 import { DERIVED_FROM_SQL } from './derivations.js';
+import { FamilyDraftPendingError } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -217,6 +218,12 @@ export interface ProposeWorkerDefinitionInput {
    *  install passes it (`application/change-plan/family-item.ts` — the pack derives the id), and
    *  it judges the family by every version, the platform installing rather than a person. */
   readonly onMissingFamily?: 'not_found' | 'start';
+  /** What the proposer's own pending draft of the family means (legacy 680). `'refuse'`, the
+   *  default: `FamilyDraftPendingError` (409 `draft_pending`). `'beside'`: the version goes in
+   *  beside it — only for a caller that publishes the version in the same transaction, so it never
+   *  stands as a second pending draft of theirs: a pack's install (`application/change-plan/
+   *  family-item.ts`), which leaves the installer's own draft as it was. */
+  readonly ownPendingDraft?: 'refuse' | 'beside';
   readonly kind: WorkerDefinitionKind;
   readonly definition: Record<string, unknown>;
   /** S11 AA3a (legacy 293): who writes this version, from the call channel (a Handle → `agent`;
@@ -269,7 +276,15 @@ export async function workerDefinitionFamilyKind(
  *  published or deprecated version, or a draft of their own. A family only another principal has
  *  drafted is not there for them (I16), so it answers exactly as an id nothing has: not found, its
  *  kind never named and no version added to it. A family's kind stays one across proposers: a
- *  family someone sees has a version they see, and every version of it has its kind. */
+ *  family someone sees has a version they see, and every version of it has its kind.
+ *
+ *  Legacy 680: a family holds at most one pending draft of each proposer — a next version over
+ *  the proposer's own draft is refused (`FamilyDraftPendingError`, 409 `draft_pending`): publish
+ *  or discard it first, as for a Skill or a Procedure. Only their own counts: another principal's
+ *  draft is not there for them (I16 — a WorkerDefinition draft is its proposer's alone, unlike a
+ *  Skill's, which builders and the owner see), and a WorkerDefinition is published by its version,
+ *  not as its family's latest, so a draft beside someone else's takes nothing's place. Read under
+ *  `lockWorkerRegistry`, so two proposals of one person cannot both pass. */
 export async function proposeWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -277,6 +292,7 @@ export async function proposeWorkerDefinition(
   input: ProposeWorkerDefinitionInput,
 ): Promise<WorkerDefinitionRow> {
   if (input.definitionId) {
+    await lockWorkerRegistry(client, workspaceId);
     const starts = input.onMissingFamily === 'start';
     const priorKind = await workerDefinitionFamilyKind(
       client,
@@ -289,6 +305,25 @@ export async function proposeWorkerDefinition(
     }
     if (priorKind && priorKind !== input.kind) {
       throw new WorkerDefinitionKindMismatchError(input.definitionId, priorKind, input.kind);
+    }
+    const pending =
+      input.ownPendingDraft === 'beside'
+        ? null
+        : await client.query<{ version: number; name: string | null }>(
+            `select version, definition ->> 'name' as name from worker_definitions
+              where workspace_id = $1 and id = $2 and status = 'draft' and proposed_by = $3
+              order by version desc
+              limit 1`,
+            [workspaceId, input.definitionId, proposerPrincipalId],
+          );
+    const own = pending?.rows[0];
+    if (own) {
+      throw new FamilyDraftPendingError(
+        'worker_definition',
+        input.definitionId,
+        own.version,
+        own.name ?? undefined,
+      );
     }
   }
 

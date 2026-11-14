@@ -4176,6 +4176,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         http={http}
         newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
         unresolved={editor.kind === 'copy' ? editor.unresolved : undefined}
+        onShowPendingDraft={
+          editor.kind === 'copy'
+            ? (draft) => {
+                // Legacy 680: the caller's own pending draft of this family — reload (it may be
+                // newer than the list) and show it, focus on its title.
+                refresh();
+                setFocusKey(workerKey(draft));
+                selectRow(workerKey(draft));
+              }
+            : undefined
+        }
         initialForm={
           editor.kind === 'template' && capabilityNames.state.status === 'ready'
             ? opsRunnerTemplateForm(capabilityNames.state.data.items, grantedGateIds)
@@ -4587,6 +4598,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               refresh();
               setFocusKey(workerKey(upgrade.draft));
               selectRow(workerKey(upgrade.draft));
+            }}
+            onShowDraft={(draft) => {
+              refresh();
+              setFocusKey(workerKey(draft));
+              selectRow(workerKey(draft));
             }}
           />
         ) : null

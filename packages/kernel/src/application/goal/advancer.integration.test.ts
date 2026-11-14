@@ -5482,6 +5482,34 @@ describe.runIf(DATABASE_URL !== undefined)(
           decisionId: confirmed.decisionId,
           overriddenChecks: [],
         });
+        // Legacy 682: a retry landing after the advance completed the run on this confirmation is
+        // the same decision, as it was while verifying.
+        expect(await confirmAs(goalRunId, requester)).toEqual({
+          status: 'completed',
+          changed: false,
+          decisionId: confirmed.decisionId,
+        });
+      });
+
+      it('legacy 682: a confirmation the run no longer ended on is not given again — the requester paused it and declared the outcome', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester);
+        const confirmed = await confirmAs(goalRunId, requester);
+        expect(confirmed.changed).toBe(true);
+        await asRequester(requester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        const ended = await endAs(goalRunId, requester, 'achieved', 'I checked it again');
+        expect(ended.decisionId).not.toBe(confirmed.decisionId);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: ended.decisionId,
+        });
+        await expect(confirmAs(goalRunId, requester)).rejects.toThrow(
+          /is completed; a confirmation is given while it is verifying/,
+        );
       });
 
       it('I-G5: what the step’s Worker or the entry agent reports gives the goal no outcome — the Task’s agent_reported achieved neither passes a check nor completes the run', async () => {
@@ -5528,6 +5556,28 @@ describe.runIf(DATABASE_URL !== undefined)(
           { checkKey: 'report', status: 'passed', decisionId: confirmed.decisionId },
           { checkKey: 'up', status: 'passed' },
         ]);
+        // Legacy 682: achieved by check, which recorded no Decision — the retry still names the
+        // requester's confirmation, by its key too; a key the round never asked is refused.
+        for (const checkKey of [undefined, 'report']) {
+          expect(
+            await asRequester(requester, (client) =>
+              confirmGoalAcceptance(client, workspaceId, {
+                goalRunId,
+                actor: by(requester),
+                ...(checkKey ? { checkKey } : {}),
+              }),
+            ),
+          ).toEqual({ status: 'completed', changed: false, decisionId: confirmed.decisionId });
+        }
+        await expect(
+          asRequester(requester, (client) =>
+            confirmGoalAcceptance(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              checkKey: 'up',
+            }),
+          ),
+        ).rejects.toThrow(/is completed; a confirmation is given while it is verifying/);
       });
 
       it('S6: an observation that never satisfies its predicate is tried again with backoff, each one recorded; at the last the run pauses needs_decision with the evidence, never achieved — and the requester ends it as not achieved', async () => {

@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 59
-  repeat_unclear: 1
+  repeat_unclear: 0
 capabilities:
   add_eval_case:
     console: required
@@ -139,7 +139,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 682"  # a retry after the advancer completed the run is 409 (legacy 682)
+    repeat: idempotent  # also once the advance completed the run on that confirmation (legacy 682)
   connect_gatekeeper:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
@@ -708,7 +708,7 @@ capabilities:
     console: required
     agents: [entry, admin]
     e2e: observed
-    repeat: creates  # without an id; with a published family's id: repeats (legacy 680) (repeat-call recipe)
+    repeat: creates  # without an id; with a family's id over the caller's own draft: "conflict: draft_pending" (legacy 680, repeat-call recipe)
   publish_manifest:
     console: required
     agents: []

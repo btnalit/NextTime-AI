@@ -328,6 +328,51 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect.objectContaining({ templateDigest: before.template.digest, created: false }),
         ]);
 
+        // Legacy 680: a family holds one pending draft of each proposer. The builder's hand-edited
+        // next version beside their template draft is refused, naming it…
+        const beside = await refusal(
+          dispatchCapability({ pool }, human(builderId, 'builder'), 'propose_worker_definition', {
+            definitionId: v1.id,
+            kind: 'entry',
+            definition: { ...upgrade.draft.definition, egressDeny: ['other.example'] },
+          }),
+        );
+        expect(beside).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: upgrade.draft.version },
+        });
+        // …and the template's draft beside the owner's own hand-edited one is refused, naming
+        // theirs; the builder's draft does not count for the owner (I16).
+        const handEdited = await dispatchCapability(
+          { pool },
+          human(ownerId, 'owner'),
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            kind: 'entry',
+            definition: { ...v1.definition, egressDeny: ['owner.example'] },
+          },
+        );
+        const handEditedVersion = (handEdited as { version: number }).version;
+        expect(handEditedVersion).toBe(upgrade.draft.version + 1);
+        const overOwn = await refusal(
+          dispatchCapability({ pool }, human(ownerId, 'owner'), 'propose_entry_template_upgrade', {
+            templateDigest: before.template.digest,
+            basedOn,
+          }),
+        );
+        expect(overOwn).toMatchObject({
+          status: 409,
+          code: 'draft_pending',
+          details: { familyId: v1.id, draftVersion: handEditedVersion },
+        });
+        await dispatchCapability({ pool }, human(ownerId, 'owner'), 'discard_draft', {
+          kind: 'worker_definition',
+          id: v1.id,
+          version: handEditedVersion,
+        });
+
         // Nothing runs differently until it is published — by the owner (the live version is
         // theirs, so the builder who proposed the draft cannot supersede it).
         expect((await status()).current?.version).toBe(own.version);

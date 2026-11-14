@@ -43,6 +43,7 @@ import { sameNameIds } from '../../lib/same-name.js';
 import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
+import { workerDraftPendingOf, workerDraftPendingText } from '../../lib/worker-draft-pending.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { ModelHealthNote, ModelOption, withModelHealthNote } from '../kit/model-health.js';
 import { SameNameId } from '../kit/same-name-id.js';
@@ -69,6 +70,9 @@ export interface WorkerDefinitionEditorProps {
    *  `opsRunnerTemplateForm()`) instead of starting blank. Ignored when `newVersionOf` is given —
    *  editing an existing family always prefills from that row, never from a template. */
   readonly initialForm?: WorkerDefinitionForm;
+  /** With `newVersionOf` (legacy 680): when the kernel refuses because the caller's own draft of
+   *  the family is still pending (409 `draft_pending`), the error offers to show that draft. */
+  readonly onShowPendingDraft?: (draft: { readonly id: string; readonly version: number }) => void;
   /** `list_models` rows for the model dropdown (optional — still loading, or unavailable). */
   readonly models?: readonly ModelRow[];
   /** `list_capability_names` rows for the capabilities picker (optional). */
@@ -219,6 +223,7 @@ export function WorkerDefinitionEditor({
   newVersionOf,
   unresolved,
   initialForm,
+  onShowPendingDraft,
   models,
   capabilityNames,
   gatekeepers,
@@ -334,6 +339,8 @@ export function WorkerDefinitionEditor({
       setBusy(false);
     }
   }
+
+  const pendingDraft = workerDraftPendingOf(error);
 
   if (proposed) {
     return (
@@ -748,6 +755,19 @@ export function WorkerDefinitionEditor({
           <ErrorBanner
             error={error}
             title={t('无法创建草稿', 'Could not propose the draft')}
+            overrides={{ draft_pending: workerDraftPendingText(error, t) }}
+            action={
+              newVersionOf && onShowPendingDraft && pendingDraft ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={() => onShowPendingDraft(pendingDraft)}
+                  data-testid="worker-show-pending-draft"
+                >
+                  {t('查看那份草稿', 'Show that draft')}
+                </Button>
+              ) : undefined
+            }
             testId="worker-editor-error"
           />
         </div>

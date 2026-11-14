@@ -535,6 +535,64 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
     expect((await screen.findAllByTestId('wd-egress-suggestion')).length).toBe(1);
   });
+
+  it('legacy 680: a next version refused over the caller’s own pending draft says so and offers to show that draft', async () => {
+    const { caller } = http({
+      propose_worker_definition: () => {
+        throw new HttpError('capability_error', 'kernel text', 'draft_pending', {
+          familyId: 'wd-d',
+          draftVersion: 3,
+        });
+      },
+    });
+    const onShowPendingDraft = vi.fn();
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 2,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'P' },
+        }}
+        onShowPendingDraft={onShowPendingDraft}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/你在这个 Worker 定义下已经有一份草稿 v3/);
+    expect(banner.textContent).toMatch(/先发布或丢弃那份草稿/);
+    // Not the Skill sentence (a Skill's publish takes the latest version).
+    expect(banner.textContent).not.toMatch(/发布总是取最新版本/);
+    fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
+    expect(onShowPendingDraft).toHaveBeenCalledWith({ id: 'wd-d', version: 3 });
+  });
+
+  it('legacy 680: without a family (a new draft) no draft is offered', async () => {
+    const { caller } = http({
+      propose_worker_definition: () => {
+        throw new HttpError('capability_error', 'kernel text', 'draft_pending', {
+          familyId: 'wd-d',
+          draftVersion: 3,
+        });
+      },
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        onShowPendingDraft={vi.fn()}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'P' } });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const banner = await screen.findByTestId('worker-editor-error');
+    expect(within(banner).queryByTestId('worker-show-pending-draft')).toBeNull();
+  });
 });
 
 function instance(

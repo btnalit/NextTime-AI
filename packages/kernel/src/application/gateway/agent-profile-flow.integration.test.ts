@@ -779,6 +779,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(second.memberCanEditProfile).toBe(false);
       });
 
+      // Review of #1214 (legacy 679): with no row yet, the compiled-in defaults given as they are
+      // still write one — the owner set the policy, so it records who and when.
+      it('set_agent_policy: the defaults as they are, with no row yet, still write a row', async () => {
+        const policyWs = await adminInsertWorkspace('agent-profile-policy-workspace-first-default');
+        const policyOwnerId = await adminInsertPrincipal(policyWs, 'owner', 'PolicyOwnerFirst');
+        const owner = humanCaller(policyWs, policyOwnerId, 'owner');
+
+        const first = (await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          memberCanEditProfile: true,
+        })) as WireAgentPolicy;
+        expect(first.memberCanEditProfile).toBe(true);
+        expect(first.updatedBy).toBe(policyOwnerId);
+        expect(first.updatedAt).not.toBeNull();
+        const read = (await dispatchCapability(
+          { pool },
+          owner,
+          'get_agent_policy',
+          {},
+        )) as WireAgentPolicy;
+        expect(read.updatedAt).toBe(first.updatedAt);
+        // The same again: nothing written, so the row keeps its time.
+        const again = (await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          memberCanEditProfile: true,
+        })) as WireAgentPolicy;
+        expect(again.updatedAt).toBe(first.updatedAt);
+      });
+
       it('set_agent_policy: a non-owner is refused at the registry level (403, minRole: owner)', async () => {
         const policyWs = await adminInsertWorkspace('agent-profile-policy-workspace-nonowner');
         const memberId = await adminInsertPrincipal(policyWs, 'member', 'NonOwner');
@@ -843,6 +870,51 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(ownerRow.rows[0]?.revoked_at).toBeNull(); // the owner's own Handle is untouched
       });
+    });
+
+    // Review of #1214 (legacy 679): a save that changes any one stored field is a change — it
+    // writes and revokes; the same save again writes nothing and revokes nothing.
+    describe('set_agent_profile — each excluded list on its own is a change (legacy 679)', () => {
+      for (const field of [
+        'excludedSkills',
+        'excludedGatekeepers',
+        'excludedWorkerDefinitions',
+      ] as const) {
+        it(`${field} alone: written and the entry Handle revoked; the same again revokes nothing`, async () => {
+          const memberId = await adminInsertPrincipal(workspaceId, 'member', `Only-${field}`);
+          const member = humanCaller(workspaceId, memberId, 'member');
+          await dispatchCapability({ pool }, member, 'set_agent_profile', {
+            promptAddendum: 'base',
+          });
+          const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+            crv: 'Ed25519',
+            extractable: true,
+          });
+          const revokedAt = async (jti: string) =>
+            (
+              await pool.query<{ revoked_at: Date | null }>(
+                'select revoked_at from capability_handles where jti = $1',
+                [jti],
+              )
+            ).rows[0]?.revoked_at;
+          const values = [randomUUID()];
+
+          const first = await issueEntryHandle(workspaceId, memberId, 'member', keyPair);
+          await dispatchCapability({ pool }, member, 'set_agent_profile', { [field]: values });
+          expect(await revokedAt(first.jti)).not.toBeNull();
+          const stored = (await dispatchCapability(
+            { pool },
+            member,
+            'get_agent_profile',
+            {},
+          )) as WireAgentProfile;
+          expect(stored[field]).toEqual(values);
+
+          const second = await issueEntryHandle(workspaceId, memberId, 'member', keyPair);
+          await dispatchCapability({ pool }, member, 'set_agent_profile', { [field]: values });
+          expect(await revokedAt(second.jti)).toBeNull();
+        });
+      }
     });
 
     describe('set_agent_policy — change propagation (R-37 / D-20)', () => {

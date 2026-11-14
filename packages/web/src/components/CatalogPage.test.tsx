@@ -3093,6 +3093,53 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
   });
 
+  it('Workers (legacy 680): a next version refused over the caller’s own pending draft offers that draft, and showing it opens it', async () => {
+    const published = {
+      id: 'wd-1',
+      version: 2,
+      kind: 'worker',
+      status: 'published',
+      definition: { name: 'Runner', systemPrompt: 'Run.' },
+    };
+    const draft = {
+      ...published,
+      version: 3,
+      status: 'draft',
+      definition: { name: 'Runner', systemPrompt: 'Run, then check.' },
+    };
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+          ? [published, draft]
+          : [published],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'kernel text', 'draft_pending', {
+            familyId: 'wd-1',
+            draftVersion: 3,
+          }),
+        ),
+    });
+    renderPage(http, 'workers');
+    const rows = await screen.findAllByTestId('catalog-row');
+    const publishedRow = rows.find((row) => !row.textContent?.includes('草稿')) ?? rows[0];
+    const detail = await selectRow(publishedRow as HTMLElement);
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    const banner = await within(drawer).findByTestId('worker-editor-error');
+    expect(banner.textContent).toMatch(/你在这个 Worker 定义下已经有一份草稿 v3/);
+    fireEvent.click(within(banner).getByTestId('worker-show-pending-draft'));
+    await waitFor(() => expect(screen.queryByTestId('worker-editor-drawer')).toBeNull());
+    const shown = await screen.findByTestId('catalog-detail');
+    await waitFor(() => expect(shown.textContent).toContain('Run, then check.'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
+    );
+  });
+
   it('at a narrow width, a half-filled Procedure editor asks before Escape or 取消 drops it (legacy 497)', async () => {
     vi.stubGlobal(
       'matchMedia',

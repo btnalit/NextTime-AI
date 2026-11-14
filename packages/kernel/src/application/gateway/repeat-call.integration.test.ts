@@ -19,9 +19,19 @@ import {
   type GatekeeperClient,
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
-import type { ResidentInventoryEntry } from '../../adapters/supervisor-client/index.js';
+import type {
+  ResidentInventoryEntry,
+  TaskSpawnInput,
+  TaskSpawnOutcome,
+  TaskSupervisorClientPort,
+  TaskSupervisorStatus,
+} from '../../adapters/supervisor-client/index.js';
 import { ApprovalDrainer, requestAction } from '../../governance/approval/index.js';
-import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
+import {
+  HANDLE_SIGNING_ALG,
+  generateEphemeralHandleKeyPair,
+  issueHandle,
+} from '../../governance/capability/index.js';
 import {
   getPublishedOperation,
   importManifest,
@@ -40,10 +50,11 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { issueAdminAgentHandle } from '../admin-agent/identity.js';
 import { manifestDigest, upsertAnnouncement } from '../gates/index.js';
+import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
-import { getOrCreateGoalPlannerPrincipal } from '../task/index.js';
+import { completeTaskWithResult, getOrCreateGoalPlannerPrincipal } from '../task/index.js';
 import {
   configureTaskRuntime,
   getConfiguredTaskRuntime,
@@ -519,6 +530,101 @@ async function goalRun(
     dispatchCapability({ pool: ctx.pool }, caller, name, params);
   if (confirm) await by(byRequester, 'confirm_goal', { goalRunId, revision: 1 });
   if (pause) await by(pausedBy ?? byRequester, 'pause_goal', { goalRunId });
+  return goalRunId;
+}
+
+/** Every spawn starts `running`; a recipe ends one by reporting the Task's result. */
+class StepTaskSupervisorClient implements TaskSupervisorClientPort {
+  readonly statuses = new Map<string, TaskSupervisorStatus>();
+
+  async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+    const containerId = `container-${input.workerRunId}`;
+    this.statuses.set(input.workerRunId, {
+      workerRunId: input.workerRunId,
+      status: 'running',
+      exitCode: undefined,
+      containerId,
+      ip: '198.51.100.23',
+      startedAt: new Date().toISOString(),
+      finishedAt: undefined,
+      reason: undefined,
+    });
+    return { containerId, ip: '198.51.100.23' };
+  }
+
+  async terminate(workerRunId: string): Promise<boolean> {
+    return this.statuses.delete(workerRunId);
+  }
+
+  async status(workerRunId: string): Promise<TaskSupervisorStatus | undefined> {
+    return this.statuses.get(workerRunId);
+  }
+}
+
+/** One advance of the run by hand (no advancer runs in this file), then parked again, so nothing
+ *  moves it between a case's two calls. */
+async function advanceOnce(ctx: RecipeContext, goalRunId: string): Promise<void> {
+  const { workspaceId, ownerId } = ctx.seed;
+  const { privateKey } = await generateEphemeralHandleKeyPair();
+  await advanceGoalRun(
+    {
+      pool: ctx.pool,
+      taskRuntime: { pool: ctx.pool, privateKey, supervisorClient: new StepTaskSupervisorClient() },
+      options: { retryBackoffMs: () => 0 },
+    },
+    { workspaceId, goalRunId, requesterId: ownerId },
+  );
+  await ctx.pool.query(
+    'update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2',
+    [workspaceId, goalRunId],
+  );
+}
+
+async function goalRunStatus(ctx: RecipeContext, goalRunId: string): Promise<string | undefined> {
+  const status = await ctx.pool.query<{ status: string }>(
+    'select status from goal_runs where workspace_id = $1 and id = $2',
+    [ctx.seed.workspaceId, goalRunId],
+  );
+  return status.rows[0]?.status;
+}
+
+/** A run of the owner's whose one step is done, so the run is verifying: its round's check waits
+ *  for the requester to confirm it (confirm_goal_acceptance). */
+async function verifyingGoalRun(ctx: RecipeContext): Promise<string> {
+  const { workspaceId, ownerId } = ctx.seed;
+  const goalRunId = await goalRun(ctx, { confirm: true });
+  await advanceOnce(ctx, goalRunId);
+  const attempt = await ctx.pool.query<{ task_id: string; run_id: string }>(
+    `select t.id as task_id, r.id as run_id
+       from step_runs s
+       join tasks t on t.workspace_id = s.workspace_id and t.step_run_id = s.id
+       join worker_runs r on r.workspace_id = t.workspace_id and r.task_id = t.id
+      where s.workspace_id = $1 and s.goal_run_id = $2`,
+    [workspaceId, goalRunId],
+  );
+  const started = attempt.rows[0];
+  if (started === undefined) throw new Error('the advance started no attempt of the step');
+  await withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, (client) =>
+    completeTaskWithResult(client, workspaceId, ownerId, started.task_id, started.run_id, {
+      summary: 'web-1 answers again',
+    }),
+  );
+  await advanceOnce(ctx, goalRunId);
+  const status = await goalRunStatus(ctx, goalRunId);
+  if (status !== 'verifying') throw new Error(`the run is ${status}, not verifying`);
+  return goalRunId;
+}
+
+/** Legacy 682: a run its requester confirmed, which the advance then completed — `achieved` on
+ *  that confirmation, what a retry of it lands on (the first confirmation makes the run due). */
+async function goalRunCompletedByConfirmation(ctx: RecipeContext): Promise<string> {
+  const goalRunId = await verifyingGoalRun(ctx);
+  await dispatchCapability({ pool: ctx.pool }, ctx.caller, 'confirm_goal_acceptance', {
+    goalRunId,
+  });
+  await advanceOnce(ctx, goalRunId);
+  const status = await goalRunStatus(ctx, goalRunId);
+  if (status !== 'completed') throw new Error(`the run is ${status}, not completed`);
   return goalRunId;
 }
 
@@ -1618,16 +1724,15 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         definition: { systemPrompt: 'A worker for the repeat walk.' },
       }),
     },
-    // Legacy 680: unlike Skills and Procedures (E2-0, one pending draft a family),
-    // a WorkerDefinition family stacks drafts — the second call makes v3 beside a pending v2.
-    // As it is: `repeats`; once it is aligned, `conflict: draft_pending`.
+    // Legacy 680: as for Skills and Procedures (E2-0), the next version waits on the caller's own
+    // pending draft of the family — the second call finds v2 pending.
     'the next version of a published one': {
       setUp: async (ctx) => ({
         definitionId: (await workerV1(ctx, true)).id,
         kind: 'worker',
         definition: { systemPrompt: 'Version two.' },
       }),
-      repeat: 'repeats',
+      repeat: 'conflict: draft_pending',
     },
   },
   // S11 GO16b: each call writes a new family's v1 draft from the combination — a second one is
@@ -1871,6 +1976,19 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
   cancel_goal: {
     'a running run': {
       setUp: async (ctx) => ({ goalRunId: await goalRun(ctx, { confirm: true }) }),
+    },
+  },
+  confirm_goal_acceptance: {
+    // The second confirmation finds the round's check confirmed: the same decision, nothing new.
+    'a run verifying its one done step': {
+      setUp: async (ctx) => ({ goalRunId: await verifyingGoalRun(ctx) }),
+    },
+    // Legacy 682: a retry that lands after the advance completed the run on that confirmation is
+    // the same decision too, not a 409 for a run no longer verifying.
+    'a run the advance completed on its confirmation': {
+      first: expect.objectContaining({ status: 'completed', changed: false }),
+      second: expect.objectContaining({ status: 'completed', changed: false }),
+      setUp: async (ctx) => ({ goalRunId: await goalRunCompletedByConfirmation(ctx) }),
     },
   },
   end_goal: {
@@ -3307,6 +3425,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'release_goal_hold',
   'cancel_goal',
   'end_goal',
+  'confirm_goal_acceptance',
   'revise_goal',
   'reconcile_goal_action',
   'propose_goal',
