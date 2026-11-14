@@ -3,6 +3,7 @@ import type {
   ConnectorWire,
   ExternalRuntimeWire,
   GateInstanceWire,
+  PlatformGateAddressChangeWire,
   SelfConnectionWire,
 } from '@nexttime/shared';
 import { SECRET_FIELD_MASK } from '@nexttime/shared';
@@ -1161,6 +1162,91 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() => expect(row.textContent).toContain('https://grafana-gate-2.example'));
     expect(screen.queryByTestId('gate-address-changes')).toBeNull();
     expect(http.calls.filter((call) => call.name === 'list_self_connections')).toHaveLength(2);
+  });
+
+  it('legacy 717: the moves that ended sit collapsed under the list, and an approval or a rejection above reads them again', async () => {
+    const pending = (id: string): PlatformGateAddressChangeWire => ({
+      id,
+      workspaceId: 'ws-1',
+      workspaceName: 'Acme',
+      gatekeeperId: 'gk-self-1',
+      connector: 'http',
+      target: 'grafana',
+      fromEndpoint: 'https://grafana-gate.example',
+      toEndpoint: 'https://grafana-gate-2.example',
+      status: 'proposed',
+      impact: {
+        publishedOperationCount: 1,
+        grantCount: 0,
+        autoApprovedOperations: [],
+        workerDefinitionCount: 0,
+        inFlightActionRequestCount: 0,
+      },
+      manifestDigest: 'm'.repeat(64),
+      previewDigest: 'p'.repeat(64),
+      proposedByName: 'Alice',
+      createdAt: '2026-11-13T00:00:00.000Z',
+      expiresAt: '2026-11-14T00:00:00.000Z',
+      decidedAt: null,
+      decidedByLogin: null,
+      rejectionReason: null,
+      suspended: false,
+    });
+    const open = [pending('gac-1'), pending('gac-2')];
+    const done: PlatformGateAddressChangeWire[] = [];
+    const decide = (id: string, status: 'applied' | 'rejected') => {
+      const at = open.findIndex((change) => change.id === id);
+      const [change] = open.splice(at, 1);
+      if (change) {
+        done.unshift({
+          ...change,
+          status,
+          decidedAt: '2026-11-13T01:00:00.000Z',
+          decidedByLogin: 'root-admin',
+        });
+      }
+      return {};
+    };
+    const http = scriptedHttp({
+      list_self_connections: () => ({ items: [selfConnection()] }),
+      list_gate_address_changes: (params) =>
+        (params as { ended?: boolean }).ended ? { items: [...done] } : { items: [...open] },
+      approve_gate_address_change: (params) => decide((params as { id: string }).id, 'applied'),
+      reject_gate_address_change: (params) => decide((params as { id: string }).id, 'rejected'),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+    const changes = await screen.findByTestId('gate-address-changes');
+    const history = screen.getByTestId('gate-address-change-history') as HTMLDetailsElement;
+    const historyReads = () =>
+      http.calls.filter(
+        (call) =>
+          call.name === 'list_gate_address_changes' &&
+          (call.params as { ended?: boolean }).ended === true,
+      ).length;
+    expect(historyReads()).toBe(0);
+    history.open = true;
+    fireEvent(history, new Event('toggle'));
+    await screen.findByTestId('gate-address-change-history-empty');
+    expect(historyReads()).toBe(1);
+
+    fireEvent.click(within(changes).getByTestId('gate-address-change-approve-gac-1'));
+    const approve = await screen.findByRole('dialog', {
+      name: '批准换到 https://grafana-gate-2.example',
+    });
+    fireEvent.click(within(approve).getByRole('button', { name: '批准' }));
+    const applied = await screen.findByTestId('gate-address-change-history-outcome-gac-1');
+    expect(applied.textContent).toBe('已换址');
+    expect(historyReads()).toBe(2);
+
+    fireEvent.click(within(changes).getByTestId('gate-address-change-reject-gac-2'));
+    const reject = await screen.findByRole('dialog', {
+      name: '驳回换到 https://grafana-gate-2.example',
+    });
+    fireEvent.click(within(reject).getByRole('button', { name: '驳回' }));
+    const rejected = await screen.findByTestId('gate-address-change-history-outcome-gac-2');
+    expect(rejected.textContent).toBe('已驳回');
+    expect(historyReads()).toBe(3);
   });
 
   it('legacy 412: an address the kernel masked whole reads as hidden in the row and its confirm', async () => {

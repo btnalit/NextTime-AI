@@ -25,6 +25,8 @@ export interface GateAddressChangesProps {
   readonly http: CapabilityCaller;
   /** A move was approved: the gate's address in 自己接入的门 changed — read the list again. */
   readonly onApplied: () => void;
+  /** A move was approved or rejected: it ended, so the history below has it (legacy 717). */
+  readonly onDecided?: () => void;
 }
 
 /**
@@ -38,7 +40,7 @@ export interface GateAddressChangesProps {
  * Addresses show their scheme, host and port only, as the list below does. Nothing renders while
  * no proposal is open.
  */
-export function GateAddressChanges({ http, onApplied }: GateAddressChangesProps) {
+export function GateAddressChanges({ http, onApplied, onDecided }: GateAddressChangesProps) {
   const t = useT();
   const changes = useCapabilityList<PlatformGateAddressChangeWire>(
     http,
@@ -71,6 +73,7 @@ export function GateAddressChanges({ http, onApplied }: GateAddressChangesProps)
 
   function settled(id: string): void {
     changes.mutate((data) => ({ ...data, items: data.items.filter((row) => row.id !== id) }));
+    onDecided?.();
   }
 
   return (

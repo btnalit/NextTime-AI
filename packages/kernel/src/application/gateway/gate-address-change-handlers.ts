@@ -38,6 +38,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import {
   GATE_ADDRESS_CHANGE_ONE_OPEN_CONSTRAINT,
   GATE_ADDRESS_CHANGE_SALT_CONSTRAINT,
+  type GateAddressChangeListPosition,
   type GateAddressChangeRow,
   type PlatformGateAddressChangeRow,
   assertEndpointFreeForSelfConnection,
@@ -694,11 +695,56 @@ function platformUserOf(
   return ctx.platformUser;
 }
 
-/** `list_gate_address_changes(status?, workspaceId?)` — platform. Newest first. */
+/** A page of `list_gate_address_changes` when the caller names no `limit` (the schema caps one). */
+const GATE_ADDRESS_CHANGE_PAGE = 50;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListCursor(row: PlatformGateAddressChangeRow): string {
+  return Buffer.from(`${row.createdAtCursor}|${row.workspaceId}|${row.id}`).toString('base64url');
+}
+
+/** The position a cursor names, or null when it is not one this list wrote — then the list starts
+ *  from the top, as the platform's other keyset lists do (`platform-handlers.ts`), and a forged
+ *  value never reaches the query as a cast it cannot make. */
+function decodeListCursor(cursor: string): GateAddressChangeListPosition | null {
+  const parts = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  if (parts.length !== 3) return null;
+  const [createdAt, workspaceId, id] = parts as [string, string, string];
+  if (Number.isNaN(Date.parse(createdAt)) || !UUID.test(workspaceId) || !UUID.test(id)) return null;
+  return { createdAt, workspaceId, id };
+}
+
+/**
+ * `list_gate_address_changes(status?, ended?, workspaceId?, cursor?, limit?)` — platform. Newest
+ * first, keyset-paged (legacy 717: the platform's history of decided moves next to the open ones).
+ * `status` and `ended` go by the status each proposal is shown with, so one past its expiry is
+ * `expired`, never `proposed`.
+ */
 export const listGateAddressChangesHandler: CapabilityHandler = async (client, _ws, params) => {
-  const filter = params as { status?: GateAddressChangeStatusWire; workspaceId?: string };
-  const rows = await listGateAddressChanges(client, filter);
-  return { result: { items: rows.map(toPlatformWire) } };
+  const { status, ended, workspaceId, cursor, limit } = params as {
+    status?: GateAddressChangeStatusWire;
+    ended?: boolean;
+    workspaceId?: string;
+    cursor?: string;
+    limit?: number;
+  };
+  const pageSize = limit ?? GATE_ADDRESS_CHANGE_PAGE;
+  const after = cursor ? decodeListCursor(cursor) : null;
+  const rows = await listGateAddressChanges(client, {
+    ...(status !== undefined ? { status } : {}),
+    ...(ended !== undefined ? { ended } : {}),
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
+    ...(after ? { after } : {}),
+    limit: pageSize + 1,
+  });
+  const page = rows.slice(0, pageSize);
+  const last = page[page.length - 1];
+  const items = page.map(toPlatformWire);
+  return {
+    result:
+      rows.length > pageSize && last ? { items, nextCursor: encodeListCursor(last) } : { items },
+  };
 };
 
 async function requireOne(

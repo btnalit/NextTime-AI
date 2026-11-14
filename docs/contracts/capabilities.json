@@ -42761,6 +42761,18 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ended": {
+          "type": "boolean"
+        },
+        "limit": {
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
         "status": {
           "enum": [
             "proposed",

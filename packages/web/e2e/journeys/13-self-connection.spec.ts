@@ -10,7 +10,7 @@ import type {
 } from '@nexttime/shared';
 import { loginWithPassword, reachLoginForm } from '../auth-helpers.js';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN, loginAsAdmin } from '../lib/auth.js';
-import { type Page, expect, test } from '../lib/test.js';
+import { type Locator, type Page, expect, test } from '../lib/test.js';
 import {
   createFreshWorkspace,
   goToByLabel,
@@ -205,9 +205,20 @@ async function addressChanges(
   const { items } = await callCap<{ items: PlatformGateAddressChangeWire[] }>(
     page,
     'list_gate_address_changes',
-    { status },
+    { status, limit: 200 },
   );
   return items.filter((item) => item.gatekeeperId === gatekeeperId);
+}
+
+/** A move's row in 「已结束的换地址申请」 under 自己接入的门, the history opened (legacy 717). */
+async function endedMove(page: Page, changeId: string): Promise<Locator> {
+  const history = page.getByTestId('gate-address-change-history');
+  if ((await history.getAttribute('open')) === null) {
+    await history.getByText('已结束的换地址申请', { exact: true }).click();
+  }
+  const row = page.getByTestId(`gate-address-change-history-row-${changeId}`);
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  return row;
 }
 
 /**
@@ -515,6 +526,11 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await reject.getByLabel('原因（可选）').fill(REJECTION_REASON);
     await reject.getByRole('button', { name: '驳回', exact: true }).click();
     await expect(row).toHaveCount(0, { timeout: 15_000 });
+    // Legacy 717: it ended, so the history under the list has it, with how and why.
+    const ended = await endedMove(page, changeId);
+    await expect(ended).toContainText('已驳回');
+    await expect(ended).toContainText(REJECTION_REASON);
+    await expect(ended).toContainText(ADMIN_LOGIN as string);
 
     const rejected = (await addressChanges(page, 'rejected')).find((c) => c.id === changeId);
     expect(rejected).toMatchObject({
@@ -555,6 +571,7 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await approve.getByRole('button', { name: '批准', exact: true }).click();
     await expect(row).toHaveCount(0, { timeout: 20_000 });
     await expect(connection).toContainText(MOVED, { timeout: 15_000 });
+    await expect(await endedMove(page, changeId)).toContainText('已换址');
 
     const applied = (await addressChanges(page, 'applied')).find((c) => c.id === changeId);
     expect(applied).toMatchObject({
