@@ -475,7 +475,8 @@ export class AgentHostRuntime implements AgentRuntime {
    *  worker-supervisor reads each absence as the workspace's choice — it removes the written
    *  prompt on a recreate, applies the (empty) egress list live on a reuse and recreates the
    *  container without the Skills. Every Task and Worker container (`application/task`) already
-   *  fails its start on the same reads. */
+   *  fails its start on the same reads. The Handle is issued after them (legacy 751), so a Turn
+   *  that ends here issues none. */
   private async prepareEntryTurn(
     input: StartTurnInput,
     turn: ActiveTurn,
@@ -487,8 +488,6 @@ export class AgentHostRuntime implements AgentRuntime {
       // `ensureEntryHandle` (gate narrowing + cache freshness), the model/prompt-addendum merge and
       // the Skill-mount resolution below, so nothing re-reads `agent_profiles`/`agent_policies`.
       const agentProfile = await this.resolveAgentProfile(workspaceId, principalId);
-      step = 'the entry session/Handle';
-      const handleToken = await this.ensureEntryHandle(workspaceId, principalId, agentProfile);
       // S2.6: the entry container's system prompt/model/egress list, from the workspace's currently
       // published `kind='entry'` WorkerDefinition (`undefined` when none is published —
       // `entrypoint.sh`'s static prompt and pi's default model then apply).
@@ -509,6 +508,10 @@ export class AgentHostRuntime implements AgentRuntime {
       // worker-supervisor's own `WORKER_IMAGE` env default applies).
       step = 'the active runtime image';
       const image = await this.resolveActiveRuntimeImage(workspaceId, principalId);
+      // Legacy 751: the Handle last, once every read has answered — a Turn that ends on a read
+      // above issues none (nor caches one for the next Turn).
+      step = 'the entry session/Handle';
+      const handleToken = await this.ensureEntryHandle(workspaceId, principalId, agentProfile);
 
       // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
       // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
@@ -554,9 +557,10 @@ export class AgentHostRuntime implements AgentRuntime {
    * and the platform's instructions — never the entry WorkerDefinition's, nor the person's entry
    * prompt addendum, nor their Skills; its model is the one the person's entry agent uses in this
    * trial workspace (their AgentProfile, else the published entry WorkerDefinition's). Its Handle
-   * is an admin agent's (`ensureAdminAgentHandle`): the authority is checked first (I-A3 — a Turn
-   * queued before the switch went off or the person was demoted does not start), and the Handle is
-   * issued under the session the Turn was recorded under, which must still be live. No egress list
+   * is an admin agent's (`ensureAdminAgentHandle`), issued after the reads (legacy 751): the
+   * authority is checked as it is issued (I-A3 — a Turn queued before the switch went off or the
+   * person was demoted does not start), and the Handle is issued under the session the Turn was
+   * recorded under, which must still be live. No egress list
    * is sent: worker-supervisor gives an admin container none at all. `undefined` when the Turn
    * could not be prepared — it has been ended, `failed` (or `interrupted` when stopped meanwhile).
    */
@@ -567,7 +571,6 @@ export class AgentHostRuntime implements AgentRuntime {
     const { workspaceId, principalId } = input;
     try {
       const basePrompt = await this.adminAgentSystemPrompt();
-      const handleToken = await this.ensureAdminAgentHandle(input);
       // Legacy 434: as for the entry agent (`prepareEntryTurn`), a read that fails ends the Turn.
       const agentProfile = await this.resolveAgentProfile(workspaceId, principalId);
       const entryDefinition = agentProfile.effective.model
@@ -575,6 +578,9 @@ export class AgentHostRuntime implements AgentRuntime {
         : await this.resolveEntryDefinition(workspaceId, principalId);
       const instanceInstructions = await this.resolveInstanceInstructions(workspaceId, principalId);
       const image = await this.resolveActiveRuntimeImage(workspaceId, principalId);
+      // Legacy 751: the Handle (and the authority check it makes) last, once every read has
+      // answered — a Turn that ends on a read above issues none.
+      const handleToken = await this.ensureAdminAgentHandle(input);
       return {
         handle: handleToken,
         systemPrompt: composeSystemPrompt({ base: basePrompt, instanceInstructions }),

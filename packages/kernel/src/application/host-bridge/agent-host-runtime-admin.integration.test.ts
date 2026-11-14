@@ -24,7 +24,8 @@ import type { AgentRuntimeEvent } from './agent-runtime.js';
  * carries the admin agent's own prompt and a Handle issued under the session the Turn was recorded
  * under — no Skills, no egress list; the Handle is reused while that session lives; and the Turn
  * fails, sending nothing, when the authority is gone (I-A3), the session ended (`stop_admin_agent`)
- * or the prompt (or, legacy 434, any other read it is prepared from) cannot be read. S11 AA5a-1: the Handle carries the person's gate Grants in the
+ * or the prompt (or, legacy 434, any other read it is prepared from) cannot be read — issuing no
+ * Handle then (legacy 751: the Handle is issued last). S11 AA5a-1: the Handle carries the person's gate Grants in the
  * trial workspace (never one from another workspace), narrowed as the entry Handle's are (AgentPolicy
  * cap, My Agent exclusions), and a Grant, policy or exclusion changed since is picked up on the next
  * Turn under the same session. Real database because the authority, the session and
@@ -128,32 +129,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
-    /** Legacy 434: `pool`, except that once a Handle has been issued through it, the query
-     *  starting with `sqlPrefix` fails — the first such query after the Handle, or the one after
-     *  `skip` more — so what fails is one read made after the Handle. */
-    function poolFailingAfterHandle(sqlPrefix: string, skip = 0): PoolLike {
-      let armed = false;
+    /** Legacy 434 / 751: `pool`, except that one query starting with `sqlPrefix` fails — the
+     *  first such query of the Turn, or the one after `skip` more — so what fails is one read the
+     *  Turn is prepared from. `fired()` says whether it did (the read was made). */
+    function poolFailingOnce(sqlPrefix: string, skip = 0): { pool: PoolLike; fired(): boolean } {
       let toSkip = skip;
       let failed = false;
       return {
-        async connect() {
-          const client = await pool.connect();
-          const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
-          const wrapped = Object.create(client) as PoolClient;
-          wrapped.query = (async (text: unknown, ...rest: unknown[]) => {
-            const sql = typeof text === 'string' ? text.trim() : '';
-            if (armed && !failed && sql.startsWith(sqlPrefix)) {
-              if (toSkip > 0) toSkip -= 1;
-              else {
-                failed = true;
-                throw new Error('canceling statement due to statement timeout');
+        fired: () => failed,
+        pool: {
+          async connect() {
+            const client = await pool.connect();
+            const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+            const wrapped = Object.create(client) as PoolClient;
+            wrapped.query = (async (text: unknown, ...rest: unknown[]) => {
+              const sql = typeof text === 'string' ? text.trim() : '';
+              if (!failed && sql.startsWith(sqlPrefix)) {
+                if (toSkip > 0) toSkip -= 1;
+                else {
+                  failed = true;
+                  throw new Error('canceling statement due to statement timeout');
+                }
               }
-            }
-            const result = await query(text, ...rest);
-            if (sql.startsWith('insert into capability_handles')) armed = true;
-            return result;
-          }) as PoolClient['query'];
-          return wrapped;
+              return query(text, ...rest);
+            }) as PoolClient['query'];
+            return wrapped;
+          },
         },
       };
     }
@@ -491,7 +492,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await handleCount(member)).toBe(0);
     });
 
-    it('legacy 434: fails, sending nothing, when a read after its Handle fails — never without the platform instructions or on another model', async () => {
+    it('legacy 434 / 751: fails, sending nothing and issuing no Handle, when a read it is prepared from fails — never without the platform instructions or on another model', async () => {
       const PLATFORM_SETTINGS = 'select settings, version, updated_at from platform_settings';
       for (const [sqlPrefix, skip] of [
         // the person's AgentProfile, whose model the admin agent uses
@@ -504,8 +505,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       ] as const) {
         const member = await newTrialMember();
         const sessionId = await sessionOf(member);
-        const harness = newRuntime(undefined, poolFailingAfterHandle(sqlPrefix, skip));
+        const failing = poolFailingOnce(sqlPrefix, skip);
+        const harness = newRuntime(undefined, failing.pool);
         expectFailedWithoutFrame(harness, await startAdminTurn(harness, member, sessionId));
+        expect(failing.fired()).toBe(true);
+        // Legacy 751: the Handle is issued last, so a Turn that ended on a read issued none —
+        // and cached none: the next Turn, whose reads answer, issues its own.
+        expect(await handleCount(member)).toBe(0);
+        harness.sent.length = 0;
+        await startAdminTurn(harness, member, sessionId);
+        expect(startFrames(harness.sent)).toHaveLength(1);
         expect(await handleCount(member)).toBe(1);
       }
     });
