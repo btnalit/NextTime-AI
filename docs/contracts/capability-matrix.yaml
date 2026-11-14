@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 9
+  repeat_unclear: 6
 capabilities:
   add_eval_case:
     console: required
@@ -129,7 +129,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: no_pending_manifest"  # the first call adopts the pending manifest, so the same call again finds nothing pending (409)
   confirm_goal:
     console: required
     agents: []
@@ -231,7 +231,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent  # an instance enabled here already returns its link, nothing written
   end_goal:
     console: required
     agents: []
@@ -1072,7 +1072,7 @@ capabilities:
   test_gate_instance:
     console: required
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats  # each call probes the instance again and records the check time
   traverse:
     console: "none: agent 的图遍历；控制台的对象页用 get_object / state_at 呈现同样的关系"
     agents: [entry, admin]
