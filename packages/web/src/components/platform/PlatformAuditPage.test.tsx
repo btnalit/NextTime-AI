@@ -245,6 +245,33 @@ describe('PlatformAuditPage', () => {
     });
   });
 
+  it('legacy 731: removing a membership again says 未改变; the first removal does not', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      platform_audit_query: () => ({
+        items: [
+          row({ id: 'audit-removed', action: 'remove_membership' }),
+          row({ id: 'audit-again', action: 'set_membership_role', payload: { unchanged: true } }),
+        ],
+      }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('platform-audit-list');
+    const rows = within(list).getAllByTestId('platform-audit-row');
+    const rowOf = (action: string) => {
+      const found = rows.find((r) =>
+        Array.from(r.querySelectorAll('.mono')).some((el) => el.textContent === action),
+      );
+      if (!found) throw new Error(`no row for ${action}`);
+      return found;
+    };
+    expect(within(rowOf('remove_membership')).queryByTestId('audit-unchanged')).toBeNull();
+    expect(within(rowOf('set_membership_role')).getByTestId('audit-unchanged').textContent).toBe(
+      '未改变',
+    );
+  });
+
   it('legacy 628: a refused call says 被拦下 with its code; a refused read is shown as the kernel keeps it', async () => {
     // What the kernel answers `excludeReads` with (legacy 669): no plain read, the refused one kept.
     const http = scriptedHttp({

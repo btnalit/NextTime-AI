@@ -550,6 +550,47 @@ describe('AuditPage entry points', () => {
     expect(toggle?.checked).toBe(true);
   });
 
+  it('legacy 731: a call that changed nothing says 未改变; the change itself and a refusal do not', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({
+        items: [
+          auditRow({ id: 'audit-changed', action: 'disable_principal' }),
+          auditRow({
+            id: 'audit-unchanged',
+            action: 'set_principal_role',
+            payload: { unchanged: true },
+          }),
+          auditRow({
+            id: 'audit-refused',
+            action: 'rotate_api_key',
+            payload: { outcome: 'refused', unchanged: true, refusal: { code: 'conflict' } },
+          }),
+        ],
+      }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('audit-list');
+    const rows = within(list).getAllByTestId('audit-row');
+    const rowOf = (action: string) => {
+      const found = rows.find((row) =>
+        Array.from(row.querySelectorAll('.mono')).some((el) => el.textContent === action),
+      );
+      if (!found) throw new Error(`no row for ${action}`);
+      return found;
+    };
+    expect(within(rowOf('disable_principal')).queryByTestId('audit-unchanged')).toBeNull();
+    const unchanged = within(rowOf('set_principal_role')).getByTestId('audit-unchanged');
+    expect(unchanged.textContent).toBe('未改变');
+    expect(unchanged.getAttribute('title')).toContain('什么也没有写');
+    expect(unchanged.parentElement?.classList.contains('audit-row-title')).toBe(true);
+    const refused = rowOf('rotate_api_key');
+    expect(within(refused).getByTestId('audit-refused')).toBeTruthy();
+    expect(within(refused).queryByTestId('audit-unchanged')).toBeNull();
+  });
+
   it('legacy 628: a refused call says 被拦下 with its code; a refused read is shown as the kernel keeps it', async () => {
     // What the kernel answers `excludeReads` with (legacy 669): no plain read, the refused one kept.
     const http = scriptedHttp({

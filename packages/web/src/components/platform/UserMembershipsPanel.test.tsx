@@ -271,8 +271,9 @@ describe('UserMembershipsPanel', () => {
   });
 
   // #1198 UX P2: removed after the drawer read it — the refusal reads the user again, so the row
-  // turns read-only and the workspace is back in the picker; the refusal stays on the row.
-  it('a role change refused as membership_removed reads the user again; the refusal stays on the now read-only row', async () => {
+  // turns read-only and the workspace is back in the picker; legacy 733: the read-only row then says
+  // it once, with a line that the change did not go through.
+  it('a role change refused as membership_removed reads the user again; the now read-only row says so once', async () => {
     const http = scriptedHttp({
       list_workspaces: () => ({ items: [workspace()] }),
       set_membership_role: () =>
@@ -301,7 +302,13 @@ describe('UserMembershipsPanel', () => {
     const after = screen.getByTestId('user-membership-row');
     expect(within(after).queryByRole('combobox')).toBeNull();
     expect(within(after).getByTestId('user-membership-removed')).toBeTruthy();
-    expect(within(after).getByText(/角色不能再改，什么也没有改/)).toBeTruthy();
+    // Legacy 733: one explanation, not the refusal and the read-only note saying the same thing —
+    // the note, with one line that this attempt did not go through.
+    expect(within(after).getByTestId('user-membership-removed-refused').textContent).toContain(
+      '刚才的修改没有生效',
+    );
+    expect(within(after).queryByText(/角色不能再改，什么也没有改/)).toBeNull();
+    expect(within(after).getAllByText(/只留作审计溯源/)).toHaveLength(1);
   });
 
   it('a removal refused as membership_replaced reads the user again and shows the new membership with its own role', async () => {

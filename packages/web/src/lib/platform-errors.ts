@@ -427,6 +427,15 @@ export function isStaleMembershipError(err: unknown): boolean {
   );
 }
 
+/** Legacy 733: refused because the membership was removed after the drawer read it — once the
+ *  drawer has read the user again, the row's own read-only note says the same thing, so the row
+ *  shows one line instead of the refusal and the note side by side. */
+export function isMembershipRemovedError(err: unknown): boolean {
+  return (
+    err instanceof HttpError && err.kind === 'capability_error' && err.code === 'membership_removed'
+  );
+}
+
 export function platformErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   if (err.code === undefined) return null;

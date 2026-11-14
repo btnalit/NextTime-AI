@@ -319,6 +319,21 @@ export function auditRefusal(
   };
 }
 
+/** Legacy 731: the call went through but changed nothing — the target was already what was asked
+ *  (a role set to the role it has, a membership removed again, a member disabled again; legacy
+ *  696 / 729). Its writer records `payload.unchanged: true` and writes nothing else. A refused row
+ *  is never also unchanged: a refusal took no effect for another reason (`auditRefusal`). */
+export function auditUnchanged(
+  payload: Readonly<Record<string, unknown>> | null | undefined,
+): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    payload.unchanged === true &&
+    payload.outcome !== 'refused'
+  );
+}
+
 /** Every workspace-scope capability name from `CAPABILITY_REGISTRY` (a dispatched call is
  *  audited under its own name) plus the lifecycle actions above, deduplicated and sorted — the
  *  action selector's suggestion list (§5.5 "action 用能力注册表做选择器"). */
