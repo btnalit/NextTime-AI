@@ -49,6 +49,7 @@ import {
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
+  DecisionQuerySinceInvalidError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
@@ -1024,6 +1025,13 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new FactHasNoEvidenceError('fact-1'));
     expect(mapped.status).toBe(409);
     expect(mapped.code).toBe('conflict');
+  });
+
+  it('DecisionQuerySinceInvalidError (query_decisions, legacy 760) → 400 invalid_params naming since, not 500', () => {
+    const mapped = mapCapabilityError(new DecisionQuerySinceInvalidError());
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_params');
+    expect(mapped.message).toMatch(/^since:/);
   });
 });
 

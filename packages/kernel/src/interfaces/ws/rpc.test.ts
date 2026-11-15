@@ -21,6 +21,7 @@ import {
   ConnectionSecretExpiredError,
   ConnectionSecretInUseError,
   DecisionNotFoundError,
+  DecisionQuerySinceInvalidError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
@@ -460,6 +461,11 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('FactHasNoEvidenceError (verify_fact, I3.6) maps to ILLEGAL_TRANSITION (-32011), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new FactHasNoEvidenceError('fact-1'));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('DecisionQuerySinceInvalidError (query_decisions, legacy 760) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new DecisionQuerySinceInvalidError());
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
   });
 });
 

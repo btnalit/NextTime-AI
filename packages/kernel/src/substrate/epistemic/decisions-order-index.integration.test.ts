@@ -9,16 +9,20 @@ import type { DecisionViewer } from './decision-visibility.js';
 import { findPrecedents, queryDecisions } from './decisions.js';
 
 /**
- * Legacy 429 (core/0060): `query_decisions` and `find_precedents` read the newest Decisions from
- * `decisions_workspace_created_ms_idx` instead of sorting every Decision of the workspace. The
- * readers' own SQL is planned (a client that EXPLAINs what it is given, as
- * audit-resource-index.integration.test.ts does), so a read whose order stops matching the index
- * fails here rather than turning back into a sort on the host.
+ * Legacy 429 (core/0060) and 760 (core/0061): `query_decisions` and `find_precedents` read the
+ * newest Decisions from `decisions_workspace_created_ms_utc_idx` instead of sorting every Decision
+ * of the workspace, and a `since` or a cursor bounds that scan. The readers' own SQL is planned as
+ * the application role (a client that EXPLAINs what it is given, as
+ * audit-resource-index.integration.test.ts does), so a read whose order stops matching the index,
+ * or whose bound is left to a filter (row-level security keeps a condition on a non-LEAKPROOF
+ * expression out of the index), fails here rather than on the host.
  *
  * The workspace gets {@link DECISIONS} Decisions of its own first, three to a millisecond (rows
  * one transaction writes share one), and the table is analyzed: with an empty workspace the
  * primary key and a sort cost as little as the index, and which the planner picks then depends on
- * whatever else the shared test database holds.
+ * whatever else the shared test database holds. 6000 rather than fewer: the planner guesses that
+ * 0.5% of them have the action kind `find_precedents` asks for, and at 3000 that guess (15 rows for
+ * a page of 10) prices reading them all and sorting them within 2% of the index scan.
  * Integration (real Postgres; auto-skip without DATABASE_URL).
  */
 
@@ -27,12 +31,12 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-const INDEX = 'decisions_workspace_created_ms_idx';
-const DECISIONS = 3000;
+const INDEX = 'decisions_workspace_created_ms_utc_idx';
+const DECISIONS = 6000;
 const ACTION_KIND = 'decisions_order_index.test';
 
 describe.runIf(DATABASE_URL !== undefined)(
-  'decisions_workspace_created_ms_idx (legacy 429)',
+  'decisions_workspace_created_ms_utc_idx (legacy 429, 760)',
   () => {
     let pool: Pool;
     let workspaceId: string;
@@ -113,6 +117,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(plans[0]).not.toContain('"Node Type":"Incremental Sort"');
     }
 
+    /** The `Index Cond` of the plan's scan of {@link INDEX}. */
+    function indexCondOf(plan: string): string {
+      const conds: string[] = [];
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const child of node) walk(child);
+        } else if (node !== null && typeof node === 'object') {
+          const record = node as Record<string, unknown>;
+          if (record['Index Name'] === INDEX && typeof record['Index Cond'] === 'string') {
+            conds.push(record['Index Cond']);
+          }
+          for (const value of Object.values(record)) walk(value);
+        }
+      };
+      walk(JSON.parse(plan));
+      expect(conds).toHaveLength(1);
+      return conds[0] ?? '';
+    }
+
     it('exists, is valid, and is keyed by the millisecond in UTC, newest first', async () => {
       const result = await pool.query<{ def: string; valid: boolean }>(
         `select pg_get_indexdef(i.indexrelid) as def, i.indisvalid as valid
@@ -122,9 +145,28 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]?.valid).toBe(true);
-      expect(result.rows[0]?.def).toMatch(
-        /\(workspace_id, date_trunc\('milliseconds'::text, \(created_at AT TIME ZONE 'UTC'::text\)\) DESC, id DESC\)$/,
+      expect(result.rows[0]?.def).toMatch(/\(workspace_id, created_ms_utc DESC, id DESC\)$/);
+
+      // The key column is generated from created_at, stored, a timestamp in UTC.
+      const column = await pool.query<{ generated: string; type: string; expr: string }>(
+        `select a.attgenerated as generated, format_type(a.atttypid, a.atttypmod) as type,
+                pg_get_expr(d.adbin, d.adrelid) as expr
+           from pg_attribute a join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+          where a.attrelid = 'decisions'::regclass and a.attname = 'created_ms_utc'`,
       );
+      expect(column.rows).toEqual([
+        {
+          generated: 's',
+          type: 'timestamp without time zone',
+          expr: "date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text))",
+        },
+      ]);
+
+      // 0060's expression index is gone (0061 drops it).
+      const old = await pool.query<{ found: string | null }>(
+        `select to_regclass('decisions_workspace_created_ms_idx')::text as found`,
+      );
+      expect(old.rows[0]?.found).toBeNull();
     });
 
     it('serves query_decisions: the first page, a cursor page and since, for the owner and a member', async () => {
@@ -133,23 +175,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         'utf8',
       ).toString('base64url');
       for (const viewer of [owner, member]) {
-        expectIndexOrder(
-          await plansOf((client) => queryDecisions(client, workspaceId, { limit: 20 }, viewer)),
+        const first = await plansOf((client) =>
+          queryDecisions(client, workspaceId, { limit: 20 }, viewer),
         );
-        expectIndexOrder(
-          await plansOf((client) =>
-            queryDecisions(client, workspaceId, { limit: 20, cursor }, viewer),
+        expectIndexOrder(first);
+        expect(indexCondOf(first[0] ?? '')).not.toContain('created_ms_utc');
+
+        // The bounds are index conditions, so the scan starts at the cursor and stops at since
+        // (legacy 760: on 0060's expression they were filters over every newer row).
+        const cursorPage = await plansOf((client) =>
+          queryDecisions(client, workspaceId, { limit: 20, cursor }, viewer),
+        );
+        expectIndexOrder(cursorPage);
+        expect(indexCondOf(cursorPage[0] ?? '')).toMatch(
+          /created_ms_utc.* < .*'2026-11-01 00:00:00\.5'::timestamp without time zone/,
+        );
+        const sincePage = await plansOf((client) =>
+          queryDecisions(
+            client,
+            workspaceId,
+            { limit: 20, since: '2026-11-01T00:00:00.900Z' },
+            viewer,
           ),
         );
-        expectIndexOrder(
-          await plansOf((client) =>
-            queryDecisions(
-              client,
-              workspaceId,
-              { limit: 20, since: '2026-11-01T00:00:00.900Z' },
-              viewer,
-            ),
-          ),
+        expectIndexOrder(sincePage);
+        expect(indexCondOf(sincePage[0] ?? '')).toContain(
+          "created_ms_utc >= '2026-11-01 00:00:00.9'::timestamp without time zone",
         );
       }
     });
@@ -206,10 +257,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       const all = await reference(null);
       expect(all).toHaveLength(DECISIONS);
       expect(await pageThrough()).toEqual(all);
-      // The last three milliseconds and a row: .998 (three rows), .999 (three), 1.000 (one).
-      const recent = await reference('2026-11-01T00:00:00.998Z');
+      // The last three milliseconds and a row: 1.998 (three rows), 1.999 (three), 2.000 (one).
+      const recent = await reference('2026-11-01T00:00:01.998Z');
       expect(recent).toHaveLength(7);
-      expect(await pageThrough('2026-11-01T00:00:00.998Z')).toEqual(recent);
+      expect(await pageThrough('2026-11-01T00:00:01.998Z')).toEqual(recent);
+      // since is read to the millisecond: one a microsecond into 1.998 matches all of 1.998, the
+      // row written at 1.998000 too.
+      expect(await pageThrough('2026-11-01T00:00:01.998001Z')).toEqual(recent);
     });
   },
 );
