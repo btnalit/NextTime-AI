@@ -35164,6 +35164,12 @@
         "adminAgentSessionId": {
           "type": "string"
         },
+        "callerCapabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "cancelledAt": {
           "type": [
             "string",
@@ -49106,6 +49112,12 @@
             "properties": {
               "adminAgentSessionId": {
                 "type": "string"
+              },
+              "callerCapabilities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "cancelledAt": {
                 "type": [

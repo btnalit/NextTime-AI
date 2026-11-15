@@ -6,7 +6,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
-import { registerWorkerMode, toSearchQuery } from './worker.js';
+import { holdsCapability, registerWorkerMode, toSearchQuery } from './worker.js';
 
 /**
  * Contract tests against a minimal `ExtensionAPI` stub (same style `modes/entry.test.ts`
@@ -832,6 +832,48 @@ describe('registerWorkerMode', () => {
     expect(searchCall?.params).toEqual({ query: '{"job":"migrate","db":{"host":"db-1"}}' });
     expect(toSearchQuery('restart the flaky pod')).toBe('restart the flaky pod');
     expect(toSearchQuery({ text: 'x'.repeat(300) })).toHaveLength(200);
+  });
+
+  it('a Worker whose Handle holds no search (get_task callerCapabilities) does not call it; one that holds it does (legacy 761)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        input: 'restart the flaky pod',
+        callerCapabilities: ['get_task', 'report_task_result'],
+      },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [{ id: 'obj-1' }] } }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    const result = await contextHandler({ messages: [] }, fakeCtx());
+
+    expect(kernel.requests.filter((r) => r.capability === 'search')).toHaveLength(0);
+    const content = String(result.messages[0]?.content);
+    expect(content).toContain('restart the flaky pod');
+    expect(content).not.toContain('Relevant facts');
+    // Nothing was refused, so nothing is logged as a kernel error.
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    const granted = createFakePi();
+    registerWorkerMode(granted.api, { kernelClient, workspaceId: 'ws-1', taskId: 'task-1' });
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: { input: 'restart the flaky pod', callerCapabilities: ['get_task', 'search'] },
+    }));
+    const grantedHandler = granted.handlers.get('context');
+    if (!grantedHandler) throw new Error('context handler not registered');
+    const grantedResult = await grantedHandler({ messages: [] }, fakeCtx());
+    expect(kernel.requests.filter((r) => r.capability === 'search')).toHaveLength(1);
+    expect(String(grantedResult.messages[0]?.content)).toContain('Relevant facts');
+    errorSpy.mockRestore();
+
+    // No list (a kernel before legacy 761) or not an array: the call is made, the kernel decides.
+    expect(holdsCapability(undefined, 'search')).toBe(true);
+    expect(holdsCapability('search', 'search')).toBe(true);
+    expect(holdsCapability([], 'search')).toBe(false);
+    expect(holdsCapability(['search'], 'search')).toBe(true);
   });
 
   it('the context handler caches Task input across calls (one get_task round trip)', async () => {

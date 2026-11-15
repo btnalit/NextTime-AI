@@ -214,6 +214,14 @@ function withoutSecretFields(value: unknown): unknown {
   return value;
 }
 
+/** Whether `get_task`'s `callerCapabilities` (legacy 761) lets this Worker's Handle call `name`.
+ *  A kernel that sends no list (before legacy 761), or anything but an array, does not say: the
+ *  call is made as before and the kernel decides. */
+export function holdsCapability(callerCapabilities: unknown, name: string): boolean {
+  if (!Array.isArray(callerCapabilities)) return true;
+  return callerCapabilities.includes(name);
+}
+
 /** The `search` query a Worker's context is looked up by: the first 200 characters of its Task
  *  input, with every secret-named field dropped first (review of #549, B3) — the query is a
  *  capability param, kept in the audit trail and shown in the console's audit feed, and a
@@ -592,19 +600,26 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
           input?: unknown;
           outputSchema?: unknown;
           reworkOf?: unknown;
+          callerCapabilities?: unknown;
         }>('get_task', {
           taskId: options.taskId,
         });
         let facts: readonly unknown[] = [];
-        try {
-          // S3.7 wire fix (docs/wire-contract-conventions.md §3): `search` now returns
-          // `{items}`, same envelope every list-shaped capability uses (was a bare array).
-          const searchResult = await options.kernelClient.call<{ items?: unknown[] }>('search', {
-            query: toSearchQuery(task.input),
-          });
-          facts = searchResult.items ?? [];
-        } catch (error) {
-          logKernelError(error, 'search');
+        // Legacy 761: the kernel says which capabilities this Worker's Handle holds; without
+        // `search` the call would only be refused (`not_in_scope`: an error in the kernel's log and
+        // a refusal in the audit, as if the Worker reached past its grant), so it is not made. A
+        // kernel that says nothing (before legacy 761) is asked, as before.
+        if (holdsCapability(task.callerCapabilities, 'search')) {
+          try {
+            // S3.7 wire fix (docs/wire-contract-conventions.md §3): `search` now returns
+            // `{items}`, same envelope every list-shaped capability uses (was a bare array).
+            const searchResult = await options.kernelClient.call<{ items?: unknown[] }>('search', {
+              query: toSearchQuery(task.input),
+            });
+            facts = searchResult.items ?? [];
+          } catch (error) {
+            logKernelError(error, 'search');
+          }
         }
         taskContext = {
           taskInput: task.input,

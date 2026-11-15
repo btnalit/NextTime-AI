@@ -2380,7 +2380,11 @@ function toWireTask(
   task: TaskRow,
   workerRuns: readonly WorkerRunRow[],
   attributions: TaskAttributions,
-  options: { readonly inputAsStored?: boolean } = {},
+  options: {
+    readonly inputAsStored?: boolean;
+    /** Legacy 761: the calling Handle's scope, given only for one of the Task's own WorkerRuns. */
+    readonly callerCapabilities?: readonly string[];
+  } = {},
 ) {
   const turn = task.createdByActivityId
     ? attributions.turns.get(task.createdByActivityId)
@@ -2430,6 +2434,9 @@ function toWireTask(
     purpose: task.purpose,
     // S11 AA5a-1 (I-A7): the admin agent session that started it, for its trial runs only.
     ...(task.adminAgentSessionId !== null ? { adminAgentSessionId: task.adminAgentSessionId } : {}),
+    ...(options.callerCapabilities !== undefined
+      ? { callerCapabilities: [...options.callerCapabilities] }
+      : {}),
   };
 }
 
@@ -2483,10 +2490,16 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
   );
   // The Task's own Worker reads the input it runs on as stored (`toWireTask`'s doc comment).
   const sessionId = ctx?.claims?.sid;
-  const inputAsStored =
+  const ownWorker =
     sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
   return {
-    result: toWireTask(task, workerRuns, attributions, { inputAsStored }),
+    result: toWireTask(task, workerRuns, attributions, {
+      inputAsStored: ownWorker,
+      // Legacy 761: and learns which capabilities its Handle holds — the verified claims
+      // `authorizeCapabilityCall` checks every call against — so it does not call one that is
+      // refused as `not_in_scope` (worker mode's `search` for context).
+      ...(ownWorker && ctx?.claims ? { callerCapabilities: ctx.claims.scope.capabilities } : {}),
+    }),
     resourceType: 'task',
     resourceId: task.id,
   };
