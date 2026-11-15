@@ -49,6 +49,14 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     corepack pnpm install --offline --frozen-lockfile --store-dir=/pnpm/store
 RUN corepack pnpm --filter @nexttime/kernel... build
 RUN corepack pnpm --filter @nexttime/kernel deploy --prod --legacy /out/kernel
+# Legacy 414: the runtime stage copies these four root-owned, so `nexttime` reads them through the
+# "other" bits — which `COPY . .` above took from the build checkout. A checkout made under umask
+# 027 / 077 has them 640 / 600 (the kernel could not read its ontology and packs and would not
+# start; an unreadable pi.version reads as no file), and one made under umask 000 has them
+# world-writable. Set here, they are readable by everyone and writable by no one but root,
+# whatever the checkout's umask.
+RUN chmod -R a+rX,go-w /workspace/ontology /workspace/packs /workspace/connectors \
+ && chmod a+r,go-w /workspace/pi.version
 
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
 FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS runtime
