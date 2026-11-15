@@ -1,6 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import type { Operation } from '@nexttime/shared';
+import {
+  GATE_CREDENTIAL_MODE_VALUES,
+  type GateCredentialMode,
+  type Operation,
+  isGateCredentialMode,
+} from '@nexttime/shared';
 import { createAnnouncer } from './announce.js';
 import {
   ConnectedAccountCredentialResolver,
@@ -218,7 +223,7 @@ async function loadManifest(path: string | undefined): Promise<Operation[]> {
  * doc comment for the same note at the store itself).
  */
 function buildCredentialResolver(
-  mode: string,
+  mode: GateCredentialMode,
   dataDir: string,
   env: NodeJS.ProcessEnv,
 ): { resolver: CredentialResolver; connectedAccountStore: ConnectedAccountStore | undefined } {
@@ -234,6 +239,19 @@ function buildCredentialResolver(
     };
   }
   return { resolver: new SharedEnvCredentialResolver({ env }), connectedAccountStore: undefined };
+}
+
+/** Validates `GATE_CREDENTIAL_MODE` (legacy 764): one of the platform's credential modes
+ *  (`GATE_CREDENTIAL_MODE_VALUES`). Anything else — `connected-account`, `Shared` — refuses to start,
+ *  where it used to come up as a shared gate with no word of why. Unset or empty → `shared`. */
+export function parseGateCredentialMode(raw: string | undefined): GateCredentialMode {
+  if (raw === undefined || raw === '') return 'shared';
+  if (!isGateCredentialMode(raw)) {
+    throw new Error(
+      `GATE_CREDENTIAL_MODE must be ${GATE_CREDENTIAL_MODE_VALUES.join(' | ')} (got "${raw}")`,
+    );
+  }
+  return raw;
 }
 
 /** Validates `GATE_SSH_PORT` (review lane 5, P3 batch — `Number(raw)` on a non-numeric value
@@ -327,7 +345,7 @@ export async function startGatekeeperServer(
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const transport = await buildTransport(env.GATE_TRANSPORT_KIND ?? 'http', env);
   const { resolver: credentialResolver, connectedAccountStore } = buildCredentialResolver(
-    env.GATE_CREDENTIAL_MODE ?? 'shared',
+    parseGateCredentialMode(env.GATE_CREDENTIAL_MODE),
     dataDir,
     env,
   );

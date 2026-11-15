@@ -8,7 +8,9 @@ import {
   VERSION,
   createGatekeeperServer,
   loadSshPolicyTable,
+  parseGateCredentialMode,
   parseSshPort,
+  startGatekeeperServer,
 } from './index.js';
 import type { Transport } from './kinds/index.js';
 
@@ -55,6 +57,47 @@ describe('@nexttime/gatekeeper-base', () => {
     expect(body.ok).toBe(true);
     expect(body.result.operations).toHaveLength(1);
     await app.close();
+  });
+});
+
+describe('parseGateCredentialMode (legacy 764)', () => {
+  it('is shared when unset or empty', () => {
+    expect(parseGateCredentialMode(undefined)).toBe('shared');
+    expect(parseGateCredentialMode('')).toBe('shared');
+  });
+
+  it("takes either of the platform's credential modes", () => {
+    expect(parseGateCredentialMode('shared')).toBe('shared');
+    expect(parseGateCredentialMode('connected_account')).toBe('connected_account');
+  });
+
+  it('throws for any other value instead of silently running as a shared gate', () => {
+    for (const raw of ['connected-account', 'Shared', 'per_principal', ' shared']) {
+      expect(() => parseGateCredentialMode(raw)).toThrow(
+        /GATE_CREDENTIAL_MODE must be shared \| connected_account/,
+      );
+    }
+  });
+
+  it('keeps a gate with an unknown mode from starting', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gate-credential-mode-'));
+    try {
+      const tokenFile = join(dir, 'gate_token');
+      writeFileSync(tokenFile, 'test-token-0123456789abcdef0123456789');
+      const started = startGatekeeperServer({
+        GATE_KERNEL_TOKEN_FILE: tokenFile,
+        GATE_DATA_DIR: dir,
+        GATE_TRANSPORT_KIND: 'cli',
+        GATE_CREDENTIAL_MODE: 'connected-account',
+        GATE_PORT: '0',
+        GATE_BIND_ADDR: '127.0.0.1',
+      });
+      // Closed if it came up after all, so a failing run does not leave a listener behind.
+      started.then((server) => server.close()).catch(() => undefined);
+      await expect(started).rejects.toThrow(/GATE_CREDENTIAL_MODE must be/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
