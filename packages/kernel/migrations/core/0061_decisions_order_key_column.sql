@@ -23,6 +23,10 @@
 -- returned on 0060. No data changes; nothing writes the column (Postgres computes it), and every
 -- INSERT names its columns, so the previous release writes Decisions unchanged on this schema.
 -- Grants are on the table, so the application role reads the new column as it reads the others.
+-- The previous release (0060 shipped in v0.69.2) also reads them correctly on this schema, the
+-- same rows in the same order, but without 0060's index it sorts the workspace's Decisions again,
+-- as releases before 0060 did; reversibility-deltas.json declares its plan tests. After a rollback
+-- by code, 0060's index can be rebuilt with `create index concurrently` (release.md §3.188).
 --
 -- Lock time: adding a stored generated column rewrites `decisions` under an ACCESS EXCLUSIVE lock
 -- until this file commits: every read and write of `decisions` waits for the rewrite and the

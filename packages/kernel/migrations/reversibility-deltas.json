@@ -463,6 +463,38 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, governance 0042: 0042's insert trigger refuses any capability_handles row under a session already revoked (I-H1). The previous release's test fixture inserts its retired source's Handle directly under a session it created revoked; the fixture now inserts the Handle first and revokes the session after. No v0.68.0 product path issues into a revoked session: every reuse lookup filters on expires_at > now(), and every statement that revokes a session pulls expires_at to now."
+    },
+    {
+      "migration": "core/0061_decisions_order_key_column.sql",
+      "baseTests": [
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_idx (legacy 429) exists, is valid, and is keyed by the millisecond in UTC, newest first"
+        },
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_idx (legacy 429) serves query_decisions: the first page, a cursor page and since, for the owner and a member"
+        },
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_idx (legacy 429) serves find_precedents by action kind"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_utc_idx (legacy 429, 760) exists, is valid, and is keyed by the millisecond in UTC, newest first"
+        },
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_utc_idx (legacy 429, 760) serves query_decisions: the first page, a cursor page and since, for the owner and a member"
+        },
+        {
+          "file": "src/substrate/epistemic/decisions-order-index.integration.test.ts",
+          "fullName": "decisions_workspace_created_ms_utc_idx (legacy 429, 760) serves find_precedents by action kind"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, core 0061: 0061 drops 0060's expression index decisions_workspace_created_ms_idx on purpose (under the row-level security of decisions its since and cursor bounds stayed filters, legacy 760) and keys the reads on the stored generated column created_ms_utc. The previous release's suite asserts that index exists and that its reads plan on it. On the new schema the previous release's query_decisions and find_precedents still return the same rows in the same order (its paging test passes); without the index they sort the workspace's Decisions again, as releases before 0060 did. A rollback by code alone is correct; to get its plans back, rebuild 0060's index (release.md §3.188, create index concurrently)."
     }
   ]
 }
