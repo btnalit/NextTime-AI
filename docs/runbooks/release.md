@@ -3170,7 +3170,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   ```sql
   select count(*) from decisions;
   ```
-  嫌排队时间太长，可以在上一版还在跑的时候，事务外提前建好（不阻塞写入），迁移发现已有有效索引就什么都不建：
+  升到 0.69.2 之后的下一版（含 core 0061，见 §3.190）的主机不用做下面这步：0060 与 0061 连续执行，0060 建的索引随即被 0061 删掉。只有停在 0.69.2、或回退代码后要重建 0060 索引时才有用。嫌排队时间太长，可以在上一版还在跑的时候，事务外提前建好（不阻塞写入），迁移发现已有有效索引就什么都不建：
   ```sql
   create index concurrently if not exists decisions_workspace_created_ms_idx
     on decisions (workspace_id, (date_trunc('milliseconds', created_at at time zone 'UTC')) desc, id desc);
@@ -3192,6 +3192,27 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级顺序**：内核与运行时镜像谁先谁后都可以。新运行时配旧内核时不显示拒绝，也不再多一次 401；旧运行时配新内核时忽略新字段，照旧回读、照旧 401。
 - **回滚**：回退代码即可。
 - 无主机动作。
+
+### 3.190 Decision 列表带 since 或游标时也走索引（#1252，遗留 760，core 0061，0.69.2 之后的下一版）
+
+**迁移 core 0061**：`decisions` 加存储生成列 `created_ms_utc timestamp generated always as (date_trunc('milliseconds', created_at at time zone 'UTC')) stored`，建索引 `decisions_workspace_created_ms_utc_idx (workspace_id, created_ms_utc desc, id desc)`，删掉 0060 的 `decisions_workspace_created_ms_idx`。
+
+- **行为变化**：
+  - `query_decisions` 带 `since` 或游标时，扫描从游标处开始、到 `since` 停下，应用角色在 RLS 下也一样（0060 下应用角色只有首页受益）。顺序、分页、游标格式不变。
+  - `since` 不是合法时间时返回 400 `invalid_params`（WS 为 `INVALID_PARAMS`，消息以 `since:` 开头），原来是 500。
+- **升级影响**：加存储生成列会重写 `decisions`，期间 ACCESS EXCLUSIVE 锁住表，读和写都等它完成（本地 20.6 万行、64 MB：0.7 s）。没有不锁表的做法。
+- **升级前只读预检**（结果记 `docs/private/`）：据行数估计锁的时长。
+  ```sql
+  select count(*) from decisions;
+  ```
+  从 0.69.2 之前的版本升级时 0060 与 0061 连续执行；§3.188 的事务外预建对升到本版的主机不用做。
+- **升级后只读核对**：
+  - `select attgenerated from pg_attribute where attrelid = 'decisions'::regclass and attname = 'created_ms_utc';` 为 `s`；
+  - `select indisvalid from pg_index where indexrelid = 'decisions_workspace_created_ms_utc_idx'::regclass;` 为 `t`；
+  - `select to_regclass('decisions_workspace_created_ms_idx');` 为空；
+  - core 迁移版本为 61。
+- **回滚**：0.69.2 的代码直接跑在新 schema 上，结果正确，Decision 列表回到每页排序（见 §6 那一行），回退代码即可。要撤 schema：`drop index decisions_workspace_created_ms_utc_idx;`，`alter table decisions drop column created_ms_utc;`，需要时按 §3.188 用 `concurrently` 重建 0060 的索引，再 `delete from schema_migrations where module = 'core' and version = 61`。
+- 下一次主机升级的提示要带上本节和 §3.188。
 
 ## 4. Hotfix 流程
 
@@ -3385,6 +3406,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.0 | governance `0045_console_session_is_live`（#1180，遗留 712）：`security definer` 函数 `console_session_is_live(uuid, uuid)`，只回答这个用户的这个控制台会话是否还在；只授给 `nexttime_app` | 可逆 | 只加函数：上一版不调它 | 只需回退代码。要撤：`drop function console_session_is_live(uuid, uuid)`，再删 `schema_migrations` 里 governance 45 那一行 |
 | v0.69.1 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
 | v0.69.2 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
+| 0.69.2 之后的下一版 | core `0061_decisions_order_key_column`（#1252，遗留 760）：`decisions` 加存储生成列 `created_ms_utc` 与索引 `decisions_workspace_created_ms_utc_idx`，删 0060 的索引（重写表） | 可逆 | 上一版代码不读新列、不引用新索引，直接跑在新 schema 上，结果正确，Decision 列表回到每页排序；`reversibility-deltas.json` 登记了 v0.69.2 的三条计划测试；#1252 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_utc_idx;`，`alter table decisions drop column created_ms_utc;`，可选按 §3.188 重建 0060 索引，再删 `schema_migrations` 里 core 61 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
