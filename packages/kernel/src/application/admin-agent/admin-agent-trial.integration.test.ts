@@ -761,13 +761,25 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Legacy 443: a client the person issued a Handle to (`mcp_session`) starts its Task from
         // no Turn, whichever of the person's agents is running one.
         const ownClient = await entryAgent('mcp_session');
+        // The supervisor fake keeps every WorkerRun running: end each of these once checked, so
+        // the person stays under the concurrency quota for the calls below.
+        const cancel = (taskId: string) =>
+          dispatchCapability({ pool }, person(trialWs, adminPrincipalId), 'cancel_task', {
+            taskId,
+          });
         const ownTask = await invoke(ownClient, 'T-attr-2b');
         expect(await taskTurn(ownTask)).toBeNull();
-        // The supervisor fake keeps every WorkerRun running: end this one so the person stays
-        // under the concurrency quota for the call below.
-        await dispatchCapability({ pool }, person(trialWs, adminPrincipalId), 'cancel_task', {
-          taskId: ownTask,
-        });
+        await cancel(ownTask);
+        // Nor does a Handle whose session this workspace has no row of (dispatch reads none, legacy
+        // 759: its kind is `null`, never taken for an entry session).
+        if (entryCaller.channel !== 'handle') throw new Error('expected a Handle caller');
+        const noSession: ResolvedCaller = {
+          ...entryCaller,
+          claims: { ...entryCaller.claims, sid: randomUUID() },
+        };
+        const noSessionTask = await invoke(noSession, 'T-attr-2c');
+        expect(await taskTurn(noSessionTask)).toBeNull();
+        await cancel(noSessionTask);
 
         // No running Turn of its own: the admin agent's Task belongs to no Turn, even with the
         // person's entry Turn still running.

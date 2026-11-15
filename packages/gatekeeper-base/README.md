@@ -157,6 +157,9 @@ Exactly one `CredentialResolver` per gate instance (a gate backs one target syst
   appears in `docker inspect`); the key file's raw bytes are used directly if exactly 32 bytes,
   else SHA-256-hashed to derive one.
 
+`startGatekeeperServer()` picks one by `GATE_CREDENTIAL_MODE`: `shared` (also when unset or empty)
+or `connected_account`. Any other value refuses to start rather than run as a shared gate.
+
 The kernel never receives credential material — every `request_action` call carries only
 `on_behalf_of`; the gate resolves the actual credential itself.
 

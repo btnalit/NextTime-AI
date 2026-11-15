@@ -136,6 +136,37 @@ describe('loadConnectorPresets (S11 P1-F)', () => {
     ).toMatch(/transportKind/);
   });
 
+  // Legacy 763: the mode is one of the platform's own (`GATE_CREDENTIAL_MODE_VALUES`), never a
+  // string the gate host would then have to guess at.
+  it('takes either credential mode and refuses any other, or none', async () => {
+    const dir = await presetsDir({
+      wiki: {
+        preset: PRESET_YAML.replace('credentialMode: shared', 'credentialMode: connected_account'),
+        operations: [KB_LIST],
+      },
+    });
+    const [wiki] = await loadConnectorPresets({ presetsDir: dir });
+    expect(wiki?.credentialMode).toBe('connected_account');
+    for (const mode of ['connected-account', 'Shared', 'per_principal', "''"]) {
+      expect(
+        await refusal({
+          wiki: {
+            preset: PRESET_YAML.replace('credentialMode: shared', `credentialMode: ${mode}`),
+            operations: [KB_LIST],
+          },
+        }),
+      ).toMatch(/credentialMode/);
+    }
+    expect(
+      await refusal({
+        wiki: {
+          preset: PRESET_YAML.replace('credentialMode: shared\n', ''),
+          operations: [KB_LIST],
+        },
+      }),
+    ).toMatch(/credentialMode/);
+  });
+
   it('refuses missing, empty, malformed, mis-bound or repeated Operations', async () => {
     expect(await refusal({ wiki: { preset: PRESET_YAML } })).toMatch(
       /operations\.json.*cannot be read/,
