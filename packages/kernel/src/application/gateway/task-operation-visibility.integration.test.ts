@@ -331,6 +331,29 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(other.id).toBe(taskId);
           expect(other).not.toHaveProperty('callerCapabilities');
         }
+
+        // Legacy 762: nor does `list_tasks`, which shares the Task's shape. It is human-channel
+        // only, so no Handle — this Task's own Worker's included — lists Tasks at all.
+        const listed = (await dispatchCapability(
+          { pool },
+          humanCaller(requesterId, 'member'),
+          'list_tasks',
+          {},
+        )) as { items: readonly { id: string }[] };
+        const item = listed.items.find((task) => task.id === taskId);
+        expect(item).toBeDefined();
+        expect(item).not.toHaveProperty('callerCapabilities');
+        await expect(
+          dispatchCapability(
+            { pool },
+            handleCaller(requesterId, sessionId, {
+              capabilities: [...workerScope.capabilities, 'list_tasks'],
+              resources: {},
+            }),
+            'list_tasks',
+            {},
+          ),
+        ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
       it('legacy 420: shows a result stored before the Worker report was scrubbed masked, to every reader', async () => {

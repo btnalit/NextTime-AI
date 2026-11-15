@@ -1189,6 +1189,10 @@ async function dispatchInActingContext(
           : {}),
         // S11 AA2: an admin agent's session and its administrator, checked above.
         ...(adminAgent ? { adminAgent } : {}),
+        // Legacy 759: the Handle's session kind, read above, so a handler need not read it again.
+        ...(caller.channel === 'handle' && caller.claims.sid
+          ? { handleSessionKind: handleSessionKind ?? null }
+          : {}),
         // Legacy 712: what this human-channel call was authenticated with — the cookie's console
         // session, or (no console login behind it) the API key it presented, by its hash. A Handle
         // issued for this call is refused under the authority locks once it is revoked or, for a
