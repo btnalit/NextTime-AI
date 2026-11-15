@@ -57,25 +57,28 @@ RUN groupadd --system --gid 10001 nexttime \
 
 WORKDIR /app
 COPY --from=build --chown=nexttime:nexttime /out/kernel .
+# Legacy 414: the four content COPYs below (ontology/, packs/, connectors/, pi.version) are shipped
+# content the kernel only reads, so they stay root-owned — no `--chown` — and the runtime user
+# (`USER nexttime`) cannot change them in place.
 # S2.6: repo-root ontology/ (platform-meta.yaml, entry-agent.yaml, ops-runner.yaml — design doc
 # §7.10 "内容以两种包交付...ontology/<domain>/") is *not* part of the @nexttime/kernel package
 # itself (`pnpm deploy` above only carries that package's own files), so it needs its own COPY
 # here. ONTOLOGY_DIR tells `substrate/ontology/loader.ts`'s `resolveOntologyDir` exactly where to
 # find it — see that file's own doc comment for why its relative-path fallback (correct in local
 # dev) cannot resolve inside this flattened image.
-COPY --from=build --chown=nexttime:nexttime /workspace/ontology ./ontology
+COPY --from=build /workspace/ontology ./ontology
 # S11 P1-C: repo-root packs/ (Pack Contract v1 manifests, `application/packs/registry.ts`) — the
 # same reason as ontology/ above; PACKS_DIR is its `resolvePacksDir`. The ontology components a
 # manifest names are read from ONTOLOGY_DIR.
-COPY --from=build --chown=nexttime:nexttime /workspace/packs ./packs
+COPY --from=build /workspace/packs ./packs
 # S11 P1-F: repo-root connectors/ (connector presets, `application/gates/presets.ts`) — the same
 # reason again; CONNECTOR_PRESETS_DIR is its `resolveConnectorPresetsDir`. The gate host reads a
 # preset instance's Operations from the kernel's pull, never from this directory.
-COPY --from=build --chown=nexttime:nexttime /workspace/connectors ./connectors
+COPY --from=build /workspace/connectors ./connectors
 # The pi version this release expects (the same repo-root file deploy/worker-runtime/Dockerfile
 # installs pi from) — the console's "pi 运行时" card compares it with the active runtime image's
 # own ai.nexttime.pi-version label (application/platform/runtime.ts `pi_drift`).
-COPY --from=build --chown=nexttime:nexttime /workspace/pi.version ./pi.version
+COPY --from=build /workspace/pi.version ./pi.version
 
 USER nexttime
 ENV NODE_ENV=production
