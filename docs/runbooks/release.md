@@ -3181,6 +3181,18 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：上一版本的代码不认这个索引，直接跑在新 schema 上（见 §6 那一行），回退代码即可。要删索引：`drop index decisions_workspace_created_ms_idx;`，再 `delete from schema_migrations where module = 'core' and version = 60`。
 - 下一次主机升级的提示要带上本节。
 
+### 3.189 `report_task_result` 的回答带逐条拒绝的条目（#1249，遗留 650，0.69.1 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：
+  - `report_task_result` 的回答多三个数组：`factsRejected`、`proposedOperationsRejected`、`evidenceDropped`，内容与 `tasks.result` 记下的是同一份；没有拒绝时为空数组。契约是加法（`docs/contracts/capabilities.json` 只这一项变）。
+  - 新运行时的 Worker 从回答里取被拒的条目交给模型，上报之后不再调 `get_task`。所以内核日志里每次 Worker 运行末尾那条 `get_task` 401（Handle 已吊销）不再出现，工具结果里也第一次能看到逐条拒绝。
+  - 没声明 `search` 的 Worker 每次运行仍有一条 `search` 403 和一条 `not_in_scope` 拒绝审计（遗留 761），这不是越权，也不是吊销后重试。
+- **升级顺序**：内核与运行时镜像谁先谁后都可以。新运行时配旧内核时不显示拒绝，也不再多一次 401；旧运行时配新内核时忽略新字段，照旧回读、照旧 401。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
