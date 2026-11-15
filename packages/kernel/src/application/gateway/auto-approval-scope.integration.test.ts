@@ -425,11 +425,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
 
         // A request made before the narrowing carries no snapshot of it, but "always allow"
-        // outlives the request: the narrowing in force now applies too.
-        await dispatchCapability({ pool }, owner, 'set_policy', {
-          policy: { gatekeeperId: labGateId, actionKindTag: SELF_OP.name, autoApprove: false },
-        });
+        // outlives the request: the narrowing in force now applies too. Legacy 316: since #592 an
+        // omitted `requesterCanApprove` keeps the rule's, so lifting the narrowing takes `null`.
+        const lifted = (await dispatchCapability({ pool }, owner, 'set_policy', {
+          policy: {
+            gatekeeperId: labGateId,
+            actionKindTag: SELF_OP.name,
+            autoApprove: false,
+            requesterCanApprove: null,
+          },
+        })) as PolicyWire;
+        expect(lifted.requesterCanApprove).toBeNull();
         const before = await request(labGateId, SELF_OP.name, labOperatorId);
+        // Made with no narrowing in force: it is the current rule, not this request's own
+        // snapshot, that refuses below.
+        expect(before.requesterCanApprove).not.toBe(false);
         await dispatchCapability({ pool }, owner, 'set_policy', {
           policy: {
             gatekeeperId: labGateId,
