@@ -1062,7 +1062,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             { kind: 'note', content: { text: 'for the valid one' }, factIndex: 0 },
             { kind: 'note', content: { text: 'for the refused one' }, factIndex: 1 },
           ],
-        })) as { id: string; status: string; factIds: string[] };
+        })) as { id: string; status: string; factIds: string[]; factsRejected: unknown[] };
         expect(result.id).toBe(taskId);
         expect(result.status).toBe('completed');
         expect(result.factIds).toHaveLength(1);
@@ -1105,6 +1105,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           reason: 'undeclared_link_type',
           linkType: 'observed_state_of',
         });
+        // Legacy 650: the answer carries the guard's own fields (sourceType, targetType, expected)
+        // exactly as recorded.
+        expect(result.factsRejected).toEqual(stored.task?.result.factsRejected);
         // The savepoint took the undeclared-type endpoint upsert with it.
         expect(stored.orphans).toBe('0');
         expect(stored.audit).toHaveLength(1);
@@ -1305,20 +1308,30 @@ describe.runIf(DATABASE_URL !== undefined)(
               },
             },
           ],
-        })) as { status: string };
+        })) as {
+          status: string;
+          factsRejected: unknown[];
+          proposedOperationsRejected: unknown[];
+        };
         expect(result.status).toBe('completed');
 
         const stored = await inTx(ownerId, async (client) => {
-          const task = await client.query<{ result: { factsRejected: unknown[] } }>(
-            'select result from tasks where workspace_id = $1 and id = $2',
-            [workspaceId, taskId],
-          );
+          const task = await client.query<{
+            result: { factsRejected: unknown[]; proposedOperationsRejected: unknown[] };
+          }>('select result from tasks where workspace_id = $1 and id = $2', [workspaceId, taskId]);
           const audit = await client.query<{ action: string; payload: Record<string, unknown> }>(
             "select action, payload from audit_records where workspace_id = $1 and resource_id = $2 and action in ('task.result_fact_rejected', 'task.result_proposal_rejected') order by action, payload ->> 'factIndex'",
             [workspaceId, taskId],
           );
-          return { factsRejected: task.rows[0]?.result.factsRejected, audit: audit.rows };
+          return {
+            factsRejected: task.rows[0]?.result.factsRejected,
+            proposedOperationsRejected: task.rows[0]?.result.proposedOperationsRejected,
+            audit: audit.rows,
+          };
         });
+        // Legacy 650: the answer carries the same bounded, visible echoes.
+        expect(result.factsRejected).toEqual(stored.factsRejected);
+        expect(result.proposedOperationsRejected).toEqual(stored.proposedOperationsRejected);
         const echoed = JSON.stringify([stored.factsRejected, stored.audit]);
         // Nothing unseen survives: no bidi override, no zero-width character, no raw line break.
         expect(echoed).not.toMatch(/[\u202E\u200B]/);
@@ -1482,13 +1495,17 @@ describe.runIf(DATABASE_URL !== undefined)(
               { gatekeeperId, operation: proposalOperation('demo.‮flip') },
               { gatekeeperId, operation: proposalOperation(takenName) },
             ],
-          })) as { status: string; factIds: string[] };
+          })) as { status: string; factIds: string[]; proposedOperationsRejected: unknown[] };
           expect(result.status).toBe('completed');
           expect(result.factIds).toHaveLength(1);
 
           const stored = await readProposalOutcome(taskId, gatekeeperId);
           expect(stored.task?.status).toBe('completed');
           expect(stored.task?.result.factIds).toEqual(result.factIds);
+          // Legacy 650: the answer carries `problem`, `existingStatus` and `detail` as recorded.
+          expect(result.proposedOperationsRejected).toEqual(
+            stored.task?.result.proposedOperationsRejected,
+          );
           expect(stored.task?.result.proposedOperationsRejected).toEqual([
             expect.objectContaining({
               index: 1,

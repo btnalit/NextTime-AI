@@ -638,6 +638,45 @@ describe('registerWorkerMode', () => {
     logSpy.mockRestore();
   });
 
+  it('report_result shows only the well-formed refusal entries of an answer whose lists hold anything else (legacy 650)', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: {
+        id: 'task-1',
+        status: 'completed',
+        activityId: 'act-1',
+        factIds: [],
+        factsRejected: [null, 'x', { index: 0, linkType: 'hosts', reason: 'undeclared_link_type' }],
+        proposedOperationsRejected: { index: 0, reason: 'gatekeeper_not_found' },
+        evidenceDropped: [1, '2', null],
+      },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        summary: 'x',
+        factsToAssert: [{ linkType: 'hosts', source: hostRef, target: serviceRef }],
+      },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    const refusedLines = text.split('\n').filter((line) => line.startsWith('- '));
+    expect(refusedLines).toEqual([
+      '- factsToAssert[0] (hosts): undeclared_link_type',
+      '- evidence[1]: dropped (its factIndex points outside factsToAssert)',
+    ]);
+    logSpy.mockRestore();
+  });
+
   it('report_result on a network failure records the contract and terminates; agent_settled then re-sends it and exits 0', async () => {
     const unreachable = new KernelClient({
       kernelUrl: 'http://127.0.0.1:1',
