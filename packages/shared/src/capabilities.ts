@@ -2669,7 +2669,8 @@ const taskCapabilities = [
       'unknown id. An attempt of a goal step also carries the output schema its result is held ' +
       'to (outputSchema), the last report that schema refused (rejectedOutput: the output and ' +
       'each problem’s place) and, when it redoes an attempt that ended without an accepted ' +
-      'result, that attempt (reworkOf).',
+      'result, that attempt (reworkOf). Read by the Task’s own WorkerRun Handle, it also lists ' +
+      'the capabilities that Handle holds (callerCapabilities).',
   },
   {
     // S2.9 addition (task brief: "add a small kernel capability/endpoint if none exists — e.g.

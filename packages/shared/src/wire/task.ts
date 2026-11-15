@@ -152,6 +152,13 @@ export const TaskWireSchema = z
      *  administrator's own Principal, so this is what says the agent started it, not the person.
      *  Fixed when the Task is created (task 0013). Absent for every other Task. */
     adminAgentSessionId: z.string().optional(),
+    /** Legacy 761: only in `get_task`'s answer to one of this Task's own WorkerRun Handles — the
+     *  capability names that Handle's verified scope holds, so the Worker skips a call the kernel
+     *  would refuse as `not_in_scope` (its `search` for context, when its definition grants none).
+     *  It describes the grant, never widens it: every call is still authorized against the same
+     *  scope. Absent for every other caller, from `list_tasks` (which shares this shape), and
+     *  from kernels before legacy 761. */
+    callerCapabilities: z.array(z.string()).optional(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;

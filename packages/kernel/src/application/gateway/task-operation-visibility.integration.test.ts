@@ -296,6 +296,43 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await read(handleCaller(requesterId, sessionId, scope))).input).toEqual(input);
       });
 
+      it('tells the Task’s own Worker, and no one else, which capabilities its Handle holds (legacy 761)', async () => {
+        const { taskId, sessionId } = await seedTask(requesterId);
+        const workerScope: CapabilityScope = {
+          capabilities: ['get_task', 'report_task_result', 'list_allowed_operations'],
+          resources: {},
+        };
+        const requesterScope: CapabilityScope = {
+          capabilities: ['get_task', 'search'],
+          resources: {},
+        };
+        const read = async (caller: ResolvedCaller) =>
+          (await dispatchCapability({ pool }, caller, 'get_task', { taskId })) as {
+            id: string;
+            callerCapabilities?: readonly string[];
+          };
+
+        // Its own WorkerRun's Handle: the verified scope, as is (search absent: worker mode then
+        // does not call it for context).
+        const own = await read(handleCaller(requesterId, sessionId, workerScope));
+        expect(own.callerCapabilities).toEqual([
+          'get_task',
+          'report_task_result',
+          'list_allowed_operations',
+        ]);
+        // The requester's entry agent, the requester and the owner in the console read the Task
+        // without it.
+        for (const caller of [
+          handleCaller(requesterId, randomUUID(), requesterScope),
+          humanCaller(requesterId, 'member'),
+          humanCaller(ownerId, 'owner'),
+        ]) {
+          const other = await read(caller);
+          expect(other.id).toBe(taskId);
+          expect(other).not.toHaveProperty('callerCapabilities');
+        }
+      });
+
       it('legacy 420: shows a result stored before the Worker report was scrubbed masked, to every reader', async () => {
         const { taskId, sessionId } = await seedTask(requesterId);
         await admin((client) =>
