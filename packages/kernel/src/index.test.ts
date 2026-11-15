@@ -85,6 +85,65 @@ describe('createServer — correlation context (leftover 87)', () => {
   });
 });
 
+// Legacy 241: V8's own JSON.parse message quotes a slice of the input (`Unexpected token … "…" is
+// not valid JSON`), so a malformed body carrying a credential would land in the 4xx log line —
+// and the kernel's logs are readable through the docker gate's `container.logs_tail`. The kernel
+// keeps Fastify's default JSON parser, which answers and logs the fixed
+// FST_ERR_CTP_INVALID_JSON_BODY / FST_ERR_CTP_EMPTY_JSON_BODY instead and drops the parse error.
+// These cases pin that, so a Fastify upgrade or a custom parser that brings V8's message back fails
+// here.
+describe('createServer — a malformed JSON body stays out of the log (legacy 241)', () => {
+  /** A synthetic credential, short enough that V8's message would quote all of it: the message
+   *  quotes the whole input when it is short, else about ten characters either side of the error. */
+  const SECRET = 'zqxjwvk';
+
+  function serverWithCapturedLog() {
+    const lines: string[] = [];
+    const app = createServer(
+      { pool: unusedPool },
+      { logger: { level: 'info', stream: { write: (line: string) => lines.push(line) } } },
+    );
+    return { app, lines };
+  }
+
+  const bodies: readonly (readonly [string, string, string])[] = [
+    ['a bare credential', `{"apiKey":${SECRET}}`, 'FST_ERR_CTP_INVALID_JSON_BODY'],
+    [
+      'a stray token right before the credential, deep in the body',
+      `{"note":"${'n'.repeat(200)}","password": x"${SECRET}"}`,
+      'FST_ERR_CTP_INVALID_JSON_BODY',
+    ],
+    ['nothing but the credential', SECRET, 'FST_ERR_CTP_INVALID_JSON_BODY'],
+    ['cut off after the credential', `{"apiKey":"${SECRET}",`, 'FST_ERR_CTP_INVALID_JSON_BODY'],
+    ['a prototype key', `{"__proto__":{"key":"${SECRET}"}}`, 'FST_ERR_CTP_INVALID_JSON_BODY'],
+    ['empty', '', 'FST_ERR_CTP_EMPTY_JSON_BODY'],
+  ];
+
+  for (const url of ['/api/cap/list_tasks', '/api/auth/login']) {
+    for (const [name, payload, code] of bodies) {
+      it(`POST ${url}, body ${name}: 400 ${code}, and neither the log nor the reply quotes it`, async () => {
+        const { app, lines } = serverWithCapturedLog();
+        const response = await app.inject({
+          method: 'POST',
+          url,
+          headers: { 'content-type': 'application/json' },
+          payload,
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ code });
+        expect(response.body).not.toContain(SECRET);
+        // The refusal is logged — so the assertion below reads a real 4xx line, not silence.
+        const refusals = lines
+          .map((line) => JSON.parse(line) as { err?: { code?: string } })
+          .filter((entry) => entry.err?.code === code);
+        expect(refusals).toHaveLength(1);
+        expect(lines.join('')).not.toContain(SECRET);
+        await app.close();
+      });
+    }
+  }
+});
+
 describe('GET /api/health', () => {
   it('responds with status ok, with no database access', async () => {
     const app = createServer({ pool: unusedPool });
