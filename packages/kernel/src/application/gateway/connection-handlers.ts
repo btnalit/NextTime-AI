@@ -6,7 +6,7 @@ import {
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
-import type { Operation, Role } from '@nexttime/shared';
+import type { GateCredentialMode, Operation, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type {
   GateConnectionSecrets,
@@ -495,7 +495,7 @@ interface CreateConnectionParams {
   readonly endpoint: string;
   readonly connectionSecret?: string;
   readonly credentials?: unknown;
-  readonly credentialKind?: 'shared' | 'connected_account';
+  readonly credentialKind?: GateCredentialMode;
   readonly onBehalfOf?: string;
   readonly manifestSource?: string;
 }
@@ -668,7 +668,7 @@ export const createConnectionHandler: CapabilityHandler = async (
     manifestSource: params.manifestSource,
   });
 
-  const effectiveCredentialKind: 'shared' | 'connected_account' =
+  const effectiveCredentialKind: GateCredentialMode =
     params.credentialKind ?? (params.credentials !== undefined ? 'connected_account' : 'shared');
   if (effectiveCredentialKind === 'connected_account' && params.credentials === undefined) {
     throw new ConnectionCredentialRequiredError();

@@ -1,4 +1,8 @@
-import { type GateHostedDefinitionWire, isGenericConnector } from '@nexttime/shared';
+import {
+  type GateCredentialMode,
+  type GateHostedDefinitionWire,
+  isGenericConnector,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { ConnectorPreset } from './presets.js';
 import type { ConnectorMode, GateTransportKind } from './store.js';
@@ -19,7 +23,7 @@ export interface HostedGateRequest {
   readonly preset?: string;
   readonly transportKind?: 'http' | 'mcp';
   readonly target: string;
-  readonly credentialMode?: 'shared' | 'connected_account';
+  readonly credentialMode?: GateCredentialMode;
   readonly manifestSource?: string | null;
   readonly connector?: string;
 }

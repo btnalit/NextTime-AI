@@ -31,6 +31,7 @@ import {
   type PlatformStatePresetOperationWire,
   type PlatformStatePresetWire,
   capabilityHasSideEffects,
+  isGateCredentialMode,
   isGenericConnector,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -196,8 +197,7 @@ export function projectGateInstance(instance: GateInstanceWire): PlatformStateGa
     transportKind,
     hosted: instance.hosted === true,
     preset: shaped(definition?.preset, CONNECTOR_NAME_PATTERN),
-    credentialMode:
-      credentialMode === 'shared' || credentialMode === 'connected_account' ? credentialMode : null,
+    credentialMode: isGateCredentialMode(credentialMode) ? credentialMode : null,
     status,
     trust,
     health,
@@ -280,10 +280,7 @@ export function projectPreset(
 ): PlatformStatePresetWire | null {
   const name = shaped(preset.name, CONNECTOR_NAME_PATTERN);
   const transportKind = preset.transportKind === 'http' ? 'http' : null;
-  const credentialMode =
-    preset.credentialMode === 'shared' || preset.credentialMode === 'connected_account'
-      ? preset.credentialMode
-      : null;
+  const credentialMode = isGateCredentialMode(preset.credentialMode) ? preset.credentialMode : null;
   if (name === null || transportKind === null || credentialMode === null) return null;
   const operations = Array.isArray(preset.operations) ? preset.operations : [];
   return {

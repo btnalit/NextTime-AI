@@ -22,6 +22,7 @@ import {
   EntryAgentSessionStatusSchema,
   EpistemicStatusSchema,
   ExtensionModeSchema,
+  GATE_CREDENTIAL_MODE_VALUES,
   GOAL_ABSENCE_BASELINE_STATUS_VALUES,
   GOAL_ACCEPTANCE_CHECK_KIND_VALUES,
   GOAL_ACCEPTANCE_CHECK_STATUS_VALUES,
@@ -30,6 +31,7 @@ import {
   GOAL_RUN_PAUSE_REASON_VALUES,
   GOAL_RUN_STATUS_VALUES,
   GRANT_STATUS_VALUES,
+  GateCredentialModeSchema,
   GoalAbsenceBaselineStatusSchema,
   GoalAcceptanceCheckKindSchema,
   GoalAcceptanceCheckStatusSchema,
@@ -78,6 +80,7 @@ import {
   WORKER_RUN_STATUS_VALUES,
   WorkerDefinitionKindSchema,
   WorkerRunStatusSchema,
+  isGateCredentialMode,
   isMetaOntologyObjectType,
 } from './enums.js';
 
@@ -245,6 +248,12 @@ const enumsUnderTest = [
     ['entry', 'worker', 'interactive', 'admin'],
   ],
   [
+    'GateCredentialMode',
+    GATE_CREDENTIAL_MODE_VALUES,
+    GateCredentialModeSchema,
+    ['shared', 'connected_account'],
+  ],
+  [
     'MetaOntologyObjectType',
     META_ONTOLOGY_OBJECT_TYPE_VALUES,
     MetaOntologyObjectTypeSchema,
@@ -359,8 +368,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 39 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus) + S11 AA3a (DraftOrigin, legacy 293)', () => {
-    expect(enumsUnderTest).toHaveLength(39);
+  it('covers all 39 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus) + S11 AA3a (DraftOrigin, legacy 293) + legacy 757 (GateCredentialMode)', () => {
+    expect(enumsUnderTest).toHaveLength(40);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {
@@ -384,6 +393,17 @@ describe('enums', () => {
       });
     });
   }
+});
+
+describe('isGateCredentialMode (legacy 757)', () => {
+  it('accepts every gate credential mode and nothing else', () => {
+    for (const value of GATE_CREDENTIAL_MODE_VALUES) {
+      expect(isGateCredentialMode(value)).toBe(true);
+    }
+    for (const value of ['', 'Shared', 'per_member', null, undefined, 1, ['shared'], {}]) {
+      expect(isGateCredentialMode(value)).toBe(false);
+    }
+  });
 });
 
 describe('isMetaOntologyObjectType', () => {

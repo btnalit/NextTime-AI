@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CONNECTOR_NAME_PATTERN,
+  type GateCredentialMode,
+  GateCredentialModeSchema,
   type Operation,
   OperationSchema,
   isGenericConnector,
@@ -58,7 +60,7 @@ const PresetFileSchema = z
     /** Presets bring their Operations, which only an http instance takes (an mcp instance lists
      *  them on the target); an mcp preset joins this schema when one is needed. */
     transportKind: z.literal('http'),
-    credentialMode: z.enum(['shared', 'connected_account']),
+    credentialMode: GateCredentialModeSchema,
     targetHint: z.string().trim().min(1),
     credentialHint: z.string().trim().min(1),
   })
@@ -69,7 +71,7 @@ export interface ConnectorPreset {
   readonly displayName: string;
   readonly summary: string;
   readonly transportKind: 'http';
-  readonly credentialMode: 'shared' | 'connected_account';
+  readonly credentialMode: GateCredentialMode;
   readonly targetHint: string;
   readonly credentialHint: string;
   readonly operations: readonly Operation[];
