@@ -3214,6 +3214,17 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：0.69.2 的代码直接跑在新 schema 上，结果正确，Decision 列表回到每页排序（见 §6 那一行），回退代码即可。要撤 schema：`drop index decisions_workspace_created_ms_utc_idx;`，`alter table decisions drop column created_ms_utc;`，需要时按 §3.188 用 `concurrently` 重建 0060 的索引，再 `delete from schema_migrations where module = 'core' and version = 61`。
 - 下一次主机升级的提示要带上本节和 §3.188。
 
+### 3.191 Worker 的 Handle 没有 `search` 时不再调它（#1255，遗留 761，0.69.2 之后的下一版）
+
+没有迁移，没有主机数据影响。
+
+- **行为变化**：WorkerDefinition 声明的能力里没有 `search` 的 Worker，不再在每次运行开始时调 `search`。内核日志里那条 `search` 403、审计里那条 `not_in_scope` 拒绝不再出现。注入的上下文不变（以前也因为被拒而没有相关事实）。
+- **契约加法**：`get_task` 回答给这个 Task 自己的 WorkerRun Handle 时多一个可选字段 `callerCapabilities`（取 Handle 已验证的 scope）。其他调用方与 `list_tasks` 不带这个字段。`docs/contracts/capabilities.json` 只这一项变。
+- **升级影响**：无 compose 或 env 变化，运行时契约不变，内核与运行时镜像谁先谁后都可以。旧内核配新运行时、新内核配旧运行时，都照旧调用 `search`。
+- **升级后只读核对（可选）**：跑一个不含 `search` 的 Worker，内核日志里没有它的 `search` 403，审计里也没有这次运行的 `not_in_scope`。
+- **回滚**：回退代码即可。
+- 无主机动作。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
