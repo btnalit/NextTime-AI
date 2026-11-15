@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GateCredentialModeSchema } from '../enums.js';
 
 // ---------------------------------------------------------------------------------------------
 // wire/gate-instance-fields: connector names and what creating a gate-host instance takes — shared
@@ -52,7 +53,7 @@ export const gateInstanceCreateFields = {
   transportKind: z.enum(['http', 'mcp']).optional(),
   target: z.string().url().max(GATE_INSTANCE_TARGET_MAX_LENGTH),
   /** Required without `preset`. */
-  credentialMode: z.enum(['shared', 'connected_account']).optional(),
+  credentialMode: GateCredentialModeSchema.optional(),
   /** http: the OpenAPI document URL the host imports Operations from (required without `preset` — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
   manifestSource: z.string().url().max(2000).nullable().optional(),
   /** P1: the connector (接入包) the instance belongs to, named after the system it serves.

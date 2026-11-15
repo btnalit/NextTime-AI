@@ -2,6 +2,7 @@ import {
   CONNECTOR_NAME_PATTERN,
   type ConnectorPresetWire,
   type ConnectorWire,
+  type GateCredentialMode,
   type GateInstanceWire,
   isGenericConnector,
 } from '@nexttime/shared';
@@ -44,7 +45,7 @@ export interface CreateGateInstanceFormProps {
 }
 
 type TransportKind = 'http' | 'mcp';
-type CredentialMode = 'shared' | 'connected_account';
+type CredentialMode = GateCredentialMode;
 /** Where the instance is filed (P1): a connector named after its system, or the generic one of its
  *  kind (`http` / `mcp`) — whose mode also decides whether workspaces connect that kind themselves. */
 type ConnectorChoice = 'system' | 'generic';

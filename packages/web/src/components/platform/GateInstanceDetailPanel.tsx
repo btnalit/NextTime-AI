@@ -1,6 +1,7 @@
 import type {
   AvailableGateInstanceWire,
   ConnectorWire,
+  GateCredentialMode,
   GateHostTokenWire,
   GateInstanceWire,
   GateTrustWire,
@@ -631,7 +632,7 @@ function HostedNextSteps({
   credentialMode,
 }: {
   readonly instance: GateInstanceWire;
-  readonly credentialMode: 'shared' | 'connected_account';
+  readonly credentialMode: GateCredentialMode;
 }) {
   const t = useT();
   const display = deriveGateInstanceStatus(instance);

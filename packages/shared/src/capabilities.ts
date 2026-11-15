@@ -8,6 +8,7 @@ import {
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
   DraftKindSchema,
+  GateCredentialModeSchema,
   GoalPlannerModeSchema,
   PlatformChangeSegmentStatusSchema,
   RejectableDraftKindSchema,
@@ -990,7 +991,7 @@ const connectionCapabilities = [
         endpoint: z.string().min(1),
         connectionSecret: z.string().min(1).optional(),
         credentials: z.unknown().optional(),
-        credentialKind: z.enum(['shared', 'connected_account']).optional(),
+        credentialKind: GateCredentialModeSchema.optional(),
         onBehalfOf: id.optional(),
         manifestSource: z.string().optional(),
       })

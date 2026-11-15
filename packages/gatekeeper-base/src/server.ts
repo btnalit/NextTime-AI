@@ -1,5 +1,6 @@
 import {
   CORRELATION_ID_HEADER,
+  type GateCredentialMode,
   PROMETHEUS_TEXT_CONTENT_TYPE,
   resolveCorrelationId,
 } from '@nexttime/shared';
@@ -154,7 +155,7 @@ export interface CredentialRouteContext {
   readonly afterStore?: (slot: string) => Promise<void>;
   /** The gate's credential mode (gate host: the instance's definition). Absent: `connected_account`
    *  exactly when a store is configured, as a single gate is started (`index.ts`). */
-  readonly credentialMode?: 'shared' | 'connected_account';
+  readonly credentialMode?: GateCredentialMode;
 }
 
 /** What one `/gate/*` request operates on. */

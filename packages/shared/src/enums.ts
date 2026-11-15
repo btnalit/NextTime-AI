@@ -1516,6 +1516,20 @@ export const CONNECTION_REQUEST_STATUS_VALUES = ['requested', 'completed', 'canc
 export type ConnectionRequestStatus = (typeof CONNECTION_REQUEST_STATUS_VALUES)[number];
 export const ConnectionRequestStatusSchema = asEnum(CONNECTION_REQUEST_STATUS_VALUES);
 
+/** How a gate holds the credential it acts with: `shared`, one credential for the whole gate;
+ *  `connected_account`, one per Principal, entered by each member. Either way the credential goes
+ *  to the gate, never to the kernel. A gate-host instance's `credentialMode` (its definition, a
+ *  connector preset, the audit of creating it) and `create_connection`'s `credentialKind` take
+ *  these values. Legacy 757: the one list every wire schema, the kernel and the console read. */
+export const GATE_CREDENTIAL_MODE_VALUES = ['shared', 'connected_account'] as const;
+export type GateCredentialMode = (typeof GATE_CREDENTIAL_MODE_VALUES)[number];
+export const GateCredentialModeSchema = asEnum(GATE_CREDENTIAL_MODE_VALUES);
+
+/** Whether `value` is one of `GATE_CREDENTIAL_MODE_VALUES`. */
+export function isGateCredentialMode(value: unknown): value is GateCredentialMode {
+  return (GATE_CREDENTIAL_MODE_VALUES as readonly unknown[]).includes(value);
+}
+
 // ---------------------------------------------------------------------------------------------
 // §5.1.4 Operation / Capability metadata
 // ---------------------------------------------------------------------------------------------

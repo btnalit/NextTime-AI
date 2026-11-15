@@ -1,4 +1,4 @@
-import type { MintConnectionSecretResultWire } from '@nexttime/shared';
+import type { GateCredentialMode, MintConnectionSecretResultWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
@@ -65,7 +65,7 @@ export interface CompleteConnectionFormProps {
   readonly platformAdmin?: boolean;
 }
 
-type CredentialKind = 'shared' | 'connected_account';
+type CredentialKind = GateCredentialMode;
 
 /** `endpoint_already_connected`'s `details` (#620): the Gatekeeper already at the address. */
 interface ExistingGatekeeper {

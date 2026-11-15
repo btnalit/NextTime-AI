@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AuditActingThroughSchema,
   BlastRadiusSchema,
+  GateCredentialModeSchema,
   OperationModeSchema,
   PublishableStatusSchema,
   RoleSchema,
@@ -576,7 +577,7 @@ export const GateHostedDefinitionWireSchema = z
     /** `shared`: one credential for the whole instance, stored under the shared slot by an
      *  administrator; `connected_account`: one per Principal, entered by each member. Either way the
      *  credential goes browser → gate host directly (决定 ⑩). */
-    credentialMode: z.enum(['shared', 'connected_account']),
+    credentialMode: GateCredentialModeSchema,
     /** http: the OpenAPI document URL the host imports Operations from; mcp: `null` (tools/list on
      *  the target). `null` too for an instance made from a preset (`preset`). */
     manifestSource: z.string().url().nullable(),
@@ -601,7 +602,7 @@ export const ConnectorPresetWireSchema = z
     /** What the system does for the platform, in a sentence an administrator reads. */
     summary: z.string(),
     transportKind: z.enum(['http', 'mcp']),
-    credentialMode: z.enum(['shared', 'connected_account']),
+    credentialMode: GateCredentialModeSchema,
     /** What the address field takes, and which credential to enter after creating, in plain words. */
     targetHint: z.string(),
     credentialHint: z.string(),
@@ -1094,7 +1095,7 @@ export const GateHostTokenWireSchema = z
     token: z.string(),
     url: z.string(),
     onBehalfOf: z.string(),
-    credentialMode: z.enum(['shared', 'connected_account']),
+    credentialMode: GateCredentialModeSchema,
     expiresAt: z.string(),
   })
   .strict();

@@ -1,5 +1,6 @@
 import type {
   ConnectionRequestStatus,
+  GateCredentialMode,
   OperationAbsentAnswersWire,
   PublishableStatus,
 } from '@nexttime/shared';
@@ -45,7 +46,7 @@ export interface CreateConnectionParams {
   /** R-01 (D-01): the gate's own secret from `mint_connection_secret`, already in its config. */
   readonly connectionSecret: string;
   readonly credentials?: unknown;
-  readonly credentialKind?: 'shared' | 'connected_account';
+  readonly credentialKind?: GateCredentialMode;
   readonly onBehalfOf?: string;
   readonly manifestSource?: string;
 }

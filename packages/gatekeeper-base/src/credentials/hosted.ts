@@ -1,4 +1,4 @@
-import { GATE_SHARED_CREDENTIAL_SLOT } from '@nexttime/shared';
+import { GATE_SHARED_CREDENTIAL_SLOT, type GateCredentialMode } from '@nexttime/shared';
 import { CredentialResolutionError } from '../errors.js';
 import type { ConnectedAccountStore } from './connected-account.js';
 import type { CredentialResolver, ResolvedCredential } from './types.js';
@@ -15,9 +15,9 @@ import type { CredentialResolver, ResolvedCredential } from './types.js';
  */
 export class HostedCredentialResolver implements CredentialResolver {
   private readonly store: ConnectedAccountStore;
-  private readonly mode: 'shared' | 'connected_account';
+  private readonly mode: GateCredentialMode;
 
-  constructor(store: ConnectedAccountStore, mode: 'shared' | 'connected_account') {
+  constructor(store: ConnectedAccountStore, mode: GateCredentialMode) {
     this.store = store;
     this.mode = mode;
   }

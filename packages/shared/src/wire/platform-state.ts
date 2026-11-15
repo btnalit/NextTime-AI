@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BlastRadiusSchema, OperationModeSchema } from '../enums.js';
+import { BlastRadiusSchema, GateCredentialModeSchema, OperationModeSchema } from '../enums.js';
 import {
   MigrationRefSchema,
   PiSdkSuiteResultSchema,
@@ -95,7 +95,7 @@ export const PlatformStateGateWireSchema = z
     preset: z.string().regex(CONNECTOR_NAME_PATTERN).nullable(),
     /** A hosted instance's credential mode; `null` for a packaged gate. Which kind of credential,
      *  never the credential. */
-    credentialMode: z.enum(['shared', 'connected_account']).nullable(),
+    credentialMode: GateCredentialModeSchema.nullable(),
     status: GateInstanceStatusWireSchema,
     trust: GateTrustWireSchema,
     health: GateHealthWireSchema,
@@ -179,7 +179,7 @@ export const PlatformStatePresetWireSchema = z
   .object({
     name: z.string().regex(CONNECTOR_NAME_PATTERN),
     transportKind: z.enum(['http', 'mcp']),
-    credentialMode: z.enum(['shared', 'connected_account']),
+    credentialMode: GateCredentialModeSchema,
     operations: z
       .array(PlatformStatePresetOperationWireSchema)
       .max(PLATFORM_STATE_PRESET_OPERATIONS_LIMIT),
