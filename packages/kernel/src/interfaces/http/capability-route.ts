@@ -99,6 +99,7 @@ import {
   ConnectorNotSelfServeError,
   CsrfHeaderRequiredError,
   DecisionNotFoundError,
+  DecisionQuerySinceInvalidError,
   type DispatchDeps,
   ExplainNodeNotFoundError,
   ExportProvInputError,
@@ -674,6 +675,11 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // `proposeOntologyChange`) — `input.change` fails `OntologyDefinitionSchema` validation. Same
   // 400 bucket as every other handler-level semantic-validation error in this file.
   if (err instanceof OntologyChangeValidationError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // Legacy 760: `query_decisions`' `since` names no instant — the caller's value, refused before
+  // the query (it used to fail in Postgres with 22007, a 500).
+  if (err instanceof DecisionQuerySinceInvalidError) {
     return { status: 400, code: 'invalid_params', message: err.message };
   }
   // S3.3 `supersede_fact` (fact-handlers.ts → substrate/graph): the replacement's

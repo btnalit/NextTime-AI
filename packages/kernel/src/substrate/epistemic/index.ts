@@ -102,6 +102,7 @@ export type {
 
 export {
   DecisionNotFoundError,
+  DecisionQuerySinceInvalidError,
   causalChain,
   decisionImpact,
   findPrecedents,

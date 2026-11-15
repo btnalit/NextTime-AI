@@ -95,6 +95,8 @@ export {
   ConflictNotFoundError,
   DecisionNotFoundError,
 } from '../../substrate/epistemic/index.js';
+// Legacy 760: `query_decisions`' `since` that names no instant (it used to fail in Postgres, 500).
+export { DecisionQuerySinceInvalidError } from '../../substrate/epistemic/index.js';
 export {
   FactNotFoundError,
   SupersedeIdentityMismatchError,

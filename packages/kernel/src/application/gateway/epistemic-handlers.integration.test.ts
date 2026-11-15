@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  DecisionQuerySinceInvalidError,
   attachEvidence,
   recordSourceObservation,
   registerPrivateSource,
@@ -925,6 +926,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         objectId: randomUUID(),
       })) as { items: unknown[] };
       expect(Array.isArray(byObject.items)).toBe(true);
+    });
+
+    it('query_decisions refuses a since that names no instant, before the query (legacy 760)', async () => {
+      const caller = handleCaller(workspaceId, memberId, READ_CAPABILITIES);
+      // It used to reach Postgres as an invalid Date and fail there (22007), a 500.
+      await expect(
+        dispatchCapability({ pool }, caller, 'query_decisions', { since: 'last tuesday' }),
+      ).rejects.toBeInstanceOf(DecisionQuerySinceInvalidError);
+      // An empty since still means no lower bound, as before.
+      const unbounded = (await dispatchCapability({ pool }, caller, 'query_decisions', {
+        since: '',
+      })) as { items: unknown[] };
+      expect(Array.isArray(unbounded.items)).toBe(true);
     });
   },
 );

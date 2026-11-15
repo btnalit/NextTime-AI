@@ -90,6 +90,7 @@ import {
   ConnectionSecretInvalidError,
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
+  DecisionQuerySinceInvalidError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotActiveError,
@@ -420,9 +421,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // equivalents of capability-route.ts's own new mappings (see that file's comments on these same
   // classes): S3.1 `propose_ontology_change`'s change-validation failure, and S3.3 `supersede_fact`'s
   // I5 identity-mismatch — both caller-input problems, INVALID_PARAMS.
+  // Legacy 760: `query_decisions`' `since` that names no instant, as capability-route.ts maps it.
   if (
     err instanceof OntologyChangeValidationError ||
-    err instanceof SupersedeIdentityMismatchError
+    err instanceof SupersedeIdentityMismatchError ||
+    err instanceof DecisionQuerySinceInvalidError
   ) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }

@@ -97,6 +97,15 @@ export class DecisionNotFoundError extends Error {
   }
 }
 
+/** A `query_decisions` `since` that names no instant, refused before the query (400). It used to
+ *  reach Postgres as an invalid Date and fail there (22007), which surfaced as a 500. */
+export class DecisionQuerySinceInvalidError extends Error {
+  constructor() {
+    super('since: not a timestamp (ISO 8601 expected)');
+    this.name = 'DecisionQuerySinceInvalidError';
+  }
+}
+
 /** Local `links` projection — deliberately re-declared rather than imported from
  *  `substrate/graph/sql-store.ts` (its `FactRow`/`mapFactRow` are that module's own internals, not
  *  part of `GraphStore`'s exported surface) — same "own local row shape per reading module" pattern
@@ -267,7 +276,9 @@ export interface QueryDecisionsInput {
   /** Matches a Decision whose `rationale` names a Fact touching this Object (module doc comment's
    *  "only as complete as what `rationale` carries" caveat applies). */
   readonly objectId?: string;
-  /** ISO 8601 — Decisions `created_at >= since`. */
+  /** ISO 8601 — Decisions `created_at >= since`, to the millisecond: it is read as a JS `Date`,
+   *  so digits past the millisecond are dropped and a `since` inside a millisecond matches all of
+   *  it. One that names no instant is refused ({@link DecisionQuerySinceInvalidError}). */
   readonly since?: string;
   readonly limit?: number;
   readonly cursor?: string;
@@ -279,23 +290,32 @@ export interface DecisionsPage {
 }
 
 /**
- * The order `query_decisions` and `find_precedents` list Decisions in, newest first — and the key
- * of core/0060's `decisions_workspace_created_ms_idx`, so the first page is the first rows of that
- * index instead of every Decision of the workspace sorted (legacy 429). Keep the two in step: a
- * read ordered by anything else is a sort of the whole workspace again
- * (decisions-order-index.integration.test.ts plans both reads).
+ * The order `query_decisions` and `find_precedents` list Decisions in, newest first: core/0061's
+ * `created_ms_utc` (generated from `created_at`), then `id` — the key of
+ * `decisions_workspace_created_ms_utc_idx`, so the first page is the first rows of that index
+ * instead of every Decision of the workspace sorted (legacy 429), and a `since` or a cursor
+ * bounds the index scan (legacy 760). Keep the two in step: a read ordered by anything else is a
+ * sort of the whole workspace again (decisions-order-index.integration.test.ts plans both reads).
  *
  * S5.5 leftover 23: the cursor carries a JS `Date` — millisecond precision — while `created_at`
  * is stored to the microsecond, so the key is the time truncated to the millisecond (the same fix
  * PR #132 made for `search`); two rows in one millisecond are then split by `id`, never skipped at
  * a page boundary. Taken in UTC because `date_trunc` on a `timestamptz` depends on the session's
- * TimeZone and cannot be indexed; it names the same instants in the same order.
+ * TimeZone and cannot be generated or indexed; it names the same instants in the same order.
+ *
+ * A column, not 0060's expression index: `date_trunc` and `at time zone` are not LEAKPROOF, so
+ * under `decisions`' row-level security a condition on the expression is checked after the
+ * policy's, as a filter on every row the scan reads, never as an index condition.
  */
 function decisionOrderKey(alias: string): string {
-  return `date_trunc('milliseconds', ${alias}.created_at at time zone 'UTC')`;
+  return `${alias}.created_ms_utc`;
 }
 
-/** A cursor's (or `since`'s) instant in {@link decisionOrderKey}'s terms. */
+/** A cursor's (or `since`'s) instant in {@link decisionOrderKey}'s terms — the expression that
+ *  generates `created_ms_utc`, applied to the parameter (a constant to the planner). Both arrive at
+ *  the millisecond today (a cursor is written by `encodeKeysetCursor`, `since` is read as a
+ *  `Date`), so the truncation changes nothing for them; it keeps the comparison exact should
+ *  either ever carry more digits. */
 function asDecisionOrderKey(param: string): string {
   return `date_trunc('milliseconds', ${param}::timestamptz at time zone 'UTC')`;
 }
@@ -333,6 +353,7 @@ export async function queryDecisions(
   const limit = Math.min(input.limit ?? DEFAULT_QUERY_DECISIONS_LIMIT, MAX_QUERY_DECISIONS_LIMIT);
   const cursor = decodeKeysetCursor(input.cursor);
   const since = input.since ? new Date(input.since) : null;
+  if (since !== null && Number.isNaN(since.getTime())) throw new DecisionQuerySinceInvalidError();
   const visible = decisionVisibleSql('d', viewer, '$1', 7);
 
   const result = await client.query<DecisionDbRow>(
@@ -340,9 +361,9 @@ export async function queryDecisions(
      where d.workspace_id = $1
        and (
          $2::timestamptz is null
-         -- The second comparison follows from the first (truncation keeps the order); it is the
-         -- one the index can stop the scan at.
-         or (d.created_at >= $2 and ${decisionOrderKey('d')} >= ${asDecisionOrderKey('$2')})
+         -- since is at the millisecond, so this is created_at >= since, and the bound the index
+         -- scan stops at.
+         or ${decisionOrderKey('d')} >= ${asDecisionOrderKey('$2')}
        )
        and (
          $3::uuid is null
