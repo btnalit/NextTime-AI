@@ -278,10 +278,28 @@ export interface DecisionsPage {
   readonly nextCursor?: string;
 }
 
-/** S5.5 leftover 23: the cursor carries a JS `Date` — millisecond precision — while `created_at`
- *  is stored to the microsecond, so the query orders and compares on
- *  `date_trunc('milliseconds', created_at)` (the same fix PR #132 made for `search`); two rows in
- *  one millisecond are then split by `id`, never skipped at a page boundary. */
+/**
+ * The order `query_decisions` and `find_precedents` list Decisions in, newest first — and the key
+ * of core/0060's `decisions_workspace_created_ms_idx`, so the first page is the first rows of that
+ * index instead of every Decision of the workspace sorted (legacy 429). Keep the two in step: a
+ * read ordered by anything else is a sort of the whole workspace again
+ * (decisions-order-index.integration.test.ts plans both reads).
+ *
+ * S5.5 leftover 23: the cursor carries a JS `Date` — millisecond precision — while `created_at`
+ * is stored to the microsecond, so the key is the time truncated to the millisecond (the same fix
+ * PR #132 made for `search`); two rows in one millisecond are then split by `id`, never skipped at
+ * a page boundary. Taken in UTC because `date_trunc` on a `timestamptz` depends on the session's
+ * TimeZone and cannot be indexed; it names the same instants in the same order.
+ */
+function decisionOrderKey(alias: string): string {
+  return `date_trunc('milliseconds', ${alias}.created_at at time zone 'UTC')`;
+}
+
+/** A cursor's (or `since`'s) instant in {@link decisionOrderKey}'s terms. */
+function asDecisionOrderKey(param: string): string {
+  return `date_trunc('milliseconds', ${param}::timestamptz at time zone 'UTC')`;
+}
+
 function encodeKeysetCursor(at: Date, id: string): string {
   return Buffer.from(`${at.toISOString()}|${id}`, 'utf8').toString('base64url');
 }
@@ -320,7 +338,12 @@ export async function queryDecisions(
   const result = await client.query<DecisionDbRow>(
     `select ${DECISION_COLUMNS} from decisions d
      where d.workspace_id = $1
-       and ($2::timestamptz is null or d.created_at >= $2)
+       and (
+         $2::timestamptz is null
+         -- The second comparison follows from the first (truncation keeps the order); it is the
+         -- one the index can stop the scan at.
+         or (d.created_at >= $2 and ${decisionOrderKey('d')} >= ${asDecisionOrderKey('$2')})
+       )
        and (
          $3::uuid is null
          or exists (
@@ -332,10 +355,10 @@ export async function queryDecisions(
        )
        and (
          $4::timestamptz is null
-         or (date_trunc('milliseconds', d.created_at), d.id) < ($4::timestamptz, $5::uuid)
+         or (${decisionOrderKey('d')}, d.id) < (${asDecisionOrderKey('$4')}, $5::uuid)
        )
        and ${visible.sql}
-     order by date_trunc('milliseconds', d.created_at) desc, d.id desc
+     order by ${decisionOrderKey('d')} desc, d.id desc
      limit $6`,
     [
       workspaceId,
@@ -373,7 +396,9 @@ export interface FindPrecedentsInput {
 /** Neither `objectId` nor `actionKindTag` given → empty result (module doc comment: this file
  *  follows the codebase's existing "no `.refine()` in `paramsSchema`" convention rather than
  *  inventing a new validation shape for this one capability — an empty, valid answer is
- *  indistinguishable in practice from "no precedent found"). */
+ *  indistinguishable in practice from "no precedent found"). Newest first in `query_decisions`'
+ *  order ({@link decisionOrderKey}, legacy 429): Decisions within one millisecond come by `id`,
+ *  where they used to come by the microsecond. */
 export async function findPrecedents(
   client: PoolClient,
   workspaceId: string,
@@ -400,7 +425,7 @@ export async function findPrecedents(
          or ($3::text is not null and d.rationale ->> 'actionKind' = $3)
        )
        and ${visible.sql}
-     order by d.created_at desc, d.id desc
+     order by ${decisionOrderKey('d')} desc, d.id desc
      limit $4`,
     [workspaceId, input.objectId ?? null, input.actionKindTag ?? null, limit, ...visible.values],
   );
