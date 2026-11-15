@@ -3054,7 +3054,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：上一版本的代码可以直接跑在这个 schema 上（见 §6 那一行），回退代码即可。要连迁移一起撤，按迁移注释的四步：`drop trigger principals_disabled_clears_api_key on principals`，`drop function principals_disabled_clears_api_key()`，`alter table principals drop constraint principals_disabled_no_api_key`，再 `delete from schema_migrations where module = 'core' and version = 59`。被清掉的 key 不会恢复：库里只存了 hash，而且它们都认证不了。
 - 下一次主机升级的提示要带上本节。
 
-### 3.180 WorkerDefinition 低于已发布 head 的草稿不能发布，入口当前版本按族 head 读（#1221，遗留 742，0.69.1 之后的下一版）
+### 3.180 WorkerDefinition 低于已发布 head 的草稿不能发布，入口当前版本按族 head 读（#1221，遗留 742，0.69.2 起）
 
 没有迁移。
 
@@ -3085,7 +3085,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，回滚即恢复原来的读法。
 - 下一次主机升级的提示要带上本节。
 
-### 3.181 `deprecate_operation` 锁住正在生效的一版，可带调用方看到的版本（#1223，遗留 423，0.69.1 之后的下一版）
+### 3.181 `deprecate_operation` 锁住正在生效的一版，可带调用方看到的版本（#1223，遗留 423，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3094,7 +3094,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.182 agent 的一轮准备时读失败就不启动（#1229，遗留 434，0.69.1 之后的下一版）
+### 3.182 agent 的一轮准备时读失败就不启动（#1229，遗留 434，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3103,7 +3103,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.183 服务账号提议的 Operation 草稿记为非人工写的（#1234，遗留 616，0.69.1 之后的下一版）
+### 3.183 服务账号提议的 Operation 草稿记为非人工写的（#1234，遗留 616，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3123,7 +3123,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作；下一次主机升级的提示可带上上面的计数 SQL。
 
-### 3.184 agent 的一轮在所有读取之后才签 Handle（#1237，遗留 751，0.69.1 之后的下一版）
+### 3.184 agent 的一轮在所有读取之后才签 Handle（#1237，遗留 751，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3132,7 +3132,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.185 `invalid_step_reference` 带结构化 `details`（#1240，遗留 502，0.69.1 之后的下一版）
+### 3.185 `invalid_step_reference` 带结构化 `details`（#1240，遗留 502，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3141,7 +3141,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可；控制台回到解析消息的路径，显示不变。
 - 无主机动作。
 
-### 3.186 门实例的审计行写明凭据模式（#1243，遗留 606，0.69.1 之后的下一版）
+### 3.186 门实例的审计行写明凭据模式（#1243，遗留 606，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3150,7 +3150,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。新写的行多出的三项会留在库里，它们是枚举值和连接器名，不含凭据；回退后控制台照旧把 `credentialMode` 显示成 `[redacted]`。
 - 无主机动作。
 
-### 3.187 只有 agent 自己的会话发来的提议目标、启动 Worker 才算来自它的那一轮（#1245，遗留 443，0.69.1 之后的下一版）
+### 3.187 只有 agent 自己的会话发来的提议目标、启动 Worker 才算来自它的那一轮（#1245，遗留 443，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3160,7 +3160,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
-### 3.188 Decision 列表与先例查询走索引（#1247，遗留 429，core 0060，0.69.1 之后的下一版）
+### 3.188 Decision 列表与先例查询走索引（#1247，遗留 429，core 0060，0.69.2 起）
 
 **迁移 core 0060**：`decisions` 加索引 `decisions_workspace_created_ms_idx`，键为 `(workspace_id, date_trunc('milliseconds', created_at at time zone 'UTC') desc, id desc)`。只加索引，不改数据、约束和授权；建之前会先删掉同名的失效索引（0044 的写法）。
 
@@ -3181,7 +3181,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：上一版本的代码不认这个索引，直接跑在新 schema 上（见 §6 那一行），回退代码即可。要删索引：`drop index decisions_workspace_created_ms_idx;`，再 `delete from schema_migrations where module = 'core' and version = 60`。
 - 下一次主机升级的提示要带上本节。
 
-### 3.189 `report_task_result` 的回答带逐条拒绝的条目（#1249，遗留 650，0.69.1 之后的下一版）
+### 3.189 `report_task_result` 的回答带逐条拒绝的条目（#1249，遗留 650，0.69.2 起）
 
 没有迁移，没有主机数据影响。
 
@@ -3384,7 +3384,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.0 | core `0058_connection_secret_issuances`（#1176，遗留 711）：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥），检查约束、守卫触发器、强制 RLS | 可逆 | 只加新表：上一版不读也不写。升级前签出、还没用的连接密钥升级后要重新签出（§3.175） | 只需回退代码，表可以留着。要删：`drop table connection_secret_issuances`、`drop function connection_secret_issuances_guard()`，再删 `schema_migrations` 里 core 58 那一行 |
 | v0.69.0 | governance `0045_console_session_is_live`（#1180，遗留 712）：`security definer` 函数 `console_session_is_live(uuid, uuid)`，只回答这个用户的这个控制台会话是否还在；只授给 `nexttime_app` | 可逆 | 只加函数：上一版不调它 | 只需回退代码。要撤：`drop function console_session_is_live(uuid, uuid)`，再删 `schema_migrations` 里 governance 45 那一行 |
 | v0.69.1 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
-| 0.69.1 之后的下一版 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
+| v0.69.2 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
