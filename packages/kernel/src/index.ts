@@ -190,6 +190,10 @@ export function createServer(
   // Fastify `request.id` *is* its correlation id — the caller's `x-correlation-id` when valid
   // (the platform extension sends its Turn id / inherited Worker id), otherwise a minted one — and
   // every request log line carries it as `correlationId` (the label replaces Fastify's `reqId`).
+  //
+  // Legacy 241: no custom `application/json` parser. Fastify's default refuses a malformed body
+  // with the fixed FST_ERR_CTP_INVALID_JSON_BODY message and drops V8's own, which quotes a slice
+  // of the input into the 4xx reply and log line (index.test.ts pins it).
   const app = Fastify({
     logger: options.logger ?? false,
     genReqId: (req) => resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]),
