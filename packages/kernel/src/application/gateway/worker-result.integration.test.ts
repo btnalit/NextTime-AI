@@ -290,6 +290,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.id).toBe(taskId);
       expect(result.status).toBe('completed');
       expect(result.factIds).toHaveLength(1);
+      // Legacy 650: nothing refused, and the answer says so.
+      expect(result).toMatchObject({
+        factsRejected: [],
+        proposedOperationsRejected: [],
+        evidenceDropped: [],
+      });
 
       const task = await inTx(ownerId, async (client) => {
         const rows = await client.query<{ status: string; result: { summary: string } }>(
@@ -1150,7 +1156,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The handler's pre-write refusals (2026-09-18 second round: a model-invented `Gatekeeper`
       // ref → I16 403, a model-invented gatekeeperId in proposedOperations → 400; six Tasks lost
       // their result to them): each costs its own entry only, and I16 still never writes.
-      it('pre-write refusals — meta-ontology ref, bogus gatekeeperId, out-of-range evidence — are recorded per entry and the Task completes', async () => {
+      it('pre-write refusals — meta-ontology ref, bogus gatekeeperId, out-of-range evidence — are recorded per entry, returned in the answer, and the Task completes', async () => {
         const { taskId, claims } = await spawnWorkerRun();
         const caller: ResolvedCaller = { channel: 'handle', claims };
         const bogusGatekeeperId = randomUUID();
@@ -1185,11 +1191,23 @@ describe.runIf(DATABASE_URL !== undefined)(
               },
             },
           ],
-        })) as { status: string; factIds: string[] };
+        })) as {
+          status: string;
+          factIds: string[];
+          factsRejected: unknown[];
+          proposedOperationsRejected: unknown[];
+          evidenceDropped: number[];
+        };
         expect(result.status).toBe('completed');
         expect(result.factIds).toHaveLength(1);
 
         const stored = await inTx(ownerId, async (client) => {
+          // Legacy 650: the report revoked this WorkerRun's Handle with the Task's completion, so
+          // the Worker can never read these refusals back — they have to be in the answer.
+          const handle = await client.query<{ revoked: boolean }>(
+            'select revoked_at is not null as revoked from capability_handles where workspace_id = $1 and jti = $2',
+            [workspaceId, claims.jti],
+          );
           const task = await client.query<{
             result: {
               factsRejected: { index: number; reason: string }[];
@@ -1210,15 +1228,23 @@ describe.runIf(DATABASE_URL !== undefined)(
             [workspaceId, result.factIds],
           );
           return {
+            handleRevoked: handle.rows[0]?.revoked,
             task: task.rows[0],
             metaObjects: metaObjects.rows[0]?.n,
             audit: audit.rows.map((row) => row.action),
             evidenceRows: evidenceRows.rows[0]?.n,
           };
         });
+        expect(stored.handleRevoked).toBe(true);
         expect(stored.task?.result.factsRejected).toEqual([
           expect.objectContaining({ index: 1, reason: 'meta_ontology_type' }),
         ]);
+        // The answer carries exactly what tasks.result records.
+        expect(result.factsRejected).toEqual(stored.task?.result.factsRejected);
+        expect(result.proposedOperationsRejected).toEqual(
+          stored.task?.result.proposedOperationsRejected,
+        );
+        expect(result.evidenceDropped).toEqual([1]);
         expect(stored.task?.result.proposedOperationsRejected).toEqual([
           { index: 0, gatekeeperId: bogusGatekeeperId, reason: 'gatekeeper_not_found' },
         ]);

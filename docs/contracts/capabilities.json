@@ -71206,14 +71206,93 @@
         "activityId": {
           "type": "string"
         },
+        "evidenceDropped": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "factIds": {
           "items": {
             "type": "string"
           },
           "type": "array"
         },
+        "factsRejected": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "expected": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "linkType": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "sourceType": {
+                "type": "string"
+              },
+              "targetType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "linkType",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "id": {
           "type": "string"
+        },
+        "proposedOperationsRejected": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "existingStatus": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "gatekeeperId",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
         "status": {
           "enum": [
@@ -71232,7 +71311,10 @@
         "id",
         "status",
         "activityId",
-        "factIds"
+        "factIds",
+        "factsRejected",
+        "proposedOperationsRejected",
+        "evidenceDropped"
       ],
       "type": "object"
     },

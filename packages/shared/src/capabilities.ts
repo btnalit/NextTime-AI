@@ -2727,7 +2727,9 @@ const taskCapabilities = [
       'accepts only a result whose output — a JSON object — meets it: otherwise 400 ' +
       'invalid_params naming each place (details.problems with path and message, ' +
       'details.problemCount), nothing written but the refused report on the Task ' +
-      '(rejectedOutput) — fix the output and report again.',
+      '(rejectedOutput) — fix the output and report again. An accepted report answers with the ' +
+      'entries refused one by one (factsRejected, proposedOperationsRejected, evidenceDropped): ' +
+      'recorded on the Task, never written, and the Task still completes.',
   },
   {
     // S2.10 addition (docs/development-tasks.md S2.10 deliverable 4): §9.3 never defined a list

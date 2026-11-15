@@ -292,13 +292,18 @@ interface ReportTaskResultOutcome {
   readonly id?: string;
   readonly status?: string;
   readonly factIds?: readonly string[];
+  readonly factsRejected?: unknown;
+  readonly proposedOperationsRejected?: unknown;
+  readonly evidenceDropped?: unknown;
 }
 
 /** The per-entry refusals `application/task/result.ts` records in `tasks.result` (S5.6 #208 /
- *  #211: `factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]`) — read back
- *  through `get_task` (a Worker-infrastructure capability every Worker Handle carries) because
- *  `report_task_result`'s own wire result does not carry them. Shapes are loose on purpose: an
- *  unexpected field never breaks the echo, it just is not rendered. */
+ *  #211: `factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]`), taken from
+ *  `report_task_result`'s own answer. Legacy 650: never read back through `get_task` — the report
+ *  completes the Task and revokes this WorkerRun's Handle in the same transaction, so every read
+ *  after it is refused (401); a kernel from before the answer carried them simply shows none.
+ *  Shapes are loose on purpose: an unexpected field never breaks the echo, it just is not
+ *  rendered. */
 interface StoredResultRejections {
   readonly factsRejected: readonly Record<string, unknown>[];
   readonly proposedOperationsRejected: readonly Record<string, unknown>[];
@@ -312,14 +317,12 @@ function recordArray(value: unknown): Record<string, unknown>[] {
   );
 }
 
-function extractStoredRejections(taskResult: unknown): StoredResultRejections | undefined {
-  if (typeof taskResult !== 'object' || taskResult === null) return undefined;
-  const record = taskResult as Record<string, unknown>;
+function extractStoredRejections(outcome: ReportTaskResultOutcome): StoredResultRejections {
   return {
-    factsRejected: recordArray(record.factsRejected),
-    proposedOperationsRejected: recordArray(record.proposedOperationsRejected),
-    evidenceDropped: Array.isArray(record.evidenceDropped)
-      ? record.evidenceDropped.filter((entry): entry is number => typeof entry === 'number')
+    factsRejected: recordArray(outcome.factsRejected),
+    proposedOperationsRejected: recordArray(outcome.proposedOperationsRejected),
+    evidenceDropped: Array.isArray(outcome.evidenceDropped)
+      ? outcome.evidenceDropped.filter((entry): entry is number => typeof entry === 'number')
       : [],
   };
 }
@@ -357,7 +360,7 @@ function renderRejections(rejections: StoredResultRejections): string[] {
 function renderAccepted(
   contract: WorkerResultContract,
   outcome: ReportTaskResultOutcome,
-  rejections: StoredResultRejections | undefined,
+  rejections: StoredResultRejections,
 ): string {
   const taskLabel = outcome.id ? `Task ${outcome.id}` : 'the Task';
   const status = outcome.status ? ` is ${outcome.status}` : ' accepted the result';
@@ -367,7 +370,7 @@ function renderAccepted(
     attempted > 0 && written !== undefined
       ? ` ${written} of ${attempted} factsToAssert written as Facts.`
       : '';
-  const rejectionLines = rejections ? renderRejections(rejections) : [];
+  const rejectionLines = renderRejections(rejections);
   const rejectionText =
     rejectionLines.length > 0
       ? `\n\nRefused by the platform (recorded on the Task, never written — the Task still completed):\n${rejectionLines.join('\n')}`
@@ -449,29 +452,6 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     resultPosted = true;
     console.log('nexttime-worker check=report_task_result result=ok');
     return outcome ?? {};
-  }
-
-  /** Best-effort read-back of the per-entry refusals the kernel recorded for this Task (see
-   *  `StoredResultRejections`) — only worth a round trip when the contract carried anything the
-   *  kernel could refuse per entry; never throws (the post already succeeded, a failed echo must
-   *  not turn into a tool error the model would answer by re-posting into a 409). */
-  async function readStoredRejections(
-    contract: WorkerResultContract,
-  ): Promise<StoredResultRejections | undefined> {
-    const refusable =
-      (contract.factsToAssert?.length ?? 0) +
-      (contract.proposedOperations?.length ?? 0) +
-      (contract.evidence?.length ?? 0);
-    if (refusable === 0) return undefined;
-    try {
-      const task = await options.kernelClient.call<{ result?: unknown }>('get_task', {
-        taskId: options.taskId,
-      });
-      return extractStoredRejections(task?.result);
-    } catch (error) {
-      logKernelError(error, 'get_task');
-      return undefined;
-    }
   }
 
   // report_result is static (its schema does not depend on any kernel round trip) — registered
@@ -566,10 +546,10 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         };
       }
 
-      const rejections = await readStoredRejections(parsed.data);
+      const rejections = extractStoredRejections(outcome);
       return {
         content: [{ type: 'text', text: renderAccepted(parsed.data, outcome, rejections) }],
-        details: { ...outcome, ...(rejections ?? {}) },
+        details: { ...outcome, ...rejections },
         // Stops the agent loop after this tool batch (structured-output.ts's own pattern) —
         // agent_settled below only exits the process now that the POST already happened here.
         terminate: true,

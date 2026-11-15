@@ -179,12 +179,52 @@ export type InvokeWorkerResultWire = z.infer<typeof InvokeWorkerResultWireSchema
 /** `cancel_task`'s result — `{id, status}` only (handlers.ts's `cancelTaskHandler`). */
 export const CancelTaskResultWireSchema = TaskWireSchema.pick({ id: true, status: true });
 
-/** `report_task_result`'s result (worker-result-handler.ts's `reportTaskResultHandler`). */
+/** One `factsToAssert[]` entry the kernel refused and recorded instead of writing
+ *  (application/task/result.ts `RejectedResultFact`): `index` is its position in the contract,
+ *  `reason` the kernel's own reason (the ontology guard's, `meta_ontology_type`, `object_not_found`),
+ *  the ontology fields present for the guard's reasons, `detail` a sentence. Every string is the
+ *  bounded, visible echo `tasks.result` stores (legacy 232). */
+export const ReportedFactRejectionWireSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    linkType: z.string(),
+    reason: z.string(),
+    sourceType: z.string().optional(),
+    targetType: z.string().optional(),
+    expected: z.array(z.string()).optional(),
+    detail: z.string().optional(),
+  })
+  .strict();
+
+/** One `proposedOperations[]` entry the kernel refused and recorded (application/task/result.ts
+ *  `RejectedResultProposal`): `problem` is the broken name rule, `existingStatus` the draft in the
+ *  way, `detail` a sentence. */
+export const ReportedProposalRejectionWireSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    gatekeeperId: z.string(),
+    reason: z.string(),
+    problem: z.string().optional(),
+    existingStatus: z.string().optional(),
+    detail: z.string().optional(),
+  })
+  .strict();
+
+/** `report_task_result`'s result (worker-result-handler.ts's `reportTaskResultHandler`).
+ *
+ *  Legacy 650: the per-entry refusals (`factsRejected` / `proposedOperationsRejected` /
+ *  `evidenceDropped`, the same lists `tasks.result` records) come back in this answer, because the
+ *  Worker cannot read them afterwards: the report completes the Task and revokes the WorkerRun's
+ *  Handle in the same transaction, so a `get_task` after it is refused (401). */
 export const ReportTaskResultWireSchema = z
   .object({
     id: z.string(),
     status: TaskStatusSchema,
     activityId: z.string(),
     factIds: z.array(z.string()),
+    factsRejected: z.array(ReportedFactRejectionWireSchema),
+    proposedOperationsRejected: z.array(ReportedProposalRejectionWireSchema),
+    /** `evidence[]` indices whose `factIndex` named no entry of `factsToAssert`. */
+    evidenceDropped: z.array(z.number().int().nonnegative()),
   })
   .strict();
