@@ -3160,6 +3160,27 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.188 Decision 列表与先例查询走索引（#1247，遗留 429，core 0060，0.69.1 之后的下一版）
+
+**迁移 core 0060**：`decisions` 加索引 `decisions_workspace_created_ms_idx`，键为 `(workspace_id, date_trunc('milliseconds', created_at at time zone 'UTC') desc, id desc)`。只加索引，不改数据、约束和授权；建之前会先删掉同名的失效索引（0044 的写法）。
+
+- **行为变化**：`query_decisions`（控制台推理链的选择器和「最近的决定」）与 `find_precedents` 按这个键排序，直接读索引，不再每页扫整个工作区再排序（本地 20 万条：首页 29 ms → 0.04 ms）。`query_decisions` 的顺序和每一页与原来相同；`find_precedents` 对同一毫秒内写下的几条 Decision 改按 `id` 排，原来按微秒排。
+- **升级影响**：迁移在一个事务里用普通 `create index`，建索引期间 `decisions` 被 SHARE 锁住：读照常，写入（审批、核对、目标结果、冲突裁决、`record_decision`）排队等它建完。本地 20.6 万行用 0.15 s，索引 12 MB。
+- **升级前只读预检**（结果记 `docs/private/`）：先看表有多大，据此估计锁要拿多久。
+  ```sql
+  select count(*) from decisions;
+  ```
+  嫌排队时间太长，可以在上一版还在跑的时候，事务外提前建好（不阻塞写入），迁移发现已有有效索引就什么都不建：
+  ```sql
+  create index concurrently if not exists decisions_workspace_created_ms_idx
+    on decisions (workspace_id, (date_trunc('milliseconds', created_at at time zone 'UTC')) desc, id desc);
+  ```
+- **升级后只读核对**：
+  - `select indisvalid from pg_index where indexrelid = 'decisions_workspace_created_ms_idx'::regclass;` 为 `t`；
+  - core 迁移版本为 60。
+- **回滚**：上一版本的代码不认这个索引，直接跑在新 schema 上（见 §6 那一行），回退代码即可。要删索引：`drop index decisions_workspace_created_ms_idx;`，再 `delete from schema_migrations where module = 'core' and version = 60`。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3351,6 +3372,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.0 | core `0058_connection_secret_issuances`（#1176，遗留 711）：新表 `connection_secret_issuances`（每个签出的 salt 一行，不存密钥），检查约束、守卫触发器、强制 RLS | 可逆 | 只加新表：上一版不读也不写。升级前签出、还没用的连接密钥升级后要重新签出（§3.175） | 只需回退代码，表可以留着。要删：`drop table connection_secret_issuances`、`drop function connection_secret_issuances_guard()`，再删 `schema_migrations` 里 core 58 那一行 |
 | v0.69.0 | governance `0045_console_session_is_live`（#1180，遗留 712）：`security definer` 函数 `console_session_is_live(uuid, uuid)`，只回答这个用户的这个控制台会话是否还在；只授给 `nexttime_app` | 可逆 | 只加函数：上一版不调它 | 只需回退代码。要撤：`drop function console_session_is_live(uuid, uuid)`，再删 `schema_migrations` 里 governance 45 那一行 |
 | v0.69.1 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
+| 0.69.1 之后的下一版 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
