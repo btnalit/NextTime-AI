@@ -3225,6 +3225,27 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 无主机动作。
 
+### 3.192 门启动时拒绝未知的 `GATE_CREDENTIAL_MODE`（#1261，遗留 764，0.69.2 之后的下一版）
+
+没有迁移，不改契约。
+
+- **行为变化**：gatekeeper-base 的门在 `GATE_CREDENTIAL_MODE` 不是 `shared` / `connected_account`、也不是未设或空时，启动失败并报出这个变量。原来这类值（包括拼错的 `connected-account`）会静默按 `shared` 运行；这次是把配置错误暴露出来。带空白的值（如 `" shared"`）也会失败，不做 trim。
+- **升级影响**：主机上哪个门的这个变量写了别的值，升级后那个门起不来。镜像升级顺序不限。
+- **升级前只读检查**（两处都只看 `GATE_CREDENTIAL_MODE` 这一个变量，只限本项目，结果记 `docs/private/`）：
+  - **下次起服务会用的配置**：在项目目录，用主机实际起服务时的同一组 `-f`、env 文件和 profile 渲染，只 grep 这个变量：
+    ```sh
+    docker compose <同一组 -f / --env-file / --profile> config | grep -n GATE_CREDENTIAL_MODE
+    ```
+    不要保存完整输出：`config` 会把插值后的 secret 一起打出来。只用默认参数渲染时，未启用 profile 的服务和用别的 `-f` 起的门都看不到。
+  - **当前在跑的容器**：用 `docker compose <同一组参数> ps -q` 列出本项目的容器，逐个：
+    ```sh
+    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' <容器> | grep '^GATE_CREDENTIAL_MODE='
+    ```
+    不扫主机上其他项目的容器。
+  - 两处都只能出现 `shared`、`connected_account`，或者没有这一行。出现别的值时，先确认这个门本该用哪种模式再改；改成 `connected_account` 还需要 `GATE_STORE_KEY_FILE`。
+- **回滚**：回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
