@@ -111,6 +111,14 @@ export interface CapabilityHandlerContext {
    */
   readonly adminAgent?: { readonly sessionId: string; readonly userId: string };
   /**
+   * Legacy 759: on a handle-channel call whose Handle names a session, that session's kind
+   * (`sessions.kind`) as dispatch read it in this call's own transaction, before anything else —
+   * `null` when this workspace has no session of that id. `undefined` when dispatch did not read
+   * one (the human channel, a Handle with no `sid`, a context built outside dispatch): a reader
+   * that needs the kind then reads it itself (`callingTurnId`).
+   */
+  readonly handleSessionKind?: string | null;
+  /**
    * Legacy 712: on every human-channel call, the credential it was authenticated with — the
    * console session behind the cookie, or the API key it presented, by its hash (dispatch.ts,
    * from the resolved caller). A handler that issues a Handle for this request names it in the

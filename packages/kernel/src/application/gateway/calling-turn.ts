@@ -18,6 +18,9 @@ import type { CapabilityHandlerContext } from './capability-handler.js';
  *
  * `adminSessionId`: the admin agent session the caller already checked (`invoke_worker`,
  * `assertAdminAgentInTrialWorkspace`); otherwise the one dispatch resolved (`ctx.adminAgent`).
+ *
+ * Legacy 759: the session's kind is the one dispatch already read for this call
+ * (`ctx.handleSessionKind`); only a context without it reads `sessions` here.
  */
 export async function callingTurnId(
   client: PoolClient,
@@ -30,11 +33,16 @@ export async function callingTurnId(
   if (!sid || !principalId) return undefined;
   const adminSession = adminSessionId ?? ctx?.adminAgent?.sessionId;
   if (adminSession === undefined) {
-    const session = await client.query<{ kind: string }>(
-      'select kind from sessions where workspace_id = $1 and id = $2',
-      [workspaceId, sid],
-    );
-    if (session.rows[0]?.kind !== 'entry') return undefined;
+    const kind =
+      ctx?.handleSessionKind !== undefined
+        ? ctx.handleSessionKind
+        : (
+            await client.query<{ kind: string }>(
+              'select kind from sessions where workspace_id = $1 and id = $2',
+              [workspaceId, sid],
+            )
+          ).rows[0]?.kind;
+    if (kind !== 'entry') return undefined;
   }
   const turn = await findAttributableTurn(client, {
     workspaceId,
