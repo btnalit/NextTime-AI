@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.69.2](https://github.com/btnalit/NextTime-AI/compare/v0.69.1...v0.69.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* a gate instance's audit row says which credential mode it was created with (legacy 606) ([#1243](https://github.com/btnalit/NextTime-AI/issues/1243)) ([9f9b3ee](https://github.com/btnalit/NextTime-AI/commit/9f9b3ee038a831128fa8873eb0a55e8b41d86426))
+* a WorkerDefinition draft below the published head is not published, and the entry version in use is the entry family's head (legacy 742) ([#1221](https://github.com/btnalit/NextTime-AI/issues/1221)) ([0a8faf1](https://github.com/btnalit/NextTime-AI/commit/0a8faf18f776ea113f4af27608812b4391fa6a5c))
+* an agent Turn whose definition, profile or platform settings cannot be read is not started (legacy 434) ([#1229](https://github.com/btnalit/NextTime-AI/issues/1229)) ([20097bd](https://github.com/btnalit/NextTime-AI/commit/20097bdae306d21fe418aa832ee2bfd0f7ad2f35))
+* an Operation draft a service account's API key proposes is recorded as agent-written (legacy 616) ([#1234](https://github.com/btnalit/NextTime-AI/issues/1234)) ([a2c5e08](https://github.com/btnalit/NextTime-AI/commit/a2c5e08a0d5478ef8cca5ebfc73ac1c23c6c23a9))
+* deprecate_operation locks the live version and refuses version_changed when it is not the one the caller looked at (legacy 423) ([#1223](https://github.com/btnalit/NextTime-AI/issues/1223)) ([2bef11a](https://github.com/btnalit/NextTime-AI/commit/2bef11ac24276fab0a649dbde3436d89c543de36))
+* invalid_step_reference says which step, why and what it names in its details (legacy 502) ([#1240](https://github.com/btnalit/NextTime-AI/issues/1240)) ([6923a28](https://github.com/btnalit/NextTime-AI/commit/6923a28941165cd8df4cb4421441063d4b9e5733))
+* **kernel:** a repeat call that changes nothing writes nothing (legacy 679 / 685 / 686 / 689) ([#1214](https://github.com/btnalit/NextTime-AI/issues/1214)) ([195da73](https://github.com/btnalit/NextTime-AI/commit/195da7300870bae9f9f66c3ce6ddb27e26dc189e))
+* **kernel:** a Turn issues its Handle only after every read it is prepared from (legacy 751) ([#1237](https://github.com/btnalit/NextTime-AI/issues/1237)) ([8c2a4bc](https://github.com/btnalit/NextTime-AI/commit/8c2a4bc5f9a590f7947240214bea1146906d4622))
+* one pending WorkerDefinition draft per proposer, edited by replacing it; a confirmation retry after completion is a no-op (legacy 680 / 682) ([#1218](https://github.com/btnalit/NextTime-AI/issues/1218)) ([a23d20f](https://github.com/btnalit/NextTime-AI/commit/a23d20fedf4850b8cfa68550e28f95bf7944466d))
+* only a call through the agent's own session comes from its Turn (legacy 443) ([#1245](https://github.com/btnalit/NextTime-AI/issues/1245)) ([95cb9ae](https://github.com/btnalit/NextTime-AI/commit/95cb9ae2a846406f33e132b7f1648eb297759bc3))
+* **task:** report_task_result answers with the refused entries (legacy 650) ([#1249](https://github.com/btnalit/NextTime-AI/issues/1249)) ([edd0fc6](https://github.com/btnalit/NextTime-AI/commit/edd0fc675faf978d0bc38bec2ec94237a4734baa))
+* **web:** a deprecated Operation says what is true of its name, and its detail title carries the version (legacy 749, 750) ([#1231](https://github.com/btnalit/NextTime-AI/issues/1231)) ([c19e76b](https://github.com/btnalit/NextTime-AI/commit/c19e76b2348ea38868abc915a8cb4deddc04cf84))
+* **web:** a Worker draft row says a newer version is published; a draft whose definition went can start a new one (legacy 746, 747) ([#1225](https://github.com/btnalit/NextTime-AI/issues/1225)) ([9143aaa](https://github.com/btnalit/NextTime-AI/commit/9143aaa918bb02403c369ba869aae356576749aa))
+* **web:** link the live version named in a deprecated Operation's note ([#1235](https://github.com/btnalit/NextTime-AI/issues/1235)) ([66478d8](https://github.com/btnalit/NextTime-AI/commit/66478d8b2f75de3ee6b574bbe37343a0c486f03c))
+* **web:** migration-written audit rows say so; the Worker editor keeps what was written when its draft went (legacy 740, 743, 744, 745) ([#1220](https://github.com/btnalit/NextTime-AI/issues/1220)) ([60d2e32](https://github.com/btnalit/NextTime-AI/commit/60d2e32e13bf5c368f595dd4b57f2e824a12ec97))
+
+
+### Performance Improvements
+
+* list Decisions newest first from an index (legacy 429) ([#1247](https://github.com/btnalit/NextTime-AI/issues/1247)) ([2d09b0b](https://github.com/btnalit/NextTime-AI/commit/2d09b0bb894f0d332d967ef842d6405d67fc49e5))
+
 ## [0.69.1](https://github.com/btnalit/NextTime-AI/compare/v0.69.0...v0.69.1) (2026-11-14)
 
 
