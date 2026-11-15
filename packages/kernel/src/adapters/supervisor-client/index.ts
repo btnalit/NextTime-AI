@@ -341,10 +341,12 @@ async function requestJson(
     let body: unknown;
     try {
       body = text.length > 0 ? JSON.parse(text) : undefined;
-    } catch (err) {
+    } catch {
+      // Fixed text, as the gatekeeper client's: V8's own message quotes a slice of the body, and
+      // this message is kept (`worker_run.spawn_failed`'s audit row, application/task/spawn.ts).
       throw new TaskSupervisorError(
         'invalid_response',
-        `worker-supervisor returned non-JSON body: ${String(err)}`,
+        `worker-supervisor returned a non-JSON body (status ${response.status})`,
       );
     }
     return { status: response.status, body };
