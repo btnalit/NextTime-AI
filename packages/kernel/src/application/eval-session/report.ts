@@ -15,6 +15,11 @@ export interface EvaluationReportOutcome {
     readonly status: string;
     readonly activityId: string;
     readonly factIds: readonly string[];
+    /** Always empty: an evaluation writes nothing, so it refuses no entry (legacy 650 added these
+     *  lists to the real answer). */
+    readonly factsRejected: readonly never[];
+    readonly proposedOperationsRejected: readonly never[];
+    readonly evidenceDropped: readonly never[];
   };
   /** Values replaced as secrets in the stored report, and U+0000 escaped. */
   readonly redactedValues: number;
@@ -23,6 +28,12 @@ export interface EvaluationReportOutcome {
    *  `model_refused`, nothing of the report was stored, and the trial ends `errored`. */
   readonly modelRefused?: { readonly scope: string; readonly refusedCalls: number };
 }
+
+const NOTHING_REFUSED = {
+  factsRejected: [],
+  proposedOperationsRejected: [],
+  evidenceDropped: [],
+} as const;
 
 /**
  * `report_task_result` for an evaluation Task's Worker: the report is the trial's result — stored
@@ -70,6 +81,7 @@ export async function reportEvaluationResult(
         status: failed.status,
         activityId: session.workerRunActivityId,
         factIds: [],
+        ...NOTHING_REFUSED,
       },
       redactedValues: 0,
       unstorableEscaped: 0,
@@ -90,6 +102,7 @@ export async function reportEvaluationResult(
       status: task.status,
       activityId: session.workerRunActivityId,
       factIds: [],
+      ...NOTHING_REFUSED,
     },
     redactedValues: scrubbed.redactedValues,
     unstorableEscaped: storable.escaped,

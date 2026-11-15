@@ -321,7 +321,16 @@ export const reportTaskResultHandler: CapabilityHandler = async (
       workerRun.id,
     );
     return {
-      result: { id: task.id, status: task.status, activityId: workerRun.activityId, factIds: [] },
+      result: {
+        id: task.id,
+        status: task.status,
+        activityId: workerRun.activityId,
+        factIds: [],
+        // Nothing of the report was checked, so nothing was refused per entry.
+        factsRejected: [],
+        proposedOperationsRejected: [],
+        evidenceDropped: [],
+      },
       resourceType: 'task',
       resourceId: task.id,
       auditPayload: {
@@ -422,11 +431,44 @@ export const reportTaskResultHandler: CapabilityHandler = async (
       status: outcome.task.status,
       activityId: outcome.activityId,
       factIds: outcome.factIds,
+      // Legacy 650: the refusals come back here, not through a later `get_task` — this call just
+      // completed the Task and revoked the WorkerRun's Handle with it, so the Worker cannot read
+      // them back. The same bounded entries `tasks.result` records.
+      factsRejected: outcome.factsRejected.map(toWireFactRejection),
+      proposedOperationsRejected: outcome.proposedOperationsRejected.map(toWireProposalRejection),
+      evidenceDropped: [...outcome.evidenceDropped],
     },
     resourceType: 'task',
     resourceId: outcome.task.id,
   };
 };
+
+/** A refused `factsToAssert[]` entry on the wire (`ReportedFactRejectionWireSchema`), field by
+ *  field — never spread, so a field added to the internal record never reaches the Worker
+ *  unreviewed. */
+function toWireFactRejection(rejection: RejectedResultFact) {
+  return {
+    index: rejection.index,
+    linkType: rejection.linkType,
+    reason: rejection.reason,
+    ...(rejection.sourceType !== undefined ? { sourceType: rejection.sourceType } : {}),
+    ...(rejection.targetType !== undefined ? { targetType: rejection.targetType } : {}),
+    ...(rejection.expected !== undefined ? { expected: [...rejection.expected] } : {}),
+    ...(rejection.detail !== undefined ? { detail: rejection.detail } : {}),
+  };
+}
+
+/** A refused `proposedOperations[]` entry on the wire (`ReportedProposalRejectionWireSchema`). */
+function toWireProposalRejection(rejection: RejectedResultProposal) {
+  return {
+    index: rejection.index,
+    gatekeeperId: rejection.gatekeeperId,
+    reason: rejection.reason,
+    ...(rejection.problem !== undefined ? { problem: rejection.problem } : {}),
+    ...(rejection.existingStatus !== undefined ? { existingStatus: rejection.existingStatus } : {}),
+    ...(rejection.detail !== undefined ? { detail: rejection.detail } : {}),
+  };
+}
 
 function toWireOperation(
   record: {

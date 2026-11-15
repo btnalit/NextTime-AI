@@ -239,6 +239,8 @@ export interface PostWorkerResultOutcome {
   readonly factIds: readonly string[];
   readonly factsRejected: readonly RejectedResultFact[];
   readonly proposedOperationsRejected: readonly RejectedResultProposal[];
+  /** `evidence[]` indices left on the Activity metadata only (their `factIndex` named no entry). */
+  readonly evidenceDropped: readonly number[];
 }
 
 /** Resolves one `WorkerResultObjectRef` to a concrete Object id — upserting a new/existing Object
@@ -574,6 +576,7 @@ export async function postWorkerResult(
       factIds: writtenFacts.map((fact) => fact.id),
       factsRejected,
       proposedOperationsRejected,
+      evidenceDropped: storedResult.evidenceDropped,
     };
   } catch (err) {
     await endActivity(client, workspaceId, activity.id, 'failed').catch(() => {

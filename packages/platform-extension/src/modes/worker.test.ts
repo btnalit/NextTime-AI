@@ -337,8 +337,7 @@ describe('registerWorkerMode', () => {
       findings: ['ok'],
       sessionJsonlPath: '/workspace/.pi/sessions/abc.jsonl',
     });
-    // No factsToAssert/proposedOperations/evidence in the contract → nothing the kernel could
-    // refuse per entry → no get_task read-back round trip.
+    // Legacy 650: the Task is never read back after the report (its Handle is revoked by then).
     expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(0);
     logSpy.mockRestore();
   });
@@ -516,47 +515,44 @@ describe('registerWorkerMode', () => {
     logSpy.mockRestore();
   });
 
-  it('report_result echoes factsRejected / proposedOperationsRejected / evidenceDropped read back from get_task (S5.6 #208 / #211 per-entry refusals, I16 included)', async () => {
+  it('report_result echoes factsRejected / proposedOperationsRejected / evidenceDropped from report_task_result’s own answer (S5.6 #208 / #211 per-entry refusals, I16 included; legacy 650)', async () => {
+    // Legacy 650: the refusals come back in the report's answer. Reading the Task back afterwards
+    // cannot work — the report completed it and revoked this WorkerRun's Handle — so no get_task
+    // handler is set here and none may be called.
     kernel.setHandler('report_task_result', () => ({
-      ok: true,
-      result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: ['fact-a'] },
-    }));
-    kernel.setHandler('get_task', () => ({
       ok: true,
       result: {
         id: 'task-1',
         status: 'completed',
-        result: {
-          summary: 's',
-          factIds: ['fact-a'],
-          factsRejected: [
-            {
-              index: 1,
-              linkType: 'runs_on',
-              reason: 'meta_ontology_type',
-              detail: 'ObjectType "Gatekeeper" is platform meta-ontology (I16)',
-            },
-            {
-              index: 2,
-              linkType: 'depends_on',
-              reason: 'link_type_not_allowed',
-              sourceType: 'Host',
-              targetType: 'Service',
-              expected: ['hosts'],
-            },
-          ],
-          proposedOperationsRejected: [
-            { index: 0, gatekeeperId: MADE_UP_GATEKEEPER_ID, reason: 'gatekeeper_not_found' },
-            {
-              index: 1,
-              gatekeeperId: MADE_UP_GATEKEEPER_ID,
-              reason: 'invalid_operation_name',
-              problem: 'too_long',
-              detail: 'Operation name "demo.long…" is longer than 128 characters',
-            },
-          ],
-          evidenceDropped: [1],
-        },
+        activityId: 'act-1',
+        factIds: ['fact-a'],
+        factsRejected: [
+          {
+            index: 1,
+            linkType: 'runs_on',
+            reason: 'meta_ontology_type',
+            detail: 'ObjectType "Gatekeeper" is platform meta-ontology (I16)',
+          },
+          {
+            index: 2,
+            linkType: 'depends_on',
+            reason: 'link_type_not_allowed',
+            sourceType: 'Host',
+            targetType: 'Service',
+            expected: ['hosts'],
+          },
+        ],
+        proposedOperationsRejected: [
+          { index: 0, gatekeeperId: MADE_UP_GATEKEEPER_ID, reason: 'gatekeeper_not_found' },
+          {
+            index: 1,
+            gatekeeperId: MADE_UP_GATEKEEPER_ID,
+            reason: 'invalid_operation_name',
+            problem: 'too_long',
+            detail: 'Operation name "demo.long…" is longer than 128 characters',
+          },
+        ],
+        evidenceDropped: [1],
       },
     }));
     const tool = fake.tools.get('report_result');
@@ -605,16 +601,16 @@ describe('registerWorkerMode', () => {
       `proposedOperations[1] (gatekeeperId ${MADE_UP_GATEKEEPER_ID}): invalid_operation_name — Operation name "demo.long…" is longer than 128 characters`,
     );
     expect(text).toContain('evidence[1]: dropped');
-    expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(1);
+    expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(0);
     logSpy.mockRestore();
   });
 
-  it('report_result still terminates with an accepted result when the get_task read-back fails (the echo is best-effort)', async () => {
+  it('report_result against a kernel whose answer has no refusal lists shows none and never reads the Task back (legacy 650)', async () => {
+    // A kernel from before legacy 650: `{id, status, activityId, factIds}` only.
     kernel.setHandler('report_task_result', () => ({
       ok: true,
       result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: [] },
     }));
-    // no get_task handler → 404
     const tool = fake.tools.get('report_result');
     if (!tool) throw new Error('report_result tool not registered');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -636,7 +632,48 @@ describe('registerWorkerMode', () => {
     const text = firstPart?.type === 'text' ? firstPart.text : '';
     expect(text).toContain('Result contract accepted');
     expect(text).not.toContain('Refused');
+    expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(0);
+    expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result shows only the well-formed refusal entries of an answer whose lists hold anything else (legacy 650)', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: {
+        id: 'task-1',
+        status: 'completed',
+        activityId: 'act-1',
+        factIds: [],
+        factsRejected: [null, 'x', { index: 0, linkType: 'hosts', reason: 'undeclared_link_type' }],
+        proposedOperationsRejected: { index: 0, reason: 'gatekeeper_not_found' },
+        evidenceDropped: [1, '2', null],
+      },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        summary: 'x',
+        factsToAssert: [{ linkType: 'hosts', source: hostRef, target: serviceRef }],
+      },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    const refusedLines = text.split('\n').filter((line) => line.startsWith('- '));
+    expect(refusedLines).toEqual([
+      '- factsToAssert[0] (hosts): undeclared_link_type',
+      '- evidence[1]: dropped (its factIndex points outside factsToAssert)',
+    ]);
     logSpy.mockRestore();
   });
 

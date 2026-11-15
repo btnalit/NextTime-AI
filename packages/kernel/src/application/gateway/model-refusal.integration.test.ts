@@ -310,6 +310,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         status: 'failed',
         activityId: expect.any(String),
         factIds: [],
+        // Nothing of the report was checked, so nothing was refused per entry (legacy 650).
+        factsRejected: [],
+        proposedOperationsRejected: [],
+        evidenceDropped: [],
       });
 
       const state = await readState(taskId, workerRunId, claims.jti);
