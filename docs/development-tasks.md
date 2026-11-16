@@ -4558,6 +4558,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **摘要换成 `contentDigest`**：统一用 ChangePlan 的 `sha256:` + 规范化 JSON，取代模块索引旧的十六进制哈希；D2 规定这类哈希从不入库、每次现算，切换对已有工作区透明。
   - **控制台**：`components/catalog/PacksTab.tsx` 取代 `ModulesTab.tsx`（`#/govern/catalog/packs/<name>`，旧链接落到这里），状态机 `packInstall`；审阅框 medium 级确认，已定制或不兼容时 `danger`，预览读在角色确认是 owner 之后才发，`version_changed` / `change_plan_changed` 时自动重读预览；安装历史来源统一叫「能力包 X vN」；平台「模块」页说明模块是只含一个本体的能力包。`operations.md` §14 改写为「能力包与模块管理」。
   - **不在本 PR**：记录核验（`verify_change_segment`、`verified` / `verification_failed` 的写入）移到 P1-E（与 Operation 改动项、gate readiness 一起）；WorkerDefinition / Skill / Procedure 改动项与 ops-base 属 P1-D；知识包验收属 P1-F；主机私有能力包目录（`config/packs/`）以后再做；默认模块仍只能选「模块」形状的能力包；`publish_ontology_version` 仍绕过权限扩大分类器（沿用 P1-A 前瞻说明）。
+  - **遗留 414 / 765 的后续**（#1265、#1281，2026-11-16 合入，b015e2c、46f104b；无迁移）：内核镜像里四处内容（`ontology/`、`packs/`、`connectors/`、`pi.version`）、应用代码与 `/app` 目录本身都不再 `--chown`，归 root、只读；构建阶段对这些路径 `chmod -R a+rX,go-w`，不随检出的 umask 变。内核运行时不往 `/app` 下写。升级说明见 `docs/runbooks/release.md` §3.193。
 - 实现说明（P1-D：能力包可带 Skill 与 Worker，首个 ops-base 包，#679，2026-10-23 合入，2167026；governance 0026；新登遗留 418、419）：
   - **变更项**（`application/change-plan/family-item.ts`）：新 kind `skill_version` / `worker_definition_version`；头部 = 最新已发布版本；应用 = 无 actor 的 propose + publish；撤销 = 把这一项发布的那一版标弃用，前后比对后才写；被后来的版本替换的不撤。迁移 governance 0026 只放宽 `change_items_kind_check`。
   - **锁**：同一工作区一把 `lockWorkerRegistry` 咨询锁；应用与撤销按 `change-plan/lock-order.ts` 同一顺序（本体在前、Skill / Worker 注册表在后，审查 #493 提出，集成测试抓反序）。
