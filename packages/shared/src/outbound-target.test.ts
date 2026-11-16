@@ -146,7 +146,8 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
     await expect(
       decideOutboundTarget('http://[fe80::1]:8090/', POLICY, resolve),
     ).resolves.toMatchObject({ allowed: false, reason: 'link-local' });
-    for (const entry of ['fe80:0:0:0:0:0:0:1', 'FE80::0001', 'fe80::1']) {
+    // Legacy 786: the bracketed form a URL writes, too.
+    for (const entry of ['fe80:0:0:0:0:0:0:1', 'FE80::0001', 'fe80::1', '[fe80::1]']) {
       const policy: OutboundTargetPolicy = { ...POLICY, allowHosts: [entry] };
       for (const url of ['http://[fe80::1]:8090/', 'http://[fe80:0:0:0:0:0:0:1]:8090/']) {
         await expect(decideOutboundTarget(url, policy, resolve)).resolves.toEqual({

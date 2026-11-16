@@ -169,7 +169,10 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
 
-    const hostname = target.hostname;
+    // As CONNECT reads its target (`parseConnectTarget`): an IPv6 host without the brackets a
+    // parsed URL keeps, so the policy sees it as the IP literal it is (legacy 786) — before, the
+    // brackets made it look like a name: it skipped the literal rule and went to the resolver.
+    const hostname = stripBrackets(target.hostname);
     const port = target.port ? Number(target.port) : 80;
     const source = options.resolveSource(clientIp);
     const decision = await decideEgress({
