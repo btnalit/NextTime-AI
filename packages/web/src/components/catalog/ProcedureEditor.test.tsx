@@ -1815,6 +1815,29 @@ describe('ProcedureEditor (S6-A A2)', () => {
     ).toEqual({ name: 'old-web' });
   });
 
+  it('legacy 776: a refused submit moves focus to the first problem said, in reading order', () => {
+    const { caller, calls } = http({});
+    render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const submit = screen.getByTestId('procedure-submit');
+    submit.focus();
+    fireEvent.click(submit);
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    const name = screen.getByLabelText(/^名称/);
+    expect(document.getElementById(`${name.id}-error`)).not.toBeNull();
+    expect(document.activeElement).toBe(name);
+
+    // The form's own fields fixed, the first problem left is the step's.
+    fireEvent.change(name, { target: { value: 'Remove' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Remove a service' } });
+    submit.focus();
+    fireEvent.click(submit);
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    const active = document.activeElement as HTMLElement;
+    expect(screen.getByTestId('procedure-step').contains(active)).toBe(true);
+    expect(document.getElementById(`${active.id}-error`)?.getAttribute('role')).toBe('alert');
+  });
+
   it('legacy 775: a platform check’s params are filled in one by one, typed by the Operation’s own params', async () => {
     const gate = '00000000-0000-4000-8000-000000000775';
     const lookup = {
@@ -1902,6 +1925,8 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.click(screen.getByTestId('procedure-submit'));
     expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
     expect(document.getElementById(`${id.id}-error`)?.textContent).toBe('这个参数必填。');
+    // Legacy 776: focus goes to the field the problem is said on, not left on 保存.
+    expect(document.activeElement).toBe(id);
 
     // A value that is not of the param's type is said once the field is left.
     fireEvent.change(id, { target: { value: '4.5' } });

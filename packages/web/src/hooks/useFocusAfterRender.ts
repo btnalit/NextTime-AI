@@ -31,3 +31,21 @@ export function byData(
   if (!root) return undefined;
   return [...root.querySelectorAll<HTMLElement>(selector)].find((el) => el.dataset[name] === value);
 }
+
+/**
+ * The first problem a refused form says under `root`, in reading order (legacy 776): the control
+ * an error is said on (`<id>-error` names it), or, when no control is found, the error itself —
+ * made focusable, so focus moving there brings it into view and has it read out.
+ */
+export function firstProblem(root: ParentNode | null | undefined): HTMLElement | undefined {
+  const said = root?.querySelector<HTMLElement>('.field-error[role="alert"]');
+  if (!said) return undefined;
+  const control = said.id.endsWith('-error')
+    ? document.getElementById(said.id.slice(0, -'-error'.length))
+    : null;
+  if (control !== null && root?.contains(control) && !control.hasAttribute('disabled')) {
+    return control;
+  }
+  if (!said.hasAttribute('tabindex')) said.setAttribute('tabindex', '-1');
+  return said;
+}
