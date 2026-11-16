@@ -135,7 +135,7 @@ function isDirectoryOfItsOwn(path: string): boolean | 'missing' {
 
 /** What `taskId`'s handoff directory is to a reader in `owner`'s workspace and goal run — see
  *  {@link UpstreamFilesState} and this module's doc comment for the checks. `runningTaskIds`:
- *  the Tasks with a container this service still counts as running. */
+ *  the Tasks with a container this service still counts as running, or a spawn under way. */
 export function upstreamFilesState(
   config: SupervisorConfig,
   taskId: string,

@@ -20,7 +20,10 @@ import {
   RuntimeImageIncompatibleError,
 } from './runtime-contract.js';
 import { createTaskService } from './task-service.js';
-import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import {
+  type FakeDockerClient,
+  createFakeDockerClient,
+} from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 let dir: string;
@@ -680,6 +683,76 @@ describe('task-service sweepRetention', () => {
     await service.sweepRetention();
     expect(existsSync(old)).toBe(false);
     expect(existsSync(running)).toBe(true);
+  });
+
+  /** Holds every spawn at its image check (its first wait on Docker) after the first `passing`
+   *  calls, until `release()`. */
+  function holdImageChecks(
+    docker: { inspectImage: FakeDockerClient['inspectImage'] },
+    passing = 0,
+  ) {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspectImage = docker.inspectImage.bind(docker);
+    let calls = 0;
+    docker.inspectImage = async (image) => {
+      calls += 1;
+      if (calls > passing) await released;
+      return inspectImage(image);
+    };
+    return { release };
+  }
+
+  function makeOld(path: string): void {
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(path, threeHoursAgo, threeHoursAgo);
+  }
+
+  it('never deletes the directories of a Task being spawned, even if old (legacy 791)', async () => {
+    const { service, config, docker } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
+    // A re-spawn finds the files of the Task's earlier run.
+    const workspace = taskDir(config, 'task-1');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, 'notes.md'), 'earlier run');
+    makeOld(workspace);
+    const held = holdImageChecks(docker);
+
+    const spawned = service.spawn(spawnInput);
+    await service.sweepRetention();
+    held.release();
+    await spawned;
+
+    expect(readFileSync(join(workspace, 'notes.md'), 'utf8')).toBe('earlier run');
+  });
+
+  it('counts a Task as being spawned until its spawn ends, whichever way, per call (legacy 791)', async () => {
+    const { service, config, docker } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
+    const createAndStart = docker.createAndStart.bind(docker);
+    let creates = 0;
+    docker.createAndStart = async (spec) => {
+      creates += 1;
+      if (creates === 1) throw new Error('start failed');
+      return createAndStart(spec);
+    };
+    const held = holdImageChecks(docker, 1);
+
+    // Two spawns of the same Task: the first fails while the second still waits.
+    const failed = service.spawn(spawnInput);
+    const second = service.spawn({ ...spawnInput, workerRunId: 'run-2' });
+    await expect(failed).rejects.toThrow('start failed');
+    const workspace = taskDir(config, 'task-1');
+    makeOld(workspace);
+    await service.sweepRetention();
+    expect(existsSync(workspace)).toBe(true);
+
+    held.release();
+    await second;
+    await service.terminate('run-2');
+    makeOld(workspace);
+    await service.sweepRetention();
+    expect(existsSync(workspace)).toBe(false);
   });
 });
 
