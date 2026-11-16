@@ -46,6 +46,7 @@ import { Field, describedBy } from '../kit/field.js';
 import { Select } from '../kit/select.js';
 import { Textarea } from '../kit/textarea.js';
 import { FactCheckEditor } from './FactCheckEditor.js';
+import { OperationParamsField } from './OperationParamsField.js';
 import { OperationStepFields } from './OperationStepFields.js';
 import { PredicateEditor } from './PredicateEditor.js';
 import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
@@ -823,6 +824,30 @@ export function VerifyCheckFields({
             gateError={messages(errors, `${prefix}.check.gatekeeperId`, t)}
             operationError={messages(errors, `${prefix}.check.operation`, t)}
             absence={step.checkKind === 'observe_absent'}
+            renderParams={(params) => (
+              <OperationParamsField
+                // The fields start from the JSON once: again for another Operation, and once its
+                // params are known.
+                key={`${step.checkGatekeeperId}\u0000${step.checkOperation}\u0000${params !== undefined}`}
+                id={`${id}-params`}
+                testPrefix="procedure-step-check-params"
+                params={params}
+                text={step.checkParamsText}
+                // #780 UX P3-2: what the confirm card tells the requester, told first to whoever
+                // writes the params (B-c: the platform looks before the work, so wrong params pause).
+                hint={
+                  step.checkKind === 'observe_absent'
+                    ? t(
+                        '参数要正好指向目标要删掉的那个东西。目标第一步开始前，平台会用同样的参数先看一次；写错、指向一个本来就没有的东西时，目标会暂停，等请求人改参数或取消。',
+                        'The params must name exactly the thing the goal removes. Before the goal’s first step the platform makes the same call first; params that name something that was never there pause the goal until the requester fixes them or cancels.',
+                      )
+                    : undefined
+                }
+                error={paramsError}
+                busy={busy}
+                onChange={(checkParamsText) => onChange({ checkParamsText })}
+              />
+            )}
             onChange={(patch) =>
               onChange({
                 ...(patch.gatekeeperId !== undefined
@@ -834,34 +859,6 @@ export function VerifyCheckFields({
               })
             }
           />
-          <Field
-            id={`${id}-params`}
-            label={t('Operation 参数（JSON，可空）', 'Operation params (JSON, optional)')}
-            // #780 UX P3-2: what the confirm card tells the requester, told first to whoever
-            // writes the params (B-c: the platform looks before the work, so wrong params pause).
-            hint={
-              step.checkKind === 'observe_absent'
-                ? t(
-                    '参数要正好指向目标要删掉的那个东西。目标第一步开始前，平台会用同样的参数先看一次；写错、指向一个本来就没有的东西时，目标会暂停，等请求人改参数或取消。',
-                    'The params must name exactly the thing the goal removes. Before the goal’s first step the platform makes the same call first; params that name something that was never there pause the goal until the requester fixes them or cancels.',
-                  )
-                : undefined
-            }
-            error={paramsError}
-          >
-            <Textarea
-              className="input-mono"
-              id={`${id}-params`}
-              aria-label={t('Operation 参数', 'Operation params')}
-              value={step.checkParamsText}
-              onChange={(event) => onChange({ checkParamsText: event.target.value })}
-              minRows={2}
-              spellCheck={false}
-              disabled={busy}
-              invalid={paramsError !== null}
-              data-testid="procedure-step-check-params"
-            />
-          </Field>
           {step.checkKind === 'observe_predicate' ? (
             <PredicateEditor
               id={`${id}-expect`}

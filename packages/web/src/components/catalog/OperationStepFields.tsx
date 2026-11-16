@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import type { OperationParamSummaryWire } from '@nexttime/shared';
+import { type ReactNode, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText } from '../../lib/format.js';
 import {
@@ -46,6 +47,7 @@ export function OperationStepFields({
   gateError,
   operationError,
   absence = false,
+  renderParams,
   onChange,
 }: {
   readonly http: CapabilityCaller;
@@ -63,6 +65,10 @@ export function OperationStepFields({
    *  which answers mean "does not exist", confirmed when published ({@link confirmsAbsence}), are
    *  offered. */
   readonly absence?: boolean;
+  /** Legacy 775: what goes under the Operation, given its params (legacy 465) — `undefined` when
+   *  they are not known (no gate from the directory, an Operation not on its list, an older
+   *  kernel). */
+  readonly renderParams?: (params: readonly OperationParamSummaryWire[] | undefined) => ReactNode;
   readonly onChange: (patch: {
     readonly gatekeeperId?: string;
     readonly operationName?: string;
@@ -94,6 +100,8 @@ export function OperationStepFields({
     name !== '' &&
     !choices.some((choice) => choice.name === name);
   const manual = !hasDirectory || manualChosen || listUnavailable || notOnList;
+  const chosenParams =
+    gate !== undefined ? choices.find((choice) => choice.name === name)?.params : undefined;
   // #780 UX P3-3: an absence check on a gate that offers no Operation able to confirm "not there"
   // — any name typed would fail at publish, so nothing is typed; the note below says what to do.
   const noAbsenceChoice =
@@ -293,6 +301,7 @@ export function OperationStepFields({
           </Button>
         </div>
       ) : null}
+      {renderParams?.(chosenParams)}
     </div>
   );
 }

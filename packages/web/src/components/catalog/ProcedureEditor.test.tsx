@@ -1815,6 +1815,139 @@ describe('ProcedureEditor (S6-A A2)', () => {
     ).toEqual({ name: 'old-web' });
   });
 
+  it('legacy 775: a platform check’s params are filled in one by one, typed by the Operation’s own params', async () => {
+    const gate = '00000000-0000-4000-8000-000000000775';
+    const lookup = {
+      gatekeeperId: gate,
+      name: 'svc.lookup',
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      version: 1,
+      status: 'published',
+      absentAnswers: { statuses: [404] },
+      absentAnswersReview: { reviewedBy: 'p-owner', reviewedAt: '2026-10-29T00:00:00.000Z' },
+      params: [
+        { name: 'X-Api-Key', in: 'header', required: true, type: 'string', gateOwned: true },
+        { name: 'filter', required: false, type: 'object' },
+        { name: 'id', in: 'path', required: true, type: 'integer' },
+        { name: 'name', required: false, type: 'string' },
+        { name: 'verbose', in: 'query', required: false, type: 'boolean' },
+      ],
+    };
+    const { caller, calls } = http({
+      list_operations: () => ({ items: [lookup] }),
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+      propose_procedure: () => ({ id: 'pr-775', version: 1, status: 'draft', name: 'Remove' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={[
+          {
+            id: gate,
+            name: 'svc-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 1,
+            createdAt: '',
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Remove' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Remove a service' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'verify' },
+    });
+    fireEvent.change(within(step).getByLabelText(/^说明/), { target: { value: 'Gone.' } });
+    fireEvent.change(within(step).getByTestId('procedure-step-check-kind'), {
+      target: { value: 'observe_absent' },
+    });
+    // Before an Operation is chosen its params are not known: the JSON, as before.
+    expect(within(step).getByTestId('procedure-step-check-params').tagName).toBe('TEXTAREA');
+    fireEvent.change(within(step).getByLabelText(/观察哪个门/), { target: { value: gate } });
+    const operationInput = within(step).getByTestId(
+      'procedure-step-check-operation',
+    ) as HTMLInputElement;
+    await waitFor(() => expect(operationInput.getAttribute('aria-busy')).toBeNull());
+    expect(offered(operationInput)).toEqual(['svc.lookup']);
+    fireEvent.click(
+      within(screen.getByRole('listbox')).getByRole('option', { name: /svc\.lookup/ }),
+    );
+
+    // One field per param a person fills in, required first; none for the one the gate sets.
+    const fields = await within(step).findByTestId('procedure-step-check-params-fields');
+    expect(within(step).queryByTestId('procedure-step-check-params')).toBeNull();
+    const named = Array.from(
+      fields.querySelectorAll<HTMLElement>('[data-testid^="procedure-step-check-params-param-"]'),
+    ).map((el) =>
+      el.getAttribute('data-testid')?.replace('procedure-step-check-params-param-', ''),
+    );
+    expect(named).toEqual(['id', 'filter', 'name', 'verbose']);
+    expect(within(fields).getByTestId('procedure-step-check-params-gate-owned').textContent).toBe(
+      '门自己设置的参数不用填：X-Api-Key。',
+    );
+    // Each field says its type and where the gate puts it.
+    const id = within(fields).getByTestId('procedure-step-check-params-param-id');
+    expect(document.getElementById(`${id.id}-hint`)?.textContent).toBe('整数 · 放在路径里');
+    // The absence hint stays with the params.
+    expect(fields.textContent).toContain('参数要正好指向目标要删掉的那个东西');
+
+    // A value that is not of the param's type is said once the field is left.
+    fireEvent.change(id, { target: { value: '4.5' } });
+    expect(within(fields).queryByRole('alert')).toBeNull();
+    fireEvent.blur(id);
+    expect(within(fields).getByRole('alert').textContent).toBe('要填一个整数。');
+    expect(id.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.change(id, { target: { value: '42' } });
+    expect(within(fields).queryByRole('alert')).toBeNull();
+    fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-name'), {
+      target: { value: 'old web' },
+    });
+    fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-verbose'), {
+      target: { value: 'true' },
+    });
+    fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-filter'), {
+      target: { value: '{"tier": 2}' },
+    });
+    const sent = { id: 42, filter: { tier: 2 }, name: 'old web', verbose: true };
+
+    // The same params as JSON — and back, while the JSON is still what the fields can hold.
+    fireEvent.click(within(fields).getByTestId('procedure-step-check-params-to-json'));
+    const json = within(step).getByTestId('procedure-step-check-params') as HTMLTextAreaElement;
+    expect(JSON.parse(json.value)).toEqual(sent);
+    fireEvent.change(json, { target: { value: JSON.stringify({ ...sent, extra: 1 }) } });
+    expect(within(step).queryByTestId('procedure-step-check-params-to-fields')).toBeNull();
+    expect(within(step).getByTestId('procedure-step-check-params-json-only')).toBeTruthy();
+    fireEvent.change(json, { target: { value: JSON.stringify(sent) } });
+    fireEvent.click(within(step).getByTestId('procedure-step-check-params-to-fields'));
+    expect(
+      (within(step).getByTestId('procedure-step-check-params-param-name') as HTMLInputElement)
+        .value,
+    ).toBe('old web');
+
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls.find((call) => call.name === 'propose_procedure')?.params).toMatchObject({
+      procedure: {
+        steps: [
+          {
+            kind: 'verify',
+            check: {
+              kind: 'observe_absent',
+              check: { gatekeeperId: gate, operation: 'svc.lookup', params: sent },
+            },
+          },
+        ],
+      },
+    });
+  });
+
   it('legacy 493: a step whose Worker version is not published is said on that step’s version, focused', async () => {
     const { caller } = http({
       propose_procedure: () =>

@@ -50,6 +50,17 @@ describe('operationChoices', () => {
       { name: 'restart', blastRadius: null, gateCount: 2, version: null },
     ]);
   });
+
+  it('legacy 775: one gate’s Operation carries its params; a name folded across gates does not', () => {
+    const params = [{ name: 'id', required: true, type: 'integer' as const }];
+    const choices = operationChoices([
+      op({ gatekeeperId: 'gk-1', name: 'inspect', params }),
+      op({ gatekeeperId: 'gk-1', name: 'restart', params }),
+      op({ gatekeeperId: 'gk-2', name: 'restart', params }),
+    ]);
+    expect(choices.find((choice) => choice.name === 'inspect')?.params).toEqual(params);
+    expect(choices.find((choice) => choice.name === 'restart')?.params).toBeUndefined();
+  });
 });
 
 describe('confirmsAbsence (S11 gate-confirmed absence B)', () => {
