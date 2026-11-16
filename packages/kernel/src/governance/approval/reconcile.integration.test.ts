@@ -1183,7 +1183,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           absentAnswersReview: REVIEW(),
           ...options.evidence,
         });
-        return () => observed(created.id, evidence, source);
+        return Object.assign(() => observed(created.id, evidence, source), {
+          actionRequestId: created.id,
+          observationId: evidence,
+        });
       }
 
       it('records effect_seen on the step’s or the goal’s baseline of the same call taken before the action', async () => {
@@ -1236,6 +1239,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         await inDoubt(created.id);
         await reconcile(requesterId, { actionRequestId: created.id, verdict: 'effect_seen' });
         expect((await row(created.id)).reconciliation).toBe('effect_seen');
+
+        // Legacy 773 (review #493 on #1289): even one naming an Observation in which the gate
+        // answered "not there" under a confirmation no version of the Operation records — what
+        // governance/0046 refuses of the platform's own finding. Written directly, as the
+        // application role could, since `reconcile.ts` never names an Observation for a person.
+        const unconfirmed = await absentFinding({
+          evidence: { absentAnswersReview: { ...CONFIRMATION, reviewedBy: randomUUID() } },
+        });
+        const theirs = await decision(requesterId, {
+          actionRequestId: unconfirmed.actionRequestId,
+          decision: 'reconcile',
+          verdict: 'effect_seen',
+          basis: 'person',
+          observationId: unconfirmed.observationId,
+        });
+        await asOwner((client) =>
+          client.query(
+            `update action_requests set reconciliation = 'effect_seen',
+                    reconciliation_decision_id = $3
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, unconfirmed.actionRequestId, theirs],
+          ),
+        );
+        expect((await row(unconfirmed.actionRequestId)).reconciliation).toBe('effect_seen');
       });
     });
   },

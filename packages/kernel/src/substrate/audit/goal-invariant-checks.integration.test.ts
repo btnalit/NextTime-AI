@@ -56,23 +56,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
 
-    /** A published version 1 of `call`'s Operation recording `review` as the confirmation of its
-     *  "does not exist" answers — what an absence's Observation must name (legacy 496). Written at
-     *  rest through `raw`, like every other row this file checks. */
+    /** A version of `call`'s Operation recording `review` as the confirmation of its "does not
+     *  exist" answers — what an absence's Observation must name (legacy 496): published version 1
+     *  unless `version` says otherwise. Written at rest through `raw`, like every other row this
+     *  file checks, so a draft can hold one too (legacy 773: what the checker must not count). */
     async function confirmedVersion(
       call: { readonly gatekeeperId: string; readonly operation: string },
       review: { readonly reviewedBy: string; readonly reviewedAt: string },
+      version: { readonly number?: number; readonly status?: string } = {},
     ): Promise<void> {
+      const number = version.number ?? 1;
       await raw(
         `insert into objects (workspace_id, object_type, identity_key, properties)
          values ($1, 'Operation', $2::jsonb, $3::jsonb)`,
         [
           workspaceId,
-          JSON.stringify({ gatekeeperId: call.gatekeeperId, name: call.operation, version: 1 }),
+          JSON.stringify({
+            gatekeeperId: call.gatekeeperId,
+            name: call.operation,
+            version: number,
+          }),
           JSON.stringify({
             name: call.operation,
-            version: 1,
-            status: 'published',
+            version: number,
+            status: version.status ?? 'published',
             absentAnswersReviewedBy: review.reviewedBy,
             absentAnswersReviewedAt: review.reviewedAt,
           }),
@@ -1122,6 +1129,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const CALL = { gatekeeperId: randomUUID(), operation: 'svc.get', params: { name: 'web' } };
         const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
         await confirmedVersion(CALL, REVIEW);
+        // Legacy 773 (review #493 on #1289): confirmations only a draft of the Operation, or one of
+        // the same name on another gate, records.
+        const ON_A_DRAFT = { reviewedBy: randomUUID(), reviewedAt: REVIEW.reviewedAt };
+        await confirmedVersion(CALL, ON_A_DRAFT, { number: 2, status: 'draft' });
+        const ON_ANOTHER_GATE = { reviewedBy: randomUUID(), reviewedAt: REVIEW.reviewedAt };
+        await confirmedVersion({ ...CALL, gatekeeperId: randomUUID() }, ON_ANOTHER_GATE);
         /** What `acceptance-check.ts` records when the gate confirmed the thing is not there. */
         const CONFIRMED = {
           gatekeeperId: CALL.gatekeeperId,
@@ -1140,6 +1153,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           { absentAnswersReview: { ...REVIEW, reviewedBy: '' } },
           // Legacy 496: a confirmation no version of the Operation records.
           { absentAnswersReview: { ...REVIEW, reviewedBy: randomUUID() } },
+          // Legacy 773: only a draft records it, or only the same name on another gate.
+          { absentAnswersReview: ON_A_DRAFT },
+          { absentAnswersReview: ON_ANOTHER_GATE },
           { outcome: 'unsatisfied' },
         ];
         const observation = async (content: Record<string, unknown>, ago = '0 seconds') => {
