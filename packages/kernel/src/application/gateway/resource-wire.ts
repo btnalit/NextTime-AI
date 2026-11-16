@@ -281,6 +281,12 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
  * this shows (`connectionActivities`); until it has run, this is what keeps the copy from being
  * read. An address that carries nothing is kept as it is, so the step still says where the
  * connection points.
+ *
+ * Each key keeps its own rule, and the rule applies to every Activity's metadata, at any depth. A
+ * cut address loses its whole query and fragment, harmless parameters too. An `endpoint` allows no
+ * query or fragment at all, so a URL under an `endpoint` key elsewhere — in what a Worker reported
+ * as a `worker_result`'s evidence, say — reads without its query even when that query carries
+ * nothing (`?page=2`). That errs toward showing less; the stored row keeps what was written.
  */
 export function toWireExplainResult(step: ExplainResult): ExplainResult {
   if (step.activity === null) return step;
