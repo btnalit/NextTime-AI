@@ -3246,6 +3246,20 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.193 内核镜像的 `/app` 与应用代码归 root 所有（#1265、#1281，遗留 414、765，0.69.2 之后的下一版）
+
+没有迁移，不改契约。
+
+- **行为变化**：内核镜像里 `/app` 目录本身、应用代码，以及 `ontology/`、`packs/`、`connectors/`、`pi.version` 都归 root 所有，所有人可读、只有 root 可写；运行时用户 `nexttime` 改不了、也没法改名或替换。权限在构建阶段设好，不随检出时的 umask 变。内核运行时本来就不往 `/app` 下写（compose 以 `read_only` 运行，只有 `/tmp` 可写）。
+- **升级影响**：换镜像即生效，镜像升级顺序不限。
+- **升级后只读检查**（只看本项目的内核镜像，结果记 `docs/private/`）：
+  ```sh
+  docker run --rm --entrypoint sh nexttime-ai-kernel -c 'stat -c "%U %a %n" /app /app/dist /app/package.json; touch /app/x 2>&1 | head -1'
+  ```
+  三行都应是 `root`，且组和其他用户没有写位（如 `755`、`644`）；`touch` 应报 `Permission denied`。镜像名以主机实际用的为准。
+- **回滚**：回退镜像即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
