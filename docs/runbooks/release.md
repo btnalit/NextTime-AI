@@ -3318,7 +3318,7 @@ select 'reconcile', count(*) from action_requests r
 
 无迁移。改的是配置与已存 Worker 定义的解析，其中一处改变了旧版本已接受的值的含义，所以加一节可选的升级前只读检查。
 
-- **含义变化**：内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里带前导零的 IP 条目，以前按十进制读，现在与 URL 解析一致按八进制读，放行的会是另一个地址。
+- **含义变化**：内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里带前导零的 IP 条目，以前按十进制读，现在与 URL 解析一致按八进制读，放行的会是另一个地址。同一批里还有一处放宽（#1316，遗留 781）：这两个变量里带单独 `0x` 段的条目（如 `192.0.2.0x`）以前不算 IP、记 error 后被忽略，现在与 URL 一致把该段读成 0，放行对应地址（这里是 `192.0.2.0`）。下面检查 (a) 会把这类条目列在「ends in a number」一行，按本意改写成十进制地址或删掉，脚本不用改。
 - **解析变严**：已存 WorkerDefinition（任何 status）的 `egressDeny` 里以数字结尾、却不是 IP 的条目不再通过校验，组合候选与管理员提议读到这个版本时当作解析不了；`EGRESS_TRUSTED_RESOLVED_CIDRS` 里带前导零的条目记 error 并忽略（收窄）。
 - **无需担心**：`NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` 带前导零时 Docker 与内核本来就拒绝，正在运行的主机不会是这种值，下面的脚本顺带检查。`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES` 与映射文件里以数字结尾的条目只多一条 error 日志，以前也拦不住任何东西。
 - **升级前检查（可选，只读，结果记 `docs/private/`）**：
