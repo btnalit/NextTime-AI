@@ -991,7 +991,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         target: 'ssh://deploy@db-1.example.com',
       });
 
-      // Derived on read: the row keeps what was written (the scrub counts it, legacy 375).
+      // Derived on read: the row keeps what was written until the scrub rewrites it (legacy 375).
       const stored = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         client.query<{ metadata: Record<string, unknown> }>(
           'select metadata from activities where workspace_id = $1 and id = $2',

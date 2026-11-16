@@ -277,9 +277,10 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
  * or `manifestSource` key — as the connection rule shows it (`redactConnectionAddressesIn`). A
  * self connection's landing records the target its owner typed on its
  * `governance.create_connection` Activity (application/gates/landing.ts); one written before
- * legacy 186 can still carry a credential there. `scrub-raw-secrets` counts those rows
- * (`connectionActivities`) and never rewrites them, so this is derived on read. An address that
- * carries nothing is kept as it is, so the step still says where the connection points.
+ * legacy 186 can still carry a credential there. `scrub-raw-secrets` rewrites those rows to what
+ * this shows (`connectionActivities`); until it has run, this is what keeps the copy from being
+ * read. An address that carries nothing is kept as it is, so the step still says where the
+ * connection points.
  */
 export function toWireExplainResult(step: ExplainResult): ExplainResult {
   if (step.activity === null) return step;

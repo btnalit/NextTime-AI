@@ -53,6 +53,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Legacy 375: a self connection's landing Activity, its target copied as typed.
       landingActivity: randomUUID(),
       cleanLandingActivity: randomUUID(),
+      // Same metadata on another Activity kind: not the landing copy this rewrites.
+      otherActivity: randomUUID(),
       gatekeeper: randomUUID(),
       cleanGatekeeper: randomUUID(),
       // Legacy 384: two systems named after the same address with different credentials, one
@@ -155,12 +157,12 @@ describe.runIf(DATABASE_URL !== undefined)(
               [workspaceId, ids.connectionRequest],
             )
           )?.target,
-          landing: (
-            await one('select metadata from activities where workspace_id = $1 and id = $2', [
-              workspaceId,
-              ids.landingActivity,
-            ])
-          )?.metadata,
+          landings: (
+            await client.query(
+              'select id, metadata from activities where workspace_id = $1 and id = any($2::uuid[]) order by id',
+              [workspaceId, [ids.landingActivity, ids.cleanLandingActivity, ids.otherActivity]],
+            )
+          ).rows,
           gatekeeper: (
             await one('select properties from objects where workspace_id = $1 and id = $2', [
               workspaceId,
@@ -279,7 +281,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         await client.query(
           `insert into activities (workspace_id, id, kind, status, metadata, started_by) values
              ($1, $2, 'governance.create_connection', 'completed', $3::jsonb, $5),
-             ($1, $4, 'governance.create_connection', 'completed', $6::jsonb, $5)`,
+             ($1, $4, 'governance.create_connection', 'completed', $6::jsonb, $5),
+             ($1, $7, 'test.other_kind', 'completed', $3::jsonb, $5)`,
           [
             workspaceId,
             ids.landingActivity,
@@ -287,6 +290,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ids.cleanLandingActivity,
             ownerId,
             JSON.stringify({ kind: 'ssh', target: 'ssh://deploy@db-1.example.invalid' }),
+            ids.otherActivity,
           ],
         );
         await client.query(
@@ -455,6 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         'selfConnectionAddresses',
         'gatekeeperNames',
         'connectedSystems',
+        'connectionActivities',
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         expect(result.categories[name].examples).toEqual([]);
@@ -465,7 +470,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const [name, id] of [
         ['taskInputs', ids.task],
         ['connectionTargets', ids.connectionRequest],
-        ['connectionActivities', ids.landingActivity],
         ['gatekeeperAddresses', ids.gatekeeper],
         ['gateInstanceAddresses', ids.gateWithTarget],
         ['gateInstanceAddresses', ids.gateWithManifest],
@@ -480,7 +484,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const name of [
         'taskInputs',
         'connectionTargets',
-        'connectionActivities',
         'gatekeeperAddresses',
         'gateInstanceAddresses',
         'factProperties',
@@ -493,11 +496,6 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
-      // A user name alone is not a credential: the clean landing is not counted.
-      expect(counted).not.toContainEqual({
-        category: 'connectionActivities',
-        id: ids.cleanLandingActivity,
-      });
       // Whether a cut name collides is known only once the ones before it are rewritten.
       for (const id of [ids.systemA, ids.systemB, ids.systemHeld]) {
         expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id });
@@ -547,6 +545,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         ].sort((a, b) => (a.gatekeeper_object_id < b.gatekeeper_object_id ? -1 : 1)),
       );
 
+      // Legacy 375: a landing's copy of the target nothing calls is cut; a user name alone is no
+      // credential, and the same metadata on another Activity kind is not this copy.
+      expect(after.landings).toEqual(
+        [
+          {
+            id: ids.landingActivity,
+            metadata: { kind: 'http', target: 'https://grafana.example.invalid/d' },
+          },
+          {
+            id: ids.cleanLandingActivity,
+            metadata: { kind: 'ssh', target: 'ssh://deploy@db-1.example.invalid' },
+          },
+          { id: ids.otherActivity, metadata: landingMetadata },
+        ].sort((a, b) => (a.id < b.id ? -1 : 1)),
+      );
+
       // Legacy 384: a label nothing calls — the Gatekeeper's name and its systems' are cut. Of two
       // systems whose names differed only in a credential, the first in key order takes the cut
       // name; the other, and one whose cut name was already held, give their identity keys up.
@@ -578,7 +592,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Counted, never rewritten.
       expect(after.task).toEqual(taskInput);
       expect(after.target).toBe(`https://ops:${FAKE}@grafana.example.invalid`);
-      expect(after.landing).toEqual(landingMetadata);
       expect(after.gatekeeper).toMatchObject({
         endpoint: `https://gate.example.invalid/?token=${FAKE}`,
       });
