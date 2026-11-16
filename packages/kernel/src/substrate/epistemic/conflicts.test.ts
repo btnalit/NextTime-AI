@@ -944,15 +944,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         readonly targetObjectId: string;
         readonly port: number;
         readonly activityId: string;
-        readonly invalidated: boolean;
+        readonly state: 'active' | 'superseded' | 'invalidated';
+        readonly supersedesId?: string;
       },
     ): Promise<void> {
       await client.query(
         `insert into links (workspace_id, id, link_type, source_object_id, target_object_id,
-           properties, epistemic_status, activity_id, asserted_by, invalidated_at, invalidation_reason)
-         values ($1, $2, 'test.runs_on', $3, $4, $5, 'asserted', $6, $7,
-           case when $8::boolean then now() end,
-           case when $8::boolean then 'legacy 143 test' end)`,
+           properties, epistemic_status, activity_id, asserted_by, supersedes_id,
+           superseded_at, invalidated_at, invalidation_reason)
+         values ($1, $2, 'test.runs_on', $3, $4, $5, 'asserted', $6, $7, $8,
+           case when $9 = 'superseded' then now() end,
+           case when $9 = 'invalidated' then now() end,
+           case when $9 = 'invalidated' then 'legacy 143 test' end)`,
         [
           workspaceId,
           fact.id,
@@ -961,7 +964,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           { port: fact.port },
           fact.activityId,
           ownerId,
-          fact.invalidated,
+          fact.supersedesId ?? null,
+          fact.state,
         ],
       );
     }
@@ -1002,7 +1006,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ...pair,
             port,
             activityId: await activityFromNewSource(client),
-            invalidated: false,
+            state: 'active',
           });
         }
         const tied = await client.query<{ n: string }>(
@@ -1050,13 +1054,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           return result.rows[0]?.invalidated;
         }
 
-        // Each case is its own identity. `low` / `high`: whether the row with the smaller / larger
-        // id is invalidated; the smaller id goes into the table first.
+        // Each case is its own identity. `low` / `high`: the state of the row with the smaller /
+        // larger id; the smaller id goes into the table first.
         const cases = [
-          { low: true, high: false, expected: false },
-          { low: false, high: true, expected: false },
-          { low: true, high: true, expected: true },
-        ];
+          { low: 'invalidated', high: 'active', expected: false },
+          { low: 'active', high: 'invalidated', expected: false },
+          { low: 'invalidated', high: 'invalidated', expected: true },
+          // The smaller one superseded by the larger, which was then invalidated, all in one
+          // transaction (review #493). The chain has ended, but this check does not follow
+          // chains: a row that is not invalidated means "re-read", which costs a bounded loop.
+          { low: 'superseded', high: 'invalidated', expected: false },
+        ] as const;
         for (const [index, { low, high, expected }] of cases.entries()) {
           const pair = await objectPair(client);
           const ids = tieIds(2 + index);
@@ -1066,14 +1074,15 @@ describe.runIf(DATABASE_URL !== undefined)(
             ...pair,
             port: 1,
             activityId,
-            invalidated: low,
+            state: low,
           });
           await seedTiedFact(client, {
             id: ids.high,
             ...pair,
             port: 2,
             activityId,
-            invalidated: high,
+            state: high,
+            ...(low === 'superseded' ? { supersedesId: ids.low } : {}),
           });
           expect({ low, high, invalidated: await latestInvalidated(pair) }).toEqual({
             low,
