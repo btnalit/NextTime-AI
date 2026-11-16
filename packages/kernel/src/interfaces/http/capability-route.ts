@@ -100,6 +100,7 @@ import {
   CsrfHeaderRequiredError,
   DecisionNotFoundError,
   DecisionQuerySinceInvalidError,
+  DecisionReferenceError,
   type DispatchDeps,
   ExplainNodeNotFoundError,
   ExportProvInputError,
@@ -745,6 +746,16 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
       if (values) unresolved[field] = [...values];
     }
     return { status: 400, code: err.code, message: err.message, details: { unresolved } };
+  }
+  // Legacy 308 (application/gateway/handlers.ts): `record_decision` relating Facts that are not
+  // there or not readable to the caller — same code and `details.unresolved` shape as above.
+  if (err instanceof DecisionReferenceError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { unresolved: { relatedFactIds: [...err.details.unresolved.relatedFactIds] } },
+    };
   }
   // S11 「门确认不存在」 B-a (governance/gatekeepers/absent-answers-review.ts): `publish_operation`
   // on an observe Operation declaring answers that mean "does not exist", without
