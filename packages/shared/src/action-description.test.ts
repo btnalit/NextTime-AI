@@ -442,6 +442,37 @@ describe('target declarations (S11 GO12)', () => {
     expect(OPERATION_TARGET_REFUSAL_VALUES).toContain('target_arity_inconsistent');
   });
 
+  it('refuses a nullable param as a target param, though a reader is told its type (legacy 774)', () => {
+    // `[X, "null"]` is an X to a person reading the Operation, and no instance to order calls by.
+    for (const type of [
+      ['string', 'null'],
+      ['null', 'integer'],
+    ]) {
+      const id = { type };
+      const nullable = OperationSchema.safeParse({
+        ...restart,
+        params_schema: { ...restart.params_schema, properties: { id } },
+      });
+      expect(operationParamType(id)).toBe(type.find((entry) => entry !== 'null'));
+      expect(nullable.success).toBe(false);
+      expect(operationTargetRefusalOf(nullable.error?.issues ?? [])).toEqual({
+        reason: 'target_param_not_required_scalar',
+        at: [],
+        path: ['target', 'params', 0],
+        // The message shows the type as declared, not as none.
+        message: `param "id" must be required and of type string or integer (type: ${JSON.stringify(type)}, required: true)`,
+      });
+    }
+    // A param with no type at all still says so.
+    const untyped = OperationSchema.safeParse({
+      ...restart,
+      params_schema: { ...restart.params_schema, properties: { id: {} } },
+    });
+    expect(operationTargetRefusalOf(untyped.error?.issues ?? [])?.message).toBe(
+      'param "id" must be required and of type string or integer (type: none, required: true)',
+    );
+  });
+
   it('operationTargetRefusalOf recovers the reason and places from a parse, alone or nested', () => {
     const alone = OperationSchema.safeParse({
       ...restart,
