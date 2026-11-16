@@ -67,11 +67,16 @@ export function parseIPv4(input: string): [number, number, number, number] | nul
 
 /** One `inet_aton`-style dotted-part: decimal, `0x`-prefixed hex, or leading-zero octal — the
  *  same three notations `parseIPv4Literal` below decomposes an address into. `null` for anything
- *  else (including a leading `+`/`-`, which `Number.parseInt` would otherwise silently accept). */
+ *  else (including a leading `+`/`-`, which `Number.parseInt` would otherwise silently accept).
+ *
+ *  Legacy 781: a bare `0x` (no hex digits) is 0, as the WHATWG URL parser reads it (`http://0x/`
+ *  is `0.0.0.0`, `192.0.2.0x` is `192.0.2.0`). glibc `inet_aton` refuses it instead; taking the
+ *  URL's reading means a part either reader takes for a number is one here, so a host a client
+ *  dials as an address is never judged as a name. */
 function parseAtonPart(part: string): number | null {
   let value: number;
-  if (/^0[xX][0-9a-fA-F]+$/.test(part)) {
-    value = Number.parseInt(part.slice(2), 16);
+  if (/^0[xX][0-9a-fA-F]*$/.test(part)) {
+    value = part.length === 2 ? 0 : Number.parseInt(part.slice(2), 16);
   } else if (/^0[0-7]+$/.test(part)) {
     value = Number.parseInt(part, 8);
   } else if (/^(0|[1-9]\d*)$/.test(part)) {

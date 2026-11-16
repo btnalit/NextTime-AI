@@ -124,6 +124,18 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it('legacy 781: an IPv4 entry with a bare 0x part is the address a URL reads it as', async () => {
+    const resolve = resolverReturning([]);
+    const policy: OutboundTargetPolicy = { ...POLICY, allowHosts: ['127.0.0.0x'] };
+    await expect(decideOutboundTarget('http://127.0.0.0:8090/', policy, resolve)).resolves.toEqual({
+      allowed: true,
+    });
+    await expect(
+      decideOutboundTarget('http://127.0.0.1:8090/', policy, resolve),
+    ).resolves.toMatchObject({ allowed: false, reason: 'loopback' });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it('legacy 149: an IPv6 entry matches however either side spells the address', async () => {
     const resolve = resolverReturning([]);
     // Link-local: refused unless allowed.
