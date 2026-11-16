@@ -104,6 +104,63 @@ describe('parseIPv4Literal (lane-6 review P3 — inet_aton-compatible alternate 
     expect(parseIPv4Literal('192.0.2.010')).toEqual([192, 0, 2, 8]);
   });
 
+  // Legacy 781: a bare `0x` part has no hex digits, and a parsed URL reads it as 0.
+  it('reads a bare 0x part as 0, the way a parsed URL reads the host', () => {
+    for (const spelling of ['0x', '0X', '0x.0x', '192.0.2.0x', '0x.0.2.7', '198.51.0x.7', '0x.1']) {
+      const urlHost = new URL(`http://${spelling}/`).hostname;
+      expect({ spelling, canonical: canonicalizeIpLiteral(spelling) }).toEqual({
+        spelling,
+        canonical: urlHost,
+      });
+    }
+    expect(parseIPv4Literal('192.0.2.0x')).toEqual([192, 0, 2, 0]);
+    expect(parseIPv4Literal('0x.0xg')).toBeNull();
+    expect(parseIPv4Literal('0xx')).toBeNull();
+  });
+
+  // Every 1–4-part spelling from a set of parts: where a parsed URL reads an IPv4 address, this
+  // reads the same one; where the URL refuses the host or keeps it as a name, this reads none.
+  it('agrees with a parsed URL on every spelling of a small part set', () => {
+    const parts = [
+      '0',
+      '0x',
+      '0X',
+      '00',
+      '08',
+      '010',
+      '0x1',
+      '0xff',
+      '0x100',
+      '1',
+      '255',
+      '256',
+      '65535',
+      '4294967295',
+      'a',
+    ];
+    const spellings: string[] = [];
+    const extend = (prefix: string[], depth: number): void => {
+      if (prefix.length > 0) spellings.push(prefix.join('.'));
+      if (depth === 0) return;
+      for (const part of parts) extend([...prefix, part], depth - 1);
+    };
+    extend([], 4);
+    const disagreements: string[] = [];
+    for (const spelling of spellings) {
+      let urlV4: string | null = null;
+      try {
+        const host = new URL(`http://${spelling}/`).hostname;
+        urlV4 = parseIPv4(host) ? host : null;
+      } catch {
+        urlV4 = null;
+      }
+      const ours = canonicalizeIpLiteral(spelling);
+      if (ours !== urlV4) disagreements.push(`${spelling}: url ${urlV4} ours ${ours}`);
+    }
+    expect(spellings.length).toBeGreaterThan(50_000);
+    expect(disagreements).toEqual([]);
+  });
+
   it('rejects a part exceeding its own bit width', () => {
     expect(parseIPv4Literal('256.0.0.1')).toBeNull(); // strict parseIPv4 already rejects this
     expect(parseIPv4Literal('999999999999')).toBeNull(); // overflows 32 bits as a single part
@@ -445,7 +502,17 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       expect(hostPatternProblem(bad), bad).toContain('ends in a number');
       expect(() => new URL(`http://${bad}/`), bad).toThrow();
     }
-    for (const ok of ['host.0xg', 'a1.b2', 'example.com1', '127.1', '192.0.2.010', '2130706433']) {
+    for (const ok of [
+      'host.0xg',
+      'a1.b2',
+      'example.com1',
+      '127.1',
+      '192.0.2.010',
+      '2130706433',
+      // Legacy 781: a bare `0x` part is 0, so these are IP literals, not names.
+      '192.0.2.0x',
+      '0x',
+    ]) {
       expect(hostPatternProblem(ok), ok).toBeNull();
     }
   });
