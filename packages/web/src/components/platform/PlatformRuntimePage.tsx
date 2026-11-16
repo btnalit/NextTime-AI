@@ -44,11 +44,6 @@ const ACTIVE_IMAGE_SOURCE_LABEL: Readonly<
   unknown: { zh: '未知（供应商不可达）', en: 'unknown — worker-supervisor unreachable' },
 };
 
-/** A digest's own display form — `RuntimeImageWire.id` is always `sha256:<64 hex>` (this platform
- *  never pushes the image to a registry, so this *is* "the image digest" throughout §6.5 — see
- *  the kernel's own `RuntimeImageWireSchema` doc comment). Strips the algorithm prefix and keeps
- *  12 hex characters — enough to tell two builds of the same tag apart in a list; `CopyId` carries
- *  the exact value on hover/copy. */
 /** Why an image built before this release's mount layout can't be used — the row hint, the
  *  disabled button's title and the active-image notice all say the same thing. */
 const INCOMPATIBLE_IMAGE_REASON = {
@@ -56,6 +51,11 @@ const INCOMPATIBLE_IMAGE_REASON = {
   en: 'Built before this release’s mount layout — no container can start from it',
 } as const;
 
+/** A digest's own display form — `RuntimeImageWire.id` is always `sha256:<64 hex>` (this platform
+ *  never pushes the image to a registry, so this *is* "the image digest" throughout §6.5 — see
+ *  the kernel's own `RuntimeImageWireSchema` doc comment). Strips the algorithm prefix and keeps
+ *  12 hex characters — enough to tell two builds of the same tag apart in a list; `CopyId` carries
+ *  the exact value on hover/copy. */
 function shortImageId(id: string): string {
   const stripped = id.startsWith('sha256:') ? id.slice('sha256:'.length) : id;
   return stripped.length > 12 ? `${stripped.slice(0, 12)}…` : stripped;

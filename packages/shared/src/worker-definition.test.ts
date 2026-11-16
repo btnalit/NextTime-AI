@@ -198,6 +198,9 @@ describe('worker-definition content schemas', () => {
       ['例え.jp', 'not a host name'],
       ['203.0.113.7', 'IP address'],
       ['2001:db8::1', 'IP address'],
+      // Legacy 786: the bracketed form a URL writes is the same address.
+      ['[2001:db8::1]', 'IP address'],
+      ['[192.0.2.8]', 'not a host name'],
       ['.', 'empty'],
     ])('refuses %j with a reason naming the entry, on the field itself', (entry, reason) => {
       const result = EgressDenyListSchema.safeParse(['ok.example', entry]);

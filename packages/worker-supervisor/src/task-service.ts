@@ -579,10 +579,25 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         }
       }
       // Retention (`sweepRetention`) goes by each directory's own mtime, which rewriting a file
-      // already there doesn't move: mark both as used by this spawn.
+      // already there doesn't move: mark both as used by this spawn. A failure only leaves the
+      // directories looking as old as they are — the sweep never takes a running Task's, and keeps
+      // anything inside the retention window — so it is logged, as `keepTaskDirs` logs the same
+      // two calls failing, and the spawn goes on rather than failing for it (legacy 435).
       const usedAt = new Date(now());
-      utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
-      utimesSync(paths.localPlatformDir, usedAt, usedAt);
+      try {
+        utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
+        utimesSync(paths.localPlatformDir, usedAt, usedAt);
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            level: 'warn',
+            msg: 'task dirs touch failed at spawn',
+            taskId,
+            workerRunId,
+            error: String(err),
+          }),
+        );
+      }
 
       const networkName = await resolveNetworkName();
       // S11 W1a: read right before the create, which binds the same file into the container.

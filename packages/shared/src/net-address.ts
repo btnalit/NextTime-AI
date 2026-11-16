@@ -67,11 +67,16 @@ export function parseIPv4(input: string): [number, number, number, number] | nul
 
 /** One `inet_aton`-style dotted-part: decimal, `0x`-prefixed hex, or leading-zero octal — the
  *  same three notations `parseIPv4Literal` below decomposes an address into. `null` for anything
- *  else (including a leading `+`/`-`, which `Number.parseInt` would otherwise silently accept). */
+ *  else (including a leading `+`/`-`, which `Number.parseInt` would otherwise silently accept).
+ *
+ *  Legacy 781: a bare `0x` (no hex digits) is 0, as the WHATWG URL parser reads it (`http://0x/`
+ *  is `0.0.0.0`, `192.0.2.0x` is `192.0.2.0`). glibc `inet_aton` refuses it instead; taking the
+ *  URL's reading means a part either reader takes for a number is one here, so a host a client
+ *  dials as an address is never judged as a name. */
 function parseAtonPart(part: string): number | null {
   let value: number;
-  if (/^0[xX][0-9a-fA-F]+$/.test(part)) {
-    value = Number.parseInt(part.slice(2), 16);
+  if (/^0[xX][0-9a-fA-F]*$/.test(part)) {
+    value = part.length === 2 ? 0 : Number.parseInt(part.slice(2), 16);
   } else if (/^0[0-7]+$/.test(part)) {
     value = Number.parseInt(part, 8);
   } else if (/^(0|[1-9]\d*)$/.test(part)) {
@@ -456,16 +461,58 @@ export function normalizeHostname(hostname: string): string {
  * `matchesDenySuffix` below, which accepts those spellings. Callers that load an allow list check
  * entries with `hostPatternProblem` — the kernel logs and drops one, the egress proxy's source map
  * logs it — so such an entry is never silently inert.
+ *
+ * An IP literal is never a suffix: a pattern that is one matches only that address, compared in
+ * canonical form (`canonicalizeIpLiteral`), so `192.0.2.010`, `0xc0000208` and `192.0.2.8.` all
+ * match the host a parsed URL writes as `192.0.2.8`, and `2.7` (the address `2.0.0.7`) does not
+ * match `192.0.2.7`; a host that is an IP literal is matched by no name pattern. A text comparison
+ * missed every spelling but the canonical one and let a short form match as a suffix — on a deny
+ * list that denied more, on an allow list it admitted more (legacy 785). An IPv6 literal in
+ * brackets, as a URL writes the host, is the same address on either side (legacy 786).
  */
 export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false;
   const host = normalizeHostname(hostname);
+  const hostAddress = addressOfHost(host);
   for (const raw of patterns) {
     const pattern = normalizeHostname(raw);
     if (pattern === '') continue;
+    const patternAddress = addressOfHost(pattern);
+    if (patternAddress !== null || hostAddress !== null) {
+      if (patternAddress === hostAddress) return true;
+      continue;
+    }
     if (host === pattern || host.endsWith(`.${pattern}`)) return true;
   }
   return false;
+}
+
+/** `host` without the brackets a URL writes around an IPv6 host (a parsed URL keeps them in
+ *  `hostname`): `[2001:db8::1]` → `2001:db8::1`. Anything else is returned unchanged, and so is a
+ *  bracketed host that is not IPv6 — `[192.0.2.8]` is no host a URL accepts (legacy 786). The one
+ *  rule for every reader of a host: the egress policy (`decideEgress`, legacy 788) and its proxy,
+ *  the kernel's outbound-target check, and the host-list matching below. */
+export function withoutIpv6Brackets(host: string): string {
+  if (host.startsWith('[') && host.endsWith(']')) {
+    const inner = host.slice(1, -1);
+    if (parseIPv6(inner) !== null) return inner;
+  }
+  return host;
+}
+
+/** The canonical form of `host` (already `normalizeHostname`d) when it is an IP literal in any
+ *  spelling, or one in brackets as a URL writes an IPv6 host, else `null`. A bracketed host that is
+ *  not IPv6 keeps its brackets (`withoutIpv6Brackets`), so it names no address (legacy 786). */
+function addressOfHost(host: string): string | null {
+  return canonicalizeIpLiteral(withoutIpv6Brackets(host));
+}
+
+/** Whether a host-list entry names an IP address: an IP literal in any spelling, or an IPv6
+ *  literal in brackets as a URL writes it (legacy 786). Such an entry matches that address only
+ *  (`matchesSuffix`); `hostPatternProblem` accepts it, and a Worker definition's `egressDeny`
+ *  refuses it as an address. */
+export function isIpLiteralPattern(pattern: string): boolean {
+  return addressOfHost(normalizeHostname(pattern)) !== null;
 }
 
 /**
@@ -501,13 +548,14 @@ const HOST_PATTERN = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
 /**
  * Why `raw` can never match a request host under `matchesSuffix`, or `null` when it can. Run on an
  * allow-list entry as written, and on a deny-list entry after `normalizeDenyHostPattern`. An IP
- * literal returns `null` (it matches only that literal target, exactly; whether a list accepts IPs
- * at all is the list's own rule). Phrased to follow the entry in a message: `"x" ${problem}`.
+ * literal, or an IPv6 literal in brackets (`isIpLiteralPattern`), returns `null`: it matches only
+ * that address, in any spelling; whether a list accepts IPs at all is the list's own rule. Phrased
+ * to follow the entry in a message: `"x" ${problem}`.
  */
 export function hostPatternProblem(raw: string): string | null {
   const pattern = normalizeHostname(raw);
   if (pattern === '') return 'is empty';
-  if (isIpLiteral(pattern)) return null;
+  if (addressOfHost(pattern) !== null) return null;
   if (pattern.startsWith('*.') || pattern.startsWith('.')) {
     return `starts with "${pattern.startsWith('*.') ? '*.' : '.'}" — write the bare name "${normalizeDenyHostPattern(pattern)}", which already matches that domain and every subdomain`;
   }

@@ -18,7 +18,6 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
-import { shownAuditPayload } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
@@ -46,6 +45,7 @@ import { applyRoleChange } from '../task/role-change.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { WorkspaceOwnerUnavailableError, createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
+import { shownAuditRecordPayload } from './audit-copy.js';
 import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { isLastActiveHumanOwner } from './auth.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
@@ -1935,8 +1935,8 @@ function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
     actorLogin: row.actor_login,
     resourceType: row.resource_type,
     resourceId: row.resource_id,
-    // Legacy 420: as a workspace audit read shows a payload (`shownAuditPayload`).
-    payload: shownAuditPayload(row.payload),
+    // Legacy 420 / 376: as a workspace audit read shows a payload (`shownAuditRecordPayload`).
+    payload: shownAuditRecordPayload(row.payload),
     createdAt: row.created_at.toISOString(),
     actingThrough: row.acting_through,
     actingSessionId: row.acting_session_id,

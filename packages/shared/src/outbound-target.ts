@@ -3,10 +3,10 @@ import {
   canonicalizeIpLiteral,
   classifyAddress,
   isBareHostname,
-  isIpLiteral,
   isUnspecifiedAddress,
   matchesSuffix,
   normalizeHostname,
+  withoutIpv6Brackets,
 } from './net-address.js';
 
 /**
@@ -113,16 +113,10 @@ function refuse(reason: OutboundTargetRefusalReason, host: string): OutboundTarg
   return { allowed: false, reason, host };
 }
 
+/** Names by suffix, IP literals exactly in canonical form — `matchesSuffix`'s rule, the one the
+ *  egress proxy's lists use too. */
 function isAllowedHost(host: string, allowHosts: readonly string[] | undefined): boolean {
-  if (!allowHosts || allowHosts.length === 0) return false;
-  if (isIpLiteral(host)) {
-    const canonical = canonicalizeIpLiteral(host);
-    return allowHosts.some((entry) => canonicalizeIpLiteral(entry.trim()) === canonical);
-  }
-  return matchesSuffix(
-    host,
-    allowHosts.filter((entry) => !isIpLiteral(entry.trim())),
-  );
+  return matchesSuffix(host, allowHosts);
 }
 
 /** The decision for `url` (see the module doc comment for the rules, in order). */
@@ -139,10 +133,7 @@ export async function decideOutboundTarget(
   }
   // The WHATWG parser already lower-cases the host, canonicalizes every alternate IPv4 notation
   // (`0x7f000001` → `127.0.0.1`) and brackets IPv6 literals.
-  const bracketed = parsed.hostname;
-  const host = normalizeHostname(
-    bracketed.startsWith('[') && bracketed.endsWith(']') ? bracketed.slice(1, -1) : bracketed,
-  );
+  const host = normalizeHostname(withoutIpv6Brackets(parsed.hostname));
   if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || host === '') {
     return refuse('invalid-url', host);
   }

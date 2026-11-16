@@ -707,7 +707,8 @@ describe.runIf(DATABASE_URL !== undefined)(
               badWorkspaceId,
               activity.id,
               JSON.stringify({
-                relatedFactIds: ['fact-1', fact.id],
+                // The real Fact twice, the second time in upper case (legacy 308 review): one Fact.
+                relatedFactIds: ['fact-1', fact.id, fact.id.toUpperCase()],
                 relatedTaskId: null,
                 factAId: 'not-a-uuid',
               }),
@@ -756,7 +757,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         decisionId,
       })) as { rootType: string; chain: unknown[] };
       expect(chain.rootType).toBe('decision');
-      // The Decision itself plus its one real Fact — the bad ids are skipped, not explained.
+      // The Decision itself plus its one real Fact — the bad ids are skipped, not explained, and
+      // the same Fact in another case is explained once.
       expect(chain.chain).toHaveLength(2);
 
       // The write side refuses a non-uuid id before any handler runs.
@@ -913,6 +915,90 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       expect(stored.rows[0]?.invalidation_reason).not.toContain(fake);
+    });
+
+    it('legacy 375: a landing Activity from before legacy 186 shows its target by the connection rule in explain and causal_chain', async () => {
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic
+      const typed = `https://ops:${fake}@grafana.example.com/d?sig=abcdef0123`;
+      const { landingId, cleanId, factId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          // As a self connection's landing wrote it before legacy 186: the target as typed.
+          const landing = await startActivity(client, workspaceId, {
+            kind: 'governance.create_connection',
+            principalId: ownerId,
+            metadata: { kind: 'http', target: typed },
+          });
+          const clean = await startActivity(client, workspaceId, {
+            kind: 'governance.create_connection',
+            principalId: ownerId,
+            metadata: { kind: 'ssh', target: 'ssh://deploy@db-1.example.com' },
+          });
+          const source = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+          await recordSourceObservation(client, workspaceId, {
+            sourceId: source.id,
+            activityId: landing.id,
+          });
+          const gate = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.gate',
+            identity: { name: `landing-${randomUUID()}` },
+          });
+          const system = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.system',
+            identity: { name: `landing-system-${randomUUID()}` },
+          });
+          const fact = await store.assertFact(
+            client,
+            workspaceId,
+            { id: ownerId, kind: 'human' },
+            {
+              linkType: 'test.connects_to',
+              sourceObjectId: gate.id,
+              targetObjectId: system.id,
+              activityId: landing.id,
+              properties: {},
+            },
+          );
+          return { landingId: landing.id, cleanId: clean.id, factId: fact.id };
+        },
+      );
+      const shown = { kind: 'http', target: 'https://grafana.example.com/d' };
+      const reader = handleCaller(workspaceId, ownerId, [...READ_CAPABILITIES, 'explain']);
+
+      const byActivity = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: landingId,
+      })) as { activity: { metadata: Record<string, unknown> } };
+      expect(byActivity.activity.metadata).toEqual(shown);
+      const byFact = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: factId,
+      })) as { activity: { id: string; metadata: Record<string, unknown> } };
+      expect(byFact.activity).toMatchObject({ id: landingId, metadata: shown });
+      const chain = (await dispatchCapability({ pool }, reader, 'causal_chain', {
+        factId,
+      })) as { chain: Array<{ activity: { metadata: Record<string, unknown> } }> };
+      expect(chain.chain.map((step) => step.activity.metadata)).toEqual([shown]);
+
+      // An address that carries nothing reads as it was written.
+      const clean = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: cleanId,
+      })) as { activity: { metadata: Record<string, unknown> } };
+      expect(clean.activity.metadata).toEqual({
+        kind: 'ssh',
+        target: 'ssh://deploy@db-1.example.com',
+      });
+
+      // Derived on read: the row keeps what was written until the scrub rewrites it (legacy 375).
+      const stored = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ metadata: Record<string, unknown> }>(
+          'select metadata from activities where workspace_id = $1 and id = $2',
+          [workspaceId, landingId],
+        ),
+      );
+      expect(stored.rows[0]?.metadata).toEqual({ kind: 'http', target: typed });
     });
 
     it('find_precedents(objectId) and find_precedents() with neither param', async () => {

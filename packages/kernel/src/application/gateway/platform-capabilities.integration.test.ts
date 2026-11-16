@@ -2243,6 +2243,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('legacy 376: a gate address in a row from before the writers cut it reads cut', async () => {
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (client) =>
+            writeAudit(client, {
+              workspaceId: null,
+              actorPrincipalId: null,
+              actorUserId: admin.id,
+              action: 'test.platform_legacy_gate_address',
+              payload: {
+                params: { gateId: 'g-376', target: 'https://grafana.example.com/?sig=abcdef0123' },
+              },
+            }),
+          { skipRoleSwitch: true },
+        );
+        const page = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { action: 'test.platform_legacy_gate_address' },
+        );
+        expect(page.items[0]?.payload).toEqual({
+          params: { gateId: 'g-376', target: 'https://grafana.example.com/' },
+        });
+      });
+
       it('legacy 666: filters by what the act came through', async () => {
         const action = 'test.platform_acting_through';
         await runWithActingContext(

@@ -5,12 +5,13 @@ import {
   type ConnectionCredentialField,
   type ConnectionRequestRow,
   redactConnectionAddress,
+  redactConnectionAddressesIn,
 } from '../../governance/connections/index.js';
 import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
-import { shownAuditPayload } from '../../governance/redaction/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
-import type { SourceRow } from '../../substrate/epistemic/index.js';
+import type { ExplainResult, SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
+import { shownAuditRecordPayload } from './audit-copy.js';
 
 /**
  * application/gateway/resource-wire: the wire-projection functions for every resource whose own
@@ -140,9 +141,10 @@ export function toWireAuditRecord(row: AuditRecordRow, actingName: string | null
     action: row.action,
     resourceType: row.resourceType,
     resourceId: row.resourceId,
-    // Legacy 420: the writers redact (`auditParams`, `redactedForAudit`); a row written before
-    // they did, and text a handler kept as given, reads masked here (`shownAuditPayload`).
-    payload: shownAuditPayload(row.payload),
+    // Legacy 420 / 376: the writers redact (`auditParams`, `redactedForAudit`); a row written
+    // before they did, and text a handler kept as given, reads masked here
+    // (`shownAuditRecordPayload`: gate addresses by the connection rule, then the value patterns).
+    payload: shownAuditRecordPayload(row.payload),
     createdAt: row.createdAt.toISOString(),
     // Batch D3 (migration core 0054).
     actingThrough: row.actingThrough,
@@ -266,5 +268,35 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     // S11 AA5a-1: only on a request an admin agent made (I-A7).
     ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
+  };
+}
+
+/**
+ * Legacy 375: one `explain` step as every read shows it (`explain`, each step of `causal_chain`):
+ * its Activity's `metadata` with every gate address in it — a string under a `target`, `endpoint`
+ * or `manifestSource` key — as the connection rule shows it (`redactConnectionAddressesIn`). A
+ * self connection's landing records the target its owner typed on its
+ * `governance.create_connection` Activity (application/gates/landing.ts); one written before
+ * legacy 186 can still carry a credential there. `scrub-raw-secrets` rewrites those rows to what
+ * this shows (`connectionActivities`); until it has run, this is what keeps the copy from being
+ * read. An address that carries nothing is kept as it is, so the step still says where the
+ * connection points.
+ *
+ * Each key keeps its own rule, and the rule applies to every Activity's metadata, at any depth. A
+ * cut address loses its whole query and fragment, harmless parameters too, and its userinfo. An
+ * `endpoint` allows no query or fragment at all, so a URL under an `endpoint` key elsewhere — in
+ * what a Worker reported as a `worker_result`'s evidence, say — reads without its query even when
+ * that query carries nothing (`?page=2`). An `endpoint` or a `manifestSource` allows no user name
+ * either (`https://u@h/x` reads `https://h/x`), while a `target` keeps one that comes alone
+ * (`ssh://deploy@db-1…` reads as written) (legacy 789). That errs toward showing less; the stored
+ * row keeps what was written.
+ */
+export function toWireExplainResult(step: ExplainResult): ExplainResult {
+  if (step.activity === null) return step;
+  const shown = redactConnectionAddressesIn(step.activity.metadata);
+  if (shown.count === 0) return step;
+  return {
+    ...step,
+    activity: { ...step.activity, metadata: shown.value as Record<string, unknown> },
   };
 }

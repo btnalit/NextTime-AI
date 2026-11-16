@@ -200,8 +200,10 @@ function mapFactRefRow(row: FactDbRow): FactRef {
 function extractFactIdsFromRationale(rationale: Record<string, unknown> | null): readonly string[] {
   if (!rationale) return [];
   const ids = new Set<string>();
+  // Lowercased, as Postgres reads a uuid back: the same Fact named in two cases (a uuid is
+  // case-insensitive, and `record_decision` stores ids as sent) is one Fact, explained once.
   const add = (value: unknown): void => {
-    if (typeof value === 'string' && UUID_PATTERN.test(value)) ids.add(value);
+    if (typeof value === 'string' && UUID_PATTERN.test(value)) ids.add(value.toLowerCase());
   };
   const related = rationale.relatedFactIds;
   if (Array.isArray(related)) {
