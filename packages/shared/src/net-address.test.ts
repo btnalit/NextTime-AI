@@ -430,4 +430,23 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       expect(hostPatternProblem(bad), bad).toContain('not a host name');
     }
   });
+
+  // Legacy 777: a name whose last label is a number is read by a URL as an IPv4 address and
+  // refused when it is not one, so it can never match a request host; said, not taken as a name.
+  it('hostPatternProblem: a name ending in a number that is no IP literal is refused (legacy 777)', () => {
+    for (const bad of [
+      '008.8.8.8',
+      '192.0.2.09',
+      '1.2.3.4.5',
+      'example.123',
+      'host.0x1f',
+      'host.0x',
+    ]) {
+      expect(hostPatternProblem(bad), bad).toContain('ends in a number');
+      expect(() => new URL(`http://${bad}/`), bad).toThrow();
+    }
+    for (const ok of ['host.0xg', 'a1.b2', 'example.com1', '127.1', '192.0.2.010', '2130706433']) {
+      expect(hostPatternProblem(ok), ok).toBeNull();
+    }
+  });
 });
