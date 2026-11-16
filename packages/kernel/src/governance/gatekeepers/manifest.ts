@@ -346,10 +346,12 @@ export class OperationTargetInvalidError extends Error {
   };
   constructor(operation: string, problem: OperationTargetProblem) {
     super(
-      `Operation ${quotedName(operation)}: its target declaration is refused (${problem.reason}: ${problem.message}) — nothing was written.`,
+      `Operation ${quotedName(operation)}: its target declaration is refused (${problem.reason}: ${boundedEcho(problem.message, 300)}) — nothing was written.`,
     );
     this.name = 'OperationTargetInvalidError';
     // The name as an echo (bounded, visible): a proposal's or announcement's name is the caller's.
+    // So is the problem's message, which echoes what the caller declared (a param's `type` as
+    // JSON, the `reads` / `writes` lists) — bounded as `report_task_result` bounds it (legacy 778).
     this.details = {
       reason: problem.reason,
       operation: boundedEcho(operation),
