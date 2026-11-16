@@ -1444,22 +1444,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await exceptionHolds(ws, adminHere)).toBe(false);
         // …and nothing reaches it: asking again, or completing the request left open, is refused
         // before any handler runs, as every call into a workspace that is not active is…
+        // Each call starts only when its refusal is awaited: one started early would be refused
+        // before anything handles it, an unhandled rejection that fails the run.
         const afterPurge = [
-          dispatchCapability({ pool }, person(ws, adminHere), 'request_connection', {
-            kind: 'http',
-            target: 'after-purge-by-hand',
-          }),
-          dispatchCapability({ pool }, person(ws, adminHere), 'create_connection', {
-            connectionRequestId: openRequest.id,
-            kind: 'http',
-            target: 'purged-trial-left-open',
-            endpoint: unusedEndpoint(),
-            connectionSecret: CONNECTION_SECRETS.mint(ws).secret,
-            credentialKind: 'shared',
-          }),
+          () =>
+            dispatchCapability({ pool }, person(ws, adminHere), 'request_connection', {
+              kind: 'http',
+              target: 'after-purge-by-hand',
+            }),
+          () =>
+            dispatchCapability({ pool }, person(ws, adminHere), 'create_connection', {
+              connectionRequestId: openRequest.id,
+              kind: 'http',
+              target: 'purged-trial-left-open',
+              endpoint: unusedEndpoint(),
+              connectionSecret: CONNECTION_SECRETS.mint(ws).secret,
+              credentialKind: 'shared',
+            }),
         ];
         for (const call of afterPurge) {
-          const refused = await refusalOf(call);
+          const refused = await refusalOf(call());
           expect(refused).toBeInstanceOf(ForbiddenError);
           expect(refused).toMatchObject({ message: expect.stringMatching(/^workspace_disabled/) });
         }
