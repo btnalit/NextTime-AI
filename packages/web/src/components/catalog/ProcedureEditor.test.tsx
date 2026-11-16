@@ -1977,6 +1977,77 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
   });
 
+  it('legacy 775: a param whose name holds a dot is said on its field, and the JSON is the kernel’s to judge', async () => {
+    const gate = '00000000-0000-4000-8000-000000000777';
+    const lookup = {
+      gatekeeperId: gate,
+      name: 'svc.lookup',
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      version: 1,
+      status: 'published',
+      absentAnswers: { statuses: [404] },
+      absentAnswersReview: { reviewedBy: 'p-owner', reviewedAt: '2026-10-29T00:00:00.000Z' },
+      params: [{ name: 'filter.status', in: 'query', required: true, type: 'integer' }],
+    };
+    const { caller, calls } = http({
+      list_operations: () => ({ items: [lookup] }),
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+      propose_procedure: () => ({ id: 'pr-777', version: 1, status: 'draft', name: 'Remove' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={[
+          {
+            id: gate,
+            name: 'svc-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 1,
+            createdAt: '',
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Remove' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Remove a service' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'verify' },
+    });
+    fireEvent.change(within(step).getByLabelText(/^说明/), { target: { value: 'Gone.' } });
+    fireEvent.change(within(step).getByTestId('procedure-step-check-kind'), {
+      target: { value: 'observe_absent' },
+    });
+    fireEvent.change(within(step).getByLabelText(/观察哪个门/), { target: { value: gate } });
+    const operationInput = within(step).getByTestId(
+      'procedure-step-check-operation',
+    ) as HTMLInputElement;
+    await waitFor(() => expect(operationInput.getAttribute('aria-busy')).toBeNull());
+    expect(offered(operationInput)).toEqual(['svc.lookup']);
+    fireEvent.click(
+      within(screen.getByRole('listbox')).getByRole('option', { name: /svc\.lookup/ }),
+    );
+    const fields = await within(step).findByTestId('procedure-step-check-params-fields');
+    const field = within(fields).getByTestId('procedure-step-check-params-param-filter.status');
+
+    // Review #501 on #1296 (P3-2): refused at submit, and said on the field — not silently.
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    expect(document.getElementById(`${field.id}-error`)?.textContent).toBe('这个参数必填。');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+
+    // Edited as JSON, the fields' problems no longer hold the form back: the kernel judges it.
+    fireEvent.click(within(fields).getByTestId('procedure-step-check-params-to-json'));
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+  });
+
   it('legacy 775: a copied check’s params turn into fields once its Operation’s params arrive', async () => {
     const gate = '00000000-0000-4000-8000-000000000776';
     const waiting: ((value: unknown) => void)[] = [];

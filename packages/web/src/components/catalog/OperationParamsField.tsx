@@ -109,7 +109,10 @@ export function OperationParamsField({
       .filter((problem) => problem.path === '')
       .map((problem) => problem.message)
       .join(t('；', '; ')) || null;
-  const formSaid = new Set(errors.map((problem) => problem.path.split('.')[0]));
+  // Review #501 on #1296 (P3-2): a param's name may hold a dot (`filter.status`), so the form's
+  // paths are matched whole, or as the start of a path below the param — never cut at a dot.
+  const formSaid = (name: string) =>
+    errors.some((problem) => problem.path === name || problem.path.startsWith(`${name}.`));
 
   // Said to the form whenever they change; none while editing the JSON, nor once gone.
   const reported = fieldsShown ? JSON.stringify(problems) : '{}';
@@ -231,7 +234,7 @@ export function OperationParamsField({
           const fieldId = `${id}-param-${param.name}`;
           // Said once left or once the form said so — and only while it still holds.
           const problem =
-            left.has(param.name) || formSaid.has(param.name) ? problems[param.name] : undefined;
+            left.has(param.name) || formSaid(param.name) ? problems[param.name] : undefined;
           const fieldError = problem !== undefined ? paramProblemText(problem, t) : null;
           const value = texts[param.name] ?? '';
           const onBlur = () => setLeft(new Set(left).add(param.name));
