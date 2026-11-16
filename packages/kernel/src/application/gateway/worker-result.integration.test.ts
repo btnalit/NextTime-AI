@@ -1716,6 +1716,47 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(description).toBe('reads \\u{0} bytes');
         });
 
+        it('legacy 780: an entry refused for two reasons is refused once, for its unknown Gatekeeper', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const missingGatekeeperId = randomUUID();
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const goodName = `demo.good.${marker}`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'proposed three Operations',
+            proposedOperations: [
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: {
+                  ...proposalOperation(`demo.binding.${marker}`),
+                  binding: { kind: 'http' as const, method: 'GET' as const, path: '/up\u0000' },
+                },
+              },
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: proposalOperation(`demo.name.${marker}\u0000`),
+              },
+              { gatekeeperId, operation: proposalOperation(goodName) },
+            ],
+          })) as {
+            status: string;
+            proposedOperationsRejected: Record<string, unknown>[];
+          };
+          expect(result.status).toBe('completed');
+          // The Gatekeeper is looked up first: an entry naming none is refused for that alone,
+          // whatever else it holds — one rejection per entry, never a second for its U+0000.
+          expect(result.proposedOperationsRejected).toEqual([
+            { index: 0, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+            { index: 1, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+          ]);
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.result.proposedOperationsRejected).toEqual(
+            result.proposedOperationsRejected,
+          );
+          expect(stored.operations).toEqual([{ name: goodName, proposed_by: ownerId }]);
+        });
+
         it('postWorkerResult: a refusal the pre-check did not see (a concurrent write) still costs that entry only', async () => {
           const marker = randomUUID().slice(0, 8);
           const gatekeeperId = await registerTestGate(marker);
