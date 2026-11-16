@@ -630,6 +630,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       const second = await scrubRawSecrets(pool, { confirm: true, batchSize: 50 });
       expect(await snapshot()).toEqual(before);
       expect(second.auditRecordId).not.toBeNull();
+      // Legacy 787: a landing copy the first run cut (or that carried nothing) is not found again.
+      // Test files run one at a time on a database (vitest.config.ts), and the first run cut every
+      // workspace's copies, so none is left anywhere; a clean copy counted on every run would never
+      // clear, and the snapshot above cannot see that (rewriting a value to itself changes nothing).
+      expect(second.categories.connectionActivities).toMatchObject({ affected: 0, values: 0 });
     });
   },
 );
