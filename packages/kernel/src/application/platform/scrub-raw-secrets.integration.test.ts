@@ -50,6 +50,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       cleanToolMessage: randomUUID(),
       task: randomUUID(),
       connectionRequest: randomUUID(),
+      // Legacy 375: a self connection's landing Activity, its target copied as typed.
+      landingActivity: randomUUID(),
+      cleanLandingActivity: randomUUID(),
       gatekeeper: randomUUID(),
       cleanGatekeeper: randomUUID(),
       // Legacy 384: two systems named after the same address with different credentials, one
@@ -94,6 +97,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       result: { text: 'ok', totalChars: 2, truncated: false },
     };
     const taskInput = { job: 'migrate', db: { password: PLAIN } };
+    const landingMetadata = {
+      kind: 'http',
+      target: `https://grafana.example.invalid/d?sig=${FAKE}`,
+    };
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, {
@@ -148,6 +155,12 @@ describe.runIf(DATABASE_URL !== undefined)(
               [workspaceId, ids.connectionRequest],
             )
           )?.target,
+          landing: (
+            await one('select metadata from activities where workspace_id = $1 and id = $2', [
+              workspaceId,
+              ids.landingActivity,
+            ])
+          )?.metadata,
           gatekeeper: (
             await one('select properties from objects where workspace_id = $1 and id = $2', [
               workspaceId,
@@ -261,6 +274,19 @@ describe.runIf(DATABASE_URL !== undefined)(
             ids.connectionRequest,
             `https://ops:${FAKE}@grafana.example.invalid`,
             ownerId,
+          ],
+        );
+        await client.query(
+          `insert into activities (workspace_id, id, kind, status, metadata, started_by) values
+             ($1, $2, 'governance.create_connection', 'completed', $3::jsonb, $5),
+             ($1, $4, 'governance.create_connection', 'completed', $6::jsonb, $5)`,
+          [
+            workspaceId,
+            ids.landingActivity,
+            JSON.stringify(landingMetadata),
+            ids.cleanLandingActivity,
+            ownerId,
+            JSON.stringify({ kind: 'ssh', target: 'ssh://deploy@db-1.example.invalid' }),
           ],
         );
         await client.query(
@@ -439,6 +465,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const [name, id] of [
         ['taskInputs', ids.task],
         ['connectionTargets', ids.connectionRequest],
+        ['connectionActivities', ids.landingActivity],
         ['gatekeeperAddresses', ids.gatekeeper],
         ['gateInstanceAddresses', ids.gateWithTarget],
         ['gateInstanceAddresses', ids.gateWithManifest],
@@ -453,6 +480,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const name of [
         'taskInputs',
         'connectionTargets',
+        'connectionActivities',
         'gatekeeperAddresses',
         'gateInstanceAddresses',
         'factProperties',
@@ -465,6 +493,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
+      // A user name alone is not a credential: the clean landing is not counted.
+      expect(counted).not.toContainEqual({
+        category: 'connectionActivities',
+        id: ids.cleanLandingActivity,
+      });
       // Whether a cut name collides is known only once the ones before it are rewritten.
       for (const id of [ids.systemA, ids.systemB, ids.systemHeld]) {
         expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id });
@@ -545,6 +578,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Counted, never rewritten.
       expect(after.task).toEqual(taskInput);
       expect(after.target).toBe(`https://ops:${FAKE}@grafana.example.invalid`);
+      expect(after.landing).toEqual(landingMetadata);
       expect(after.gatekeeper).toMatchObject({
         endpoint: `https://gate.example.invalid/?token=${FAKE}`,
       });

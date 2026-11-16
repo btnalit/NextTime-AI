@@ -54,6 +54,12 @@ import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
  *   - `connectionTargets` / `gatekeeperAddresses`: a connection request's `target`, a Gatekeeper's
  *     `target` / `endpoint`, carrying a credential (legacy 186) — it is where the gate is called;
  *     its owner fixes it (cancel the request, re-register the gate);
+ *   - `connectionActivities`: the `governance.create_connection` Activity a self connection's
+ *     landing records, whose `metadata.target` copies the address its owner typed (application/
+ *     gates/landing.ts), carrying a credential (legacy 375). The Gatekeeper that landing registered
+ *     keeps the same address (`gatekeeperAddresses` above), so cutting this copy would not take the
+ *     credential out of the database; its owner re-registers the gate without it. Every read
+ *     shows the copy cut (`explain`, `causal_chain`: resource-wire.ts `toWireExplainResult`);
  *   - `gateInstanceAddresses`: a platform gate instance's `target` / `endpoint`, or its gate-host
  *     definition's `target` / `manifestSource`, carrying a credential (review of #549) — the gate
  *     host calls the definition as stored; an administrator recreates the instance without it;
@@ -102,6 +108,7 @@ export const REWRITTEN_CATEGORIES = [
 export const COUNTED_CATEGORIES = [
   'taskInputs',
   'connectionTargets',
+  'connectionActivities',
   'gatekeeperAddresses',
   'gateInstanceAddresses',
   'factProperties',
@@ -452,6 +459,20 @@ const SCANS: readonly Scan[] = [
     window: workspaceKeyset('connection_requests', 'workspace_id, id, target', 'true'),
     inspect: (row) =>
       findConnectionParamsCredential({ target: (row as ScannedRow & { target: string }).target })
+        ? { values: 1 }
+        : null,
+  },
+  {
+    category: 'connectionActivities',
+    window: workspaceKeyset(
+      'activities',
+      `workspace_id, id, metadata ->> 'target' as target`,
+      `kind = 'governance.create_connection' and metadata ? 'target'`,
+    ),
+    inspect: (row) =>
+      findConnectionParamsCredential({
+        target: (row as ScannedRow & { target: string | null }).target,
+      })
         ? { values: 1 }
         : null,
   },
