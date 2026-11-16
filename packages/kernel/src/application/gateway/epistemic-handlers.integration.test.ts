@@ -707,7 +707,8 @@ describe.runIf(DATABASE_URL !== undefined)(
               badWorkspaceId,
               activity.id,
               JSON.stringify({
-                relatedFactIds: ['fact-1', fact.id],
+                // The real Fact twice, the second time in upper case (legacy 308 review): one Fact.
+                relatedFactIds: ['fact-1', fact.id, fact.id.toUpperCase()],
                 relatedTaskId: null,
                 factAId: 'not-a-uuid',
               }),
@@ -756,7 +757,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         decisionId,
       })) as { rootType: string; chain: unknown[] };
       expect(chain.rootType).toBe('decision');
-      // The Decision itself plus its one real Fact — the bad ids are skipped, not explained.
+      // The Decision itself plus its one real Fact — the bad ids are skipped, not explained, and
+      // the same Fact in another case is explained once.
       expect(chain.chain).toHaveLength(2);
 
       // The write side refuses a non-uuid id before any handler runs.
