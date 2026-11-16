@@ -47,13 +47,17 @@ export interface CidrRange {
   prefixLen: number;
 }
 
-/** Parse a dotted-quad IPv4 address into its four octets, or `null` if malformed. */
+/** Parse a dotted-quad IPv4 address into its four octets, or `null` if malformed. Strict as
+ *  `inet_pton` and Node's `net.isIP` read one (legacy 777): four decimal parts with no leading zero,
+ *  since `inet_aton` and the WHATWG URL parser read a part like `010` as octal (8). Such a part is
+ *  {@link parseIPv4Literal}'s to read, and a CIDR or subnet written with one is refused here as the
+ *  kernel's subnet matcher refuses it. */
 export function parseIPv4(input: string): [number, number, number, number] | null {
   const parts = input.split('.');
   if (parts.length !== 4) return null;
   const octets: number[] = [];
   for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return null;
     const value = Number.parseInt(part, 10);
     if (value > 255) return null;
     octets.push(value);
@@ -511,7 +515,20 @@ export function hostPatternProblem(raw: string): string | null {
   if (!HOST_PATTERN.test(pattern)) {
     return 'is not a host name (letters, digits, "-" or "_" labels joined by single dots; no scheme, port, path, CIDR or spaces; an internationalized name in its xn-- form)';
   }
+  if (endsInANumber(pattern)) {
+    return 'ends in a number, so a URL reads it as an IPv4 address, and it is not one — write the address as four decimal parts with no leading zero, or the host by its name';
+  }
   return null;
+}
+
+/** Legacy 777: whether a name's last label is a number (all digits, or `0x` and hex digits) — the
+ *  WHATWG URL parser's "ends in a number": it reads such a host as an IPv4 address and refuses it
+ *  when it is not one, so a name like this never reaches a request. `008.8.8.8` is one: since a
+ *  leading-zero part is no longer strict dotted-quad, and `8` is no octal digit, it is not an IP
+ *  literal either — without this it would be taken as a name and quietly match nothing. */
+function endsInANumber(pattern: string): boolean {
+  const last = pattern.slice(pattern.lastIndexOf('.') + 1);
+  return /^(\d+|0x[0-9a-f]*)$/.test(last);
 }
 
 /** Bare hostnames (no dot) can't be real public domains — they're internal/Docker DNS names. */

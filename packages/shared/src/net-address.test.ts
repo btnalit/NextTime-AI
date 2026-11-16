@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   canonicalizeIpLiteral,
@@ -34,6 +35,21 @@ describe('parseIPv4', () => {
   it.each(['1.2.3', '1.2.3.4.5', '1.2.3.256', 'a.b.c.d', ''])('rejects %s', (input) => {
     expect(parseIPv4(input)).toBeNull();
   });
+
+  // Legacy 777: a part with a leading zero is octal to inet_aton and the WHATWG URL parser, so the
+  // strict parser refuses it as inet_pton and Node's net.isIP do (the kernel's subnet matcher).
+  it.each(['192.0.2.07', '192.00.2.7', '198.051.100.7', '0192.0.2.7'])(
+    'rejects %s (a leading zero), as net.isIP does',
+    (input) => {
+      expect(parseIPv4(input)).toBeNull();
+      expect(isIP(input)).toBe(0);
+    },
+  );
+
+  it('still accepts a lone zero part', () => {
+    expect(parseIPv4('0.0.0.0')).toEqual([0, 0, 0, 0]);
+    expect(parseIPv4('192.0.2.0')).toEqual([192, 0, 2, 0]);
+  });
 });
 
 describe('parseIPv4Literal (lane-6 review P3 — inet_aton-compatible alternate notations)', () => {
@@ -67,6 +83,25 @@ describe('parseIPv4Literal (lane-6 review P3 — inet_aton-compatible alternate 
 
   it('allows mixed notations across parts', () => {
     expect(parseIPv4Literal('0x7f.0.0.1')).toEqual([127, 0, 0, 1]);
+  });
+
+  // Legacy 777: a dotted-quad with a leading-zero part was read as decimal by the strict path, so
+  // `192.0.2.010` came back as `.10` while a parsed URL's host is `.8`.
+  it('reads a leading-zero part as octal, the way a parsed URL reads the host', () => {
+    for (const spelling of [
+      '192.0.2.010',
+      '0300.0.2.7',
+      '192.00.2.7',
+      '192.0.02.7',
+      '198.051.100.7',
+    ]) {
+      const urlHost = new URL(`http://${spelling}/`).hostname;
+      expect({ spelling, canonical: canonicalizeIpLiteral(spelling) }).toEqual({
+        spelling,
+        canonical: urlHost,
+      });
+    }
+    expect(parseIPv4Literal('192.0.2.010')).toEqual([192, 0, 2, 8]);
   });
 
   it('rejects a part exceeding its own bit width', () => {
@@ -212,6 +247,12 @@ describe('parseCidr / isInCidr', () => {
     expect(() => parseCidr('198.51.100.0/99')).toThrow();
   });
 
+  it('refuses an address with a leading-zero part, as the kernel subnet matcher does (legacy 777)', () => {
+    for (const bad of ['198.051.100.0/24', '192.0.2.00/24', '::ffff:192.0.2.07/128']) {
+      expect(() => parseCidr(bad), bad).toThrow(/invalid CIDR address/);
+    }
+  });
+
   it('reads the prefix length strictly: digits only, nothing after them (legacy 772)', () => {
     for (const bad of [
       '198.51.100.0/24abc',
@@ -238,6 +279,8 @@ describe('parseCidr / isInCidr', () => {
     expect(parseCidrPrefixLength('33', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('128', 128)).toBe(128);
     expect(parseCidrPrefixLength('1000', 128)).toBeUndefined();
+    // Legacy 777: at most three digits, even when the value would fit.
+    expect(parseCidrPrefixLength('0024', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('24abc', 32)).toBeUndefined();
   });
@@ -385,6 +428,25 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       'a..b',
     ]) {
       expect(hostPatternProblem(bad), bad).toContain('not a host name');
+    }
+  });
+
+  // Legacy 777: a name whose last label is a number is read by a URL as an IPv4 address and
+  // refused when it is not one, so it can never match a request host; said, not taken as a name.
+  it('hostPatternProblem: a name ending in a number that is no IP literal is refused (legacy 777)', () => {
+    for (const bad of [
+      '008.8.8.8',
+      '192.0.2.09',
+      '1.2.3.4.5',
+      'example.123',
+      'host.0x1f',
+      'host.0x',
+    ]) {
+      expect(hostPatternProblem(bad), bad).toContain('ends in a number');
+      expect(() => new URL(`http://${bad}/`), bad).toThrow();
+    }
+    for (const ok of ['host.0xg', 'a1.b2', 'example.com1', '127.1', '192.0.2.010', '2130706433']) {
+      expect(hostPatternProblem(ok), ok).toBeNull();
     }
   });
 });

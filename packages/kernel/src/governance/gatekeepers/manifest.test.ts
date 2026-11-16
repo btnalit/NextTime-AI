@@ -2004,6 +2004,35 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       }
     });
 
+    it('echoes what was declared bounded and visible, as report_task_result does (legacy 778)', async () => {
+      // A target param's declared `type` is shown as JSON in the refusal; a long one is cut.
+      const longType = Array.from({ length: 200 }, (_, i) => `t${i}`);
+      const bad = restartOn(`q4.long.${randomUUID()}`, {
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: ['string', '\u202e', ...longType] } },
+          required: ['id'],
+        },
+      });
+      const act = await newActivity();
+      const refused = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [bad],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      ).catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(OperationTargetInvalidError);
+      const message = (refused as Error).message;
+      expect(message).toContain('target_param_not_required_scalar: param "id" must be required');
+      expect(message).toContain('…) — nothing was written.');
+      expect(message).not.toContain('t199');
+      // A bidi override in the declared type is shown, never applied.
+      expect(message).toContain('\\u{202E}');
+      expect(message).not.toContain('\u202e');
+    });
+
     it('two Operations naming one type by different numbers of params are refused as target_arity_inconsistent', async () => {
       const restart = restartOn(`q4.restart.${randomUUID()}`);
       const stop = restartOn(`q4.stop.${randomUUID()}`, {

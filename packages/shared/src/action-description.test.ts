@@ -473,6 +473,28 @@ describe('target declarations (S11 GO12)', () => {
     );
   });
 
+  it('reads no instance from a nullable target param of an Operation never parsed (legacy 778)', () => {
+    // `actionTargetOf` reads the declared type by the same rule the parse refuses `[X, "null"]` by,
+    // so a row that skipped the parse still never orders calls by a value that may be null.
+    const declaring = (type: unknown) => ({
+      params_schema: { type: 'object', properties: { id: { type } }, required: ['id'] },
+      target: { object_type: 'Container', params: ['id'] },
+    });
+    for (const type of [
+      ['string', 'null'],
+      ['null', 'integer'],
+    ]) {
+      expect(actionTargetOf(declaring(type), { id: 'web-1' }), JSON.stringify(type)).toBeNull();
+      expect(actionTargetOf(declaring(type), { id: 7 }), JSON.stringify(type)).toBeNull();
+      expect(actionTargetOf(declaring(type), { id: null }), JSON.stringify(type)).toBeNull();
+    }
+    expect(actionTargetOf(declaring('string'), { id: 'web-1' })).toEqual({
+      type: 'Container',
+      params: ['id'],
+      identity: ['web-1'],
+    });
+  });
+
   it('operationTargetRefusalOf recovers the reason and places from a parse, alone or nested', () => {
     const alone = OperationSchema.safeParse({
       ...restart,
