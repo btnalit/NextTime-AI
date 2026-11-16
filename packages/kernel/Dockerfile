@@ -51,11 +51,12 @@ RUN corepack pnpm --filter @nexttime/kernel... build
 RUN corepack pnpm --filter @nexttime/kernel deploy --prod --legacy /out/kernel
 # Legacy 414 / 765: the runtime stage copies the application and these four root-owned, so
 # `nexttime` reads them through the "other" bits — which `COPY . .` above took from the build
-# checkout (the application's own package.json among them). A checkout made under umask 027 / 077
-# has them 640 / 600 (the kernel could not read its ontology and packs and would not start; an
-# unreadable pi.version reads as no file), and one made under umask 000 has them world-writable.
-# Set here, they are readable by everyone and writable by no one but root, whatever the
-# checkout's umask.
+# checkout. So did the application's own package.json and migrations/: `pnpm deploy` copies them
+# with those bits, and only dist/ is written by the build itself (legacy 771). A checkout made under
+# umask 027 / 077 has them 640 / 600 (the kernel could not read its ontology and packs and would
+# not start, `dist/cli/migrate.js` could not read the migrations, and an unreadable pi.version
+# reads as no file), and one made under umask 000 has them world-writable. Set here, they are
+# readable by everyone and writable by no one but root, whatever the checkout's umask.
 RUN chmod -R a+rX,go-w /out/kernel /workspace/ontology /workspace/packs /workspace/connectors \
  && chmod a+r,go-w /workspace/pi.version
 
