@@ -3314,6 +3314,48 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可，不需要删触发器。要撤 schema：删两个验收检查触发器、reconcile 触发器与对应函数，再删 `schema_migrations` 里 goal 20 与 governance 46 两行。
 - 下一次主机升级的提示要带上本节。
 
+### 3.196 IPv4 前导零段与以数字结尾的主机条目（#1305，遗留 777，0.69.2 之后的下一版）
+
+无迁移。改的是配置与已存 Worker 定义的解析，其中一处改变了旧版本已接受的值的含义，所以加一节可选的升级前只读检查。
+
+- **含义变化**：内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里带前导零的 IP 条目，以前按十进制读，现在与 URL 解析一致按八进制读，放行的会是另一个地址。
+- **解析变严**：已存 WorkerDefinition（任何 status）的 `egressDeny` 里以数字结尾、却不是 IP 的条目不再通过校验，组合候选与管理员提议读到这个版本时当作解析不了；`EGRESS_TRUSTED_RESOLVED_CIDRS` 里带前导零的条目记 error 并忽略（收窄）。
+- **无需担心**：`NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` 带前导零时 Docker 与内核本来就拒绝，正在运行的主机不会是这种值，下面的脚本顺带检查。`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES` 与映射文件里以数字结尾的条目只多一条 error 日志，以前也拦不住任何东西。
+- **升级前检查（可选，只读，结果记 `docs/private/`）**：
+  - (a) 在项目目录下检查 `.env`，正常输出为空。有输出时升级前处理：前导零的 IP / CIDR 改写成本意的十进制（尤其是 ALLOW_HOSTS），以数字结尾的非 IP 条目删掉（它们以前就匹配不到任何主机）。
+
+    ```sh
+    grep -E '^(NEXTTIME_SUBNET_CONTROL|NEXTTIME_SUBNET_WORKERS|EGRESS_TRUSTED_RESOLVED_CIDRS|NEXTTIME_CONNECTION_ALLOW_HOSTS|NEXTTIME_CONNECTION_FIXTURE_HOSTS|DENY_HOSTS|EGRESS_DENY_HOST_SUFFIXES)=' .env |
+    awk 'function strict(h,  p, k, n) { n = split(h, p, "."); if (n != 4) return 0
+           for (k = 1; k <= 4; k++) if (p[k] !~ /^(0|[1-9][0-9]*)$/ || length(p[k]) > 3 || p[k] + 0 > 255) return 0
+           return 1 }
+    {
+      name = $0; sub(/=.*/, "", name); v = substr($0, length(name) + 2); gsub(/["\047[:space:]]/, "", v)
+      n = split(v, e, ",")
+      for (i = 1; i <= n; i++) {
+        h = tolower(e[i]); sub(/\/.*/, "", h); sub(/\.+$/, "", h)
+        if (h == "" || h ~ /:/) continue
+        if (h ~ /^[0-9.]+$/ && h ~ /(^|\.)0[0-9]/) print name ": leading-zero part: " e[i]
+        else if (h ~ /(^|\.)(0x[0-9a-f]*|[0-9]+)$/ && !strict(h)) print name ": ends in a number but is not an IPv4 address: " e[i]
+      }
+    }'
+    ```
+
+  - (b) 已存定义里的 `egressDeny`。**必须用表属主跑（`psql -U nexttime`）**：`worker_definitions` 开了 RLS。正常结果为空；有行时升级照常，升级后对这些定义发一个去掉该条目的新版本（条目本来就拦不住请求，去掉不会放宽出口）。
+
+    ```sql
+    select workspace_id, id, version, kind, status, e as entry
+      from worker_definitions,
+           jsonb_array_elements_text(case when jsonb_typeof(definition -> 'egressDeny') = 'array'
+                                          then definition -> 'egressDeny' else '[]'::jsonb end) e
+     where rtrim(lower(e), '.') ~ '(^|\.)(0x[0-9a-f]*|[0-9]+)$'
+     order by workspace_id, id, version;
+    ```
+
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
