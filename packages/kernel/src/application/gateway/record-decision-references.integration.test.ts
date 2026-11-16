@@ -20,7 +20,7 @@ import {
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { dispatchCapability } from './dispatch.js';
-import { DecisionReferenceError } from './handlers.js';
+import { DecisionReferenceError, NoActiveTurnError } from './handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -109,11 +109,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
     }
 
-    /** The principal's entry agent in the middle of a Turn: a real `entry` session, a Chat, and a
-     *  Turn started the way the console starts one (`send_chat_message`). */
-    async function entryAgentInTurn(
-      principalId: string,
-    ): Promise<{ caller: ResolvedCaller; turnId: string }> {
+    /** The principal's entry agent: a Handle on a real `entry` session, no Turn of its own yet. */
+    async function entryAgent(principalId: string): Promise<ResolvedCaller> {
       const sid = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
         const result = await client.query<{ id: string }>(
           `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -124,28 +121,34 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (!id) throw new Error('test setup: no session');
         return id;
       });
+      const now = Math.floor(Date.now() / 1000);
+      return {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid,
+          obo: principalId,
+          scope: { capabilities: ['record_decision'], resources: {} },
+          jti: randomUUID(),
+          iat: now,
+          exp: now + 600,
+        },
+      };
+    }
+
+    /** The principal's entry agent in the middle of a Turn: {@link entryAgent}, a Chat, and a Turn
+     *  started the way the console starts one (`send_chat_message`). */
+    async function entryAgentInTurn(
+      principalId: string,
+    ): Promise<{ caller: ResolvedCaller; turnId: string }> {
+      const caller = await entryAgent(principalId);
       const human = humanCaller(principalId);
       const chat = (await dispatchCapability({ pool }, human, 'new_chat', {})) as { id: string };
       const { turnId } = (await dispatchCapability({ pool }, human, 'send_chat_message', {
         chatId: chat.id,
         text: 'hi',
       })) as { turnId: string };
-      const now = Math.floor(Date.now() / 1000);
-      return {
-        caller: {
-          channel: 'handle',
-          claims: {
-            ws: workspaceId,
-            sid,
-            obo: principalId,
-            scope: { capabilities: ['record_decision'], resources: {} },
-            jti: randomUUID(),
-            iat: now,
-            exp: now + 600,
-          },
-        },
-        turnId,
-      };
+      return { caller, turnId };
     }
 
     /** A Fact observed through `owner`'s private Source — readable to that principal alone. */
@@ -352,6 +355,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         relatedFactIds: [draftExposesFactId, proposersPrivateFactId],
       });
       expect(await decisionsOf(turnId)).toHaveLength(1);
+    });
+
+    it('with no running Turn, the Turn is what it refuses first — 409 before any reference is read', async () => {
+      // A member with no Turn at all: nothing to attribute a Decision to, whatever it names.
+      const caller = await entryAgent(await insertPrincipal('member', 'no-turn'));
+      await expect(
+        dispatchCapability({ pool }, caller, 'record_decision', {
+          summary: 'nothing to hang this on',
+          relatedFactIds: [randomUUID()],
+        }),
+      ).rejects.toBeInstanceOf(NoActiveTurnError);
     });
   },
 );
