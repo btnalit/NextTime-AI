@@ -345,9 +345,10 @@ function factIsNamed(c: string): string {
 }
 
 /** Whether Observation `o` records what an absence check `c` (S11 「门确认不存在」 B,
- *  `observe_absent`) passes on, as goal/0011's guards require it: the gate's `absent` and no
- *  predicate, of the Gatekeeper and Operation `c` calls, under a version whose answers a person
- *  confirmed (`absentAnswersReview`: who and when, B-a). */
+ *  `observe_absent`) passes on, as goal/0011's guards and goal/0020's triggers require it: the
+ *  gate's `absent` and no predicate, of the Gatekeeper and Operation `c` calls, under a version
+ *  whose answers a person confirmed (`absentAnswersReview`: who and when, B-a) — a version of that
+ *  Operation, published or since deprecated, that records the same confirmation (legacy 496). */
 function absenceConfirmed(o: string, c: string): string {
   return `(${o}.content ? 'absent' and not (${o}.content ? 'expect')
           and ${o}.content ->> 'gatekeeperId' = ${c}.observation_check ->> 'gatekeeperId'
@@ -355,7 +356,17 @@ function absenceConfirmed(o: string, c: string): string {
           and jsonb_typeof(${o}.content #> '{absentAnswersReview,reviewedBy}') = 'string'
           and jsonb_typeof(${o}.content #> '{absentAnswersReview,reviewedAt}') = 'string'
           and ${o}.content #>> '{absentAnswersReview,reviewedBy}' <> ''
-          and ${o}.content #>> '{absentAnswersReview,reviewedAt}' <> '')`;
+          and ${o}.content #>> '{absentAnswersReview,reviewedAt}' <> ''
+          and exists (
+            select 1 from objects op
+             where op.workspace_id = ${c}.workspace_id and op.object_type = 'Operation'
+               and op.identity_key ->> 'gatekeeperId' = ${c}.observation_check ->> 'gatekeeperId'
+               and op.identity_key ->> 'name' = ${c}.observation_check ->> 'operation'
+               and op.properties ->> 'status' in ('published', 'deprecated')
+               and op.properties ->> 'absentAnswersReviewedBy'
+                   = ${o}.content #>> '{absentAnswersReview,reviewedBy}'
+               and op.properties ->> 'absentAnswersReviewedAt'
+                   = ${o}.content #>> '{absentAnswersReview,reviewedAt}'))`;
 }
 
 /** I-AB1 (S11 「门确认不存在」 B-c, goal/0012): whether the run of absence check row `c` saw the thing

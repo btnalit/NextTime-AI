@@ -1078,7 +1078,36 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     describe('the platform’s finding on a "not there" answer (S11 「门确认不存在」 reconcile, governance/0029, I-AB1)', () => {
       const ABSENT = () => ({ gatekeeperId, operation: 'inventory.get', params: { sku: 'old' } });
-      const REVIEW = () => ({ reviewedBy: ownerId, reviewedAt: new Date().toISOString() });
+      /** Who confirmed the "does not exist" answers of the published `inventory.get`, and when —
+       *  what `reconcile-check.ts` copies onto its Observation from the version it asks. */
+      const CONFIRMATION = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+      const REVIEW = () => CONFIRMATION;
+      // Legacy 496 (governance/0046): the reconciliation rests on a confirmation a version of the
+      // Operation records. Inserted as a draft and then published, as `publish_operation` does.
+      beforeAll(async () => {
+        const [operation] = await raw<{ id: string }>(
+          `insert into objects (workspace_id, object_type, identity_key, properties)
+           values ($1, 'Operation', $2::jsonb, $3::jsonb) returning id`,
+          [
+            workspaceId,
+            JSON.stringify({ gatekeeperId, name: 'inventory.get', version: 1 }),
+            JSON.stringify({ name: 'inventory.get', version: 1, mode: 'observe', status: 'draft' }),
+          ],
+        );
+        await raw(
+          `update objects set properties = properties || $3::jsonb
+            where workspace_id = $1 and id = $2`,
+          [
+            workspaceId,
+            operation?.id,
+            JSON.stringify({
+              status: 'published',
+              absentAnswersReviewedBy: CONFIRMATION.reviewedBy,
+              absentAnswersReviewedAt: CONFIRMATION.reviewedAt,
+            }),
+          ],
+        );
+      });
       const observed = (id: string, observationId: string, sourceId: string) =>
         as(requesterId, (client) =>
           recordObservedReconciliation(client, workspaceId, {
@@ -1164,7 +1193,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(onGoal.actionRequest.reconciliation).toBe('effect_seen');
       });
 
-      it('refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version (or a blank confirmation), or a check with a predicate', async () => {
+      it('refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version (or a blank confirmation), a confirmation no version of the Operation records (legacy 496), or a check with a predicate', async () => {
         const refused: [string, AbsentCase][] = [
           ['no baseline', { baselineStepKey: 'none' }],
           ['looked after the action', { baselineAfter: true }],
@@ -1187,6 +1216,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const [label, options] of refused) {
           const finding = await absentFinding(options);
           await expect(finding(), label).rejects.toThrow(NOT_BASELINED);
+        }
+        // Legacy 496 (governance/0046): a confirmation no version of the Operation records.
+        for (const review of [
+          { ...CONFIRMATION, reviewedBy: randomUUID() },
+          { ...CONFIRMATION, reviewedAt: new Date(0).toISOString() },
+        ]) {
+          const finding = await absentFinding({ evidence: { absentAnswersReview: review } });
+          await expect(finding(), JSON.stringify(review)).rejects.toThrow(
+            /effect_seen on a "not there" answer rests on the confirmation a version of the reconcile check's Operation records/,
+          );
         }
       });
 

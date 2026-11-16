@@ -495,6 +495,58 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, core 0061: 0061 drops 0060's expression index decisions_workspace_created_ms_idx on purpose (under the row-level security of decisions its since and cursor bounds stayed filters, legacy 760) and keys the reads on the stored generated column created_ms_utc. The previous release's suite asserts that index exists and that its reads plan on it. On the new schema the previous release's query_decisions and find_precedents still return the same rows in the same order (its paging test passes); without the index they sort the workspace's Decisions again, as releases before 0060 did. A rollback by code alone is correct; to get its plans back, rebuild 0060's index (release.md §3.188, create index concurrently)."
+    },
+    {
+      "migration": "goal/0020_absence_version_confirmed.sql",
+      "baseTests": [
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B) passes only on an Observation of that very check in which the gate confirmed absence of the call it names, under a version a person confirmed"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B) achieves a run by check on a round whose only check the platform made is an absence the gate confirmed (I-G5)"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B) a step’s absence check is one it declares, as declared, and passes only as the goal’s does"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0012: the baselines absence checks go by (S11 「门确认不存在」 B-c, I-AB1) I-AB1: an absence check passes only on a baseline of its call that saw the thing before the Observation it passes on — the goal’s check on the goal’s baseline, a step’s on its step’s"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0012: the baselines absence checks go by (S11 「门确认不存在」 B-c, I-AB1) I-AB1 for a step: its absence check passes only on its step’s baseline, not the goal’s of the same key"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B) legacy 496 (goal/0020): passes only under the confirmation a published or deprecated version of the Operation it calls records"
+        },
+        {
+          "file": "src/application/goal/goal-schema.integration.test.ts",
+          "fullName": "application/goal — goal_runs, plan_revisions, step_runs (S11 GO1, integration, real Postgres) goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B) a step’s absence check is one it declares, as declared, and passes only as the goal’s does — under the confirmation a version of its Operation records (legacy 496)"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, goal 0020: an absence check now passes only when a published or deprecated version of the Operation it calls records the confirmation its Observation carries (absentAnswersReviewedBy / absentAnswersReviewedAt). The previous release's suite passes its absence checks on Observations carrying a confirmation it makes up on the spot, with no Operation row behind it; its fixtures now publish the version first and use that version's confirmation. No v0.69.2 product path writes such an Observation: platform-observation.ts copies the confirmation of the published version it asks, which 0047 keeps frozen, so the previous release's goals pass these triggers unchanged (its advancer suite, which publishes the Operation through publishOperation and passes absence checks on the product path, passes on this schema)."
+    },
+    {
+      "migration": "governance/0046_reconcile_absence_version_confirmed.sql",
+      "baseTests": [
+        {
+          "file": "src/governance/approval/reconcile.integration.test.ts",
+          "fullName": "governance/approval — step identity and reconciliation (S11 GO3c, integration, real Postgres) the platform’s finding on a \"not there\" answer (S11 「门确认不存在」 reconcile, governance/0029, I-AB1) records effect_seen on the step’s or the goal’s baseline of the same call taken before the action"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/governance/approval/reconcile.integration.test.ts",
+          "fullName": "governance/approval — step identity and reconciliation (S11 GO3c, integration, real Postgres) the platform’s finding on a \"not there\" answer (S11 「门确认不存在」 reconcile, governance/0029, I-AB1) refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version (or a blank confirmation), a confirmation no version of the Operation records (legacy 496), or a check with a predicate"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0046: the platform's effect_seen nobody decided on a \"not there\" answer now needs a published or deprecated version of the reconcile check's Operation to record the confirmation its Observation carries, as goal 0020 does for an absence check. The previous release's test records that finding on an Observation carrying a confirmation it makes up, with no Operation row behind it; the fixture now publishes inventory.get with its confirmation first. reconcile-check.ts copies the confirmation of the published version it asks, so the previous release's reconciliations pass unchanged (its advancer suite reconciles a lost removal on a \"not there\" answer through the product path and passes on this schema); a person's finding is not touched."
     }
   ]
 }
