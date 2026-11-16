@@ -398,6 +398,25 @@ describe('TaskSupervisorClient', () => {
     await expect(client.status('wr1')).rejects.toMatchObject({ kind: 'invalid_response' });
   });
 
+  // Legacy 766: V8's JSON.parse message quotes a slice of the body — short enough, all
+  // of it — and the error's message is kept in an audit row; it says what failed, never what came.
+  it("a non-JSON body's content stays out of the error's message", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response('{"token":zqxjwvk}', { status: 502, headers: {} }));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    const thrown = await client.status('wr1').then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(TaskSupervisorError);
+    expect(thrown).toMatchObject({
+      kind: 'invalid_response',
+      message: 'worker-supervisor returned a non-JSON body (status 502)',
+    });
+    expect(String((thrown as Error).stack)).not.toContain('zqxjwvk');
+  });
+
   describe('internal-plane Authorization header (worker-supervisor internal-auth.ts requires it on POST /task/spawn)', () => {
     const AUTH_HEADER = 'Bearer the-internal-token';
 
