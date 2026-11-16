@@ -1671,18 +1671,21 @@ describe.runIf(DATABASE_URL !== undefined)(
               index: 0,
               gatekeeperId,
               reason: 'unstorable_text',
-              detail: expect.stringContaining('the text at field "binding.path"'),
+              // The place right before "holds", where the console reads it (web/src/lib/errors.ts).
+              detail: expect.stringContaining('the text at field "binding.path" holds U+0000'),
             },
             {
               index: 1,
               gatekeeperId,
               reason: 'unstorable_text',
               detail: expect.stringContaining(
-                'the key at field "params_schema.properties.a\\u0000b"',
+                'the key at field "params_schema.properties.a\\u0000b" holds U+0000',
               ),
             },
           ]);
-          expect(result.proposedOperationsRejected[0]?.detail).toContain(`"${inBinding}"`);
+          expect(result.proposedOperationsRejected[0]?.detail).toMatch(
+            new RegExp(`^Operation "${inBinding.replaceAll('.', '\\.')}": `),
+          );
           expect(
             result.proposedOperationsRejected.some(({ detail }) => detail?.includes('\u0000')),
           ).toBe(false);

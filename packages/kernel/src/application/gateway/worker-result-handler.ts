@@ -241,7 +241,9 @@ function unstorableProposalRefusals(
       gatekeeperId,
       reason: 'unstorable_text',
       detail: boundedEcho(
-        `the ${unstorable.in === 'key' ? 'key' : 'text'} at field ${quotedName(unstorable.path.join('.'))} of Operation ${quotedName(operation.name)} holds U+0000 (NUL), which cannot be stored, so this proposal was not written; only a description may hold it (stored as \\u{0})`,
+        // The place sits right before "holds", as `UnstorableTextError` words it: the console
+        // reads the field from there (`unstorableTextNextStep`, web/src/lib/errors.ts).
+        `Operation ${quotedName(operation.name)}: the ${unstorable.in === 'key' ? 'key' : 'text'} at field ${quotedName(unstorable.path.join('.'))} holds U+0000 (NUL), which cannot be stored, so this proposal was not written; only a description may hold it (stored as \\u{0})`,
         400,
       ),
     });
