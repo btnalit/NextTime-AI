@@ -159,6 +159,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('legacy 376: a gate address in a row from before the writers cut it reads as the connection rule shows it', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      // A `create_connection` copy written before S11 AA3c-1: query parameters the value patterns
+      // do not know as credentials, in the params and in the handler's own part.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: ownerId,
+          action: 'test.legacy_connection_address',
+          payload: {
+            params: {
+              target: 'https://grafana.example.com/d?sig=abcdef0123',
+              endpoint: 'https://gate.example.com:8090/?v=1',
+              manifestSource: 'https://docs.example.com/openapi.json?X-Amz-Signature=abc123',
+            },
+            instance: { target: 'ssh://deploy@db-1.example', note: 'kept' },
+          },
+        }),
+      );
+      const page = (await dispatchCapability({ pool }, owner, 'audit_query', {
+        filter: { action: 'test.legacy_connection_address' },
+      })) as { items: { payload: Record<string, unknown> }[] };
+      expect(page.items[0]?.payload).toEqual({
+        params: {
+          target: 'https://grafana.example.com/d',
+          endpoint: 'https://gate.example.com:8090/',
+          manifestSource: 'https://docs.example.com/openapi.json',
+        },
+        // An address that carries nothing keeps saying where it points.
+        instance: { target: 'ssh://deploy@db-1.example', note: 'kept' },
+      });
+    });
+
     it('legacy 666: filter.actingThrough keeps only the rows an act came through that way', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const action = 'test.acting_through_filter';

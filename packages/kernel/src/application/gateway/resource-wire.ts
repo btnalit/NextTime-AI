@@ -7,10 +7,10 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
-import { shownAuditPayload } from '../../governance/redaction/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
 import type { SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
+import { shownAuditRecordPayload } from './audit-copy.js';
 
 /**
  * application/gateway/resource-wire: the wire-projection functions for every resource whose own
@@ -140,9 +140,10 @@ export function toWireAuditRecord(row: AuditRecordRow, actingName: string | null
     action: row.action,
     resourceType: row.resourceType,
     resourceId: row.resourceId,
-    // Legacy 420: the writers redact (`auditParams`, `redactedForAudit`); a row written before
-    // they did, and text a handler kept as given, reads masked here (`shownAuditPayload`).
-    payload: shownAuditPayload(row.payload),
+    // Legacy 420 / 376: the writers redact (`auditParams`, `redactedForAudit`); a row written
+    // before they did, and text a handler kept as given, reads masked here
+    // (`shownAuditRecordPayload`: gate addresses by the connection rule, then the value patterns).
+    payload: shownAuditRecordPayload(row.payload),
     createdAt: row.createdAt.toISOString(),
     // Batch D3 (migration core 0054).
     actingThrough: row.actingThrough,
