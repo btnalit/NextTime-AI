@@ -28,6 +28,7 @@ import { reviewFieldNames } from '../../lib/credential-review.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { type ParamProblem, paramProblemText } from '../../lib/operation-params.js';
 import {
   parsedProcedureParameters,
   parsedProcedureSteps,
@@ -129,6 +130,11 @@ export function ProcedureEditor({
   );
   const [view, setView] = useState<View>('form');
   const [errors, setErrors] = useState<FieldErrors>({});
+  // #1296 UX P2-1 (legacy 775): by step key, its check's params fields that cannot be sent as
+  // they are — not form data (nothing to keep or send), but the form refuses to submit over them.
+  const [paramProblems, setParamProblems] = useState<
+    Readonly<Record<string, Readonly<Record<string, ParamProblem>>>>
+  >({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
@@ -242,13 +248,22 @@ export function ProcedureEditor({
     event.preventDefault();
     if (busy) return;
     const validated = validateProcedure(form, t);
+    const fieldProblems: Record<string, string> = {};
+    for (const [index, step] of form.steps.entries()) {
+      if (step.kind !== 'verify') continue;
+      if (step.checkKind !== 'observe_predicate' && step.checkKind !== 'observe_absent') continue;
+      for (const [name, problem] of Object.entries(paramProblems[step.key] ?? {})) {
+        fieldProblems[`steps.${index}.check.check.params.${name}`] = paramProblemText(problem, t);
+      }
+    }
+    const blocked = Object.keys(fieldProblems).length > 0;
     // Legacy 485: a step naming an entry definition is refused here, not when it runs; its field
     // already says why (live, so it clears once another definition is picked).
     const entryStep = form.steps.findIndex(
       (step) => step.kind === 'worker' && kindOf(step.definitionId) === 'entry',
     );
-    if (!validated.ok || entryStep !== -1) {
-      setErrors(validated.ok ? {} : validated.errors);
+    if (!validated.ok || entryStep !== -1 || blocked) {
+      setErrors({ ...(validated.ok ? {} : validated.errors), ...fieldProblems });
       setView('form');
       if (entryStep !== -1) {
         focusAfterRender(() =>
@@ -726,6 +741,13 @@ export function ProcedureEditor({
                       errors={errors}
                       busy={busy}
                       onChange={(patch) => updateStep(index, patch)}
+                      onParamProblems={(problems) =>
+                        setParamProblems((prev) =>
+                          JSON.stringify(prev[step.key] ?? {}) === JSON.stringify(problems)
+                            ? prev
+                            : { ...prev, [step.key]: problems },
+                        )
+                      }
                     />
                   ) : null}
                   {leftover(index, step.kind).length > 0 ? (
