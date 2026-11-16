@@ -52,7 +52,7 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 
 **auto-merge.yml 没有给某个 PR 开自动合并。** 先看这个 PR 有没有 `needs-review` 标签——有就是
 故意的（major 或 pi 依赖）。没有标签但也没触发：检查 workflow 运行记录里 `dependabot` job 有没有跑
-（`if: github.actor == ...` 条件没匹配上，通常是因为这个 PR 不是 Dependabot 开的）。
+（`if:` 条件没匹配上：PR 不是 `dependabot[bot]` 开的，或者 PR 头分支不在本仓库里）。
 
 **`needs-review` 标签的 PR 想强制走自动合并流程。** 把标签摘掉，然后随便 push 一次这个 PR 分支
 触发 `synchronize`（或者直接手动 `gh pr merge --auto --merge`，效果一样，只是不经过这个

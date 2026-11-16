@@ -27,7 +27,14 @@ permissions:
 jobs:
   dependabot:
     name: dependabot
-    if: github.actor == 'dependabot[bot]'
+    # Gate on who opened the PR and where its head lives, not on `github.actor`: the actor is
+    # whoever caused this event, and a fork can make it `dependabot[bot]` (e.g. by having
+    # Dependabot update the fork's own PR branch), which would hand a fork PR this job's write
+    # token and `gh pr merge --auto`. A Dependabot security-update PR is opened by
+    # dependabot[bot] from a branch in this repository, so both conditions hold for every real one.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
