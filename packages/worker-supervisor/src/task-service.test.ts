@@ -471,7 +471,7 @@ describe('task-service reconcile', () => {
     });
     const outcome = await first.spawn(spawnInput);
 
-    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    egressMap.unregister(outcome.ip as string, undefined); // pretend the file was also reset/lost
     const second = createTaskService({
       config,
       docker,
@@ -495,7 +495,7 @@ describe('task-service reconcile', () => {
     });
     const outcome = await first.spawn({ ...spawnInput, egressDeny: ['blocked.example.com'] });
 
-    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    egressMap.unregister(outcome.ip as string, undefined); // pretend the file was also reset/lost
     const second = createTaskService({
       config,
       docker,
@@ -826,6 +826,20 @@ describe('task-service Handle binding (the Handle never enters the container)', 
     });
   });
 
+  it('address reuse: the exited Worker’s egress unregistration leaves the next one’s entry (legacy 169)', async () => {
+    const { service, docker, egressMap } = setup();
+    const first = await service.spawn(spawnInput);
+    docker.simulateExit('nexttime-task-run-1', 0);
+    docker.assignNextIp(first.ip as string);
+    const second = await service.spawn({ ...spawnInput, taskId: 'task-2', workerRunId: 'run-2' });
+    expect(second.ip).toBe(first.ip);
+
+    // reap() finds the first Worker exited only now.
+    await service.reap();
+    expect((await service.status('run-1'))?.status).toBe('exited');
+    expect(egressMap.read()[second.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-2' });
+  });
+
   it('shared address: refuses a Worker at an address another running container holds, and removes it', async () => {
     const { service, docker, handleBindings } = setup();
     const first = await service.spawn({ ...spawnInput, capabilityHandle: 'h1' });
@@ -863,7 +877,7 @@ describe('task-service deny-all egress for evaluation runs (S10 E3-2-0)', () => 
       register: () => {
         throw new Error('EACCES: permission denied');
       },
-      unregister: (ip) => inner.unregister(ip),
+      unregister: (ip, sourceId) => inner.unregister(ip, sourceId),
       read: () => inner.read(),
     };
   }
@@ -919,7 +933,7 @@ describe('task-service deny-all egress for evaluation runs (S10 E3-2-0)', () => 
     });
     const outcome = await first.spawn({ ...spawnInput, egressDenyAll: true });
 
-    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    egressMap.unregister(outcome.ip as string, undefined); // pretend the file was also reset/lost
     const second = createTaskService({
       config,
       docker,
@@ -947,7 +961,7 @@ describe('task-service deny-all egress for evaluation runs (S10 E3-2-0)', () => 
     const evalRun = await first.spawn({ ...spawnInput, egressDenyAll: true });
     await first.spawn({ ...spawnInput, taskId: 'task-2', workerRunId: 'run-2' });
 
-    egressMap.unregister(evalRun.ip as string);
+    egressMap.unregister(evalRun.ip as string, undefined);
     const second = createTaskService({
       config,
       docker,

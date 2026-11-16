@@ -251,7 +251,10 @@ export interface TaskService {
   /** S11 GO14: the kernel's lease on goal step Tasks' directories (`POST /task-dirs/keep`) — for
    *  each, its handoff directory's state for a reader of that workspace and goal run
    *  (`upstreamFilesState`); a `kept` one has both of its directories marked used now, so
-   *  `sweepRetention` leaves them for another retention period. Touches nothing else. */
+   *  `sweepRetention` leaves them for another retention period. Touches nothing else. Running is
+   *  the registry's word alone, unlike a spawn's upstream check, which asks Docker too: the
+   *  registry holds every running Task once startup `reconcile()` has run, before any request,
+   *  and every spawn under way (legacy 578). */
   keepTaskDirs(tasks: readonly TaskDirsKeepEntry[]): Promise<readonly TaskDirsKeepResult[]>;
   /** feat/egress-docker-events: called by `index.ts`'s docker-events subscriber for every
    *  container-lifecycle event (`die`/`destroy`/`kill`/`stop`) matching the platform's own label
@@ -328,7 +331,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     const { ip } = entry;
     if (!ip) return;
     try {
-      egressMap.unregister(ip);
+      // Only this Worker's own entry: the address may already be the next container's (legacy
+      // 169), as `unbindHandle` below leaves the next container's Handle binding.
+      egressMap.unregister(ip, taskSourceId(entry.workspaceId, workerRunId));
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -431,7 +436,10 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
    *  throws — counted per call, so one of two calls for the same Task ending leaves the other's
    *  Task counted. A spawn awaits Docker before its container is in `registry`, and a sweep in
    *  between would otherwise take the Task's directories: an earlier run's files on a re-spawn,
-   *  or the ones this spawn could not mark used (`utimesSync` below) before its container starts. */
+   *  or the ones this spawn could not mark used (`utimesSync` below) before its container starts.
+   *  A spawn its Task's owner marker refuses (`TaskAlreadySpawnedError`, a goal step spawned
+   *  again) counts too, until it is refused: a reader asking about that step's directories in
+   *  that moment is told `running`, and asks again. */
   const spawningTasks = new Map<string, number>();
 
   function spawnStarted(taskId: string): void {
@@ -546,7 +554,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
         // S11 GO14: every earlier step's handoff directory is checked before anything is written
         // (`upstream-files.ts` has why these checks). Running is asked of Docker as well as of the
-        // registry, which a restart empties until `reconcile()` has run.
+        // registry, as a second look: a restart empties the registry, but startup `reconcile()`
+        // refills it before this service takes a request (`index.ts`), and a spawn under way is
+        // counted from its start (legacy 578; `keepTaskDirs` asks the registry alone).
         if (upstream && upstream.length > 0) {
           if (goalRunId === undefined) {
             throw new Error('task spawn: upstream files need the goal run they belong to');
