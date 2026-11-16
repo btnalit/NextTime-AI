@@ -8,6 +8,7 @@ import {
   matchesDenySuffix,
   matchesSuffix,
   normalizeHostname,
+  withoutIpv6Brackets,
 } from '@nexttime/shared';
 
 // The hostname rules (`matchesSuffix`, `isBareHostname`) and the address classification above
@@ -132,7 +133,10 @@ export interface DecideEgressInput {
  * 0a. A source registered as deny-all (`SourcePolicy.denyAll`) — denied whatever the hostname.
  * 1. Per-source `deny` (beats `allow` — checked first).
  * 2. Global `DENY_HOSTS` (internal service names).
- * 3. Bare hostnames (no dot), unless the source's `allow` list explicitly names them.
+ * 3. Bare hostnames (no dot), unless the source's `allow` list explicitly names them. An IPv6
+ *    literal has no dot either, so one the `allow` list does not name is refused here — the
+ *    reason reads `bare-hostname` although it is an address (legacy 788 records it; reaching
+ *    such an address without an `allow` entry would widen what a source can reach).
  * 4. Per-source `allow` restriction, when the source declares one.
  * 5. DNS resolution *inside the proxy*, then classify every resolved address and only connect to
  *    one that isn't private/platform-internal — this defeats DNS rebinding because the caller
@@ -141,10 +145,15 @@ export interface DecideEgressInput {
  * Steps 0–3 need no DNS lookup at all, so an obviously-denied hostname (an internal service name,
  * a source's deny list, an unregistered or deny-all source) is rejected before `resolve` is ever
  * called.
+ *
+ * `hostname` may be an IPv6 host as a parsed URL writes it, in brackets: the policy takes the
+ * brackets off itself (`withoutIpv6Brackets`, legacy 788), so every rule — the literal rule of
+ * step 5 above all — sees the address it is, whichever caller passed it. The proxy's own callers
+ * (CONNECT and plain HTTP) already pass it without; a caller added later cannot forget to.
  */
 export async function decideEgress(input: DecideEgressInput): Promise<PolicyDecision> {
   const { source, config, resolve } = input;
-  const hostname = normalizeHostname(input.hostname);
+  const hostname = withoutIpv6Brackets(normalizeHostname(input.hostname));
 
   if (source === undefined && config.denyUnknownSource) {
     return { allowed: false, reason: 'unknown-source' };
