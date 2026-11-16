@@ -338,7 +338,8 @@ function extractStoredRejections(outcome: ReportTaskResultOutcome): StoredResult
 /** One line per refused entry, in the contract's own index space so the model can match them
  *  to what it sent. `reason` is the kernel's own enum (`ResultFactRejectionReason` — the S5.1
  *  ontology guard's reasons, `meta_ontology_type` for I16, `object_not_found`;
- *  `gatekeeper_not_found`, `invalid_operation_name`, `operation_identity_conflict` for proposals);
+ *  `gatekeeper_not_found`, `invalid_operation_name`, `operation_identity_conflict`,
+ *  `unstorable_text` for proposals);
  *  `detail` is its free-text explanation when present. */
 function renderRejections(rejections: StoredResultRejections): string[] {
   const lines: string[] = [];

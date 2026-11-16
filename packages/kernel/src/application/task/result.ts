@@ -176,13 +176,16 @@ function boundedFactRejection(rejection: RejectedResultFact): RejectedResultFact
 }
 
 /** Why one `proposedOperations[]` entry was refused: its `gatekeeperId` names no Gatekeeper of
- *  this workspace (a model-generated id that was never real), or `proposeOperation` would refuse
+ *  this workspace (a model-generated id that was never real), `proposeOperation` would refuse
  *  it — a new name that breaks the name rule (legacy 232), or an identity the proposer may not
- *  write over (another principal's draft, an import draft, a deprecated identity). */
+ *  write over (another principal's draft, an import draft, a deprecated identity) — or a field
+ *  other than its name and description holds U+0000, which cannot be stored (legacy 326, as
+ *  `import_manifest` refuses it). */
 export type ResultProposalRejectionReason =
   | 'gatekeeper_not_found'
   | 'invalid_operation_name'
-  | 'operation_identity_conflict';
+  | 'operation_identity_conflict'
+  | 'unstorable_text';
 
 /** One refused `proposedOperations[]` entry. `problem` is the broken name rule
  *  (`invalid_operation_name`), `existingStatus` the row in the way (`operation_identity_conflict`);

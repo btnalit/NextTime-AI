@@ -28,6 +28,7 @@ import {
   listGatekeepers,
   listPublishedOperationsForGatekeepers,
   operationProposalRefusal,
+  unstorableActedText,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { boundedEcho, quotedName, redactSecrets } from '../../governance/redaction/index.js';
@@ -208,41 +209,57 @@ async function validateContract(
   return { facts, proposals, evidenceDropped };
 }
 
-/** Legacy 320: `proposedOperations[]` entries whose Operation name holds U+0000, by index, with
- *  the name as sent — the one field of the contract refused rather than escaped (see the handler). */
-function unstorableProposalNames(
+/** Legacy 320 / 326: the refusal of every `proposedOperations[]` entry that holds U+0000 where an
+ *  import refuses it too (`unstorableActedText`, governance/gatekeepers/manifest.ts) — by index.
+ *  These are the fields of the contract refused rather than escaped (see the handler): a name by
+ *  the name rule (`invalid_operation_name`, the reason and problem `operationNameProblem` gives any
+ *  other control character), any other field the kernel or the gate acts on — the binding, the
+ *  params schema, the types read and written — as `unstorable_text`: an escaped one would be a
+ *  different Operation than the one proposed. Only the description is stored with it escaped. */
+function unstorableProposalRefusals(
   contract: WorkerResultCapabilityParams,
-): ReadonlyMap<number, { readonly gatekeeperId: string; readonly name: string }> {
-  const found = new Map<number, { gatekeeperId: string; name: string }>();
-  for (const [index, proposal] of (contract.proposedOperations ?? []).entries()) {
-    if (proposal.operation.name.includes(UNSTORABLE_CHAR)) {
-      found.set(index, { gatekeeperId: proposal.gatekeeperId, name: proposal.operation.name });
+): ReadonlyMap<number, RejectedResultProposal> {
+  const found = new Map<number, RejectedResultProposal>();
+  for (const [index, { gatekeeperId, operation }] of (
+    contract.proposedOperations ?? []
+  ).entries()) {
+    if (operation.name.includes(UNSTORABLE_CHAR)) {
+      const problem = 'invisible_or_control_characters' as const;
+      found.set(index, {
+        index,
+        gatekeeperId,
+        reason: 'invalid_operation_name',
+        problem,
+        detail: boundedEcho(new OperationNameInvalidError(operation.name, problem).message, 400),
+      });
+      continue;
     }
+    const unstorable = unstorableActedText(operation);
+    if (unstorable === undefined) continue;
+    found.set(index, {
+      index,
+      gatekeeperId,
+      reason: 'unstorable_text',
+      detail: boundedEcho(
+        // The place sits right before "holds", as `UnstorableTextError` words it: the console
+        // reads the field from there (`unstorableTextNextStep`, web/src/lib/errors.ts).
+        `Operation ${quotedName(operation.name)}: the ${unstorable.in === 'key' ? 'key' : 'text'} at field ${quotedName(unstorable.path.join('.'))} holds U+0000 (NUL), which cannot be stored, so this proposal was not written; only a description may hold it (stored as \\u{0})`,
+        400,
+      ),
+    });
   }
   return found;
 }
 
-/** `preRejected` plus an `invalid_operation_name` refusal for every proposal whose name held
- *  U+0000 and that `validateContract` did not already refuse for another reason — the same reason
- *  and problem the name rule gives any other control character (`operationNameProblem`). */
-function withUnstorableNameRefusals(
+/** `preRejected` plus each of `unstorable` that `validateContract` did not already refuse for
+ *  another reason. */
+function withUnstorableRefusals(
   preRejected: ContractPreRejections,
-  unstorableNames: ReadonlyMap<number, { readonly gatekeeperId: string; readonly name: string }>,
+  unstorable: ReadonlyMap<number, RejectedResultProposal>,
 ): ContractPreRejections {
-  if (unstorableNames.size === 0) return preRejected;
+  if (unstorable.size === 0) return preRejected;
   const refused = new Set(preRejected.proposals.map((rejection) => rejection.index));
-  const added: RejectedResultProposal[] = [];
-  for (const [index, { gatekeeperId, name }] of unstorableNames) {
-    if (refused.has(index)) continue;
-    const problem = 'invisible_or_control_characters' as const;
-    added.push({
-      index,
-      gatekeeperId,
-      reason: 'invalid_operation_name',
-      problem,
-      detail: boundedEcho(new OperationNameInvalidError(name, problem).message, 400),
-    });
-  }
+  const added = [...unstorable.values()].filter((rejection) => !refused.has(rejection.index));
   return {
     ...preRejected,
     proposals: [...preRejected.proposals, ...added].sort((a, b) => a.index - b.index),
@@ -343,10 +360,11 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   // Legacy 320 (`HANDLERS_SETTLING_UNSTORABLE_TEXT`, dispatch.ts): the contract is the report of
   // work already done, so U+0000 in it — text Postgres cannot store — must not cost the whole
   // result (and leave the Task `running` until its run exits). It is stored as the visible `\u{0}`
-  // and the count goes on the `worker_result` Activity. One exception, by field: a proposed
-  // Operation *name* holding it is refused for that entry, as the name rule refuses any other
-  // control character — an escaped name would be a different name than the one proposed.
-  const unstorableNames = unstorableProposalNames(sent);
+  // and the count goes on the `worker_result` Activity. One exception, by field (legacy 326): a
+  // proposed Operation holding it anywhere but its description is refused for that entry, as
+  // `import_manifest` refuses it — an escaped name or binding would be a different Operation than
+  // the one proposed.
+  const unstorableProposals = unstorableProposalRefusals(sent);
   const storable = storableValue(sent);
   const { contract, redactedValues } = scrubReport(storable.value);
   // S11 GO5d-1 (plan §4.5): a goal step's attempt is held to the step's output contract — the
@@ -399,9 +417,9 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   }
   // Proposed Operations are owned by `onBehalfOf` (application/task/result.ts), so that is whose
   // own draft a proposal may revise.
-  const preRejected = withUnstorableNameRefusals(
+  const preRejected = withUnstorableRefusals(
     await validateContract(client, workspaceId, contract, onBehalfOf),
-    unstorableNames,
+    unstorableProposals,
   );
   // `agentPrincipalId` is resolved once, at spawn time (`spawn.ts`'s `ensureWorkerAgentPrincipal`),
   // and stamped on the WorkerRun row itself — `findWorkerRunBySessionId` above already read it, so

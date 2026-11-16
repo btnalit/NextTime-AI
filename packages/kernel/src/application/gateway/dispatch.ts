@@ -158,7 +158,8 @@ export { UnstorableTextError } from '@nexttime/shared';
  * being refused: refusing would lose the work behind it (the Task's result, the Turn's end, a
  * collection run every cycle), and the sender cannot always produce the text any other way. Each
  * handler decides field by field (`worker-result-handler.ts` still refuses a proposed Operation
- * name holding it, by the name rule). Every other capability is refused by `UnstorableTextError`.
+ * holding it anywhere but its description, as an import does). Every other capability is refused
+ * by `UnstorableTextError`.
  */
 export const HANDLERS_SETTLING_UNSTORABLE_TEXT: ReadonlySet<string> = new Set([
   'report_task_result',

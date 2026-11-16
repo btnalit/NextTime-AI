@@ -4,6 +4,7 @@ import type {
   PrincipalKind,
   PublishableStatus,
   Role,
+  UnstorableTextLocation,
 } from '@nexttime/shared';
 import {
   IllegalTransition,
@@ -438,8 +439,7 @@ export function storableManifestOperation(operation: Operation): Operation {
   if (operation.name.includes(UNSTORABLE_CHAR)) {
     throw new OperationNameInvalidError(operation.name, 'invisible_or_control_characters');
   }
-  const { description, ...acted } = operation;
-  const unstorable = findUnstorableText(acted);
+  const unstorable = unstorableActedText(operation);
   if (unstorable !== undefined) {
     throw new UnstorableTextError(
       `import_manifest: Operation ${quotedName(operation.name)}`,
@@ -447,9 +447,20 @@ export function storableManifestOperation(operation: Operation): Operation {
       'the field',
     );
   }
+  const description = operation.description;
   return description?.includes(UNSTORABLE_CHAR)
     ? { ...operation, description: storableText(description) }
     : operation;
+}
+
+/** Legacy 320 / 326: the first U+0000 in a field of `operation` that the kernel or its gate acts on
+ *  — every field but `description`, the one written for a reader — or `undefined`. The one split
+ *  for every path an Operation comes in by from outside the kernel: an import
+ *  ({@link storableManifestOperation}) and a Worker's proposal (`report_task_result`) refuse such
+ *  an Operation, and store U+0000 in its description as `\u{0}`. */
+export function unstorableActedText(operation: Operation): UnstorableTextLocation | undefined {
+  const { description: _description, ...acted } = operation;
+  return findUnstorableText(acted);
 }
 
 /** Imports a whole manifest (e.g. from `importOpenApi`/`importMcpTools`, or a hand-written YAML
