@@ -243,6 +243,28 @@ describe('decideEgress', () => {
     }
   });
 
+  it('an IP entry matches the address in any spelling, and never as a suffix', async () => {
+    // Deny: an operator's alternate spelling of a public address now denies it.
+    for (const entry of ['203.0.113.010', '0xcb007108', '203.0.113.8.']) {
+      const decision = await decideEgress({
+        hostname: '203.0.113.8',
+        source: undefined,
+        config: baseConfig({ denyHosts: [...DEFAULT_DENY_HOSTS, entry] }),
+        resolve: unreachableResolver(),
+      });
+      expect(decision, entry).toEqual({ allowed: false, reason: 'deny-host' });
+    }
+    // Allow: a short form names one address, so it no longer admits every address ending in it.
+    const source: SourcePolicy = { sourceId: 'src-1', allow: ['113.8'] };
+    const decision = await decideEgress({
+      hostname: '203.0.113.8',
+      source,
+      config: baseConfig(),
+      resolve: unreachableResolver(),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'not-in-allow-list' });
+  });
+
   it('denies a bare hostname (no dot) before resolving DNS', async () => {
     const decision = await decideEgress({
       hostname: 'printer',

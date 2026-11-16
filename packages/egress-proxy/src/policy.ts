@@ -30,9 +30,10 @@ export { isBareHostname, matchesDenySuffix, matchesSuffix };
 export interface SourcePolicy {
   sourceId: string;
   /** Suffix patterns, strict (`matchesSuffix`): `.x` / `*.x` never match (fail closed); the
-   *  source-map loader logs such entries. */
+   *  source-map loader logs such entries. An IP entry matches that address only, in any spelling. */
   allow?: string[];
-  /** Suffix patterns (`matchesDenySuffix`): `x`, `.x` and `*.x` all deny `x` and its subdomains. */
+  /** Suffix patterns (`matchesDenySuffix`): `x`, `.x` and `*.x` all deny `x` and its subdomains.
+   *  An IP entry denies that address only, in any spelling. */
   deny?: string[];
   /** S10 E3-2-0: this source may reach nothing through this proxy — every request is denied
    *  (`source-deny-all`) before any hostname rule or DNS lookup, whatever `allow` / `deny` say.

@@ -461,16 +461,37 @@ export function normalizeHostname(hostname: string): string {
  * `matchesDenySuffix` below, which accepts those spellings. Callers that load an allow list check
  * entries with `hostPatternProblem` — the kernel logs and drops one, the egress proxy's source map
  * logs it — so such an entry is never silently inert.
+ *
+ * An IP literal is never a suffix: a pattern that is one matches only that address, compared in
+ * canonical form (`canonicalizeIpLiteral`), so `192.0.2.010`, `0xc0000208` and `192.0.2.8.` all
+ * match the host a parsed URL writes as `192.0.2.8`, and `2.7` (the address `2.0.0.7`) does not
+ * match `192.0.2.7`; a host that is an IP literal is matched by no name pattern. A text comparison
+ * missed every spelling but the canonical one and let a short form match as a suffix — on a deny
+ * list that denied more, on an allow list it admitted more (legacy 785).
  */
 export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false;
   const host = normalizeHostname(hostname);
+  const hostAddress = addressOfHost(host);
   for (const raw of patterns) {
     const pattern = normalizeHostname(raw);
     if (pattern === '') continue;
+    const patternAddress = addressOfHost(pattern);
+    if (patternAddress !== null || hostAddress !== null) {
+      if (patternAddress === hostAddress) return true;
+      continue;
+    }
     if (host === pattern || host.endsWith(`.${pattern}`)) return true;
   }
   return false;
+}
+
+/** The canonical form of `host` (already `normalizeHostname`d) when it is an IP literal in any
+ *  spelling, brackets around an IPv6 literal ignored (a parsed URL keeps them in `hostname`); else
+ *  `null`. */
+function addressOfHost(host: string): string | null {
+  const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  return canonicalizeIpLiteral(bare);
 }
 
 /**
