@@ -135,8 +135,10 @@ export interface DecideEgressInput {
  * 2. Global `DENY_HOSTS` (internal service names).
  * 3. Bare hostnames (no dot), unless the source's `allow` list explicitly names them. An IPv6
  *    literal has no dot either, so one the `allow` list does not name is refused here — the
- *    reason reads `bare-hostname` although it is an address (legacy 788 records it; reaching
- *    such an address without an `allow` entry would widen what a source can reach).
+ *    reason reads `bare-hostname` although it is an address. A reason of its own would refuse it
+ *    just the same, at the cost of a new observation reason and its console text; reaching such
+ *    an address without an `allow` entry would widen what a source can reach, which needs its own
+ *    decision (legacy 790).
  * 4. Per-source `allow` restriction, when the source declares one.
  * 5. DNS resolution *inside the proxy*, then classify every resolved address and only connect to
  *    one that isn't private/platform-internal — this defeats DNS rebinding because the caller
