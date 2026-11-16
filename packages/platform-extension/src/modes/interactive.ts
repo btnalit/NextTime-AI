@@ -178,7 +178,9 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
   // 2026-09-27) — identical mechanism to `entry.ts`'s own `session_start` handler, reusing
   // `gate-tools.ts`'s shared naming helpers.
   pi.on('session_start', async () => {
-    const usedNames = new Set<string>();
+    // Every tool already registered (pi's built-ins, the capability tools above) keeps its name: a
+    // gate tool that would sanitize onto one takes a fallback instead of replacing it (legacy 768).
+    const usedNames = new Set<string>(pi.getAllTools().map((tool) => tool.name));
     let operations: AllowedOperationWire[];
     try {
       const response = await options.kernelClient.call<{ items?: AllowedOperationWire[] }>(

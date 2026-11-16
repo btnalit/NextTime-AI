@@ -37,6 +37,7 @@ function createFakePi(): FakePi {
     registerTool: vi.fn((tool: ToolDefinition) => {
       tools.set(tool.name, tool);
     }),
+    getAllTools: vi.fn(() => [...tools.values()].map((tool) => ({ name: tool.name }))),
     sendUserMessage: vi.fn((content: unknown) => {
       sendUserMessageCalls.push(content);
     }),
@@ -136,6 +137,38 @@ describe('registerWorkerMode', () => {
     const gateTool = fake.tools.get('docker_container_restart');
     expect(gateTool?.label).toBe('docker.container.restart');
     expect(fake.sendUserMessageCalls).toHaveLength(1);
+  });
+
+  it('session_start never lets a gate tool replace report_result or share a name with another one (legacy 768)', async () => {
+    const execute = { mode: 'execute', params_schema: { type: 'object', properties: {} } };
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          // `<gate>_<op>` is `report_result`, the Worker's own tool.
+          { gatekeeperId: 'gk-1', gateName: 'report', name: 'result', operation: execute },
+          // Two gates named `host`; the second has two Operations that sanitize to one name.
+          { gatekeeperId: 'gk-2', gateName: 'host', name: 'disk.clean', operation: execute },
+          { gatekeeperId: 'gk-3', gateName: 'host', name: 'disk.clean', operation: execute },
+          { gatekeeperId: 'gk-3', gateName: 'host', name: 'disk_clean', operation: execute },
+        ],
+      },
+    }));
+    const reportResult = fake.tools.get('report_result');
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+
+    expect(fake.tools.get('report_result')).toBe(reportResult);
+    expect([...fake.tools.values()].map((tool) => [tool.name, tool.label])).toEqual([
+      ['report_result', reportResult?.label],
+      ['gk-1_result', 'report.result'],
+      ['host_disk_clean', 'host.disk.clean'],
+      ['gk-3_disk_clean', 'host.disk.clean'],
+      ['gk-3_disk_clean_2', 'host.disk_clean'],
+    ]);
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(fake.tools.size);
   });
 
   it('session_start degrades to zero gate tools (but still sends the kickoff) when list_allowed_operations fails', async () => {

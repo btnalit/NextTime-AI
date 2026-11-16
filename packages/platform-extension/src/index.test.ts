@@ -72,6 +72,7 @@ function fakePi(): ExtensionAPI {
   return {
     on: vi.fn(),
     registerTool: vi.fn(),
+    getAllTools: vi.fn(() => []),
     appendEntry: vi.fn(),
   } as unknown as ExtensionAPI;
 }

@@ -155,7 +155,9 @@ Dockerfile 在 `ENV PI_OFFLINE=1` 之后跑 `selfcheck-search-tools.mjs`：以�
   "什么都不允许"。
 - 名字在一个会话内稳定：同一 `(gatekeeperId, operation)` 始终是同一个工具名，一个名字不会改指另一
   个 Operation；会撞上别人已注册名字（内置、静态能力工具，例如门 `get` 的 `object` → `get_object`）
-  的 Operation 改用 `gateToolName` 的 `gatekeeperId` 兜底名，不会覆盖或停用别人的工具。
+  的 Operation 改用 `gateToolName` 的 `gatekeeperId` 兜底名，兜底名也被占用时再加编号（`_2`、`_3`…，
+  规则在 `@nexttime/shared` 的 `allocateGateToolName`，内核 MCP 投影同用这一条），不会覆盖或停用别人
+  的工具。Worker 与 interactive 模式在 `session_start` 一次性注册门工具，同样先保留已注册的名字。
 - 哪些变更**不重启**就在下一条消息生效：在工作区启用门实例（`enable_gate_instance`）、发布 / 弃用
   观察类 Operation（含智能体 `propose_operation` 经审阅后发布的）——它们不轮换 Handle。哪些变更
   **仍会重建容器**：授权、

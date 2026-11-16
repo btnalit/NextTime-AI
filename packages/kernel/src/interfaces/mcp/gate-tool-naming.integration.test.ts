@@ -9,6 +9,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { dispatchCapability } from '../../application/gateway/index.js';
 import {
   importManifest,
+  listGatekeepers,
   proposeOperation,
   publishOperation,
   registerGatekeeper,
@@ -17,12 +18,18 @@ import {
 import { buildToolCatalog } from './tool-projection.js';
 
 /**
- * Legacy 144 (#514 audit): which gate a tool name belongs to. Every consumer of
- * `list_allowed_operations` names gate tools in list order — `<gate>_<op>` for the first Operation
- * that sanitizes to it, `<gatekeeperId>_<op>` for a later one (this MCP projection; the pi
- * extension's `gateToolName` is the same rule). The list was in Operation `updated_at` order, so
- * editing one gate's Operation handed its tool name to another gate of the same name. DB-gated
- * (real Postgres; auto-skip without DATABASE_URL).
+ * Which gate a tool name belongs to. Every consumer of `list_allowed_operations` names gate tools
+ * in list order by `@nexttime/shared`'s `allocateGateToolName` (this MCP projection and the pi
+ * extension alike) — `<gate>_<op>` for the first Operation that sanitizes to it, `<gatekeeperId>_<op>`
+ * for a later one, then a numbered name.
+ *
+ * - Legacy 144 (#514 audit): the list was in Operation `updated_at` order, so editing one gate's
+ *   Operation handed its tool name to another gate of the same name.
+ * - Legacy 768: the fallback could be taken too, and a gate tool could take a native or alias
+ *   tool's name; two tools then shared a name and a call reached whichever was listed last.
+ * - Legacy 769: gates registered at one instant are listed by id.
+ *
+ * DB-gated (real Postgres; auto-skip without DATABASE_URL).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -222,6 +229,75 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const ofThisGate = (await listedOrder()).filter((key) => key.startsWith(`${gatekeeperId}/`));
       expect(ofThisGate).toEqual([`${gatekeeperId}/shelf.count`, `${gatekeeperId}/shelf.scan`]);
+    });
+
+    it('no two tools share a name, and each reaches its own Operation or capability (legacy 768)', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const hostName = `host-${tag}`;
+      const firstHost = await gateWith(hostName, [observeOperation('disk.usage', 'Disk usage.')]);
+      // The second gate of that name has two Operations that sanitize to one tool name.
+      const secondHost = await gateWith(hostName, [
+        observeOperation('disk.usage', 'Disk usage.'),
+        observeOperation('disk_usage', 'Disk usage, per mount.'),
+      ]);
+      // `search_graph` is the alias of `search`; `list_allowed_operations` a native tool.
+      const searchGate = await gateWith('search', [observeOperation('graph', 'A graph.')]);
+      const listGate = await gateWith('list', [observeOperation('allowed_operations', 'Ops.')]);
+
+      const catalog = await buildToolCatalog(
+        { pool },
+        memberHandle(['list_allowed_operations', 'search', '<gate>.<op>']),
+      );
+      const names = catalog.tools.map((tool) => tool.name);
+      expect(new Set(names).size).toBe(names.length);
+
+      expect(catalog.resolve('search_graph', { query: 'x' })?.capability).toBe('search');
+      expect(catalog.resolve('list_allowed_operations', {})?.capability).toBe(
+        'list_allowed_operations',
+      );
+      const reached = (toolName: string) => {
+        const call = catalog.resolve(toolName, {});
+        const params = call?.params as { gatekeeperId?: string; operation?: string } | undefined;
+        return [call?.capability, params?.gatekeeperId, params?.operation];
+      };
+      expect(reached(`${hostName}_disk_usage`)).toEqual([
+        'observe_operation',
+        firstHost,
+        'disk.usage',
+      ]);
+      expect(reached(`${secondHost}_disk_usage`)).toEqual([
+        'observe_operation',
+        secondHost,
+        'disk.usage',
+      ]);
+      expect(reached(`${secondHost}_disk_usage_2`)).toEqual([
+        'observe_operation',
+        secondHost,
+        'disk_usage',
+      ]);
+      expect(reached(`${searchGate}_graph`)).toEqual(['observe_operation', searchGate, 'graph']);
+      expect(reached(`${listGate}_allowed_operations`)).toEqual([
+        'observe_operation',
+        listGate,
+        'allowed_operations',
+      ]);
+    });
+
+    it('gates registered at one instant are listed by id (legacy 769)', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const ids: string[] = [];
+      for (let index = 0; index < 8; index += 1) {
+        ids.push(await gateWith(`instant-${tag}-${index}`, []));
+      }
+      await adminInsert(
+        'update objects set created_at = $2 where workspace_id = $1 and id = any($3::uuid[])',
+        [workspaceId, new Date('2026-01-01T00:00:00Z'), ids],
+        ownerId,
+      );
+
+      const listed = await asOwner((client) => listGatekeepers(client, workspaceId));
+      const ofThese = listed.map((gate) => gate.gatekeeperId).filter((id) => ids.includes(id));
+      expect(ofThese).toEqual([...ids].sort());
     });
   },
 );

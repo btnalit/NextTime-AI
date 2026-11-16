@@ -7,6 +7,8 @@
  * (it holds no execute-mode capability at all — governance/capability/handles.ts `entryScope()`).
  */
 
+import { allocateGateToolName } from '@nexttime/shared';
+
 /** One row of `list_allowed_operations`'s result (application/gateway/worker-result-handler.ts). */
 export interface AllowedOperationWire {
   readonly gatekeeperId: string;
@@ -23,33 +25,27 @@ export interface AllowedOperationWire {
   };
 }
 
-/** provider tool-name charset every major LLM API restricts function/tool names to
- *  (`^[a-zA-Z0-9_-]{1,64}$` — no dots) — verified against the vendored provider adapters in
- *  `@earendil-works/pi-coding-agent`'s own bundle (anthropic-messages/openai-completions/bedrock-
- *  converse all sanitize against this exact character class). §7.4's own `<gate>.<op>` naming is
- *  therefore a *display* convention, not a literal wire tool name — `<gate>.<op>` (unsanitized) is
- *  kept as each tool's `label`; the registered `name` is the sanitized form, with a
- *  gatekeeperId-based fallback on collision (two Gatekeepers sharing a `gateName`). Documented
- *  deviation — see docs/development-tasks.md S2.9 "实现说明".
+/**
+ * §7.4's own `<gate>.<op>` naming is a *display* convention, not a literal wire tool name: provider
+ * APIs accept only `^[a-zA-Z0-9_-]{1,64}$` (no dots — verified against the vendored provider
+ * adapters in `@earendil-works/pi-coding-agent`'s own bundle). `<gate>.<op>` (unsanitized) is kept
+ * as each tool's `label`; the registered `name` comes from `@nexttime/shared`'s
+ * `allocateGateToolName`, the one rule the kernel's MCP projection uses too (legacy 768):
+ * `<gate>_<op>`, then a gatekeeperId-based fallback, then a numbered one. Documented deviation —
+ * see docs/development-tasks.md S2.9 "实现说明".
  */
-export function sanitizeToolName(raw: string): string {
-  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-}
+export { sanitizeToolName } from '@nexttime/shared';
 
 /** The `{name, label}` a projected Operation registers under; `usedNames` is the per-session
- *  collision set (mutated). Both modes must use this one function so a scripted model, a runbook,
- *  or an acceptance script can predict the tool name from `<gateName>.<opName>` alone. */
+ *  collision set (mutated) and must already hold every tool the session registered itself (pi's
+ *  built-ins, the mode's own capability tools), so a gate tool never replaces one. Every mode uses
+ *  this one function so a scripted model, a runbook, or an acceptance script can predict the tool
+ *  name from `<gateName>.<opName>` alone whenever nothing else holds it. */
 export function gateToolName(
   op: AllowedOperationWire,
   usedNames: Set<string>,
 ): { readonly name: string; readonly label: string } {
-  const label = `${op.gateName}.${op.name}`;
-  let name = sanitizeToolName(label);
-  if (usedNames.has(name)) {
-    name = sanitizeToolName(`${op.gatekeeperId}.${op.name}`);
-  }
-  usedNames.add(name);
-  return { name, label };
+  return { name: allocateGateToolName(op, usedNames), label: `${op.gateName}.${op.name}` };
 }
 
 /**
