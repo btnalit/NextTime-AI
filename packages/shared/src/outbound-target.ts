@@ -6,6 +6,7 @@ import {
   isUnspecifiedAddress,
   matchesSuffix,
   normalizeHostname,
+  withoutIpv6Brackets,
 } from './net-address.js';
 
 /**
@@ -132,10 +133,7 @@ export async function decideOutboundTarget(
   }
   // The WHATWG parser already lower-cases the host, canonicalizes every alternate IPv4 notation
   // (`0x7f000001` → `127.0.0.1`) and brackets IPv6 literals.
-  const bracketed = parsed.hostname;
-  const host = normalizeHostname(
-    bracketed.startsWith('[') && bracketed.endsWith(']') ? bracketed.slice(1, -1) : bracketed,
-  );
+  const host = normalizeHostname(withoutIpv6Brackets(parsed.hostname));
   if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || host === '') {
     return refuse('invalid-url', host);
   }

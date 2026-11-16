@@ -487,16 +487,24 @@ export function matchesSuffix(hostname: string, patterns: readonly string[] | un
   return false;
 }
 
-/** The canonical form of `host` (already `normalizeHostname`d) when it is an IP literal in any
- *  spelling, else `null`. Brackets are how a URL writes an IPv6 host (a parsed URL keeps them in
- *  `hostname`), so they are ignored around an IPv6 literal, and only there: `[192.0.2.8]` is no
- *  host a URL accepts, so it names no address (legacy 786). */
-function addressOfHost(host: string): string | null {
+/** `host` without the brackets a URL writes around an IPv6 host (a parsed URL keeps them in
+ *  `hostname`): `[2001:db8::1]` → `2001:db8::1`. Anything else is returned unchanged, and so is a
+ *  bracketed host that is not IPv6 — `[192.0.2.8]` is no host a URL accepts (legacy 786). The one
+ *  rule for every reader of a host: the egress policy (`decideEgress`, legacy 788) and its proxy,
+ *  the kernel's outbound-target check, and the host-list matching below. */
+export function withoutIpv6Brackets(host: string): string {
   if (host.startsWith('[') && host.endsWith(']')) {
     const inner = host.slice(1, -1);
-    return parseIPv6(inner) !== null ? canonicalizeIpLiteral(inner) : null;
+    if (parseIPv6(inner) !== null) return inner;
   }
-  return canonicalizeIpLiteral(host);
+  return host;
+}
+
+/** The canonical form of `host` (already `normalizeHostname`d) when it is an IP literal in any
+ *  spelling, or one in brackets as a URL writes an IPv6 host, else `null`. A bracketed host that is
+ *  not IPv6 keeps its brackets (`withoutIpv6Brackets`), so it names no address (legacy 786). */
+function addressOfHost(host: string): string | null {
+  return canonicalizeIpLiteral(withoutIpv6Brackets(host));
 }
 
 /** Whether a host-list entry names an IP address: an IP literal in any spelling, or an IPv6

@@ -368,6 +368,57 @@ describe('decideEgress', () => {
     expect(decision).toEqual({ allowed: true, address: '192.0.2.50' });
   });
 
+  describe('legacy 788: a bracketed IPv6 host is the address it is, whoever passes it', () => {
+    it('takes the brackets off before any rule, so the literal rule holds', async () => {
+      // A trusted range never exempts a literal target: with the brackets left on, the host would
+      // be taken as a name, resolved, and allowed through the range.
+      const resolve = vi.fn(resolverReturning('fd00:db8::1'));
+      const decision = await decideEgress({
+        hostname: '[FD00:DB8::1]',
+        source: { sourceId: 'src-1', allow: ['fd00:db8::1'] },
+        config: baseConfig({ trustedResolvedCidrs: [parseCidr('fd00::/8')] }),
+        resolve,
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+      expect(resolve.mock.calls).toEqual([['fd00:db8::1']]);
+    });
+
+    it('allows a bracketed public address its source allows, resolving the address', async () => {
+      const resolve = vi.fn(resolverReturning('2001:db8::1'));
+      const decision = await decideEgress({
+        hostname: '[2001:db8::1]',
+        source: { sourceId: 'src-1', allow: ['2001:db8::1'] },
+        config: baseConfig(),
+        resolve,
+      });
+      expect(decision).toEqual({ allowed: true, address: '2001:db8::1' });
+      expect(resolve.mock.calls).toEqual([['2001:db8::1']]);
+    });
+
+    it('a bracketed host that is not IPv6 keeps its brackets and names no address', async () => {
+      const decision = await decideEgress({
+        hostname: '[192.0.2.8]',
+        source: { sourceId: 'src-1', allow: ['192.0.2.8'] },
+        config: baseConfig(),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'not-in-allow-list' });
+    });
+
+    it('an IPv6 literal no allow entry names is still refused before DNS (existing behavior)', async () => {
+      // It has no dot, so the bare-hostname rule refuses it; the reason is a misleading label
+      // (legacy 788 records it), and allowing it would widen what a source without an allow list
+      // can reach.
+      const decision = await decideEgress({
+        hostname: '[2001:db8::1]',
+        source: undefined,
+        config: baseConfig(),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'bare-hostname' });
+    });
+  });
+
   describe('trustedResolvedCidrs (transparent-proxy fake-IP ranges)', () => {
     // A host whose resolver answers every public name from a private "fake-IP" range that a
     // local transparent proxy maps back to the real destination (design doc §7.9 note).

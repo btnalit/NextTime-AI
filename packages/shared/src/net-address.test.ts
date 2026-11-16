@@ -16,6 +16,7 @@ import {
   parseIPv4,
   parseIPv4Literal,
   parseIPv6,
+  withoutIpv6Brackets,
 } from './net-address.js';
 
 /**
@@ -490,6 +491,36 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
     }
     for (const no of ['[192.0.2.8]', '[example.com]', '[::1', '::1]', 'example.com', '']) {
       expect(isIpLiteralPattern(no), no).toBe(false);
+    }
+  });
+
+  it('withoutIpv6Brackets takes off the brackets a URL writes around an IPv6 host, and only those (legacy 788)', () => {
+    for (const [host, expected] of [
+      ['[2001:db8::1]', '2001:db8::1'],
+      ['[::1]', '::1'],
+      ['[::ffff:192.0.2.8]', '::ffff:192.0.2.8'],
+      ['[fe80::1%eth0]', 'fe80::1%eth0'],
+    ] as const) {
+      expect(withoutIpv6Brackets(host), host).toBe(expected);
+      // The address a parsed URL reads in that host (a zone is no URL host).
+      if (!host.includes('%')) {
+        const urlHost = new URL(`http://${host}/`).hostname;
+        expect(canonicalizeIpLiteral(urlHost.slice(1, -1)), host).toBe(
+          canonicalizeIpLiteral(expected),
+        );
+      }
+    }
+    for (const host of [
+      '[192.0.2.8]',
+      '[example.com]',
+      '[]',
+      '[::1',
+      '::1]',
+      '2001:db8::1',
+      'example.com',
+      '',
+    ]) {
+      expect(withoutIpv6Brackets(host), host).toBe(host);
     }
   });
 
