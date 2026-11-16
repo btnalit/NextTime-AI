@@ -10,6 +10,7 @@ import {
   normalizeAddress,
   normalizeDenyHostPattern,
   parseCidr,
+  parseCidrPrefixLength,
   parseIPv4,
   parseIPv4Literal,
   parseIPv6,
@@ -209,6 +210,36 @@ describe('parseCidr / isInCidr', () => {
   it('throws on a malformed CIDR', () => {
     expect(() => parseCidr('not-a-cidr')).toThrow();
     expect(() => parseCidr('198.51.100.0/99')).toThrow();
+  });
+
+  it('reads the prefix length strictly: digits only, nothing after them (legacy 772)', () => {
+    for (const bad of [
+      '198.51.100.0/24abc',
+      '198.51.100.0/24 ',
+      '198.51.100.0/ 24',
+      '198.51.100.0/+24',
+      '198.51.100.0/24.0',
+      '198.51.100.0/0x18',
+      '198.51.100.0/',
+      '198.51.100.0/-1',
+      '2001:db8::/32x',
+      '2001:db8::/129',
+    ]) {
+      expect(() => parseCidr(bad), bad).toThrow(/prefix length/);
+    }
+    expect(parseCidr('198.51.100.0/0').prefixLen).toBe(0);
+    expect(parseCidr('198.51.100.7/32').prefixLen).toBe(32);
+    expect(parseCidr('2001:db8::/128').prefixLen).toBe(128);
+  });
+
+  it('parseCidrPrefixLength: one to three digits, at most the family’s width', () => {
+    expect(parseCidrPrefixLength('24', 32)).toBe(24);
+    expect(parseCidrPrefixLength('024', 32)).toBe(24);
+    expect(parseCidrPrefixLength('33', 32)).toBeUndefined();
+    expect(parseCidrPrefixLength('128', 128)).toBe(128);
+    expect(parseCidrPrefixLength('1000', 128)).toBeUndefined();
+    expect(parseCidrPrefixLength('', 32)).toBeUndefined();
+    expect(parseCidrPrefixLength('24abc', 32)).toBeUndefined();
   });
 });
 
