@@ -50,6 +50,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       cleanToolMessage: randomUUID(),
       task: randomUUID(),
       connectionRequest: randomUUID(),
+      // Legacy 375: a self connection's landing Activity, its target copied as typed.
+      landingActivity: randomUUID(),
+      cleanLandingActivity: randomUUID(),
+      // Same metadata on another Activity kind: not the landing copy this rewrites.
+      otherActivity: randomUUID(),
       gatekeeper: randomUUID(),
       cleanGatekeeper: randomUUID(),
       // Legacy 384: two systems named after the same address with different credentials, one
@@ -94,6 +99,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       result: { text: 'ok', totalChars: 2, truncated: false },
     };
     const taskInput = { job: 'migrate', db: { password: PLAIN } };
+    const landingMetadata = {
+      kind: 'http',
+      target: `https://grafana.example.invalid/d?sig=${FAKE}`,
+    };
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, {
@@ -148,6 +157,12 @@ describe.runIf(DATABASE_URL !== undefined)(
               [workspaceId, ids.connectionRequest],
             )
           )?.target,
+          landings: (
+            await client.query(
+              'select id, metadata from activities where workspace_id = $1 and id = any($2::uuid[]) order by id',
+              [workspaceId, [ids.landingActivity, ids.cleanLandingActivity, ids.otherActivity]],
+            )
+          ).rows,
           gatekeeper: (
             await one('select properties from objects where workspace_id = $1 and id = $2', [
               workspaceId,
@@ -261,6 +276,21 @@ describe.runIf(DATABASE_URL !== undefined)(
             ids.connectionRequest,
             `https://ops:${FAKE}@grafana.example.invalid`,
             ownerId,
+          ],
+        );
+        await client.query(
+          `insert into activities (workspace_id, id, kind, status, metadata, started_by) values
+             ($1, $2, 'governance.create_connection', 'completed', $3::jsonb, $5),
+             ($1, $4, 'governance.create_connection', 'completed', $6::jsonb, $5),
+             ($1, $7, 'test.other_kind', 'completed', $3::jsonb, $5)`,
+          [
+            workspaceId,
+            ids.landingActivity,
+            JSON.stringify(landingMetadata),
+            ids.cleanLandingActivity,
+            ownerId,
+            JSON.stringify({ kind: 'ssh', target: 'ssh://deploy@db-1.example.invalid' }),
+            ids.otherActivity,
           ],
         );
         await client.query(
@@ -429,6 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         'selfConnectionAddresses',
         'gatekeeperNames',
         'connectedSystems',
+        'connectionActivities',
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         expect(result.categories[name].examples).toEqual([]);
@@ -512,6 +543,22 @@ describe.runIf(DATABASE_URL !== undefined)(
             endpoint: 'https://gate-db-1.example.invalid',
           },
         ].sort((a, b) => (a.gatekeeper_object_id < b.gatekeeper_object_id ? -1 : 1)),
+      );
+
+      // Legacy 375: a landing's copy of the target nothing calls is cut; a user name alone is no
+      // credential, and the same metadata on another Activity kind is not this copy.
+      expect(after.landings).toEqual(
+        [
+          {
+            id: ids.landingActivity,
+            metadata: { kind: 'http', target: 'https://grafana.example.invalid/d' },
+          },
+          {
+            id: ids.cleanLandingActivity,
+            metadata: { kind: 'ssh', target: 'ssh://deploy@db-1.example.invalid' },
+          },
+          { id: ids.otherActivity, metadata: landingMetadata },
+        ].sort((a, b) => (a.id < b.id ? -1 : 1)),
       );
 
       // Legacy 384: a label nothing calls — the Gatekeeper's name and its systems' are cut. Of two

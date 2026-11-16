@@ -46,7 +46,14 @@ import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
  *     Nothing is merged into the holder: the `connects_to` Fact that names the duplicate is
  *     append-only (I4), so the duplicate stays the Object its Gatekeeper is linked to. Rewritten
  *     with the identity key and properties as read; a system that took the shown name in between
- *     fails the run (`objects_identity_key_uidx`), and a rerun makes this one its duplicate.
+ *     fails the run (`objects_identity_key_uidx`), and a rerun makes this one its duplicate;
+ *   - `connectionActivities`: the `governance.create_connection` Activity a self connection's
+ *     landing records (legacy 375) — its `metadata.target` copies the address the owner typed
+ *     (application/gates/landing.ts); nothing calls it. Rewritten to what every read shows
+ *     (`redactConnectionAddress`, the `target` rule — `explain` / `causal_chain` cut it on read
+ *     too, resource-wire.ts `toWireExplainResult`), conditional on the target as read. A count
+ *     would never clear: the gate's own address is fixed by re-registering the gate
+ *     (`gatekeeperAddresses`), which leaves this copy as it was.
  *
  * **Counted, never rewritten:**
  *   - `taskInputs`: a `tasks.input` carrying a suspected credential (legacy 184). The Worker runs
@@ -98,6 +105,7 @@ export const REWRITTEN_CATEGORIES = [
   'selfConnectionAddresses',
   'gatekeeperNames',
   'connectedSystems',
+  'connectionActivities',
 ] as const;
 export const COUNTED_CATEGORIES = [
   'taskInputs',
@@ -433,6 +441,28 @@ const SCANS: readonly Scan[] = [
           { identityKey: read.identity_key, properties: read.properties },
           { identityKey, properties },
         ),
+      };
+    },
+  },
+  {
+    category: 'connectionActivities',
+    window: workspaceKeyset(
+      'activities',
+      `workspace_id, id, metadata ->> 'target' as target`,
+      `kind = 'governance.create_connection' and jsonb_typeof(metadata -> 'target') = 'string'`,
+    ),
+    inspect: (row) => {
+      const { target } = row as ScannedRow & { target: string };
+      const shown = redactConnectionAddress('target', target);
+      if (shown === target) return null;
+      return {
+        values: 1,
+        rewrite: {
+          sql: `update activities set metadata = jsonb_set(metadata, '{target}', to_jsonb($3::text))
+                 where workspace_id = $1 and id = $2 and kind = 'governance.create_connection'
+                   and metadata ->> 'target' = $4`,
+          params: [row.workspace_id, row.id, shown, target],
+        },
       };
     },
   },

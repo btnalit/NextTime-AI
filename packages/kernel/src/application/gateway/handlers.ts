@@ -455,6 +455,7 @@ import {
   grantAuditPayload,
   toWireAuditRecord,
   toWireChat,
+  toWireExplainResult,
   toWireFact,
   toWireGrant,
   toWireObject,
@@ -645,7 +646,7 @@ const explainHandler: CapabilityHandler = async (client, workspaceId, params, ct
     decisions: await decisionViewerOf(client, workspaceId, ctx),
     drafts: await graphReadViewerOf(client, workspaceId, ctx),
   });
-  return { result, resourceType: result.nodeType, resourceId: nodeId };
+  return { result: toWireExplainResult(result), resourceType: result.nodeType, resourceId: nodeId };
 };
 
 /** Picks the recognized `AuditQueryFilter` fields out of the capability's opaque `jsonRecord`. */

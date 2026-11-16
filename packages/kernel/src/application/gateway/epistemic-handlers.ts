@@ -27,7 +27,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { decisionViewerOf } from './draft-viewer.js';
-import { toWireFact } from './resource-wire.js';
+import { toWireExplainResult, toWireFact } from './resource-wire.js';
 
 /**
  * application/gateway/epistemic-handlers: the seven S3.2 `epistemic`-group capability handlers
@@ -381,7 +381,11 @@ export const causalChainHandler: CapabilityHandler = async (client, workspaceId,
     { factId, decisionId, depth },
     await decisionViewerOf(client, workspaceId, ctx),
   );
-  return { result, resourceType: result.rootType, resourceId: result.rootId };
+  return {
+    result: { ...result, chain: result.chain.map(toWireExplainResult) },
+    resourceType: result.rootType,
+    resourceId: result.rootId,
+  };
 };
 
 export const decisionImpactHandler: CapabilityHandler = async (

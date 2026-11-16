@@ -5,10 +5,11 @@ import {
   type ConnectionCredentialField,
   type ConnectionRequestRow,
   redactConnectionAddress,
+  redactConnectionAddressesIn,
 } from '../../governance/connections/index.js';
 import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
-import type { SourceRow } from '../../substrate/epistemic/index.js';
+import type { ExplainResult, SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
 import { shownAuditRecordPayload } from './audit-copy.js';
 
@@ -267,5 +268,26 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     // S11 AA5a-1: only on a request an admin agent made (I-A7).
     ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
+  };
+}
+
+/**
+ * Legacy 375: one `explain` step as every read shows it (`explain`, each step of `causal_chain`):
+ * its Activity's `metadata` with every gate address in it — a string under a `target`, `endpoint`
+ * or `manifestSource` key — as the connection rule shows it (`redactConnectionAddressesIn`). A
+ * self connection's landing records the target its owner typed on its
+ * `governance.create_connection` Activity (application/gates/landing.ts); one written before
+ * legacy 186 can still carry a credential there. `scrub-raw-secrets` rewrites those rows to what
+ * this shows (`connectionActivities`); until it has run, this is what keeps the copy from being
+ * read. An address that carries nothing is kept as it is, so the step still says where the
+ * connection points.
+ */
+export function toWireExplainResult(step: ExplainResult): ExplainResult {
+  if (step.activity === null) return step;
+  const shown = redactConnectionAddressesIn(step.activity.metadata);
+  if (shown.count === 0) return step;
+  return {
+    ...step,
+    activity: { ...step.activity, metadata: shown.value as Record<string, unknown> },
   };
 }
