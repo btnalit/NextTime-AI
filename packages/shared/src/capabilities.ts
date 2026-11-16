@@ -53,6 +53,7 @@ import {
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
 import { GoalFromProcedureSchema } from './procedure.js';
+import { SKILL_NAME_MAX_LENGTH } from './skill.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -3406,6 +3407,17 @@ const membersCapabilities = [
 // Gatekeeper call — `write`, never `execute` (S3.13's own spec: "变更是即时的、不走 propose/approve").
 // -------------------------------------------------------------------------------------------
 
+/** Legacy 305: how many entries one AgentProfile exclusion list or AgentPolicy cap list may hold.
+ *  Each only narrows what the agent is given, so it is a bound on stored size, not on authority —
+ *  far above any workspace's catalog, so the console's whole-list write never meets it. */
+export const AGENT_PROFILE_LIST_MAX = 1000;
+
+/** A Skill named in an exclusion or cap list: a published Skill's name, so never longer than one. */
+const agentListSkillNames = z
+  .array(z.string().min(1).max(SKILL_NAME_MAX_LENGTH))
+  .max(AGENT_PROFILE_LIST_MAX);
+const agentListIds = z.array(id).max(AGENT_PROFILE_LIST_MAX);
+
 const agentProfileCapabilities = [
   {
     name: 'get_agent_profile',
@@ -3434,9 +3446,9 @@ const agentProfileCapabilities = [
         // exclusion lists (console redesign D1): `[]` excludes nothing, so later grants / publishes
         // flow in automatically.
         model: z.string().min(1).nullable().optional(),
-        excludedSkills: z.array(z.string().min(1)).optional(),
-        excludedGatekeepers: z.array(id).optional(),
-        excludedWorkerDefinitions: z.array(id).optional(),
+        excludedSkills: agentListSkillNames.optional(),
+        excludedGatekeepers: agentListIds.optional(),
+        excludedWorkerDefinitions: agentListIds.optional(),
         promptAddendum: z.string().nullable().optional(),
         autoApproveLow: z.boolean().nullable().optional(),
       })
@@ -3468,8 +3480,8 @@ const agentProfileCapabilities = [
         defaultModel: z.string().min(1).nullable().optional(),
         memberCanEditProfile: z.boolean().optional(),
         maxPromptAddendumChars: z.number().int().positive().optional(),
-        allowedSkills: z.array(z.string().min(1)).optional(),
-        allowedGatekeepers: z.array(id).optional(),
+        allowedSkills: agentListSkillNames.optional(),
+        allowedGatekeepers: agentListIds.optional(),
         allowMemberAutoApproveLow: z.boolean().optional(),
       })
       .strict(),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  AGENT_PROFILE_LIST_MAX,
   ATTEST_FACT_NOTE_MAX_LENGTH,
   CAPABILITY_REGISTRY,
   type Capability,
@@ -11,6 +12,7 @@ import {
   listByChannel,
 } from './capabilities.js';
 import { toJsonSchema } from './json-schema.js';
+import { SKILL_NAME_MAX_LENGTH } from './skill.js';
 
 /**
  * Every capability name listed in design doc §9.3, hardcoded (no snapshot), plus `list_tasks`
@@ -280,6 +282,37 @@ describe('listByChannel', () => {
 // INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS (90 — matches the kernel's own wait-window default, no
 // larger ceiling is defined anywhere) so a caller can never ask for a wait longer than the kernel
 // will ever actually hold.
+describe('AgentProfile / AgentPolicy list bounds (legacy 305)', () => {
+  const parses = (capability: string, params: Record<string, unknown>): boolean =>
+    getCapability(capability)?.paramsSchema.safeParse(params).success ?? false;
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `id-${i}`);
+  const skills = (n: number) => Array.from({ length: n }, (_, i) => `skill-${i}`);
+  const lists = [
+    ['set_agent_profile', 'excludedSkills', skills],
+    ['set_agent_profile', 'excludedGatekeepers', ids],
+    ['set_agent_profile', 'excludedWorkerDefinitions', ids],
+    ['set_agent_policy', 'allowedSkills', skills],
+    ['set_agent_policy', 'allowedGatekeepers', ids],
+  ] as const;
+
+  it.each(lists)('%s %s holds up to AGENT_PROFILE_LIST_MAX entries', (capability, field, make) => {
+    expect(parses(capability, { [field]: [] })).toBe(true);
+    expect(parses(capability, { [field]: make(AGENT_PROFILE_LIST_MAX) })).toBe(true);
+    expect(parses(capability, { [field]: make(AGENT_PROFILE_LIST_MAX + 1) })).toBe(false);
+  });
+
+  it('a Skill in either list is named as a published Skill can be: at most SKILL_NAME_MAX_LENGTH', () => {
+    for (const [capability, field] of [
+      ['set_agent_profile', 'excludedSkills'],
+      ['set_agent_policy', 'allowedSkills'],
+    ] as const) {
+      expect(parses(capability, { [field]: ['a'.repeat(SKILL_NAME_MAX_LENGTH)] })).toBe(true);
+      expect(parses(capability, { [field]: ['a'.repeat(SKILL_NAME_MAX_LENGTH + 1)] })).toBe(false);
+      expect(parses(capability, { [field]: [''] })).toBe(false);
+    }
+  });
+});
+
 describe('invoke_worker paramsSchema timeout clamp', () => {
   const baseParams = { definitionId: 'def-1', version: 1, input: {} };
   const schema = () => getCapability('invoke_worker')?.paramsSchema;

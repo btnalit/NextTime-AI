@@ -76570,6 +76570,7 @@
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "allowedModels": {
@@ -76581,9 +76582,11 @@
         },
         "allowedSkills": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "defaultModel": {
@@ -76698,13 +76701,16 @@
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "excludedSkills": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "excludedWorkerDefinitions": {
@@ -76712,6 +76718,7 @@
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "model": {
