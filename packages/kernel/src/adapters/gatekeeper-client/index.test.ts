@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
+import type net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,14 @@ import {
   gateRefusalOf,
   platformGateTarget,
 } from './index.js';
+
+/**
+ * The port a "connection refused" case calls: nothing can listen on port 0 (`listen(0)` means "any
+ * free port"), so on Linux a connect to it is always refused. A port taken from a listener that was
+ * then closed could be handed to the next `listen(0)` — here or in a test file running beside this
+ * one — and the call would reach that server instead (legacy 437).
+ */
+const REFUSED_PORT = 0;
 
 /**
  * adapters/gatekeeper-client (unit, no network — an injected `fetchImpl`): the protocol port's
@@ -731,7 +739,6 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
       setTimeout(() => req.socket.destroy(), 10);
     });
   });
-  let refusedPort: number;
   let dropsAfterRequestPort: number;
   let dropsMidAnswerPort: number;
 
@@ -741,9 +748,6 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
     });
 
   beforeAll(async () => {
-    const closed = net.createServer();
-    refusedPort = await listen(closed);
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
     dropsAfterRequestPort = await listen(dropsAfterRequest);
     dropsMidAnswerPort = await listen(dropsMidAnswer);
   });
@@ -775,7 +779,7 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
   }
 
   it('a gate that refused the connection never had the request: gate_unreachable', async () => {
-    const failure = await failureOf(applyTo(refusedPort));
+    const failure = await failureOf(applyTo(REFUSED_PORT));
     expect(failure).toMatchObject({ code: 'gate_unreachable', status: 0 });
     expect(failure.message).toBe(
       'gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
@@ -819,7 +823,7 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
   });
 
   it('never repeats the address the error names', async () => {
-    for (const port of [refusedPort, dropsAfterRequestPort, dropsMidAnswerPort]) {
+    for (const port of [REFUSED_PORT, dropsAfterRequestPort, dropsMidAnswerPort]) {
       const failure = await failureOf(applyTo(port));
       expect(failure.message).not.toMatch(/127\.0\.0\.1|:\d{2,5}\b/);
     }

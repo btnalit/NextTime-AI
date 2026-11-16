@@ -69,6 +69,14 @@ import {
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
+ * The port a "connection refused" case calls: nothing can listen on port 0 (`listen(0)` means "any
+ * free port"), so on Linux a connect to it is always refused. A port taken from a listener that was
+ * then closed could be handed to the next `listen(0)` — here or in a test file running beside this
+ * one — and the call would reach that server instead (legacy 437).
+ */
+const REFUSED_PORT = 0;
+
+/**
  * Integration tests (real Postgres + a real fake Gatekeeper HTTP server; auto-skip without
  * DATABASE_URL) for `request_action` end-to-end, including the S2.4 two-phase fix (coordinator
  * review, PR #42 — see request-action-handler.ts's own module doc comment for the full
@@ -3000,7 +3008,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       let netGatekeeperId: string;
       let netTransport: RecordingTransport;
       let netGateApp: FastifyInstance;
-      let refusedPort: number;
       /** Forwards each connection to the gate, and cuts the kernel's side as soon as the gate
        *  answers: the gate ran the call, the kernel never hears back. */
       let losesAnswers: net.Server;
@@ -3019,7 +3026,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const routedFetch: typeof fetch = (input, init) => {
         const url = new URL(input instanceof Request ? input.url : input.toString());
-        if (route === 'refused') url.port = String(refusedPort);
+        if (route === 'refused') url.port = String(REFUSED_PORT);
         if (route === 'loses_answer') url.port = String(losesAnswersPort);
         if (route === 'proxy_502') url.port = String(answers502Port);
         if (route === 'old_gate') url.port = String(oldGatePort);
@@ -3140,9 +3147,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           new Promise<number>((resolve) => {
             server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port));
           });
-        const closed = net.createServer();
-        refusedPort = await listen(closed);
-        await new Promise<void>((resolve) => closed.close(() => resolve()));
         losesAnswers = net.createServer((kernelSide) => {
           const gateSide = net.connect(gatePort, '127.0.0.1');
           kernelSide.on('error', () => {});
