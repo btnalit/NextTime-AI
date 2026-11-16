@@ -4340,6 +4340,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **证据**：Observation 带门的 `absent` 与 `absentAnswersReview`（当时版本的确认人和时间）；goal/0011 guard 只认这种证据（同一个门和 Operation、结果 satisfied），`observe_predicate` 只认带 `expect` 不带 `absent` 的；I-G5 把 `observe_absent` 算作平台检查，审计检查器同步。guard 只核对确认的形状、不回查 Operation 行见遗留 496。
   - **控制台**：目标详情、确认卡、流程编辑器；入口提示词说明删除类目标用 `observe_absent`（实模型核对并入阶段收尾那一轮）。可访问性与编辑器 Esc 见遗留 497、498，目标级检查失败时的步骤标记见遗留 499（计划随 B-c 修）。
   - **不在本 PR**：「存在过」基线（B-c：确认目标时或第一步开始前先观察一次，基线没拿到过数据则 `never_seen_present`）；reconcile 检查用门确认不存在（B 之后的小 PR）。
+  - **遗留 496 后续**（#1289，2026-11-16 合入，2a95090；迁移 goal/0020、governance/0046）：确认不存在的检查通过，以及 reconcile 在「不存在」回答上记 `effect_seen`，都要求该 Operation（同一个门、同名）有一个已发布或已弃用的版本记着 Observation 上的同一次确认（`absentAnswersReviewedBy` / `At`）；两张验收检查表各加一个独立触发器，排在原 guard 与 I-AB1 之后；I-G5 审计检查器同步。
 - 实现说明（「门确认不存在」B-c：「存在过」基线，#786，2026-10-30 合入，ecbf656；迁移 goal/0012）：
   - **基线**：新表 `goal_absence_baselines`，状态 `pending` / `seen_present` / `never_seen_present` / `unavailable` / `superseded`，`take` 每重看加 1；看的方式与验收观察相同（请求人上下文 prepare、事务外调门、结算事务记录，上限 `GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` / `_MAX_DURATION_MS`），Observation `purpose: absence_baseline`。
   - **推进**：推进器在阶段 D 前把关（有 pending 不开始步骤，`never_seen_present` / `unavailable` 停到 `paused(needs_decision)`）；`resumeGoalRun` 重看失败的基线；修订保留同一调用沿用基线；`moves.ts` 移出 running 时作废还没看完的；验收执行器对没有 `seen_present` 基线的检查兜底记 `never_seen_present`；审计动作 `goal_run.absence_baseline`（outcome 取 opened / retry / 各结算状态）。

@@ -3270,6 +3270,50 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：只回退代码即可，不需要回换函数。要撤 schema，按 0042 的定义重建这两个函数，再删 `schema_migrations` 里 core 62 那一行。
 - 下一次主机升级的提示要带上本节。
 
+### 3.195 确认不存在只认 Operation 版本记着的那次确认（#1289，遗留 496，goal 0020 + governance 0046，0.69.2 之后的下一版）
+
+**迁移 goal 0020 与 governance 0046**：只建函数与触发器（`goal_absence_version_confirmed`，两张验收检查表各一个触发器，reconcile 一个），不动数据，执行很快。
+
+- **行为变化**：确认不存在的验收检查要通过、平台要在「不存在」回答上记 `effect_seen`，Observation 上的 `absentAnswersReview` 必须是这个 Operation（同一个门、同名）某个已发布或已弃用版本记着的那一次确认。产品路径本来就复制被问版本的确认，正常部署不受影响。
+- **升级前检查（可选，只读）**：三行都应为 0。**必须用表属主跑（`psql -U nexttime`）**：用 `nexttime_app` 跑，RLS 会让三行都读成 0。不为 0 时升级照常，触发器不改已有行，但升级后审计检查器会报出这些行；结果记 `docs/private/`。
+
+```sql
+-- 已通过的确认不存在检查，以及无人决定、建立在「不存在」回答上的 reconcile，
+-- 其 Observation 上的确认没有任何已发布或已弃用的该 Operation 版本记着。
+with confirmed as (
+  select op.workspace_id, op.identity_key ->> 'gatekeeperId' as gk, op.identity_key ->> 'name' as name,
+         op.properties ->> 'absentAnswersReviewedBy' as by, op.properties ->> 'absentAnswersReviewedAt' as at
+    from objects op
+   where op.object_type = 'Operation' and op.properties ->> 'status' in ('published', 'deprecated')
+)
+select 'goal' as kind, count(*) from goal_acceptance_checks c
+  join observations o on o.workspace_id = c.workspace_id and o.id = c.observation_id
+ where c.kind = 'observe_absent' and c.status = 'passed'
+   and not exists (select 1 from confirmed v where v.workspace_id = c.workspace_id
+     and v.gk = c.observation_check ->> 'gatekeeperId' and v.name = c.observation_check ->> 'operation'
+     and v.by = o.content #>> '{absentAnswersReview,reviewedBy}' and v.at = o.content #>> '{absentAnswersReview,reviewedAt}')
+union all
+select 'step', count(*) from step_acceptance_checks c
+  join observations o on o.workspace_id = c.workspace_id and o.id = c.observation_id
+ where c.kind = 'observe_absent' and c.status = 'passed'
+   and not exists (select 1 from confirmed v where v.workspace_id = c.workspace_id
+     and v.gk = c.observation_check ->> 'gatekeeperId' and v.name = c.observation_check ->> 'operation'
+     and v.by = o.content #>> '{absentAnswersReview,reviewedBy}' and v.at = o.content #>> '{absentAnswersReview,reviewedAt}')
+union all
+select 'reconcile', count(*) from action_requests r
+  join decisions d on d.workspace_id = r.workspace_id and d.id = r.reconciliation_decision_id
+  join observations o on o.workspace_id = r.workspace_id and o.id::text = d.rationale ->> 'observationId'
+  join action_request_reconcile_checks c on c.workspace_id = r.workspace_id and c.action_request_id = r.id
+ where d.decided_by is null and o.content ? 'absent'
+   and not exists (select 1 from confirmed v where v.workspace_id = r.workspace_id
+     and v.gk = c.observation_check ->> 'gatekeeperId' and v.name = c.observation_check ->> 'operation'
+     and v.by = o.content #>> '{absentAnswersReview,reviewedBy}' and v.at = o.content #>> '{absentAnswersReview,reviewedAt}');
+```
+
+- **升级顺序**：不限。上一版内核写 Observation 的方式不变，照常通过新触发器。
+- **回滚**：只回退代码即可，不需要删触发器。要撤 schema：删两个验收检查触发器、reconcile 触发器与对应函数，再删 `schema_migrations` 里 goal 20 与 governance 46 两行。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3464,6 +3508,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.2 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
 | 0.69.2 之后的下一版 | core `0061_decisions_order_key_column`（#1252，遗留 760）：`decisions` 加存储生成列 `created_ms_utc` 与索引 `decisions_workspace_created_ms_utc_idx`，删 0060 的索引（重写表） | 可逆 | 上一版代码不读新列、不引用新索引，直接跑在新 schema 上，结果正确，Decision 列表回到每页排序；`reversibility-deltas.json` 登记了 v0.69.2 的三条计划测试；#1252 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_utc_idx;`，`alter table decisions drop column created_ms_utc;`，可选按 §3.188 重建 0060 索引，再删 `schema_migrations` 里 core 61 那一行 |
 | 0.69.2 之后的下一版 | core `0062_fact_identity_lookup_tiebreaker`（#1283，遗留 143）：只替换 `find_active_fact_for_identity` 与 `latest_fact_invalidated_for_identity` 两个函数体，给并列的行定顺序 | 可逆 | 上一版内核调同样的函数，不依赖并列时的顺序，直接跑在新函数上；#493 在 v0.69.2 的用例上验证过，#1283 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：按 0042 的定义重建两个函数，再删 `schema_migrations` 里 core 62 那一行 |
+| 0.69.2 之后的下一版 | goal `0020_absence_version_confirmed`（#1289，遗留 496）：新函数 `goal_absence_version_confirmed`，两张验收检查表各加一个触发器，确认不存在的检查通过时回查 Operation 版本记着的确认；不动数据 | 可逆 | 上一版内核照常写同样的 Observation，直接跑在新 schema 上；上一版在探针里失败的用例已在 `reversibility-deltas.json` 声明；#1289 的 CI rehearsal 与可逆性探针通过 | 只需回退代码，不需要删触发器。要撤 schema：删两个触发器与三个函数，再删 `schema_migrations` 里 goal 20 那一行 |
+| 0.69.2 之后的下一版 | governance `0046_reconcile_absence_version_confirmed`（#1289，遗留 496）：reconcile 在「不存在」回答上记 `effect_seen` 前同样回查 Operation 版本的确认；只建函数与触发器，不动数据 | 可逆 | 同上一行 | 只需回退代码。要撤 schema：删该触发器与函数，再删 `schema_migrations` 里 governance 46 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
