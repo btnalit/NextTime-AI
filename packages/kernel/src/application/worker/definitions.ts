@@ -743,9 +743,9 @@ export async function listWorkerDefinitions(
 // above (every existing caller of that function needs the full, unpaginated list — `find_workers`'
 // candidate resolution and `resolveAvailableResources`'s AgentProfile ceiling both iterate every
 // published row; splitting the read-model capability's own paginated shape into its own function
-// keeps neither one guessing at a default `limit` it does not need). Same
-// `(date_trunc('milliseconds', created_at), id)` cursor shape, `desc` — preserves the pre-existing
-// `order by created_at desc` for the no-`limit` case.
+// keeps neither one guessing at a default `limit` it does not need). A
+// `(date_trunc('milliseconds', created_at), id, version)` cursor, `desc` — preserves the
+// pre-existing `order by created_at desc` for the no-`limit` case.
 //
 // S8 W2-U2b (audit R6): also the one entry point that can return the caller's own `draft` rows
 // (`includeOwnDrafts`, `ListWorkerDefinitionsPageFilter`'s own doc comment) — `listWorkerDefinitions`
@@ -757,28 +757,33 @@ export const MAX_LIST_WORKER_DEFINITIONS_LIMIT = 500;
 const WORKER_DEFINITION_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function encodeListWorkerDefinitionsCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+// Legacy 144: the cursor carries `version` too. One row per version, so `(created_at, id)` alone is
+// not a row's key: two versions of one family written in one transaction (one `now()`) share both,
+// and a page that ended on one of them skipped the other.
+function encodeListWorkerDefinitionsCursor(createdAt: Date, id: string, version: number): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}|${version}`, 'utf8').toString('base64url');
 }
 
 function decodeListWorkerDefinitionsCursor(
   cursor: string | undefined,
-): { readonly createdAt: string; readonly id: string } | null {
+): { readonly createdAt: string; readonly id: string; readonly version: number } | null {
   if (!cursor) return null;
   try {
-    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    const sepIndex = decoded.lastIndexOf('|');
-    if (sepIndex < 0) return null;
-    const createdAt = decoded.slice(0, sepIndex);
-    const id = decoded.slice(sepIndex + 1);
+    const parts = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    // A cursor issued before `version` was added (`<createdAt>|<id>`) reads as version 0, below
+    // every version: the next page starts after every row of that `(created_at, id)`, as it did.
+    if (parts.length !== 2 && parts.length !== 3) return null;
+    const [createdAt = '', id = '', versionText = '0'] = parts;
+    const version = /^\d{1,9}$/.test(versionText) ? Number(versionText) : Number.NaN;
     if (
       !createdAt ||
       Number.isNaN(Date.parse(createdAt)) ||
-      !WORKER_DEFINITION_UUID_PATTERN.test(id)
+      !WORKER_DEFINITION_UUID_PATTERN.test(id) ||
+      !Number.isSafeInteger(version)
     ) {
       return null;
     }
-    return { createdAt, id };
+    return { createdAt, id, version };
   } catch {
     return null;
   }
@@ -827,9 +832,10 @@ export async function listWorkerDefinitionsPage(
        )
        and (
          $3::timestamptz is null
-         or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+         or (date_trunc('milliseconds', created_at), id, version)
+            < ($3::timestamptz, $4::uuid, $8::integer)
        )
-     order by date_trunc('milliseconds', created_at) desc, id desc
+     order by date_trunc('milliseconds', created_at) desc, id desc, version desc
      limit $5`,
     [
       workspaceId,
@@ -839,6 +845,7 @@ export async function listWorkerDefinitionsPage(
       limit + 1,
       includeOwnDrafts,
       callerPrincipalId,
+      cursor?.version ?? null,
     ],
   );
 
@@ -846,7 +853,7 @@ export async function listWorkerDefinitionsPage(
   const last = rows[rows.length - 1];
   const nextCursor =
     result.rows.length > limit && last
-      ? encodeListWorkerDefinitionsCursor(last.createdAt, last.id)
+      ? encodeListWorkerDefinitionsCursor(last.createdAt, last.id, last.version)
       : undefined;
   const truncated =
     requestedLimit > MAX_LIST_WORKER_DEFINITIONS_LIMIT ? (true as const) : undefined;

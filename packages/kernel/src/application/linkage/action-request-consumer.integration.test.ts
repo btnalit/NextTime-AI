@@ -481,6 +481,100 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(newerChatMessages.rows).toHaveLength(0);
     });
 
+    it("a holder's update stays in the holder's own Chat when the requester's Chat is shared with the workspace (legacy 144)", async () => {
+      const sharingRequesterId = await adminInsertPrincipal('member', 'shared-chat-requester');
+      const sharedChat = await withWorkspace(
+        pool,
+        { workspaceId, principalId: sharingRequesterId },
+        (client) => newChat(client, workspaceId, sharingRequesterId, {}),
+      );
+      // Every holder can read a `visibility = 'workspace'` Chat (RLS `chats_visibility`), so the
+      // requester's pending message — written after the holders' cards — is the newest one each
+      // holder sees for this ActionRequest.
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: sharingRequesterId },
+        (client) =>
+          client.query(
+            "update chats set visibility = 'workspace' where workspace_id = $1 and id = $2",
+            [workspaceId, sharedChat.id],
+          ),
+        { skipRoleSwitch: true },
+      );
+
+      const row = await withWorkspace(
+        pool,
+        { workspaceId, principalId: sharingRequesterId },
+        (client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: 'linkage.test.action',
+            blastRadius: 'medium',
+            operationAutoApprovable: true,
+            awaitDecision: false,
+            onBehalfOf: sharingRequesterId,
+            actorRuntime: 'pi',
+            requesterScope: scopeCovering(gatekeeperId),
+          }),
+      );
+      expect(row.status).toBe('pending_approval');
+
+      async function outboxRowFor(eventType: string) {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ id: string; payload: Record<string, unknown> }>(
+            `select id, payload from outbox
+             where workspace_id = $1 and event_type = $2 and payload->>'actionRequestId' = $3
+             order by id desc limit 1`,
+            [workspaceId, eventType, row.id],
+          );
+          const found = result.rows[0];
+          if (!found) throw new Error(`expected an ${eventType} outbox row`);
+          return found;
+        });
+      }
+
+      const dispatcher = createFakeDispatcher();
+      registerActionRequestConsumers(dispatcher, { pool });
+      const pending = await outboxRowFor('ActionRequestPending');
+      await dispatcher.emit('ActionRequestPending', pending.id, pending.payload as never);
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId: row.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      const updated = await outboxRowFor('ActionRequestUpdated');
+      await dispatcher.emit('ActionRequestUpdated', updated.id, updated.payload as never);
+
+      /** Who owns each Chat holding a message of `kind` for this ActionRequest, one entry per
+       *  message (read with RLS off, so every Chat counts). */
+      async function chatOwnersOf(kind: string): Promise<string[]> {
+        return withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            const result = await client.query<{ owner_principal_id: string }>(
+              `select c.owner_principal_id from chat_messages m
+               join chats c on c.workspace_id = m.workspace_id and c.id = m.chat_id
+               where m.workspace_id = $1 and m.content ->> 'kind' = $2
+                 and m.content ->> 'actionRequestId' = $3
+               order by c.owner_principal_id`,
+              [workspaceId, kind, row.id],
+            );
+            return result.rows.map((found) => found.owner_principal_id);
+          },
+          { skipRoleSwitch: true },
+        );
+      }
+
+      const holders = pending.payload.holderPrincipalIds as string[];
+      expect(holders).toEqual(expect.arrayContaining([ownerId, holderId]));
+      const everyone = [...holders, sharingRequesterId].sort();
+      expect(await chatOwnersOf('system.action_pending')).toEqual(everyone);
+      expect(await chatOwnersOf('system.action_update')).toEqual(everyone);
+    });
+
     // 2026-10-02 review R-57 (decision D-23: items belong to the Chat that started them): an
     // ActionRequest raised by a Worker belongs, for its requester, to the Chat whose Turn invoked
     // that Worker — its pending card, its update and its context items — not to whichever Chat the

@@ -1180,6 +1180,83 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(seen.has(id)).toBe(true);
         }
       });
+
+      it('pages through two versions of one family written at the same instant, each once (legacy 144)', async () => {
+        const freshWorkspaceId = await adminInsertWorkspace('worker-definitions-version-paging');
+        const asAdmin = <T>(fn: (client: import('pg').PoolClient) => Promise<T>) =>
+          withWorkspace(pool, { workspaceId: freshWorkspaceId, principalId: randomUUID() }, fn, {
+            skipRoleSwitch: true,
+          });
+        const principal = async (role: string): Promise<string> => {
+          const id = randomUUID();
+          await asAdmin((client) =>
+            client.query(
+              "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', $3, $3)",
+              [freshWorkspaceId, id, role],
+            ),
+          );
+          return id;
+        };
+        const pagingBuilderId = await principal('builder');
+        const pagingOwnerId = await principal('owner');
+        const inFreshTx = <T>(
+          principalId: string,
+          fn: (client: import('pg').PoolClient) => Promise<T>,
+        ) => withWorkspace(pool, { workspaceId: freshWorkspaceId, principalId }, fn);
+
+        const first = await inFreshTx(pagingBuilderId, (client) =>
+          proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+            origin: 'human',
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        await inFreshTx(pagingOwnerId, (client) =>
+          publishWorkerDefinition(client, freshWorkspaceId, pagingOwnerId, {
+            definitionId: first.id,
+            version: first.version,
+          }),
+        );
+        const second = await inFreshTx(pagingBuilderId, (client) =>
+          proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+            origin: 'human',
+            definitionId: first.id,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        expect(second.version).toBe(2);
+        // As one transaction writing both would leave them (one `now()`).
+        await asAdmin((client) =>
+          client.query(
+            `update worker_definitions set created_at = $3
+              where workspace_id = $1 and id = $2 and version = 2`,
+            [freshWorkspaceId, first.id, first.createdAt],
+          ),
+        );
+
+        const page = (cursor?: string) =>
+          inFreshTx(pagingBuilderId, (client) =>
+            listWorkerDefinitionsPage(client, freshWorkspaceId, pagingBuilderId, {
+              includeOwnDrafts: true,
+              limit: 1,
+              ...(cursor !== undefined ? { cursor } : {}),
+            }),
+          );
+        const firstPage = await page();
+        expect(firstPage.items.map((row) => row.version)).toEqual([2]);
+        const secondPage = await page(firstPage.nextCursor);
+        expect(secondPage.items.map((row) => row.version)).toEqual([1]);
+        expect(secondPage.nextCursor).toBeUndefined();
+
+        // A cursor issued before it carried `version` goes on after every row of its
+        // `(created_at, id)`, as it did.
+        const oldCursor = Buffer.from(
+          `${first.createdAt.toISOString()}|${first.id}`,
+          'utf8',
+        ).toString('base64url');
+        expect((await page(oldCursor)).items).toEqual([]);
+      });
     });
   },
 );

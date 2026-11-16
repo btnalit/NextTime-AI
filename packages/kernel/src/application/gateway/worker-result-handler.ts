@@ -492,6 +492,28 @@ function toWireOperation(
   };
 }
 
+/**
+ * Legacy 144: the order `list_allowed_operations` lists Operations in is the order every consumer
+ * names its gate tools in — `<gate>_<op>` goes to the first Operation that sanitizes to it, and a
+ * later one with the same name falls back to `<gatekeeperId>_<op>` (platform-extension
+ * `modes/gate-tools.ts` `gateToolName`, interfaces/mcp/tool-projection.ts). So the order rests on
+ * what an edit never changes: the gate registered first (`listGatekeepers`, oldest first) keeps
+ * the short name, and within one gate the Operation name decides. Operation `updated_at` (the
+ * store's order) moved with every description edit or re-import, and `created_at` with every
+ * published revision (a new row), so two gates sharing a name could swap tool names between one
+ * session and the next.
+ */
+function inToolNamingOrder<T extends { readonly gatekeeperId: string; readonly name: string }>(
+  gates: readonly { readonly gatekeeperId: string }[],
+  records: readonly T[],
+): T[] {
+  const gateRank = new Map(gates.map((gate, index) => [gate.gatekeeperId, index]));
+  const rank = (record: T) => gateRank.get(record.gatekeeperId) ?? gates.length;
+  return [...records].sort(
+    (a, b) => rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  );
+}
+
 /** `list_allowed_operations` (S2.9 deliverable B seam): the Operations the calling Handle may act
  *  on, one entry per `<gate>.<op>` — a pure description, never a grant of its own (see
  *  `packages/shared/src/capabilities.ts`'s registry entry doc comment). Two halves:
@@ -542,10 +564,13 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
       : [],
   );
   const gates = await listGatekeepers(client, workspaceId);
-  const records = await listPublishedOperationsForGatekeepers(
-    client,
-    workspaceId,
-    gates.map((gate) => gate.gatekeeperId),
+  const records = inToolNamingOrder(
+    gates,
+    await listPublishedOperationsForGatekeepers(
+      client,
+      workspaceId,
+      gates.map((gate) => gate.gatekeeperId),
+    ),
   );
   const platformPolicies = await readGatekeeperPlatformPolicies(client, workspaceId);
   // S11 GO11: a Worker of a scoped Task is listed only the observe tools of the gates its Task names.

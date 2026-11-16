@@ -705,6 +705,36 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       expect(Math.max(...result.edges.map((edge) => edge.depth))).toBe(3);
     });
 
+    it('walking both ways, reports each edge once, at the depth it was first reached (legacy 144)', async () => {
+      const { a, b, c, ab, bc } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const c = await makeObject(client, 'C');
+        const activity = await makeActivity(client);
+        const link = async (from: GraphObject, to: GraphObject) =>
+          store.assertFact(client, workspaceId, humanCaller(), {
+            linkType: 'test.both-ways',
+            sourceObjectId: from.id,
+            targetObjectId: to.id,
+            activityId: activity.id,
+          });
+        const ab = await link(a, b);
+        const bc = await link(b, c);
+        return { a, b, c, ab, bc };
+      });
+
+      // From A: A–B at depth 1; B–C, and A–B again from B's side, at depth 2; then B–C from C's.
+      const result = await inTx((client) =>
+        store.traverse(client, workspaceId, { fromId: a.id, direction: 'both', depth: 3 }),
+      );
+
+      expect(result.edges.map((edge) => [edge.linkId, edge.depth])).toEqual([
+        [ab.id, 1],
+        [bc.id, 2],
+      ]);
+      expect(result.nodes).toEqual(expect.arrayContaining([b.id, c.id]));
+    });
+
     it('respects an explicit link_type filter', async () => {
       const { a, matching, other } = await inTx(async (client) => {
         const a = await makeObject(client, 'A');

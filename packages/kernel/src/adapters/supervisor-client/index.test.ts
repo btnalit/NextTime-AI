@@ -415,6 +415,8 @@ describe('TaskSupervisorClient', () => {
       message: 'worker-supervisor returned a non-JSON body (status 502)',
     });
     expect(String((thrown as Error).stack)).not.toContain('zqxjwvk');
+    // Legacy 767: nor hung on it as a `cause`, which a log serializer would print.
+    expect((thrown as Error).cause).toBeUndefined();
   });
 
   describe('internal-plane Authorization header (worker-supervisor internal-auth.ts requires it on POST /task/spawn)', () => {
