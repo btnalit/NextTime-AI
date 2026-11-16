@@ -3260,6 +3260,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退镜像即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.194 按身份取 Fact 的两个函数加 tiebreaker（#1283，遗留 143，core 0062，0.69.2 之后的下一版）
+
+**迁移 core 0062**：用 `create or replace` 只替换 `find_active_fact_for_identity` 与 `latest_fact_invalidated_for_identity` 两个函数体；签名、`security definer`、`search_path` 与工作区检查不变。不动数据，不锁表，执行很快。
+
+- **行为变化**：同一身份有多条最新并列的行时，活跃 Fact 按 `id desc` 取第一条；作废检查只有并列的最新几行全部作废才回答「是」，否则内核重读（最多 `MAX_ACTIVE_FACT_REREAD_ATTEMPTS` 次，之后照旧插一条新 Fact）。没有并列的身份结果和原来一样。
+- **升级前检查**：无。
+- **升级顺序**：不限。上一版内核在新函数上照常运行，不依赖并列时的顺序。
+- **回滚**：只回退代码即可，不需要回换函数。要撤 schema，按 0042 的定义重建这两个函数，再删 `schema_migrations` 里 core 62 那一行。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3453,6 +3463,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.69.1 | core `0059_disabled_principal_no_api_key`（#1210，遗留 738）：清已停用成员残留的 `api_key_hash`（每个一条 `principal.disabled_api_key_cleared` 审计），约束 `principals_disabled_no_api_key`，BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` | 可逆 | 上一版的 `disable_principal` 只写 `disabled_at`、`remove_membership` 先停用后清 key，触发器在停用那次写入里清 key，都照常成功；上一版的 `rotate_api_key` 对已停用的服务账号会被约束拒绝（原本签发一把认证不了的 key，#1204 修掉的 bug）。本地把 v0.69.0 的 kernel 全量跑在新 schema 上，5731 条全过 | 只需回退代码。要撤 schema 按迁移注释四步（见 §3 那一节）；被清的 key 不恢复 |
 | v0.69.2 | core `0060_decisions_order_idx`（#1247，遗留 429）：`decisions` 加索引 `decisions_workspace_created_ms_idx`（UTC 毫秒键 + id，均降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它，照常运行；#1247 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_idx;`，再删 `schema_migrations` 里 core 60 那一行 |
 | 0.69.2 之后的下一版 | core `0061_decisions_order_key_column`（#1252，遗留 760）：`decisions` 加存储生成列 `created_ms_utc` 与索引 `decisions_workspace_created_ms_utc_idx`，删 0060 的索引（重写表） | 可逆 | 上一版代码不读新列、不引用新索引，直接跑在新 schema 上，结果正确，Decision 列表回到每页排序；`reversibility-deltas.json` 登记了 v0.69.2 的三条计划测试；#1252 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index decisions_workspace_created_ms_utc_idx;`，`alter table decisions drop column created_ms_utc;`，可选按 §3.188 重建 0060 索引，再删 `schema_migrations` 里 core 61 那一行 |
+| 0.69.2 之后的下一版 | core `0062_fact_identity_lookup_tiebreaker`（#1283，遗留 143）：只替换 `find_active_fact_for_identity` 与 `latest_fact_invalidated_for_identity` 两个函数体，给并列的行定顺序 | 可逆 | 上一版内核调同样的函数，不依赖并列时的顺序，直接跑在新函数上；#493 在 v0.69.2 的用例上验证过，#1283 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：按 0042 的定义重建两个函数，再删 `schema_migrations` 里 core 62 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
