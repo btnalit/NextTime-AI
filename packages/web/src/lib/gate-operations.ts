@@ -1,4 +1,8 @@
-import type { BlastRadius, OperationSummaryWire } from '@nexttime/shared';
+import type {
+  BlastRadius,
+  OperationParamSummaryWire,
+  OperationSummaryWire,
+} from '@nexttime/shared';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from './clients.js';
 
@@ -23,6 +27,9 @@ export interface OperationChoice {
   /** The published version — what an "always allow" rule on one gate names (legacy 218, the
    *  policy editor's `operationVersion`); `null` once the name folds several gates together. */
   readonly version: number | null;
+  /** Legacy 775: the published version's params (legacy 465) — only for one gate's Operation;
+   *  absent once the name folds several gates together, or when the kernel did not list them. */
+  readonly params?: readonly OperationParamSummaryWire[];
 }
 
 /** Published rows → one choice per name, sorted by name. */
@@ -34,6 +41,7 @@ export function operationChoices(items: readonly OperationSummaryWire[]): Operat
       description?: string;
       gates: Set<string>;
       version: number | null;
+      params?: readonly OperationParamSummaryWire[] | undefined;
     }
   >();
   for (const item of items) {
@@ -45,11 +53,13 @@ export function operationChoices(items: readonly OperationSummaryWire[]): Operat
         ...(item.description ? { description: item.description } : {}),
         gates: new Set([item.gatekeeperId]),
         version: item.version,
+        ...(item.params !== undefined ? { params: item.params } : {}),
       });
       continue;
     }
     existing.gates.add(item.gatekeeperId);
     existing.version = null;
+    existing.params = undefined;
     if (existing.blastRadius !== item.blastRadius) existing.blastRadius = null;
     if (existing.description === undefined && item.description) {
       existing.description = item.description;
@@ -62,6 +72,7 @@ export function operationChoices(items: readonly OperationSummaryWire[]): Operat
       ...(entry.description !== undefined ? { description: entry.description } : {}),
       gateCount: entry.gates.size,
       version: entry.version,
+      ...(entry.params !== undefined ? { params: entry.params } : {}),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

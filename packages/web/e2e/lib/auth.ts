@@ -80,11 +80,30 @@ export async function signedInOwner(page: Page): Promise<{ id: Promise<string> }
   const owner = new Promise<string>((done) => {
     resolve = done;
   });
+  // Only the first read that names the caller is looked into; every later one goes on as it is.
+  // One the page makes as a test ends (a click that opens another page) used to be fetched here
+  // and then lose its response to the closing context — "Response has been disposed" thrown from
+  // this handler failed a test whose every step had passed.
+  let known = false;
   await page.route('**/api/cap/get_workspace', async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { result?: { caller?: { id?: string } } };
-    if (body.result?.caller?.id) resolve(body.result.caller.id);
-    await route.fulfill({ response });
+    if (known) {
+      await route.fallback();
+      return;
+    }
+    try {
+      const response = await route.fetch();
+      const body = (await response.json()) as { result?: { caller?: { id?: string } } };
+      const id = body.result?.caller?.id;
+      if (id) {
+        known = true;
+        resolve(id);
+      }
+      await route.fulfill({ response });
+    } catch (error) {
+      // The context closed while this read was out: nobody waits for its answer any more.
+      if (!String(error).includes('has been disposed')) throw error;
+      await route.fallback().catch(() => undefined);
+    }
   });
   return { id: owner };
 }
