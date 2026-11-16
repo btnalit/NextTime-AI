@@ -1,5 +1,5 @@
 import { redactConnectionAddressesIn } from '../../governance/connections/index.js';
-import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
+import { redactSuspectedSecrets, shownAuditPayload } from '../../governance/redaction/index.js';
 
 /**
  * application/gateway/audit-copy (S11 AA3c-1): the audit copy of what a handler adds to its own
@@ -23,4 +23,17 @@ export function auditedHandlerPayload(
   if (payload === undefined) return {};
   const addresses = redactConnectionAddressesIn(payload);
   return redactSuspectedSecrets(addresses.value).value as Record<string, unknown>;
+}
+
+/**
+ * Legacy 376: an audit record's payload as every audit read shows it (`audit_query`,
+ * `platform_audit_query`, the recent platform changes): every gate address in it as the connection
+ * rule shows it (`redactConnectionAddressesIn`), then `shownAuditPayload` (legacy 420: the value
+ * patterns, and the field-name rule for `params`). The writers cut addresses since S11 AA3c-1
+ * (`auditParams`, {@link auditedHandlerPayload}), so this changes only a row written before then —
+ * a `create_connection` or `request_connection` copy whose address kept a `sig=` or
+ * `X-Amz-Signature=` the value patterns do not know. Derived on read; no row is rewritten (I11).
+ */
+export function shownAuditRecordPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return shownAuditPayload(redactConnectionAddressesIn(payload).value as Record<string, unknown>);
 }
