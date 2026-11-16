@@ -56,6 +56,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
 
+    /** A published version 1 of `call`'s Operation recording `review` as the confirmation of its
+     *  "does not exist" answers — what an absence's Observation must name (legacy 496). Written at
+     *  rest through `raw`, like every other row this file checks. */
+    async function confirmedVersion(
+      call: { readonly gatekeeperId: string; readonly operation: string },
+      review: { readonly reviewedBy: string; readonly reviewedAt: string },
+    ): Promise<void> {
+      await raw(
+        `insert into objects (workspace_id, object_type, identity_key, properties)
+         values ($1, 'Operation', $2::jsonb, $3::jsonb)`,
+        [
+          workspaceId,
+          JSON.stringify({ gatekeeperId: call.gatekeeperId, name: call.operation, version: 1 }),
+          JSON.stringify({
+            name: call.operation,
+            version: 1,
+            status: 'published',
+            absentAnswersReviewedBy: review.reviewedBy,
+            absentAnswersReviewedAt: review.reviewedAt,
+          }),
+        ],
+      );
+    }
+
     async function check(
       run: (client: PoolClient) => Promise<GoalInvariantCheckResult>,
     ): Promise<GoalInvariantCheckResult> {
@@ -1097,6 +1121,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('counts a passed absence check without the gate’s absence of its own call, recorded under a version a person confirmed, after a look that saw the thing there — on the goal and on a step (S11 「门确认不存在」 B, B-c I-AB1)', async () => {
         const CALL = { gatekeeperId: randomUUID(), operation: 'svc.get', params: { name: 'web' } };
         const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+        await confirmedVersion(CALL, REVIEW);
         /** What `acceptance-check.ts` records when the gate confirmed the thing is not there. */
         const CONFIRMED = {
           gatekeeperId: CALL.gatekeeperId,
@@ -1113,6 +1138,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           { absentAnswersReview: undefined },
           { absentAnswersReview: { reviewedAt: REVIEW.reviewedAt } },
           { absentAnswersReview: { ...REVIEW, reviewedBy: '' } },
+          // Legacy 496: a confirmation no version of the Operation records.
+          { absentAnswersReview: { ...REVIEW, reviewedBy: randomUUID() } },
           { outcome: 'unsatisfied' },
         ];
         const observation = async (content: Record<string, unknown>, ago = '0 seconds') => {
@@ -1261,6 +1288,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('counts the platform’s effect_seen on a "not there" answer without the request’s own absence reconcile check under a confirmed version and a look before the action that saw the thing (S11 「门确认不存在」 reconcile, I-AB1)', async () => {
         const CALL = { gatekeeperId: randomUUID(), operation: 'vm.get', params: { name: 'old' } };
         const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+        await confirmedVersion(CALL, REVIEW);
         const observation = async (content: Record<string, unknown>, ago: string) => {
           const rows = await raw<{ id: string }>(
             `insert into observations (workspace_id, source_id, activity_id, content, created_at)
@@ -1367,6 +1395,10 @@ describe.runIf(DATABASE_URL !== undefined)(
             declared: { ...CALL, expect: { path: 'state', op: 'eq', value: 'x' } },
           }),
           await reconciled({ evidence: { absentAnswersReview: undefined } }),
+          // Legacy 496: a confirmation no version of the Operation records.
+          await reconciled({
+            evidence: { absentAnswersReview: { ...REVIEW, reviewedAt: new Date(0).toISOString() } },
+          }),
           await reconciled({ evidence: { operation: 'vm.list' } }),
         ];
 

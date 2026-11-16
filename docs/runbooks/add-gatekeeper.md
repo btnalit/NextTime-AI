@@ -279,6 +279,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 - 发布出的版本记下确认人和时间，目录的 Operation 详情里显示确认人和「确认于 N 前」；需要确认之前发布的版本显示没有人确认过。
 - 整批发布（`publish_manifest`、`enable_gate_instance`）不发布这种草稿，把它们留作草稿，结果里的 `absentAnswerDrafts` 列出名字和回答，控制台给出逐个去目录发布的链接。
 - 清单、`propose_operation` 写进定义里的确认字段一律丢掉：确认只能由发布时的人给出。所以提议出的修订草稿（比如接入向导里的重分类）发布时要重新确认。变更计划（ChangePlan）里的 Operation 修订不改定义，沿用当前版本的确认；当前版本没有确认时，修订出的版本也没有。
+- 平台靠「不存在」下结论时（目标或步骤的 absence 验收通过，或核对一次结果不明的动作后记下 `effect_seen`），Observation 记下当时所问版本的确认人和时间。数据库只在这个 Operation（同一个门、同一个名字）有某个已发布、或之后被弃用的版本记着同样的确认人和时间时才接受（goal 0020、governance 0046，遗留 496）。
 
 ### 6.1 目标声明（`target`，可选，只对 `execute`；S11 GO12）
 

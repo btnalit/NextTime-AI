@@ -69,6 +69,63 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect: { path: 'state', op: 'eq', value: 'running' },
     };
     const CONFIRM_PROMPT = 'Is the report out?';
+    /** Who confirmed, and when, the "does not exist" answers of the published `svc.get` on
+     *  OBSERVE's Gatekeeper — the Operation the absence checks below call (goal/0011, goal/0012).
+     *  An absence check passes only under a confirmation a version of its Operation records
+     *  (goal/0020, legacy 496); `beforeAll` publishes that version. */
+    const ABSENCE_REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+    /** Version `version` of Operation `name` on `gatekeeperId`, inserted as a draft and walked to
+     *  `status` the way `publish_operation` takes it (core/0047): a publish stamps `review` as the
+     *  version's confirmation of its "does not exist" answers. A draft is given `review` as raw
+     *  properties, as no product path writes it. */
+    async function operationVersion(
+      gatekeeperId: string,
+      name: string,
+      version: number,
+      status: 'draft' | 'published' | 'deprecated',
+      review?: { readonly reviewedBy: string; readonly reviewedAt: string },
+    ): Promise<void> {
+      const stamped =
+        review === undefined
+          ? {}
+          : {
+              absentAnswersReviewedBy: review.reviewedBy,
+              absentAnswersReviewedAt: review.reviewedAt,
+            };
+      const inserted = await sql(
+        `insert into objects (workspace_id, object_type, identity_key, properties)
+         values ($1, 'Operation', $2::jsonb, $3::jsonb) returning id`,
+        [
+          workspaceId,
+          JSON.stringify({ gatekeeperId, name, version }),
+          JSON.stringify({
+            name,
+            version,
+            mode: 'observe',
+            status: 'draft',
+            ...(status === 'draft' ? stamped : {}),
+          }),
+        ],
+      );
+      const id = inserted.rows[0]?.id as string;
+      const walk =
+        status === 'draft'
+          ? []
+          : status === 'published'
+            ? ['published']
+            : ['published', 'deprecated'];
+      for (const step of walk) {
+        await sql(
+          `update objects set properties = properties || $3::jsonb
+            where workspace_id = $1 and id = $2`,
+          [
+            workspaceId,
+            id,
+            JSON.stringify(step === 'published' ? { status: step, ...stamped } : { status: step }),
+          ],
+        );
+      }
+    }
     type DeclaredCheck = Readonly<Record<string, unknown>>;
     const observeCheck = (key: string): DeclaredCheck => ({
       kind: 'observe_predicate',
@@ -511,6 +568,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         { skipRoleSwitch: true },
       );
+      await operationVersion(OBSERVE.gatekeeperId, 'svc.get', 1, 'published', ABSENCE_REVIEW);
     });
 
     afterAll(async () => {
@@ -2534,7 +2592,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         check: ABSENT,
       });
       /** Who confirmed the published version's answers, as `platform-observation.ts` records it. */
-      const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+      const REVIEW = ABSENCE_REVIEW;
       /** The content `acceptance-check.ts` records for an absence check the gate confirmed: the
        *  call, its `absent`, no predicate, and the version's confirmation. */
       const CONFIRMED = {
@@ -2660,6 +2718,71 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      it('legacy 496 (goal/0020): passes only under the confirmation a published or deprecated version of the Operation it calls records', async () => {
+        /** A fresh run whose goal declares one absence check `gone` of `call`, verifying round 1,
+         *  with the baseline that saw the thing; returns a try at passing it on an Observation
+         *  of `call` carrying `review`. */
+        async function passUnder(
+          call: { readonly gatekeeperId: string; readonly operation: string },
+          review: unknown,
+        ): Promise<unknown> {
+          const declared = { ...ABSENT, ...call };
+          const goalRunId = await runningGoal(
+            ['A', 'B'],
+            [{ kind: 'observe_absent', key: 'gone', check: declared }],
+          );
+          await takeBaseline(goalRunId, 'gone', declared);
+          await setGoal(goalRunId, "status = 'verifying'");
+          await insertAbsent(goalRunId, 1, 'gone', declared);
+          const observationId = await acceptanceObservation(goalRunId, 1, 'gone', {
+            ...CONFIRMED,
+            gatekeeperId: call.gatekeeperId,
+            operation: call.operation,
+            absentAnswersReview: review,
+          });
+          return setCheck(
+            goalRunId,
+            1,
+            'gone',
+            `status = 'passed', observation_id = $5, ${SETTLED}`,
+            [observationId],
+          );
+        }
+        const NOT_ON_RECORD =
+          /an absence check passes only under the confirmation a version of its Operation records/;
+        const review = () => ({ reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() });
+        const gate = randomUUID();
+        const [draft, published, deprecated, otherGate, otherName] = [
+          review(),
+          review(),
+          review(),
+          review(),
+          review(),
+        ];
+        await operationVersion(gate, 'svc.get', 1, 'deprecated', deprecated);
+        await operationVersion(gate, 'svc.get', 2, 'published', published);
+        await operationVersion(gate, 'svc.get', 3, 'draft', draft);
+        await operationVersion(randomUUID(), 'svc.get', 1, 'published', otherGate);
+        await operationVersion(gate, 'svc.other', 1, 'published', otherName);
+        const call = { gatekeeperId: gate, operation: 'svc.get' };
+
+        // Two non-empty strings the guard's shape accepts, which no version records.
+        await expect(passUnder(call, review())).rejects.toThrow(NOT_ON_RECORD);
+        await expect(passUnder(call, { ...published, reviewedBy: randomUUID() })).rejects.toThrow(
+          NOT_ON_RECORD,
+        );
+        await expect(
+          passUnder(call, { ...published, reviewedAt: new Date(0).toISOString() }),
+        ).rejects.toThrow(NOT_ON_RECORD);
+        // A draft never holds a confirmation; another gate's or another Operation's is not this one.
+        await expect(passUnder(call, draft)).rejects.toThrow(NOT_ON_RECORD);
+        await expect(passUnder(call, otherGate)).rejects.toThrow(NOT_ON_RECORD);
+        await expect(passUnder(call, otherName)).rejects.toThrow(NOT_ON_RECORD);
+        // The published version's, or the one a version since deprecated holds.
+        await passUnder(call, published);
+        await passUnder(call, deprecated);
+      });
+
       it('achieves a run by check on a round whose only check the platform made is an absence the gate confirmed (I-G5)', async () => {
         const goalRunId = await runningGoal(['A', 'B'], [absentCheck('gone'), confirmCheck('ok')]);
         await takeBaseline(goalRunId, 'gone', ABSENT);
@@ -2698,7 +2821,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
-      it('a step’s absence check is one it declares, as declared, and passes only as the goal’s does', async () => {
+      it('a step’s absence check is one it declares, as declared, and passes only as the goal’s does — under the confirmation a version of its Operation records (legacy 496)', async () => {
         const STEP_ABSENT = { kind: 'observe_absent', key: 'gone', check: ABSENT };
         const goal = await sql(
           `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
@@ -2781,6 +2904,17 @@ describe.runIf(DATABASE_URL !== undefined)(
             JSON.stringify(content),
           ).rejects.toThrow(NOT_PASSED);
         }
+        // Legacy 496 (goal/0020): a confirmation no version of `svc.get` records.
+        await expect(
+          passOn(
+            await stepObservation({
+              ...CONFIRMED,
+              absentAnswersReview: { ...REVIEW, reviewedBy: randomUUID() },
+            }),
+          ),
+        ).rejects.toThrow(
+          /step_acceptance_checks: an absence check passes only under the confirmation a version of its Operation records/,
+        );
         await passOn(await stepObservation(CONFIRMED));
       });
     });
@@ -2959,7 +3093,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           operation: ABSENT.operation,
           expect: undefined,
           absent: { status: 404 },
-          absentAnswersReview: { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() },
+          absentAnswersReview: ABSENCE_REVIEW,
         };
         /** A run that did `whileRunning` while it ran, then `gone` of its round 1 passed on an
          *  Observation the gate confirmed absence in — one made after `whileVerifying`, or the one
@@ -3046,7 +3180,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId: ABSENT.gatekeeperId,
           operation: ABSENT.operation,
           absent: { status: 404 },
-          absentAnswersReview: { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() },
+          absentAnswersReview: ABSENCE_REVIEW,
         };
         async function passStepGone(whileRunning: (goalRunId: string) => Promise<unknown>) {
           const goalRunId = await absenceGoal();
