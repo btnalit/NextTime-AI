@@ -21,6 +21,7 @@ import { ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   ADMIN_AGENT_SESSION_KIND,
   HANDLE_SIGNING_ALG,
+  HandleRevoked,
   entryScope,
   issueHandle,
 } from '../../governance/capability/index.js';
@@ -49,7 +50,7 @@ import { CAPABILITY_HANDLERS } from '../gateway/handlers.js';
 import { setRequestActionDeps } from '../gateway/request-action-handler.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
-import { purgeWorkspace } from '../platform/purge-workspace.js';
+import { PURGE_RETENTION_DAYS, purgeWorkspace } from '../platform/purge-workspace.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
@@ -863,13 +864,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         await drainer.drainGatekeeper(trialWs, adminPrincipalId, trialGate);
         expect(applied).toEqual([]);
 
-        // Neither the admin agent nor its Worker decides it: `approve` is the person's own.
+        // Neither the admin agent nor its Worker decides it: `approve` is the person's own, on the
+        // human channel only.
         for (const handle of [adminAgent, worker.caller]) {
-          expect(
-            await refusalOf(
-              dispatchCapability({ pool }, handle, 'approve', { actionRequestId: requested.id }),
-            ),
-          ).toBeInstanceOf(ForbiddenError);
+          const refused = await refusalOf(
+            dispatchCapability({ pool }, handle, 'approve', { actionRequestId: requested.id }),
+          );
+          expect(refused).toBeInstanceOf(ForbiddenError);
+          expect(refused).toMatchObject({ reason: 'human_channel_only' });
         }
         expect(await statusOf(requested.id)).toBe('pending_approval');
 
@@ -1426,19 +1428,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await rowsOf('connection_requests')).toBe(2);
         expect(await rowsOf('workspace_self_connections')).toBe(1);
 
-        // Taken out of use, then purged, as the console's purge_workspace does it.
+        // Taken out of use, and purged once its retention has passed — the same function and the
+        // same eligibility check the console's purge_workspace runs (no operator `force`).
         await withAdminClient(pool, (client) =>
           client.query(
-            "update workspaces set status = 'disabled', disabled_at = now() where id = $1",
-            [ws],
+            `update workspaces set status = 'disabled',
+                    disabled_at = now() - make_interval(days => $2::int + 1)
+              where id = $1`,
+            [ws, PURGE_RETENTION_DAYS],
           ),
         );
-        await purgeWorkspace(pool, {
-          workspaceId: ws,
-          confirm: true,
-          force: true,
-          actorUserId: admin.id,
-        });
+        await purgeWorkspace(pool, { workspaceId: ws, confirm: true, actorUserId: admin.id });
 
         // After: the exception's own check says no for the same platform administrator…
         expect(await exceptionHolds(ws, adminHere)).toBe(false);
@@ -1466,7 +1466,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // …and the admin agent's Handle no longer authenticates.
         expect(
           await refusalOf(authenticateHandle(pool, issued.token, { publicKey }, 'source')),
-        ).toBeInstanceOf(Error);
+        ).toBeInstanceOf(HandleRevoked);
         // Nothing of it is left for the platform to count as a self connection, or to complete.
         expect(await rowsOf('connection_requests')).toBe(0);
         expect(await rowsOf('workspace_self_connections')).toBe(0);
