@@ -785,8 +785,10 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // Simulate a pre-S3.12 row exactly as `registerOperationDraftObject` used to write it:
       // `identity_key` is the old two-field `{gatekeeperId, name}` — no `version` key at all —
       // and `properties` carries no `version`/`draftOf` either (those fields did not exist yet).
-      const legacyRow = await inTx((client) =>
-        client.query<{ id: string }>(
+      // Inserted as a draft and then published, the way that code reached a published version
+      // too (legacy 484: an Operation row is only ever inserted as a draft).
+      const legacyRow = await inTx(async (client) => {
+        const inserted = await client.query<{ id: string }>(
           `insert into objects (workspace_id, object_type, identity_key, properties)
            values ($1, 'Operation', $2::jsonb, $3::jsonb)
            returning id`,
@@ -795,14 +797,20 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
             JSON.stringify({ gatekeeperId, name }),
             JSON.stringify({
               ...legacyOperation,
-              status: 'published',
+              status: 'draft',
               origin: 'import',
               proposedBy: ownerId,
               proposedByKind: 'human',
             }),
           ],
-        ),
-      );
+        );
+        await client.query(
+          `update objects set properties = properties || '{"status": "published"}'::jsonb
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, inserted.rows[0]?.id],
+        );
+        return inserted;
+      });
       const legacyId = legacyRow.rows[0]?.id;
       expect(legacyId).toBeTruthy();
 
@@ -1037,7 +1045,9 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
     }
 
     /** A raw Operation row, the shape `registerOperationDraftObject` writes — used to build the
-     *  states the pre-fix code left behind (a revision draft without `draftOf`, duplicates). */
+     *  states the pre-fix code left behind (a revision draft without `draftOf`, duplicates). A
+     *  published one is inserted as a draft and then published, the way the product reaches it
+     *  (legacy 484: an Operation row is only ever inserted as a draft). */
     async function insertOperationRow(
       client: PoolClient,
       operation: Operation,
@@ -1053,7 +1063,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           JSON.stringify({ gatekeeperId, name: operation.name, version }),
           JSON.stringify({
             ...operation,
-            status,
+            status: 'draft',
             origin: 'import',
             proposedBy: ownerId,
             proposedByKind: 'human',
@@ -1063,6 +1073,13 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       );
       const id = result.rows[0]?.id;
       if (!id) throw new Error('failed to insert test Operation row');
+      if (status === 'published') {
+        await client.query(
+          `update objects set properties = properties || '{"status": "published"}'::jsonb
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, id],
+        );
+      }
       return id;
     }
 
