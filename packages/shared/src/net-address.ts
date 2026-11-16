@@ -47,13 +47,17 @@ export interface CidrRange {
   prefixLen: number;
 }
 
-/** Parse a dotted-quad IPv4 address into its four octets, or `null` if malformed. */
+/** Parse a dotted-quad IPv4 address into its four octets, or `null` if malformed. Strict as
+ *  `inet_pton` and Node's `net.isIP` read one (legacy 777): four decimal parts with no leading zero,
+ *  since `inet_aton` and the WHATWG URL parser read a part like `010` as octal (8). Such a part is
+ *  {@link parseIPv4Literal}'s to read, and a CIDR or subnet written with one is refused here as the
+ *  kernel's subnet matcher refuses it. */
 export function parseIPv4(input: string): [number, number, number, number] | null {
   const parts = input.split('.');
   if (parts.length !== 4) return null;
   const octets: number[] = [];
   for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return null;
     const value = Number.parseInt(part, 10);
     if (value > 255) return null;
     octets.push(value);
