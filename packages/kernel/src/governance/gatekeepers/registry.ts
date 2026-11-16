@@ -258,7 +258,7 @@ export async function listGatekeepers(
     `select id, properties, created_at
      from objects
      where workspace_id = $1 and object_type = 'Gatekeeper'
-     order by created_at asc`,
+     order by created_at asc, id asc`,
     [workspaceId],
   );
   return result.rows.map((row) => {

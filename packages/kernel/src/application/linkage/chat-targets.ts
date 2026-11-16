@@ -65,7 +65,12 @@ export async function resolveActionRequestChat(
   actionRequestId: string,
   parentWorkerRunId: string | null,
 ): Promise<ChatRow> {
-  const pinnedChatId = await findChatIdForActionPending(client, workspaceId, actionRequestId);
+  const pinnedChatId = await findChatIdForActionPending(
+    client,
+    workspaceId,
+    principalId,
+    actionRequestId,
+  );
   if (pinnedChatId) return requireChatAccess(client, workspaceId, pinnedChatId);
   return resolveRequesterChat(client, workspaceId, principalId, parentWorkerRunId);
 }

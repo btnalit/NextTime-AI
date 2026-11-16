@@ -427,9 +427,10 @@ export async function assertChatKindAccess(
  * *different* Chat if the principal creates a new one between the `ActionRequestPending` and
  * `ActionRequestUpdated` events, landing the update somewhere the pending card never was.
  *
- * RLS (`chat_messages_visibility`, mirroring `chats_visibility`) already confines this to Chats
- * visible to whichever principal the caller's transaction is scoped to
- * (`withWorkspace(pool, {workspaceId, principalId}, ...)`); a `content ->> 'kind'` match is exact
+ * Only a Chat `principalId` owns counts (legacy 144). RLS (`chat_messages_visibility`, mirroring
+ * `chats_visibility`) shows the caller every `visibility = 'workspace'` Chat too, and the requester
+ * and each holder get their own pending card: without the owner check, one holder's update could
+ * be pinned into a card another person's shared Chat holds. A `content ->> 'kind'` match is exact
  * (`buildActionPendingContent` always sets it, `content.ts`), so no other message kind can match.
  * Returns `null` when no such message exists (e.g. a pre-fix ActionRequest, or the pending write
  * somehow never landed) — the caller falls back to its own default-chat rule.
@@ -437,16 +438,19 @@ export async function assertChatKindAccess(
 export async function findChatIdForActionPending(
   client: PoolClient,
   workspaceId: string,
+  principalId: string,
   actionRequestId: string,
 ): Promise<string | null> {
   const result = await client.query<{ chat_id: string }>(
-    `select chat_id from chat_messages
-     where workspace_id = $1
-       and content ->> 'kind' = 'system.action_pending'
-       and content ->> 'actionRequestId' = $2
-     order by created_at desc, id desc
+    `select m.chat_id from chat_messages m
+     join chats c on c.workspace_id = m.workspace_id and c.id = m.chat_id
+     where m.workspace_id = $1
+       and c.owner_principal_id = $3
+       and m.content ->> 'kind' = 'system.action_pending'
+       and m.content ->> 'actionRequestId' = $2
+     order by m.created_at desc, m.id desc
      limit 1`,
-    [workspaceId, actionRequestId],
+    [workspaceId, actionRequestId, principalId],
   );
   return result.rows[0]?.chat_id ?? null;
 }

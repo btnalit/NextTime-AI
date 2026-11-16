@@ -775,13 +775,22 @@ export class SqlGraphStore implements GraphStore {
     const query = buildTraverseQuery(workspaceId, input, viewer);
     const result = await client.query<TraverseRow>(query.text, query.values as unknown[]);
 
-    const edges: TraverseEdge[] = result.rows.map((row) => ({
-      linkId: row.link_id,
-      linkType: row.link_type,
-      sourceObjectId: row.source_object_id,
-      targetObjectId: row.target_object_id,
-      depth: Number(row.depth),
-    }));
+    // Legacy 144: one row per (edge, the end the walk left it by). Walking `both` ways, an edge is
+    // also reached back from its far end one level deeper, so it came in twice. Rows arrive by
+    // depth, so the first row of an edge is its shallowest; every row still counts for `nodes`.
+    const edges: TraverseEdge[] = [];
+    const reported = new Set<string>();
+    for (const row of result.rows) {
+      if (reported.has(row.link_id)) continue;
+      reported.add(row.link_id);
+      edges.push({
+        linkId: row.link_id,
+        linkType: row.link_type,
+        sourceObjectId: row.source_object_id,
+        targetObjectId: row.target_object_id,
+        depth: Number(row.depth),
+      });
+    }
 
     const shallowestDepthByNode = new Map<string, number>();
     for (const row of result.rows) {
