@@ -76567,9 +76567,11 @@
         },
         "allowedGatekeepers": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "allowedModels": {
@@ -76577,13 +76579,16 @@
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "allowedSkills": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "defaultModel": {
@@ -76695,23 +76700,29 @@
         },
         "excludedGatekeepers": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "excludedSkills": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "excludedWorkerDefinitions": {
           "items": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
+          "maxItems": 1000,
           "type": "array"
         },
         "model": {
