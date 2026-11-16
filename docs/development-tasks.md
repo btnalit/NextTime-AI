@@ -2199,6 +2199,7 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   `observed-facts.integration.test.ts`（三例：首次观察注册 Source 并串起 Observation、同门再观察
   unchanged 且最近确认前进、S5.2 前形态的 Fact 被佐证不动且正是 I-S5-2 计的行）；
   `sql-store.same-origin.test.ts`（假 client 三例）；`queries.test.ts` / collector `run.test.ts` 相应用例。
+- **遗留 143 后续**（#1283，2026-11-16 合入，d9c8d95；core 0062）：`find_active_fact_for_identity` 并列时按 `id desc` 取（与 `recorded_at desc, id desc` 的「最新在前」一致，`for update` 加锁顺序随之固定）；`latest_fact_invalidated_for_identity` 并列时只有最新几行全部作废才回答「是」——并列组里有一行没作废，链条末端就在组内、可能仍活着，应重读。`conflicts.test.ts` 覆盖了这几种并列。
 
 ### S5.3 数据与代码分离（关闭遗留 9，部分关闭 11）
 
