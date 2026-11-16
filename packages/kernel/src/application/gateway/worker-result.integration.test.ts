@@ -1724,7 +1724,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           const caller: ResolvedCaller = { channel: 'handle', claims };
           const goodName = `demo.good.${marker}`;
           const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
-            summary: 'proposed three Operations',
+            summary: 'proposed four Operations',
             proposedOperations: [
               {
                 gatekeeperId: missingGatekeeperId,
@@ -1736,6 +1736,12 @@ describe.runIf(DATABASE_URL !== undefined)(
               {
                 gatekeeperId: missingGatekeeperId,
                 operation: proposalOperation(`demo.name.${marker}\u0000`),
+              },
+              // U+0001 passes the pre-check (only U+0000 is unstorable) and fails the name rule
+              // later: refused for its Gatekeeper only because that lookup ends the entry.
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: proposalOperation(`demo.control.${marker}\u0001`),
               },
               { gatekeeperId, operation: proposalOperation(goodName) },
             ],
@@ -1749,6 +1755,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(result.proposedOperationsRejected).toEqual([
             { index: 0, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
             { index: 1, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+            { index: 2, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
           ]);
           const stored = await readProposalOutcome(taskId, gatekeeperId);
           expect(stored.task?.result.proposedOperationsRejected).toEqual(
