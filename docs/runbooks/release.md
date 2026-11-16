@@ -3356,6 +3356,39 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.197 主机列表里的 IP 条目按地址精确匹配（#1320，遗留 785，0.69.2 之后的下一版）
+
+无迁移。出口代理的 allow / deny 条目与内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里的 IP 条目，以前按文本后缀比较，现在按它表示的地址精确匹配，任何写法都认（前导零、整数、十六进制、末尾点、方括号）。
+
+- **含义变化**：
+  - 拒绝列表里写法不规范的 IP 条目开始生效（多拒，收窄）；出口代理拒绝列表里写法不规范或带方括号的 IPv6 条目同样开始生效。
+  - 内核允许列表里带末尾点的 IP 条目（如 `203.0.113.8.`）开始生效（放宽，以前永远匹配不到）。
+  - 短写法（如 `2.7`）不再按后缀匹配以它结尾的其他地址：拒绝侧不再多拒（放宽，属非预期用法），映射文件允许侧不再多放。
+  - 出口代理的 allow 放行后仍要过地址分类，不会因此放出私网地址。默认的 `DENY_HOSTS` 与默认拒绝后缀里没有 IP 条目，映射文件的 allow / deny 由 worker-supervisor 写、正常不会有 IP 条目，正常部署不受影响。
+- **升级前检查（可选，只读，结果记 `docs/private/`）**：在项目目录下运行，列出 `.env` 里以数字结尾、却不是四段十进制的条目，正常输出为空。有输出时，把条目改写成本意的四段十进制地址。列出的条目有两种：写法不规范的 IP（如 `192.0.2.010`、`0xcb007108`、`2.7`、`203.0.113.8.`），升级后按它表示的地址匹配；根本不是 IP 的（如 `256.1.1.1`、`08.8.8.8`、五段写法），什么也匹配不到。能处理行首空格、`export` 前缀、引号与行尾 ` # 注释`；只用 POSIX awk 特性（mawk 1.3.4 实测，gawk 结果相同为推断）。
+
+    ```sh
+    grep -E '^[[:space:]]*(export[[:space:]]+)?(NEXTTIME_CONNECTION_ALLOW_HOSTS|NEXTTIME_CONNECTION_FIXTURE_HOSTS|DENY_HOSTS|EGRESS_DENY_HOST_SUFFIXES)=' .env |
+    awk 'function strict(h,  p, k, n) { n = split(h, p, "."); if (n != 4) return 0
+           for (k = 1; k <= 4; k++) if (p[k] !~ /^(0|[1-9][0-9]*)$/ || length(p[k]) > 3 || p[k] + 0 > 255) return 0
+           return 1 }
+    {
+      line = $0; sub(/^[[:space:]]*/, "", line); sub(/^export[[:space:]]+/, "", line)
+      name = line; sub(/=.*/, "", name); v = substr(line, length(name) + 2)
+      sub(/[[:space:]]+#.*$/, "", v); gsub(/["\047[:space:]]/, "", v)
+      n = split(v, e, ",")
+      for (i = 1; i <= n; i++) {
+        h = tolower(e[i]); if (!sub(/^[*][.]/, "", h)) sub(/^[.]/, "", h)
+        if (h ~ /^((0x[0-9a-f]*|[0-9]+)[.])*(0x[0-9a-f]*|[0-9]+)[.]?$/ && !strict(h))
+          print name ": entry ends in a number but is not four plain decimal parts; rewrite it as the address you mean: " e[i]
+      }
+    }'
+    ```
+
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
