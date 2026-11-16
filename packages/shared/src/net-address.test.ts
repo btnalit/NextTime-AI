@@ -6,6 +6,7 @@ import {
   hostPatternProblem,
   isInCidr,
   isIpLiteral,
+  isIpLiteralPattern,
   matchesDenySuffix,
   matchesSuffix,
   normalizeAddress,
@@ -470,9 +471,26 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       }
       expect(matchesSuffix(host, ['2001:db8::2'])).toBe(false);
     }
+    // Legacy 786: brackets hold an IPv6 literal only — `[192.0.2.8]` names no address.
+    expect(matchesSuffix('192.0.2.8', ['[192.0.2.8]'])).toBe(false);
+    expect(matchesDenySuffix('192.0.2.8', ['[192.0.2.8]'])).toBe(false);
     // A name never matches an address, and an address never matches a name.
     expect(matchesSuffix('192.0.2.8', ['example.com'])).toBe(false);
     expect(matchesSuffix('a.example.com', ['192.0.2.8'])).toBe(false);
+  });
+
+  it('isIpLiteralPattern: an IP literal in any spelling, or an IPv6 literal in brackets (legacy 786)', () => {
+    for (const ok of ['192.0.2.8', '192.0.2.010', '0xc0000208', ' 192.0.2.8. ', '2001:db8::1']) {
+      expect(isIpLiteralPattern(ok), ok).toBe(true);
+    }
+    for (const ok of ['[2001:db8::1]', '[2001:DB8:0::1]', '[::1]', '[::ffff:192.0.2.8]']) {
+      expect(isIpLiteralPattern(ok), ok).toBe(true);
+      // The bracketed form is the one a URL writes and parses.
+      expect(new URL(`http://${ok}/`).hostname, ok).toMatch(/^\[.*\]$/);
+    }
+    for (const no of ['[192.0.2.8]', '[example.com]', '[::1', '::1]', 'example.com', '']) {
+      expect(isIpLiteralPattern(no), no).toBe(false);
+    }
   });
 
   it('normalizeDenyHostPattern strips exactly one leading `*.` or `.`', () => {
@@ -491,6 +509,9 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       'a_b-c.example',
       '203.0.113.7',
       '::1',
+      // Legacy 786: an IPv6 literal in brackets, as a URL writes it, matches that address.
+      '[::1]',
+      '[2001:DB8::1]',
     ]) {
       expect(hostPatternProblem(ok), ok).toBeNull();
     }
@@ -503,7 +524,10 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       'example.com:443',
       '198.51.100.0/24',
       'a b',
-      '[::1]',
+      // Brackets hold an IPv6 literal only; a URL refuses anything else in them.
+      '[192.0.2.8]',
+      '[example.com]',
+      '[::1',
       'a..b',
     ]) {
       expect(hostPatternProblem(bad), bad).toContain('not a host name');
