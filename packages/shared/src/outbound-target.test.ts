@@ -124,6 +124,27 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it('legacy 149: an IPv6 entry matches however either side spells the address', async () => {
+    const resolve = resolverReturning([]);
+    // Link-local: refused unless allowed.
+    await expect(
+      decideOutboundTarget('http://[fe80::1]:8090/', POLICY, resolve),
+    ).resolves.toMatchObject({ allowed: false, reason: 'link-local' });
+    for (const entry of ['fe80:0:0:0:0:0:0:1', 'FE80::0001', 'fe80::1']) {
+      const policy: OutboundTargetPolicy = { ...POLICY, allowHosts: [entry] };
+      for (const url of ['http://[fe80::1]:8090/', 'http://[fe80:0:0:0:0:0:0:1]:8090/']) {
+        await expect(decideOutboundTarget(url, policy, resolve)).resolves.toEqual({
+          allowed: true,
+        });
+      }
+      // Still exact: a neighbouring address is not allowed by it.
+      await expect(
+        decideOutboundTarget('http://[fe80::2]:8090/', policy, resolve),
+      ).resolves.toMatchObject({ allowed: false, reason: 'link-local' });
+    }
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   describe('legacy 413: plain http:// never reaches the public internet', () => {
     it.each([
       ['an IPv4 literal', `http://${PUBLIC_ADDRESS}:8090/`, [], PUBLIC_ADDRESS],

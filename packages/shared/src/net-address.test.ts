@@ -113,6 +113,37 @@ describe('isIpLiteral / canonicalizeIpLiteral', () => {
   it('returns null for a non-literal hostname', () => {
     expect(canonicalizeIpLiteral('example.com')).toBeNull();
   });
+
+  // Legacy 149: an IPv6 literal comes back as the WHATWG URL parser writes the host, so an allow
+  // list entry spelled out in full matches the host of a parsed URL.
+  it('writes every spelling of an IPv6 address the way a parsed URL writes its host', () => {
+    const spellings = [
+      '2001:DB8:0:0:0:0:0:1',
+      '2001:0db8::0001',
+      'fd00:0:0:0:0:0:0:1',
+      '0:0:0:0:0:0:0:0',
+      '0:0:0:0:0:0:0:1',
+      '::ffff:192.0.2.7',
+      '64:ff9b::192.0.2.7',
+      // Two runs of zeros of the same length: the first is compressed.
+      '2001:db8:0:0:1:0:0:1',
+      // The longer run is compressed, wherever it is.
+      '2001:db8:0:1:0:0:0:1',
+      // A single zero group is never written `::`.
+      '1:0:2:3:4:5:6:7',
+    ];
+    for (const spelling of spellings) {
+      const urlHost = new URL(`http://[${spelling}]/`).hostname.slice(1, -1);
+      expect({ spelling, canonical: canonicalizeIpLiteral(spelling) }).toEqual({
+        spelling,
+        canonical: urlHost,
+      });
+    }
+    expect(canonicalizeIpLiteral('2001:db8:0:0:1:0:0:1')).toBe('2001:db8::1:0:0:1');
+    expect(canonicalizeIpLiteral('1:0:2:3:4:5:6:7')).toBe('1:0:2:3:4:5:6:7');
+    // A URL host never carries a zone ID; the literal's own address is what is compared.
+    expect(canonicalizeIpLiteral('fe80::1%eth0')).toBe('fe80::1');
+  });
 });
 
 describe('parseIPv6', () => {

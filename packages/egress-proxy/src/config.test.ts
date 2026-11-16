@@ -103,12 +103,35 @@ describe('loadConfig', () => {
     expect(loadConfig({}).trustedResolvedCidrs).toEqual([]);
   });
 
-  it('logs and ignores an invalid subnet instead of throwing', () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const config = loadConfig({ NEXTTIME_SUBNET_CONTROL: 'not-a-cidr' });
-    expect(config.platformSubnets).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalled();
-    errorSpy.mockRestore();
+  // Legacy 149: as the kernel and llm-proxy do. Logging and dropping it would run the proxy
+  // without that subnet's deny.
+  it.each(['NEXTTIME_SUBNET_CONTROL', 'NEXTTIME_SUBNET_WORKERS'])(
+    'refuses to start on a malformed %s, naming it',
+    (name) => {
+      for (const value of ['not-a-cidr', '198.51.100.0', '198.51.100.0/33', '2001:db8::/129']) {
+        expect(() =>
+          loadConfig({
+            NEXTTIME_SUBNET_CONTROL: '198.51.100.0/24',
+            NEXTTIME_SUBNET_WORKERS: '203.0.113.0/24',
+            [name]: value,
+          }),
+        ).toThrow(new RegExp(`^egress-proxy: ${name} is not a valid CIDR`));
+      }
+    },
+  );
+
+  it('trims a platform subnet as the kernel does, and treats an empty one as unset', () => {
+    const config = loadConfig({
+      NEXTTIME_SUBNET_CONTROL: ' 198.51.100.0/24 ',
+      NEXTTIME_SUBNET_WORKERS: '203.0.113.0/24\n',
+    });
+    expect(config.platformSubnets).toHaveLength(2);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(
+      loadConfig({ NEXTTIME_SUBNET_CONTROL: '  ', NEXTTIME_SUBNET_WORKERS: '' }).platformSubnets,
+    ).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('falls back to defaults for non-numeric or non-positive port/limit values', () => {
