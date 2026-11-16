@@ -156,6 +156,38 @@ describe('PersistedToolCallRowView', () => {
     expect(screen.queryByTestId('tool-call-gate-reason')).toBeNull();
   });
 
+  it('legacy 779: a read whose answer lists a refused entry gets no refusal note', () => {
+    const text = JSON.stringify(
+      {
+        id: 't779',
+        status: 'completed',
+        result: {
+          factsRejected: [{ index: 0, linkType: 'runs_on', reason: 'unstorable_text' }],
+          proposedOperationsRejected: [
+            { index: 0, gatekeeperId: 'g1', reason: 'invalid_operation_name', problem: 'dot' },
+          ],
+        },
+      },
+      null,
+      2,
+    );
+    render(
+      <PersistedToolCallRowView
+        record={{
+          toolCallId: 'c779',
+          name: 'get_task',
+          outcome: 'done',
+          result: { text, truncated: false, totalChars: text.length },
+          redactedValues: 0,
+          startedAt: null,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-gate-reason')).toBeNull();
+    expect(document.body.textContent).not.toContain('什么也没有写入');
+  });
+
   it('explains a request made against no definition (operation_definition_unavailable)', () => {
     render(
       <PersistedToolCallRowView
