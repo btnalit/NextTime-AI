@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -11,6 +11,7 @@ import {
   findWorkerDefinitionCandidates,
 } from './find-means.js';
 import { SqlGraphStore } from './sql-store.js';
+import type { GraphObject } from './store.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL) for `find-means.ts`'s
@@ -60,6 +61,29 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
       { skipRoleSwitch: true },
     );
     return id;
+  }
+
+  /** A published version 1 of `properties.name` on `gatekeeperId`: upserted as a draft, then the
+   *  same upsert flips it to published — the way every product path reaches a published version
+   *  (legacy 484: an Operation row is only ever inserted as a draft). */
+  async function publishedOperation(
+    client: PoolClient,
+    gatekeeperId: string,
+    properties: { readonly name: string } & Record<string, unknown>,
+  ): Promise<GraphObject> {
+    const identity = { gatekeeperId, name: properties.name, version: 1 };
+    await store.upsertObject(client, workspaceId, {
+      objectType: 'Operation',
+      kernelAuthored: true,
+      identity,
+      properties: { ...properties, status: 'draft' },
+    });
+    return store.upsertObject(client, workspaceId, {
+      objectType: 'Operation',
+      kernelAuthored: true,
+      identity,
+      properties: { status: 'published' },
+    });
   }
 
   beforeAll(async () => {
@@ -179,16 +203,10 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
         kernelAuthored: true,
         properties: { name: 'docker', transportKind: 'cli', target: 'docker', endpoint: 'local' },
       });
-      const op = await store.upsertObject(client, workspaceId, {
-        objectType: 'Operation',
-        kernelAuthored: true,
-        identity: { gatekeeperId: gk.id, name: 'container.restart', version: 1 },
-        properties: {
-          name: 'container.restart',
-          description: 'restarts one container',
-          mode: 'execute',
-          status: 'published',
-        },
+      const op = await publishedOperation(client, gk.id, {
+        name: 'container.restart',
+        description: 'restarts one container',
+        mode: 'execute',
       });
       const candidates = await findOperationCandidates(client, workspaceId, {
         need: 'docker',
@@ -210,16 +228,10 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
           endpoint: 'https://gate.example',
         },
       });
-      const op = await store.upsertObject(client, workspaceId, {
-        objectType: 'Operation',
-        kernelAuthored: true,
-        identity: { gatekeeperId: gk.id, name: 'ticket.close', version: 1 },
-        properties: {
-          name: 'ticket.close',
-          description: 'closes one ticket',
-          mode: 'execute',
-          status: 'published',
-        },
+      const op = await publishedOperation(client, gk.id, {
+        name: 'ticket.close',
+        description: 'closes one ticket',
+        mode: 'execute',
       });
       const find = (need: string, gatekeeperNames: Record<string, string>) =>
         findOperationCandidates(client, workspaceId, { need, gatekeeperNames }).then((rows) =>

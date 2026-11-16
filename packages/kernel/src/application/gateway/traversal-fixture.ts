@@ -102,6 +102,8 @@ export async function seedWorkspace(
         "insert into objects (workspace_id, id, object_type, properties) values ($1, $2, 'Gatekeeper', $3)",
         [workspaceId, gatekeeperId, { name: marker }],
       );
+      // Inserted as a draft and then published, the way every product path reaches a published
+      // version (legacy 484: an Operation row is only ever inserted as a draft).
       const operation = await client.query<{ id: string }>(
         `insert into objects (workspace_id, object_type, identity_key, properties)
          values ($1, 'Operation', $2, $3) returning id`,
@@ -111,12 +113,17 @@ export async function seedWorkspace(
           {
             name: marker,
             description: marker,
-            status: 'published',
+            status: 'draft',
             version: 1,
             origin: 'import',
             mode: 'execute',
           },
         ],
+      );
+      await client.query(
+        `update objects set properties = properties || '{"status": "published"}'::jsonb
+         where workspace_id = $1 and id = $2`,
+        [workspaceId, operation.rows[0]?.id],
       );
       const request = await client.query<{ id: string }>(
         `insert into action_requests

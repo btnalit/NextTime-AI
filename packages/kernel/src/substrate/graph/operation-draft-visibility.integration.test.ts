@@ -20,7 +20,8 @@ import { SqlGraphStore } from './sql-store.js';
  * predicate `operationDraftVisibleTo` and the SQL fragments give the same answer — the object
  * fragment through `SqlGraphStore.getObjectsByIds`, the Fact fragment through `traverse` from an
  * anchor linked to every row. Rows are seeded with raw `properties`, as a legacy writer could have
- * left them, not through the propose/import pipeline (which always writes both proposer fields).
+ * left them, not through the propose/import pipeline (which always writes both proposer fields);
+ * a row past draft is inserted as a draft and walked to its status (legacy 484).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -29,6 +30,13 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
 // Legacy 278: `discarded` stays as private as the draft it was.
 const STATUSES = ['draft', 'published', 'deprecated', 'discarded', undefined] as const;
+// Legacy 484: an Operation row is only ever inserted as a draft. A row with a later status is
+// inserted as one and walked there along the lifecycle (core 0047 holds each step to its edges).
+const LIFECYCLE_STEPS: Readonly<Record<string, readonly string[]>> = {
+  published: ['published'],
+  deprecated: ['published', 'deprecated'],
+  discarded: ['discarded'],
+};
 const PROPOSERS = ['viewer', 'other', undefined] as const;
 const KINDS = ['agent', undefined] as const;
 
@@ -99,7 +107,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                     ? otherPrincipal
                     : undefined;
               const properties: Record<string, unknown> = { name: 'parity' };
-              if (status !== undefined) properties.status = status;
+              if (status !== undefined) properties.status = 'draft';
               if (proposedBy !== undefined) properties.proposedBy = proposedBy;
               if (kind !== undefined) properties.proposedByKind = kind;
               // No identity key: always a fresh row, outside the one-published-per-identity rule.
@@ -108,6 +116,13 @@ describe.runIf(DATABASE_URL !== undefined)(
                 kernelAuthored: true,
                 properties,
               });
+              for (const step of LIFECYCLE_STEPS[status ?? 'draft'] ?? []) {
+                await client.query(
+                  `update objects set properties = properties || jsonb_build_object('status', $3::text)
+                   where workspace_id = $1 and id = $2`,
+                  [workspaceId, object.id, step],
+                );
+              }
               rows.push({ id: object.id, row: { status, proposedBy, proposedByKind: kind } });
               linked.push(object.id);
             }
