@@ -1,10 +1,11 @@
 import type { OperationParamSummaryWire } from '@nexttime/shared';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { type Translate, useT } from '../../lib/i18n.js';
 import {
   type ParamProblem,
   type ParamTexts,
   fillableParams,
+  paramProblemText,
   paramTextsOf,
   paramsTextFrom,
 } from '../../lib/operation-params.js';
@@ -46,25 +47,7 @@ function typeLabel(type: OperationParamSummaryWire['type'], t: Translate): strin
     case 'array':
       return t('JSON 数组', 'JSON array');
     default:
-      return t('JSON 值', 'JSON value');
-  }
-}
-
-function problemText(problem: ParamProblem, t: Translate): string {
-  switch (problem) {
-    case 'number':
-      return t('要填一个数字。', 'Enter a number.');
-    case 'integer':
-      return t('要填一个整数。', 'Enter a whole number.');
-    case 'object':
-      return t('要填一个 JSON 对象，比如 {"a": 1}。', 'Enter a JSON object, like {"a": 1}.');
-    case 'array':
-      return t('要填一个 JSON 数组，比如 ["a"]。', 'Enter a JSON array, like ["a"].');
-    case 'json':
-      return t(
-        '要填一个 JSON 值；文字要加双引号，比如 "abc"。',
-        'Enter a JSON value; text goes in double quotes, like "abc".',
-      );
+      return t('JSON 值，文字可以不加引号', 'JSON value; text needs no quotes');
   }
 }
 
@@ -78,6 +61,10 @@ function problemText(problem: ParamProblem, t: Translate): string {
  *
  * Mount it again (a `key`) when the gate, the Operation or whether its params are known changes:
  * the fields start from the JSON once and own their text after.
+ *
+ * #1296 UX P2-1: what the fields cannot send as they are (a required param left empty, a value
+ * not of its type) goes to `onProblems` — the form refuses to submit while there is any — and is
+ * said on the field once it is left, or once the form says so (`errors`, under the params' path).
  */
 export function OperationParamsField({
   id,
@@ -85,9 +72,10 @@ export function OperationParamsField({
   params,
   text,
   hint,
-  error,
+  errors,
   busy,
   onChange,
+  onProblems,
 }: {
   readonly id: string;
   /** Where the test ids start (`procedure-step-check-params`, …). */
@@ -97,9 +85,13 @@ export function OperationParamsField({
   /** The params as JSON (`''`: none). */
   readonly text: string;
   readonly hint?: ReactNode;
-  readonly error: string | null;
+  /** The form's errors under the params' path: `''` the params as a whole, a param's name that
+   *  param. */
+  readonly errors: readonly { readonly path: string; readonly message: string }[];
   readonly busy: boolean;
   readonly onChange: (text: string) => void;
+  /** The fields that cannot be sent as they are, by param name; `{}` in JSON and once unmounted. */
+  readonly onProblems: (problems: Readonly<Record<string, ParamProblem>>) => void;
 }) {
   const t = useT();
   const fillable = useMemo(() => (params ? fillableParams(params) : []), [params]);
@@ -111,6 +103,37 @@ export function OperationParamsField({
   // A field's problem is said once the person leaves it — not on every keystroke of "-1".
   const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
   const problems = paramsTextFrom(texts, fillable).problems;
+  const fieldsShown = mode === 'fields' && params !== undefined;
+  const error =
+    errors
+      .filter((problem) => problem.path === '')
+      .map((problem) => problem.message)
+      .join(t('；', '; ')) || null;
+  const formSaid = new Set(errors.map((problem) => problem.path.split('.')[0]));
+
+  // Said to the form whenever they change; none while editing the JSON, nor once gone.
+  const reported = fieldsShown ? JSON.stringify(problems) : '{}';
+  const report = useRef(onProblems);
+  report.current = onProblems;
+  useEffect(() => {
+    report.current(JSON.parse(reported) as Record<string, ParamProblem>);
+  }, [reported]);
+  useEffect(() => () => report.current({}), []);
+
+  // #1296 UX P2-2: switching between the fields and the JSON leaves focus on what replaced the
+  // button — the JSON, or the first field (the switch back, when there is none).
+  const switched = useRef(false);
+  useEffect(() => {
+    if (!switched.current) return;
+    switched.current = false;
+    const first = fillable[0];
+    const target =
+      mode === 'json'
+        ? document.getElementById(id)
+        : (document.getElementById(first !== undefined ? `${id}-param-${first.name}` : '') ??
+          document.querySelector<HTMLElement>(`[data-testid="${testPrefix}-to-json"]`));
+    target?.focus();
+  }, [mode, fillable, id, testPrefix]);
 
   const setText = (name: string, value: string) => {
     const next = { ...texts, [name]: value };
@@ -160,6 +183,7 @@ export function OperationParamsField({
                 onClick={() => {
                   setTexts(backToFields);
                   setLeft(new Set());
+                  switched.current = true;
                   setMode('fields');
                 }}
                 data-testid={`${testPrefix}-to-fields`}
@@ -205,8 +229,10 @@ export function OperationParamsField({
       ) : (
         fillable.map((param) => {
           const fieldId = `${id}-param-${param.name}`;
-          const problem = left.has(param.name) ? problems[param.name] : undefined;
-          const fieldError = problem !== undefined ? problemText(problem, t) : null;
+          // Said once left or once the form said so — and only while it still holds.
+          const problem =
+            left.has(param.name) || formSaid.has(param.name) ? problems[param.name] : undefined;
+          const fieldError = problem !== undefined ? paramProblemText(problem, t) : null;
           const value = texts[param.name] ?? '';
           const onBlur = () => setLeft(new Set(left).add(param.name));
           return (
@@ -224,8 +250,10 @@ export function OperationParamsField({
                   aria-label={param.name}
                   value={value}
                   onChange={(event) => setText(param.name, event.target.value)}
+                  onBlur={onBlur}
                   disabled={busy}
-                  aria-describedby={describedBy(fieldId, true, false)}
+                  invalid={fieldError !== null}
+                  aria-describedby={describedBy(fieldId, true, fieldError !== null)}
                   data-testid={`${testPrefix}-param-${param.name}`}
                 >
                   <option value="">
@@ -241,13 +269,6 @@ export function OperationParamsField({
                   value={value}
                   onChange={(event) => setText(param.name, event.target.value)}
                   onBlur={onBlur}
-                  inputMode={
-                    param.type === 'number'
-                      ? 'decimal'
-                      : param.type === 'integer'
-                        ? 'numeric'
-                        : undefined
-                  }
                   spellCheck={false}
                   disabled={busy}
                   aria-invalid={fieldError !== null || undefined}
@@ -270,7 +291,10 @@ export function OperationParamsField({
           variant="ghost"
           size="s"
           disabled={busy}
-          onClick={() => setMode('json')}
+          onClick={() => {
+            switched.current = true;
+            setMode('json');
+          }}
           data-testid={`${testPrefix}-to-json`}
         >
           {t('用 JSON 编辑', 'Edit as JSON')}

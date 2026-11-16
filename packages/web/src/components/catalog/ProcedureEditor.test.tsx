@@ -1898,13 +1898,30 @@ describe('ProcedureEditor (S6-A A2)', () => {
     // The absence hint stays with the params.
     expect(fields.textContent).toContain('参数要正好指向目标要删掉的那个东西');
 
+    // #1296 UX P2-1: a required param never touched is refused at submit, said on its field.
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    expect(document.getElementById(`${id.id}-error`)?.textContent).toBe('这个参数必填。');
+
     // A value that is not of the param's type is said once the field is left.
     fireEvent.change(id, { target: { value: '4.5' } });
-    expect(within(fields).queryByRole('alert')).toBeNull();
+    // Once the form has said something of a field, the field says its problem as it is typed.
+    expect(document.getElementById(`${id.id}-error`)?.textContent).toBe('要填一个整数。');
     fireEvent.blur(id);
     expect(within(fields).getByRole('alert').textContent).toBe('要填一个整数。');
     expect(id.getAttribute('aria-invalid')).toBe('true');
+    // #1296 UX P2-1: what cannot be sent is refused at submit, said on its field — a value not
+    // of its type, and a required param left empty, left or not.
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    expect(document.getElementById(`${id.id}-error`)?.textContent).toBe('要填一个整数。');
+    fireEvent.change(id, { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+    expect(document.getElementById(`${id.id}-error`)?.textContent).toBe('这个参数必填。');
     fireEvent.change(id, { target: { value: '42' } });
+    // Fixed, the field says nothing more, before the form is sent again.
+    expect(document.getElementById(`${id.id}-error`)).toBeNull();
     expect(within(fields).queryByRole('alert')).toBeNull();
     fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-name'), {
       target: { value: 'old web' },
@@ -1912,15 +1929,24 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-verbose'), {
       target: { value: 'true' },
     });
-    fireEvent.change(within(fields).getByTestId('procedure-step-check-params-param-filter'), {
-      target: { value: '{"tier": 2}' },
-    });
+    // A field the form has said nothing of says its problem once it is left, not per keystroke.
+    const filter = within(fields).getByTestId('procedure-step-check-params-param-filter');
+    fireEvent.change(filter, { target: { value: '[1' } });
+    expect(document.getElementById(`${filter.id}-error`)).toBeNull();
+    fireEvent.blur(filter);
+    expect(document.getElementById(`${filter.id}-error`)?.textContent).toBe(
+      '要填一个 JSON 对象，比如 {"a": 1}。',
+    );
+    fireEvent.change(filter, { target: { value: '{"tier": 2}' } });
+    expect(document.getElementById(`${filter.id}-error`)).toBeNull();
     const sent = { id: 42, filter: { tier: 2 }, name: 'old web', verbose: true };
 
     // The same params as JSON — and back, while the JSON is still what the fields can hold.
     fireEvent.click(within(fields).getByTestId('procedure-step-check-params-to-json'));
     const json = within(step).getByTestId('procedure-step-check-params') as HTMLTextAreaElement;
     expect(JSON.parse(json.value)).toEqual(sent);
+    // #1296 UX P2-2: focus moves to what replaced the button.
+    expect(document.activeElement).toBe(json);
     fireEvent.change(json, { target: { value: JSON.stringify({ ...sent, extra: 1 }) } });
     expect(within(step).queryByTestId('procedure-step-check-params-to-fields')).toBeNull();
     expect(within(step).getByTestId('procedure-step-check-params-json-only')).toBeTruthy();
@@ -1930,6 +1956,9 @@ describe('ProcedureEditor (S6-A A2)', () => {
       (within(step).getByTestId('procedure-step-check-params-param-name') as HTMLInputElement)
         .value,
     ).toBe('old web');
+    expect(document.activeElement).toBe(
+      within(step).getByTestId('procedure-step-check-params-param-id'),
+    );
 
     fireEvent.click(screen.getByTestId('procedure-submit'));
     await screen.findByTestId('draft-proposed');

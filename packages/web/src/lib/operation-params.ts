@@ -1,4 +1,5 @@
 import type { OperationParamSummaryWire } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/operation-params (legacy 775): an Operation's params, filled in one by one, over the JSON
@@ -7,8 +8,25 @@ import type { OperationParamSummaryWire } from '@nexttime/shared';
  * keeps and sends, so switching back to editing it as JSON loses nothing.
  */
 
-/** Why what a field holds is not a value of its param's type. */
-export type ParamProblem = 'number' | 'integer' | 'object' | 'array' | 'json';
+/** Why a field cannot be sent as it is: a required param left empty, or what it holds is not a
+ *  value of its param's type. */
+export type ParamProblem = 'required' | 'number' | 'integer' | 'object' | 'array';
+
+/** What a field's problem says, on the field and among the form's errors. */
+export function paramProblemText(problem: ParamProblem, t: Translate): string {
+  switch (problem) {
+    case 'required':
+      return t('这个参数必填。', 'This param is required.');
+    case 'number':
+      return t('要填一个数字。', 'Enter a number.');
+    case 'integer':
+      return t('要填一个整数。', 'Enter a whole number.');
+    case 'object':
+      return t('要填一个 JSON 对象，比如 {"a": 1}。', 'Enter a JSON object, like {"a": 1}.');
+    case 'array':
+      return t('要填一个 JSON 数组，比如 ["a"]。', 'Enter a JSON array, like ["a"].');
+  }
+}
 
 /** The text in each param's field, by param name. An empty text leaves the param out. */
 export type ParamTexts = Readonly<Record<string, string>>;
@@ -29,6 +47,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** What a param's field shows for a value already in the JSON, or `null` when the field could
  *  not hold it without changing it (a number in a text param, say). */
 function textOf(param: OperationParamSummaryWire, value: unknown): string | null {
@@ -46,8 +73,11 @@ function textOf(param: OperationParamSummaryWire, value: unknown): string | null
     case 'array':
       return Array.isArray(value) ? JSON.stringify(value) : null;
     default:
-      // No single type: the field takes a JSON value, so any value round-trips.
-      return JSON.stringify(value);
+      // No single type: the field takes a JSON value, or text that is not JSON as that text —
+      // so a word shows without quotes, and anything else as JSON; either way it round-trips.
+      return typeof value === 'string' && value.trim() !== '' && !parsesAsJson(value)
+        ? value
+        : JSON.stringify(value);
   }
 }
 
@@ -108,7 +138,9 @@ function paramValue(
       try {
         parsed = JSON.parse(text);
       } catch {
-        return { value: text, problem: param.type === undefined ? 'json' : param.type };
+        // #1296 UX P3: a param with no single type takes text as typed when it is not JSON, so
+        // a word needs no quotes; an object or an array must be JSON.
+        return param.type === undefined ? { value: text } : { value: text, problem: param.type };
       }
       if (param.type === 'object' && !isPlainObject(parsed)) {
         return { value: text, problem: 'object' };
@@ -122,7 +154,8 @@ function paramValue(
 }
 
 /** The params JSON the fields make (`''` when none is filled in), in the fields' order, and the
- *  fields whose text does not fit their param's type. */
+ *  fields that cannot be sent as they are: a required one left empty, or text that does not fit
+ *  its param's type. */
 export function paramsTextFrom(
   texts: ParamTexts,
   fillable: readonly OperationParamSummaryWire[],
@@ -132,7 +165,10 @@ export function paramsTextFrom(
   for (const param of fillable) {
     const text = texts[param.name] ?? '';
     // A text param keeps its spaces; any other empty-looking field is left out.
-    if (param.type === 'string' ? text === '' : text.trim() === '') continue;
+    if (param.type === 'string' ? text === '' : text.trim() === '') {
+      if (param.required) problems[param.name] = 'required';
+      continue;
+    }
     const { value, problem } = paramValue(param, text);
     params[param.name] = value;
     if (problem !== undefined) problems[param.name] = problem;

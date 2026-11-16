@@ -50,8 +50,11 @@ describe('paramTextsOf (legacy 775)', () => {
       name: 'web 1',
       on: 'false',
       spec: '{"a":1}',
-      value: '"x"',
+      // A word with no single type shows without quotes; anything JSON reads shows as JSON.
+      value: 'x',
     });
+    expect(paramTextsOf('{"value": "12"}', fillable)).toEqual({ value: '"12"' });
+    expect(paramTextsOf('{"value": "  "}', fillable)).toEqual({ value: '"  "' });
     expect(paramTextsOf('  ', fillable)).toEqual({});
   });
 
@@ -105,12 +108,12 @@ describe('paramsTextFrom (legacy 775)', () => {
       { id: '1.5', count: '1,5', spec: '[1]', labels: '{', value: 'abc' },
       fillable,
     );
+    // #1296 UX P3: a param with no single type takes a word as that text, no quotes needed.
     expect(problems).toEqual({
       id: 'integer',
       count: 'number',
       spec: 'object',
       labels: 'array',
-      value: 'json',
     });
     expect(JSON.parse(text)).toEqual({
       id: '1.5',
@@ -128,6 +131,13 @@ describe('paramsTextFrom (legacy 775)', () => {
     expect(paramsTextFrom({ id: '9007199254740991' }, fillable).problems).toEqual({});
   });
 
+  it('says a required param left empty (#1296 UX P2-1)', () => {
+    expect(paramsTextFrom({ id: ' ', name: 'x' }, fillable)).toEqual({
+      text: JSON.stringify({ name: 'x' }, null, 2),
+      problems: { id: 'required' },
+    });
+  });
+
   it('keeps a text param that is only spaces; any other such field is left out', () => {
     expect(JSON.parse(paramsTextFrom({ name: '  ', count: '  ' }, fillable).text)).toEqual({
       name: '  ',
@@ -135,7 +145,7 @@ describe('paramsTextFrom (legacy 775)', () => {
   });
 
   it('round-trips what paramTextsOf shows', () => {
-    const sent = { id: 9, labels: [1, 'b'], name: '', on: false, value: null };
+    const sent = { id: 9, labels: [1, 'b'], name: '', on: false, value: 'a word' };
     const texts = paramTextsOf(JSON.stringify(sent), fillable);
     expect(texts).not.toBeNull();
     // An empty text param is left out; everything else comes back as it was.

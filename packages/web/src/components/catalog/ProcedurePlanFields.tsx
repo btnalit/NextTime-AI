@@ -25,6 +25,7 @@ import { DEFAULT_ATTEMPTS } from '../../lib/goal-plan-draft.js';
 import { absenceOperationKey, factCheckObjectIds, planCheckSentence } from '../../lib/goals.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import type { ParamProblem } from '../../lib/operation-params.js';
 import {
   type ProcedurePlanPlace,
   procedureBindingIssue,
@@ -706,6 +707,7 @@ export function VerifyCheckFields({
   errors,
   busy,
   onChange,
+  onParamProblems,
 }: {
   readonly http: CapabilityCaller;
   readonly index: number;
@@ -716,6 +718,9 @@ export function VerifyCheckFields({
   readonly errors: FieldErrors;
   readonly busy: boolean;
   readonly onChange: (patch: Partial<ProcedureStepForm>) => void;
+  /** #1296 UX P2-1: the check's params fields that cannot be sent as they are (legacy 775) — the
+   *  form refuses to submit while there is any. */
+  readonly onParamProblems?: (problems: Readonly<Record<string, ParamProblem>>) => void;
 }) {
   const t = useT();
   const prefix = `steps.${index}.check`;
@@ -743,7 +748,6 @@ export function VerifyCheckFields({
       : null;
   const absenceOperations = useAbsenceOperations(http, absenceCheck ? [absenceCheck] : []);
   const keyError = messages(errors, `${prefix}.key`, t);
-  const paramsError = messages(errors, `${prefix}.check.params`, t);
   // What no field below shows: the check's own (its JSON, or a whole-check problem).
   const shown = [
     'key',
@@ -843,9 +847,10 @@ export function VerifyCheckFields({
                       )
                     : undefined
                 }
-                error={paramsError}
+                errors={errorsUnder(errors, `${prefix}.check.params`)}
                 busy={busy}
                 onChange={(checkParamsText) => onChange({ checkParamsText })}
+                onProblems={(problems) => onParamProblems?.(problems)}
               />
             )}
             onChange={(patch) =>
