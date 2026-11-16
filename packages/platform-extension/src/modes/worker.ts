@@ -566,7 +566,9 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   });
 
   pi.on('session_start', async (_event, ctx: ExtensionContext) => {
-    const usedNames = new Set<string>();
+    // Every tool already registered (pi's built-ins, `report_result`) keeps its name: a gate tool
+    // that would sanitize onto one takes a fallback instead of replacing it (legacy 768).
+    const usedNames = new Set<string>(pi.getAllTools().map((tool) => tool.name));
     try {
       const response = await options.kernelClient.call<{ items: AllowedOperationWire[] }>(
         'list_allowed_operations',

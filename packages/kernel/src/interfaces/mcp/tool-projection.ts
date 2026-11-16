@@ -1,5 +1,5 @@
 import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
-import { listByChannel, toJsonSchema } from '@nexttime/shared';
+import { allocateGateToolName, listByChannel, toJsonSchema } from '@nexttime/shared';
 import type { ZodType } from 'zod';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { dispatchCapability } from '../../application/gateway/index.js';
@@ -12,10 +12,10 @@ import { type JsonSchemaObject, MCP_TOOL_ALIASES } from './reference-tool-aliase
  * already-authenticated Handle's own `scope`.
  *
  * Three sources, mirroring `packages/platform-extension`'s `modes/{entry,worker}.ts` (the same
- * projection, for a pi tool instead of an MCP tool — this module cannot import that package
- * directly, `.dependency-cruiser.cjs`'s `no-cross-package-internal-import` rule, so the small
- * amount of naming logic they share is independently re-implemented here, not duplicated by
- * reference):
+ * projection, for a pi tool instead of an MCP tool). Gate tools are named by `@nexttime/shared`'s
+ * `allocateGateToolName`, the one rule both use (legacy 768); the rest of what they share is
+ * independently re-implemented here, since this module cannot import that package directly
+ * (`.dependency-cruiser.cjs`'s `no-cross-package-internal-import` rule):
  *
  *   1. **Native tools** — one per literal capability name in `scope.capabilities` (the two dynamic
  *      gate-pattern rows, `<gate>.<op>`/`<gate>.<op>:execute`, are never dispatchable by that
@@ -29,9 +29,11 @@ import { type JsonSchemaObject, MCP_TOOL_ALIASES } from './reference-tool-aliase
  *      native tool already being projected (a real collision never happens with today's 5 aliases
  *      — see that module's own doc comment — this guard is defensive, not load-bearing today).
  *   3. **Gate-projected tools** — one per allowed Gatekeeper Operation (`list_allowed_operations`),
- *      named `<gateName>.<opName>` (sanitized): observe-class via `observe_operation` when
- *      `<gate>.<op>` is in scope (the `entry`/`interactive` ceiling — never execute-class,
- *      structurally, per `governance/capability/handles.ts`'s `entryScope()`), execute-class via
+ *      named `<gateName>.<opName>` (sanitized; a fallback when sources 1 and 2 or an earlier gate
+ *      tool already hold that name, so no two tools ever share one): observe-class via
+ *      `observe_operation` when `<gate>.<op>` is in scope (the `entry`/`interactive` ceiling —
+ *      never execute-class, structurally, per `governance/capability/handles.ts`'s
+ *      `entryScope()`), execute-class via
  *      `request_action` when `request_action` is in scope (a Worker-ceiling Handle, mirroring
  *      `platform-extension/modes/worker.ts`'s uniform "always request_action, kernel resolves
  *      mode" behavior — never expected from an `issue_handle`-minted interactive Handle, which can
@@ -59,13 +61,6 @@ export interface McpToolCatalog {
 const GATE_OBSERVE_PATTERN = '<gate>.<op>';
 const GATE_EXECUTE_PATTERN = '<gate>.<op>:execute';
 
-/** provider tool-name charset every major LLM API restricts function/tool names to (no dots) —
- *  same convention `platform-extension/modes/gate-tools.ts` documents and uses; re-implemented
- *  here rather than imported (see this file's own module doc comment). */
-function sanitizeToolName(raw: string): string {
-  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-}
-
 interface AllowedOperationWire {
   readonly gatekeeperId: string;
   readonly gateName: string;
@@ -80,14 +75,6 @@ interface AllowedOperationWire {
     readonly blast_radius?: string;
     readonly [key: string]: unknown;
   };
-}
-
-function gateToolName(op: AllowedOperationWire, usedNames: Set<string>): string {
-  const label = `${op.gateName}.${op.name}`;
-  let name = sanitizeToolName(label);
-  if (usedNames.has(name)) name = sanitizeToolName(`${op.gatekeeperId}.${op.name}`);
-  usedNames.add(name);
-  return name;
 }
 
 /**
@@ -201,12 +188,15 @@ export async function buildToolCatalog(
   const wantsExecuteGates = scopeCapabilities.has('request_action');
   if (wantsObserveGates || wantsExecuteGates) {
     const operations = await fetchAllowedOperations(deps.pool, claims);
-    const usedNames = new Set<string>(nativeNames);
+    // Every tool listed so far — native and alias — keeps its name: a gate tool that would
+    // sanitize onto one takes a fallback, as does a later gate tool onto an earlier one's
+    // (legacy 768: two tools of one name, and the resolver below kept only the later).
+    const usedNames = new Set<string>(tools.map((tool) => tool.name));
     for (const op of operations) {
       const isExecute = op.operation.mode === 'execute';
       if (isExecute && !wantsExecuteGates) continue;
       if (!isExecute && !wantsObserveGates) continue;
-      const name = gateToolName(op, usedNames);
+      const name = allocateGateToolName(op, usedNames);
       tools.push({
         name,
         description: gateToolDescription(op, name),

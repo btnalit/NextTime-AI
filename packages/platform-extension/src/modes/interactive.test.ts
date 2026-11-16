@@ -38,6 +38,7 @@ function createFakePi(): FakePi {
     registerTool: vi.fn((tool: ToolDefinition) => {
       tools.set(tool.name, tool);
     }),
+    getAllTools: vi.fn(() => [...tools.values()].map((tool) => ({ name: tool.name }))),
     appendEntry: vi.fn((customType: string, data: unknown) => {
       appendEntryCalls.push({ customType, data });
       return 'fake-entry-id';
@@ -162,6 +163,40 @@ describe('registerInteractiveMode', () => {
     });
     expect(kernel.requests.some((r) => r.capability === 'request_action')).toBe(false);
     expect(result.details).toMatchObject({ status: 'ok' });
+  });
+
+  it('session_start never lets a gate tool replace a capability tool or share a name with another one (legacy 768)', async () => {
+    const observe = { mode: 'observe', params_schema: { type: 'object', properties: {} } };
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          // `<gate>_<op>` is `get_object`, the capability tool.
+          { gatekeeperId: 'gk-1', gateName: 'get', name: 'object', operation: observe },
+          // Two gates named `host`; the second has two Operations that sanitize to one name.
+          { gatekeeperId: 'gk-2', gateName: 'host', name: 'disk.usage', operation: observe },
+          { gatekeeperId: 'gk-3', gateName: 'host', name: 'disk.usage', operation: observe },
+          { gatekeeperId: 'gk-3', gateName: 'host', name: 'disk_usage', operation: observe },
+        ],
+      },
+    }));
+    const getObject = fake.tools.get('get_object');
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+
+    expect(fake.tools.get('get_object')).toBe(getObject);
+    const projected = [...fake.tools.values()]
+      .filter((tool) => tool.label?.includes('.'))
+      .map((tool) => [tool.name, tool.label]);
+    expect(projected).toEqual([
+      ['gk-1_object', 'get.object'],
+      ['host_disk_usage', 'host.disk.usage'],
+      ['gk-3_disk_usage', 'host.disk.usage'],
+      ['gk-3_disk_usage_2', 'host.disk_usage'],
+    ]);
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(fake.tools.size);
   });
 
   it('session_start degrades to zero gate tools when list_allowed_operations fails', async () => {
