@@ -78,7 +78,27 @@ function parseIntEnv(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseSubnetEnv(value: string | undefined, name: string): CidrRange | undefined {
+/**
+ * A platform subnet (`NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS`). Unset or empty: none
+ * (see the warning in `loadConfig`). Malformed: throws, so the proxy does not start (legacy 149).
+ * Logging and dropping it would leave the proxy running without that subnet's deny — the one rule
+ * that keeps a Worker off the platform's own networks when they are not inside a well-known
+ * private range. The kernel and llm-proxy already refuse to start on the same value, so the
+ * platform does not work with it either way; trimmed the same way they trim it.
+ */
+function parsePlatformSubnetEnv(value: string | undefined, name: string): CidrRange | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  try {
+    return parseCidr(trimmed);
+  } catch (err) {
+    throw new Error(
+      `egress-proxy: ${name} is not a valid CIDR (${String(err)}) — refusing to start`,
+    );
+  }
+}
+
+function parseTrustedCidrEntry(value: string | undefined, name: string): CidrRange | undefined {
   if (!value) return undefined;
   try {
     return parseCidr(value);
@@ -122,8 +142,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
   }
 
   const platformSubnets: CidrRange[] = [];
-  const control = parseSubnetEnv(env.NEXTTIME_SUBNET_CONTROL, 'NEXTTIME_SUBNET_CONTROL');
-  const workers = parseSubnetEnv(env.NEXTTIME_SUBNET_WORKERS, 'NEXTTIME_SUBNET_WORKERS');
+  const control = parsePlatformSubnetEnv(env.NEXTTIME_SUBNET_CONTROL, 'NEXTTIME_SUBNET_CONTROL');
+  const workers = parsePlatformSubnetEnv(env.NEXTTIME_SUBNET_WORKERS, 'NEXTTIME_SUBNET_WORKERS');
   if (control) platformSubnets.push(control);
   if (workers) platformSubnets.push(workers);
   if (platformSubnets.length === 0) {
@@ -134,19 +154,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
     console.warn(
       JSON.stringify({
         level: 'warn',
-        msg: 'egress-proxy: no platform subnets configured (NEXTTIME_SUBNET_CONTROL / NEXTTIME_SUBNET_WORKERS unset or invalid) — only well-known private/CGNAT ranges are denied',
+        msg: 'egress-proxy: no platform subnets configured (NEXTTIME_SUBNET_CONTROL / NEXTTIME_SUBNET_WORKERS unset) — only well-known private/CGNAT ranges are denied',
       }),
     );
   }
 
   // Comma-separated CIDRs; each parsed independently so one bad entry is logged and dropped
-  // (same policy as an invalid platform subnet) rather than silently disabling the whole list
-  // or, worse, crashing a proxy every agent container depends on.
+  // rather than silently disabling the whole list or crashing a proxy every agent container
+  // depends on. Unlike a platform subnet, dropping one only narrows an exemption: a hostname
+  // resolving into that range is then refused, never let through.
   const trustedResolvedCidrs: CidrRange[] = (env.EGRESS_TRUSTED_RESOLVED_CIDRS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
-    .map((s) => parseSubnetEnv(s, 'EGRESS_TRUSTED_RESOLVED_CIDRS'))
+    .map((s) => parseTrustedCidrEntry(s, 'EGRESS_TRUSTED_RESOLVED_CIDRS'))
     .filter((r): r is CidrRange => r !== undefined);
   if (trustedResolvedCidrs.length > 0) {
     console.warn(

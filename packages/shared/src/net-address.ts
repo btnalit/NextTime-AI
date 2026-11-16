@@ -145,11 +145,41 @@ export function isIpLiteral(input: string): boolean {
  * `proxy.ts`'s default resolver uses this to short-circuit an alternate-notation literal straight
  * to its dotted-quad form instead of asking the OS resolver to interpret a numeric "hostname" it
  * may or may not handle the same way this proxy's own policy does.
+ *
+ * An IPv6 literal comes back in the form the WHATWG URL parser writes a host in (legacy 149):
+ * lowercase hex without leading zeros, the first longest run of two or more zero groups as `::`,
+ * an embedded IPv4 tail as two hex groups, any zone ID (`%eth0`) dropped. So two spellings of one
+ * address — `fd00:0:0:0:0:0:0:1` in an operator's allow list, `fd00::1` in a parsed URL — compare
+ * equal.
  */
 export function canonicalizeIpLiteral(input: string): string | null {
   const v4 = parseIPv4Literal(input);
   if (v4) return v4.join('.');
-  return parseIPv6(input) !== null ? input : null;
+  const v6 = parseIPv6(input);
+  return v6 !== null ? formatIPv6(v6) : null;
+}
+
+/** Eight 16-bit groups as the WHATWG URL serializer writes them (RFC 5952 without mixed
+ *  notation): see `canonicalizeIpLiteral`. */
+function formatIPv6(groups: readonly number[]): string {
+  let runStart = -1;
+  let runLength = 0;
+  for (let i = 0; i < groups.length; ) {
+    if (groups[i] !== 0) {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end < groups.length && groups[end] === 0) end++;
+    if (end - i > runLength) {
+      runStart = i;
+      runLength = end - i;
+    }
+    i = end;
+  }
+  const hex = groups.map((group) => group.toString(16));
+  if (runLength < 2) return hex.join(':');
+  return `${hex.slice(0, runStart).join(':')}::${hex.slice(runStart + runLength).join(':')}`;
 }
 
 /**
