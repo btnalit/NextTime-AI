@@ -1,4 +1,5 @@
 import { BlockList, isIP } from 'node:net';
+import { parseCidrPrefixLength } from '@nexttime/shared';
 
 /**
  * interfaces/internal-auth/subnet: the one CIDR check the internal-plane guard needs — "is this
@@ -36,13 +37,12 @@ export function createSubnetMatcher(cidr: string): SubnetMatcher {
   if (family === 0) {
     throw new InvalidCidrError(cidr, 'address part is not an IPv4 or IPv6 address');
   }
-  if (!/^\d{1,3}$/.test(prefixRaw)) {
-    throw new InvalidCidrError(cidr, 'prefix length must be a non-negative integer');
-  }
-  const prefix = Number.parseInt(prefixRaw, 10);
+  // Legacy 772: the same rule `parseCidr` (@nexttime/shared) reads it by — the egress proxy and
+  // the LLM proxy parse the same NEXTTIME_SUBNET_* values with that.
   const maxPrefix = family === 4 ? 32 : 128;
-  if (prefix > maxPrefix) {
-    throw new InvalidCidrError(cidr, `prefix length must be 0..${maxPrefix}`);
+  const prefix = parseCidrPrefixLength(prefixRaw, maxPrefix);
+  if (prefix === undefined) {
+    throw new InvalidCidrError(cidr, `prefix length must be an integer 0..${maxPrefix}`);
   }
 
   const list = new BlockList();

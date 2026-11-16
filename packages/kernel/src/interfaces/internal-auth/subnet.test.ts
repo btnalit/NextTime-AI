@@ -54,6 +54,9 @@ describe('createSubnetMatcher', () => {
       '203.0.113.0/24/8',
       'not-an-ip/24',
       '2001:db8::/129',
+      // Legacy 772: what `parseCidr` (@nexttime/shared) refuses too.
+      '203.0.113.0/24abc',
+      '203.0.113.0/+24',
     ]) {
       expect(() => createSubnetMatcher(bad), bad).toThrow(InvalidCidrError);
     }
