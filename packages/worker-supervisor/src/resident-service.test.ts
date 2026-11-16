@@ -199,6 +199,18 @@ describe('resident-service spawn', () => {
     expect(egressMap.read()[first.ip as string]).toBeUndefined();
   });
 
+  it('leaves the crashed container’s address alone once another container is registered there (legacy 169)', async () => {
+    const { service, docker, egressMap } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    docker.simulateExternalKill('nexttime-entry-alice');
+    // Docker gave the freed address to a Worker, registered before alice's next spawn.
+    egressMap.register(first.ip as string, { sourceId: 'worker:ws-1:run-9' });
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    expect(egressMap.read()[first.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-9' });
+  });
+
   it('does not recreate when the same jti-bearing Handle is presented again (P2-5)', async () => {
     const { service, docker } = setup();
     const handle = fakeHandle('jti-alpha');
@@ -864,6 +876,29 @@ describe('resident-service stop', () => {
     expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
   });
 
+  it('a stop after a restart leaves the address to a container registered there since (legacy 169)', async () => {
+    const { config, docker, egressMap, service } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    // A restarted supervisor that has not reconciled yet knows the container only from Docker,
+    // its workspace only from the container's label.
+    const restarted = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
+    const stop = docker.stop.bind(docker);
+    docker.stop = async (name, timeout) => {
+      await stop(name, timeout);
+      // Docker hands the released address to a Worker before the stop unregisters.
+      egressMap.register(outcome.ip as string, { sourceId: 'worker:ws-1:run-9' });
+    };
+
+    await restarted.stop('alice');
+
+    expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-9' });
+  });
+
   it('is a no-op when nothing is running for that principal', async () => {
     const { service, docker } = setup();
     await expect(service.stop('nobody')).resolves.toBeUndefined();
@@ -999,7 +1034,7 @@ describe('resident-service reconcile', () => {
 
     // Simulate this supervisor process restarting: a brand new service instance, same docker +
     // egress-map backends, empty in-memory registry.
-    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    egressMap.unregister(outcome.ip as string, undefined); // pretend the file was also reset/lost
     const second = createResidentService({
       config,
       docker,
@@ -1072,7 +1107,7 @@ describe('resident-service reconcile', () => {
     // Simulate a supervisor restart: fresh service instance, and pretend the source-map file
     // itself was also lost — reconcile() must restore the deny list from the container's own
     // label, not merely re-register a bare sourceId (which would silently widen egress).
-    egressMap.unregister(outcome.ip as string);
+    egressMap.unregister(outcome.ip as string, undefined);
     const second = createResidentService({
       config,
       docker,
@@ -1630,9 +1665,9 @@ describe('resident-service: an admin agent beside the entry agent (S11 AA4c-2)',
         order.push(`egress:${entry.sourceId}:bound=${handleBindings.snapshot().has(ip)}`);
         real.register(ip, entry);
       },
-      unregister: (ip) => {
+      unregister: (ip, sourceId) => {
         order.push('unregister');
-        real.unregister(ip);
+        real.unregister(ip, sourceId);
       },
       read: () => real.read(),
     };

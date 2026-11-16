@@ -62,10 +62,25 @@ describe('createEgressMapStore', () => {
     const store = createEgressMapStore(file);
     store.register('198.51.100.10', { sourceId: 'entry:ws-1:alice' });
     store.register('198.51.100.11', { sourceId: 'entry:ws-1:bob' });
-    store.unregister('198.51.100.10');
+    store.unregister('198.51.100.10', 'entry:ws-1:alice');
     expect(store.read()).toEqual({
       '198.51.100.11': { sourceId: 'entry:ws-1:bob' },
     });
+  });
+
+  it('leaves an address’s entry that is another source’s — the next container’s (legacy 169)', () => {
+    const store = createEgressMapStore(file);
+    store.register('198.51.100.10', { sourceId: taskSourceId('ws-1', 'run-2') });
+    const before = readFileSync(file, 'utf8');
+    store.unregister('198.51.100.10', taskSourceId('ws-1', 'run-1'));
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('without a source, removes the address’s entry whoever’s it is', () => {
+    const store = createEgressMapStore(file);
+    store.register('198.51.100.10', { sourceId: taskSourceId('ws-1', 'run-2') });
+    store.unregister('198.51.100.10', undefined);
+    expect(store.read()).toEqual({});
   });
 
   it('registers a worker: sourceId alongside entry: ones (opaque string, either format)', () => {
@@ -93,7 +108,7 @@ describe('createEgressMapStore', () => {
     const store = createEgressMapStore(file);
     store.register('198.51.100.10', { sourceId: 'entry:ws-1:alice' });
     const before = readFileSync(file, 'utf8');
-    store.unregister('198.51.100.99');
+    store.unregister('198.51.100.99', undefined);
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 

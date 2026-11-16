@@ -353,10 +353,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
-  function unregisterEgress(ip: string | undefined, containerId: string | undefined): void {
+  /** Removes the egress entry at `ip` while it is still `sourceId`'s (legacy 169: Docker may have
+   *  given the address to another container, whose entry stays) — see {@link sourceIdOf}. */
+  function unregisterEgress(
+    ip: string | undefined,
+    containerId: string | undefined,
+    sourceId: string | undefined,
+  ): void {
     if (!ip) return;
     try {
-      egressMap.unregister(ip);
+      egressMap.unregister(ip, sourceId);
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -370,6 +376,17 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     // The Handle binding goes with the egress registration (handle-bindings.ts): once this
     // container is gone, nothing may be authenticated as it from that address.
     unbindHandle(ip, containerId);
+  }
+
+  /** The source a `kind` container for `principalId` was registered under (`registerEgress`), from
+   *  the workspace it was started for: the registry entry's, or a found container's label. Without
+   *  one, `undefined`, and `unregisterEgress` removes whatever entry is at the address. */
+  function sourceIdOf(
+    kind: ResidentAgentKind,
+    principalId: string,
+    workspaceId: string | undefined,
+  ): string | undefined {
+    return workspaceId === undefined ? undefined : residentSourceId(kind, workspaceId, principalId);
   }
 
   /** Removes the Handle bound to `ip` if it is still `containerId`'s (handle-bindings.ts). Called
@@ -748,7 +765,11 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           // still holds its address (handle-bindings.ts).
           unbindHandle(existing.ip, existing.id);
           await docker.stop(name, STOP_TIMEOUT_SECONDS);
-          unregisterEgress(existing.ip, existing.id);
+          unregisterEgress(
+            existing.ip,
+            existing.id,
+            sourceIdOf(kind, principalId, existing.labels[WORKSPACE_LABEL]),
+          );
         } else {
           // Crash path (lane-6 review P2-7's IP-reuse-misattribution concern, resident-mode half):
           // Docker already clears `ip` once a container isn't running (`ContainerState.ip`'s own
@@ -761,7 +782,11 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           // principal — rather than leaving the stale entry in place for up to a full
           // `entryIdleTimeoutMs` (idle-sweep is the only other thing that would ever clear it).
           const crashed = registry.get(key);
-          unregisterEgress(crashed?.ip, crashed?.containerId);
+          unregisterEgress(
+            crashed?.ip,
+            crashed?.containerId,
+            crashed && sourceIdOf(crashed.agentKind, crashed.principalId, crashed.workspaceId),
+          );
         }
         await docker.remove(name);
       }
@@ -804,7 +829,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       try {
         await bindHandle(kind, workspaceId, principalId, created.id, created.ip, handle);
       } catch (err) {
-        if (egressFirst) unregisterEgress(created.ip, created.id);
+        if (egressFirst) {
+          unregisterEgress(created.ip, created.id, sourceIdOf(kind, principalId, workspaceId));
+        }
         registry.delete(key);
         try {
           await docker.remove(name);
@@ -853,10 +880,15 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const existing = entry ? undefined : await docker.inspectByName(name);
       const ip = entry?.ip ?? existing?.ip;
       const containerId = entry?.containerId ?? existing?.id;
+      const sourceId = sourceIdOf(
+        agentKind,
+        principalId,
+        entry?.workspaceId ?? existing?.labels[WORKSPACE_LABEL],
+      );
 
       unbindHandle(ip, containerId);
       await docker.stop(name, STOP_TIMEOUT_SECONDS);
-      unregisterEgress(ip, containerId);
+      unregisterEgress(ip, containerId, sourceId);
       registry.delete(key);
     },
 
@@ -869,10 +901,15 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         const existing = entry ? undefined : await docker.inspectByName(name);
         const ip = entry?.ip ?? existing?.ip;
         const containerId = entry?.containerId ?? existing?.id;
+        const sourceId = sourceIdOf(
+          kind,
+          principalId,
+          entry?.workspaceId ?? existing?.labels[WORKSPACE_LABEL],
+        );
 
         unbindHandle(ip, containerId);
         await docker.remove(name);
-        unregisterEgress(ip, containerId);
+        unregisterEgress(ip, containerId, sourceId);
         registry.delete(key);
 
         // Best-effort, same convention as registerEgress/writeSystemPromptIfChanged above: a purge
@@ -1045,7 +1082,11 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         const name = residentContainerName(entry.agentKind, entry.principalId);
         unbindHandle(entry.ip, entry.containerId);
         await docker.stop(name, STOP_TIMEOUT_SECONDS);
-        unregisterEgress(entry.ip, entry.containerId);
+        unregisterEgress(
+          entry.ip,
+          entry.containerId,
+          sourceIdOf(entry.agentKind, entry.principalId, entry.workspaceId),
+        );
         registry.delete(key);
       }
     },
@@ -1064,7 +1105,11 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       );
       if (state?.running) return false;
 
-      unregisterEgress(entry.ip, entry.containerId);
+      unregisterEgress(
+        entry.ip,
+        entry.containerId,
+        sourceIdOf(entry.agentKind, entry.principalId, entry.workspaceId),
+      );
       registry.delete(key);
       console.log(
         JSON.stringify({
