@@ -49,13 +49,14 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     corepack pnpm install --offline --frozen-lockfile --store-dir=/pnpm/store
 RUN corepack pnpm --filter @nexttime/kernel... build
 RUN corepack pnpm --filter @nexttime/kernel deploy --prod --legacy /out/kernel
-# Legacy 414: the runtime stage copies these four root-owned, so `nexttime` reads them through the
-# "other" bits — which `COPY . .` above took from the build checkout. A checkout made under umask
-# 027 / 077 has them 640 / 600 (the kernel could not read its ontology and packs and would not
-# start; an unreadable pi.version reads as no file), and one made under umask 000 has them
-# world-writable. Set here, they are readable by everyone and writable by no one but root,
-# whatever the checkout's umask.
-RUN chmod -R a+rX,go-w /workspace/ontology /workspace/packs /workspace/connectors \
+# Legacy 414 / 765: the runtime stage copies the application and these four root-owned, so
+# `nexttime` reads them through the "other" bits — which `COPY . .` above took from the build
+# checkout (the application's own package.json among them). A checkout made under umask 027 / 077
+# has them 640 / 600 (the kernel could not read its ontology and packs and would not start; an
+# unreadable pi.version reads as no file), and one made under umask 000 has them world-writable.
+# Set here, they are readable by everyone and writable by no one but root, whatever the
+# checkout's umask.
+RUN chmod -R a+rX,go-w /out/kernel /workspace/ontology /workspace/packs /workspace/connectors \
  && chmod a+r,go-w /workspace/pi.version
 
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
@@ -64,10 +65,12 @@ RUN groupadd --system --gid 10001 nexttime \
  && useradd --system --uid 10001 --gid nexttime --home-dir /app --shell /usr/sbin/nologin nexttime
 
 WORKDIR /app
-COPY --from=build --chown=nexttime:nexttime /out/kernel .
-# Legacy 414: the four content COPYs below (ontology/, packs/, connectors/, pi.version) are shipped
-# content the kernel only reads, so they stay root-owned — no `--chown` — and the runtime user
-# (`USER nexttime`) cannot change them in place.
+# Legacy 414 / 765: everything under /app — the application below, the four content COPYs after it
+# (ontology/, packs/, connectors/, pi.version) and /app itself — is root-owned, no `--chown`: the
+# kernel only reads it, so the runtime user (`USER nexttime`) can neither change it in place nor
+# rename or replace it. The kernel writes nothing under /app at runtime (docker-compose.yml runs it
+# `read_only` with only /tmp writable); this holds where the image runs without that too.
+COPY --from=build /out/kernel .
 # S2.6: repo-root ontology/ (platform-meta.yaml, entry-agent.yaml, ops-runner.yaml — design doc
 # §7.10 "内容以两种包交付...ontology/<domain>/") is *not* part of the @nexttime/kernel package
 # itself (`pnpm deploy` above only carries that package's own files), so it needs its own COPY
