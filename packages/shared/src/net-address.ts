@@ -321,23 +321,33 @@ function ipv6ToBigInt(groups: readonly number[]): bigint {
   return groups.reduce((acc, g) => (acc << 16n) | BigInt(g), 0n);
 }
 
+/** Legacy 772: a CIDR's prefix length as written after its slash — one to three digits and nothing
+ *  else (no sign, space or trailing text), at most `max`; `undefined` otherwise. The one rule
+ *  {@link parseCidr} and the kernel's subnet matcher (`interfaces/internal-auth/subnet.ts`) read
+ *  it by, so a value one of them accepts the other does too. */
+export function parseCidrPrefixLength(text: string, max: number): number | undefined {
+  if (!/^\d{1,3}$/.test(text)) return undefined;
+  const value = Number.parseInt(text, 10);
+  return value <= max ? value : undefined;
+}
+
 /** Parse a CIDR string (`a.b.c.d/n` or `xxxx::/n`) into a {@link CidrRange}. Throws on malformed input. */
 export function parseCidr(cidr: string): CidrRange {
   const slash = cidr.lastIndexOf('/');
   if (slash === -1) throw new Error(`invalid CIDR (missing prefix length): ${cidr}`);
   const address = cidr.slice(0, slash);
-  const prefixLen = Number.parseInt(cidr.slice(slash + 1), 10);
+  const prefixText = cidr.slice(slash + 1);
 
   const v4 = parseIPv4(address);
   if (v4) {
-    if (!(prefixLen >= 0 && prefixLen <= 32))
-      throw new Error(`invalid IPv4 prefix length: ${cidr}`);
+    const prefixLen = parseCidrPrefixLength(prefixText, 32);
+    if (prefixLen === undefined) throw new Error(`invalid IPv4 prefix length: ${cidr}`);
     return { family: 4, network: ipv4ToBigInt(v4), prefixLen };
   }
   const v6 = parseIPv6(address);
   if (v6) {
-    if (!(prefixLen >= 0 && prefixLen <= 128))
-      throw new Error(`invalid IPv6 prefix length: ${cidr}`);
+    const prefixLen = parseCidrPrefixLength(prefixText, 128);
+    if (prefixLen === undefined) throw new Error(`invalid IPv6 prefix length: ${cidr}`);
     return { family: 6, network: ipv6ToBigInt(v6), prefixLen };
   }
   throw new Error(`invalid CIDR address: ${cidr}`);
