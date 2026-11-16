@@ -50,6 +50,7 @@ import {
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
   DecisionQuerySinceInvalidError,
+  DecisionReferenceError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
@@ -289,6 +290,26 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
         },
       },
     });
+  });
+
+  it('DecisionReferenceError (legacy 308) maps to 400 unresolved_references with every id it refuses', () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    const mapped = mapCapabilityError(new DecisionReferenceError(ids));
+    expect(mapped).toEqual({
+      status: 400,
+      code: 'unresolved_references',
+      message: expect.stringContaining('names 12 Facts that are not there or not readable to you'),
+      details: { unresolved: { relatedFactIds: ids } },
+    });
+    // The message names the first ten and counts the rest; `details` carries all twelve.
+    expect(mapped.message).toContain(`"${ids[9]}", and 2 more), so nothing was recorded`);
+    expect(mapped.message).not.toContain(ids[10] as string);
+    expect(new DecisionReferenceError([ids[0] as string]).message).toContain(
+      `names 1 Fact that is not there or not readable to you ("${ids[0]}"), so nothing was recorded`,
+    );
   });
 
   it('OperationNameInvalidError maps to 400 invalid_operation_name with its details', () => {

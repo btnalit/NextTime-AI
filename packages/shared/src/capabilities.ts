@@ -1861,7 +1861,10 @@ const epistemicCapabilities = [
     description:
       'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
       'why), optional `relatedFactIds` (the ids of the Facts it rests on) and `relatedTaskId` — ' +
-      'both uuids as returned by the graph and task tools, else 400 invalid_params. Automatically ' +
+      'both uuids as returned by the graph and task tools, else 400 invalid_params. Each ' +
+      'relatedFactIds entry must be a Fact you can read (explain finds it), else 400 ' +
+      'unresolved_references (details: unresolved.relatedFactIds, the ids that do not resolve) and ' +
+      'nothing is recorded. Automatically ' +
       'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
       'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
       'Not for routine observations — only for real choices worth tracing.',

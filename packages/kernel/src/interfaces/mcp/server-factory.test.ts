@@ -11,7 +11,7 @@ import {
   HttpGatekeeperClient,
   platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
-import { UnknownOperationError } from '../../application/gateway/index.js';
+import { DecisionReferenceError, UnknownOperationError } from '../../application/gateway/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
@@ -150,6 +150,16 @@ describe('mapCapabilityErrorToToolResult', () => {
     expect(result.isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toMatch(
       /^unstorable_text: capability "x": the text at params "name" holds U\+0000/,
+    );
+  });
+
+  it('prefixes record_decision relating Facts that are not there with its code (legacy 308)', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new DecisionReferenceError(['00000000-0000-4000-8000-000000000001']),
+    );
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(
+      /^unresolved_references: record_decision: relatedFactIds names 1 Fact that is not there/,
     );
   });
 

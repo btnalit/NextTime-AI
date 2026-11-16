@@ -181,6 +181,8 @@ export type {
   CapabilityHandlerContext,
   CapabilityHandlerResult,
 } from './handlers.js';
+// Legacy 308: `record_decision`'s refusal of Fact ids that do not resolve (the MCP mapping reads it).
+export { DecisionReferenceError } from './handlers.js';
 
 export {
   MetaOntologyWriteForbiddenError,

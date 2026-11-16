@@ -502,7 +502,7 @@ export function normalizeTraverseDepth(depth: number | undefined): number {
 /**
  * **Reader narrowing (STATUS leftover 123, D-26)**: the reads a capability exposes — `getObject`,
  * `getObjectsByIds`, `search` / `searchPage`, `traverse`, `stateAt`, `listRecentFacts`,
- * `listFactsPage`, `countFactsByLinkType` — take an optional trailing `viewer`
+ * `listFactsPage`, `countFactsByLinkType`, `readableFactIds` — take an optional trailing `viewer`
  * (operation-draft-visibility.ts). Given one, an Operation draft that
  * viewer may not see reads as absent: no row, and no Fact with it at either end. Omitted, the read
  * is unfiltered — for internal callers only (write-path guards that must see the real ObjectType,
@@ -672,4 +672,15 @@ export interface GraphStore {
     workspaceId: string,
     viewer?: GraphReadViewer,
   ): Promise<readonly FactCountByLinkType[]>;
+
+  /** Legacy 308: the ids among `factIds` that name a Fact this caller can read — whatever its
+   *  status (superseded and invalidated Facts still exist; `explain` reads them), under the same
+   *  visibility rules as the reads above, so an id it may not read is absent exactly like an
+   *  unknown one. `record_decision` refuses the rest. */
+  readableFactIds(
+    client: PoolClient,
+    workspaceId: string,
+    factIds: readonly string[],
+    viewer?: GraphReadViewer,
+  ): Promise<ReadonlySet<string>>;
 }

@@ -1169,6 +1169,30 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   };
 };
 
+/** How many of a refusal's ids {@link DecisionReferenceError}'s message names; `details` has all. */
+const DECISION_REFERENCE_MESSAGE_IDS = 10;
+
+/** Legacy 308: 400 `unresolved_references` — `record_decision`'s `relatedFactIds` names a Fact
+ *  that is not there or that the caller may not read (the two read the same), so no Decision was
+ *  recorded. `details.unresolved.relatedFactIds` lists each such id once, in the order sent. */
+export class DecisionReferenceError extends Error {
+  readonly code = 'unresolved_references' as const;
+  readonly details: { readonly unresolved: { readonly relatedFactIds: readonly string[] } };
+  constructor(relatedFactIds: readonly string[]) {
+    const shown = relatedFactIds
+      .slice(0, DECISION_REFERENCE_MESSAGE_IDS)
+      .map((factId) => JSON.stringify(factId))
+      .join(', ');
+    const more = relatedFactIds.length - DECISION_REFERENCE_MESSAGE_IDS;
+    const count = relatedFactIds.length;
+    super(
+      `record_decision: relatedFactIds names ${count} ${count === 1 ? 'Fact that is' : 'Facts that are'} not there or not readable to you (${shown}${more > 0 ? `, and ${more} more` : ''}), so nothing was recorded. Pass only ids of Facts the graph tools returned (list_facts, traverse, state_at), or leave them out.`,
+    );
+    this.name = 'DecisionReferenceError';
+    this.details = { unresolved: { relatedFactIds: [...relatedFactIds] } };
+  }
+}
+
 /**
  * `record_decision` (design doc §5.2 `Turn --generated--> Decision`; docs/development-tasks.md
  * S2.11 deliverable 4). `decisions.activity_id` *is* the edge — the same relational-FK-as-edge
@@ -1196,8 +1220,15 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
  * shape nothing yet needs.
  *
  * `summary` is agent text, stored scrubbed (`scrubAgentText`, legacy 183).
+ *
+ * Legacy 308: every `relatedFactIds` entry must name a Fact the caller can read
+ * (`graphStore.readableFactIds`, with the caller's viewer — the visibility `explain` applies, so
+ * an id it may not read is refused exactly like an unknown one and the answer never says it
+ * exists); otherwise {@link DecisionReferenceError} and nothing is recorded. A Decision is never
+ * deleted, so a dangling id would stay in its provenance for good. `relatedTaskId` is stored as
+ * given.
  */
-const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { summary, relatedFactIds, relatedTaskId } = params as {
     summary: string;
     relatedFactIds?: string[];
@@ -1210,6 +1241,27 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
     at: new Date(),
   });
   if (!attributedTurn?.wasRunning) throw new NoActiveTurnError();
+
+  // Each id once, by its lowercase form (a uuid in any case names the same row, and Postgres
+  // returns it lowercase); a refusal names an id as first sent.
+  const sentFactIds = new Map<string, string>();
+  for (const factId of relatedFactIds ?? []) {
+    const key = factId.toLowerCase();
+    if (!sentFactIds.has(key)) sentFactIds.set(key, factId);
+  }
+  if (sentFactIds.size > 0) {
+    const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+    const readable = await graphStore.readableFactIds(
+      client,
+      workspaceId,
+      [...sentFactIds.keys()],
+      viewer,
+    );
+    const unresolved = [...sentFactIds]
+      .filter(([key]) => !readable.has(key))
+      .map(([, factId]) => factId);
+    if (unresolved.length > 0) throw new DecisionReferenceError(unresolved);
+  }
 
   const result = await client.query<{ id: string; status: string }>(
     `insert into decisions (workspace_id, status, activity_id, summary, rationale)
