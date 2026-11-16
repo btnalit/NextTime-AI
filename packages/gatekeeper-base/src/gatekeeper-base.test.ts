@@ -554,6 +554,12 @@ describe('GatekeeperBase: the approved definition (legacy K)', () => {
     await expect(gate.revert('stock.adjust', {}, ctx)).rejects.toBeInstanceOf(
       OperationDefinitionMismatchError,
     );
+    // Legacy 348: what an agent reads names the way back for both kinds of gate — a platform
+    // gate's align, and a self-connected gate's re-read of its manifest.
+    const refusal = await gate.simulate('stock.adjust', {}, ctx).catch((err: unknown) => err);
+    expect((refusal as Error).message).toMatch(
+      /For a platform gate: .*aligns the Operation \(Systems & access\) and publishes the revision it opens \(Catalog\)\. For a gate the workspace connected itself: the workspace re-reads the gate's manifest \(Systems & access\) and publishes the revision it opens \(Catalog\)\.$/,
+    );
     expect(resolve).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
