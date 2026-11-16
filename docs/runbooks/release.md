@@ -1086,7 +1086,7 @@ SQL 列出的自连门清单就是要逐个确认的范围。
 - 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.50.0 起改写 6 类：#620（core 0045）加
   `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34），#637 加 `gatekeeperNames`
   （Gatekeeper 的 `name`）与 `connectedSystems`（门旁 ConnectedSystem 的 identity key `name`、`target`、`name`）。名字按读侧的显示规则改写；
-  剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。
+  剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。0.69.2 之后的下一版起改写 7 类（#1322，遗留 375）：加 `connectionActivities`，即遗留 186 之前写入的自接门落地活动（`governance.create_connection`）的 `metadata.target`，按读侧的显示规则（`target` 规则）改写：整段查询和片段去掉，带密码时连用户名也去掉，主机和路径保留；只改 `target` 一个键，不需要单独处置，清洗报告的类别行里多出这一类。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
   备份里。
