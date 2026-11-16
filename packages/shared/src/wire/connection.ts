@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OperationSchema } from '../action-description.js';
+import { OPERATION_PARAM_TYPES, OperationSchema } from '../action-description.js';
 import {
   ConnectionRequestStatusSchema,
   OperationModeSchema,
@@ -87,17 +87,28 @@ export const GatekeeperListItemWireSchema = GatekeeperSummaryWireSchema.extend({
 export type GatekeeperListItemWire = z.infer<typeof GatekeeperListItemWireSchema>;
 
 /** Legacy K (UX acceptance of #538): one param of an Operation's `params_schema` — where the gate
- *  sends it (`x-in`, lower-cased; absent = the request body) and whether it is required. */
+ *  sends it (`x-in`, lower-cased; absent = the request body) and whether it is required.
+ *  Legacy 465: `type` is its one JSON Schema type (`operationParamType`: `type: X`, or
+ *  `type: [X, "null"]`), absent when it has none (a union, a `$ref`, no `type`); `gateOwned: true`
+ *  marks a param only the gate sets (the same judgment as `gateOwnedParams`, which names its
+ *  location), absent otherwise. */
 export const OperationParamSummaryWireSchema = z
-  .object({ name: z.string(), in: z.string().optional(), required: z.boolean() })
+  .object({
+    name: z.string(),
+    in: z.string().optional(),
+    required: z.boolean(),
+    type: z.enum(OPERATION_PARAM_TYPES).optional(),
+    gateOwned: z.literal(true).optional(),
+  })
   .strict();
 export type OperationParamSummaryWire = z.infer<typeof OperationParamSummaryWireSchema>;
 
 /** Legacy K: what publishing a revision draft changes in the definition the gate runs —
  *  `changedFields` names the differing definition fields (`binding`, `params_schema`,
  *  `result_mapping`, `mode`, `reversibility`, `blast_radius` for an ssh binding); the params lists
- *  say which params were added, removed or changed (the draft's side). Governance fields are
- *  `governanceChange`'s. */
+ *  say which params were added, removed or changed (the draft's side). A param is changed when
+ *  anything in its own schema (its type included) or whether it is required differs. Governance
+ *  fields are `governanceChange`'s. */
 export const OperationDefinitionChangeWireSchema = z
   .object({
     changedFields: z.array(z.string()),
@@ -139,6 +150,10 @@ export const OperationSummaryWireSchema = z
      *  published row (published before the check existed) the gate refuses every call that passes
      *  one of them. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** Legacy 465: the top-level params this version's `params_schema` declares, by name (stored
+     *  definitions do not keep their authored order). `[]` when it declares none; absent when its
+     *  stored `params_schema` cannot be read as one. */
+    params: z.array(OperationParamSummaryWireSchema).optional(),
     /** UX acceptance of #573 P3-1: who wrote this version — `import` for the gate's own manifest,
      *  `agent` / `human` for a proposal. Absent on a legacy row with none recorded. A held draft
      *  the gate never wrote is told apart from one the gate stopped announcing by this. */

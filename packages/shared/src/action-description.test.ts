@@ -12,6 +12,7 @@ import {
   manifestTargetProblems,
   operationAbsentAnswers,
   operationNameProblem,
+  operationParamType,
   operationTargetRefusalOf,
 } from './action-description.js';
 import type { ActionDescription, Operation } from './action-description.js';
@@ -154,6 +155,20 @@ describe('OperationSchema', () => {
   it('requires reads and writes arrays (possibly empty)', () => {
     const { reads, ...withoutReads } = httpOperation;
     expect(() => OperationSchema.parse(withoutReads)).toThrow();
+  });
+});
+
+describe('operationParamType (legacy 465)', () => {
+  it('names the one type of a param schema, and none for a union, a $ref or no type', () => {
+    expect(operationParamType({ type: 'string' })).toBe('string');
+    expect(operationParamType({ type: ['integer', 'null'] })).toBe('integer');
+    expect(operationParamType({ type: ['null', 'array'] })).toBe('array');
+    expect(operationParamType({ type: ['string', 'integer'] })).toBeUndefined();
+    expect(operationParamType({ type: 'null' })).toBeUndefined();
+    expect(operationParamType({ type: 'date' })).toBeUndefined();
+    expect(operationParamType({ $ref: '#/definitions/x' })).toBeUndefined();
+    expect(operationParamType({ anyOf: [{ type: 'string' }] })).toBeUndefined();
+    expect(operationParamType(true)).toBeUndefined();
   });
 });
 

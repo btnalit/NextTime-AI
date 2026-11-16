@@ -660,12 +660,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         const listed = await callAs<{
           items: { name: string; status: string; gateOwnedParams?: unknown }[];
         }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        // Legacy 465: the params it declares, by name, each with its type — the one the gate sets
+        // marked on the entry itself, so the console need not match `gateOwnedParams` to it.
+        const params = [
+          { name: 'Authorization', in: 'header', required: false, type: 'string', gateOwned: true },
+          { name: 'sku', in: 'query', required: false, type: 'string' },
+        ];
         expect(listed.items.find((row) => row.name === held.name)).toMatchObject({
           status: 'draft',
           gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          params,
           // UX acceptance of #573 P3-1: the catalog tells the gate's own draft from a proposal.
           origin: 'import',
         });
+        // `get_gatekeeper` shows each Operation the same way.
+        const detail = await callAs<{ operations: { name: string; params?: unknown }[] }>(
+          ownerId,
+          'owner',
+          'get_gatekeeper',
+          { gatekeeperId },
+        );
+        expect(detail.operations.find((row) => row.name === held.name)?.params).toEqual(params);
       });
 
       it('once the gate drops the param, the preview marks the held draft rewritable and align rewrites it', async () => {

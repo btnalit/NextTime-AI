@@ -3772,7 +3772,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ?.definitionChange,
         ).toEqual({
           changedFields: ['params_schema'],
-          paramsAdded: [{ name: 'filter', required: false }],
+          paramsAdded: [{ name: 'filter', required: false, type: 'string' }],
           paramsRemoved: [],
           paramsChanged: [],
         });

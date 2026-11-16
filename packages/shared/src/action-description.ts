@@ -235,6 +235,32 @@ export interface OperationTargetProblem {
   readonly message: string;
 }
 
+/** Legacy 465: the JSON Schema types a param summary names (`OperationParamSummaryWire.type`). */
+export const OPERATION_PARAM_TYPES = [
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'object',
+  'array',
+] as const;
+export type OperationParamType = (typeof OPERATION_PARAM_TYPES)[number];
+
+const OPERATION_PARAM_TYPE_SET: ReadonlySet<string> = new Set(OPERATION_PARAM_TYPES);
+
+/** Legacy 465: one param schema's single type, as a person reading the Operation is told it —
+ *  `type: X`, or `type: [X, "null"]` in either order; `undefined` for anything else (a union, a
+ *  `$ref`, no `type`), so a reader is never shown a guess. */
+export function operationParamType(schema: unknown): OperationParamType | undefined {
+  if (schema === null || typeof schema !== 'object') return undefined;
+  const declared = (schema as Record<string, unknown>).type;
+  const types = Array.isArray(declared) ? declared.filter((entry) => entry !== 'null') : [declared];
+  const [only] = types;
+  return types.length === 1 && typeof only === 'string' && OPERATION_PARAM_TYPE_SET.has(only)
+    ? (only as OperationParamType)
+    : undefined;
+}
+
 /** The JSON Schema `type` of `params_schema`'s param `name`, when it is a single string. */
 function paramSchemaType(paramsSchema: Record<string, unknown>, name: string): string | undefined {
   const properties = paramsSchema.properties;
