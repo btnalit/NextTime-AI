@@ -438,8 +438,9 @@ export function buildGetFactForUpdateQuery(workspaceId: string, factId: string):
  * locks the row for the rest of `assertFact`'s transaction, so two concurrent assertions against
  * the same identity serialize rather than both reading "no prior Fact" and both inserting
  * independently. Returns *every* still-active Fact of the identity, newest first (migrations/core/
- * 0027; 0017 returned only the newest) — after a Conflict has been opened once, more than one Fact
- * can be simultaneously `recorded` for the same identity (that is the whole point of "keep both"),
+ * 0027; 0017 returned only the newest; rows one transaction recorded share `recorded_at`, and come
+ * back larger `id` first — core/0062, legacy 143) — after a Conflict has been opened once, more
+ * than one Fact can be simultaneously `recorded` for the same identity (the point of "keep both"),
  * and `assertFact` must build on the row that is the caller's *own* (same origin) rather than on
  * whichever happens to be latest: the S5.2 observation window retires what a Source did not touch,
  * so landing on another Source's row would retire a Fact the run just re-observed.
@@ -469,7 +470,9 @@ export function buildFindActiveFactByIdentityQuery(
  * rather than "superseded": a *second* concurrent supersede can make the newest row itself the
  * un-superseded successor of the row this statement was blocked on, not "superseded" at all).
  * `security definer`, same reasoning as the query above — the newest row can belong to a private
- * Source this caller cannot otherwise see.
+ * Source this caller cannot otherwise see. When several rows tie for newest (one transaction
+ * recorded them), the answer is `true` only if every one of them is invalidated (core/0062,
+ * legacy 143): a wrong `true` inserts a needless Fact, a wrong `false` costs one bounded re-read.
  */
 export function buildLatestFactInvalidatedForIdentityQuery(
   workspaceId: string,

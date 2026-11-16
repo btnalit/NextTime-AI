@@ -921,5 +921,176 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect([...seenDecisions].sort()).toEqual(decisionIds);
       });
     });
+
+    // Legacy 143 (core/0062): every Fact one transaction records has the same `recorded_at`
+    // (`now()`), so two Facts of one identity recorded together stay tied for "newest". These
+    // tests seed the tied rows directly, to choose their ids and the order they sit in the table:
+    // the smaller id goes in first, which is also the order they come back in without a
+    // tiebreaker on either plan (table order, or the primary key's `id` order).
+    /** A pair of Fact ids for tied rows, smaller and larger; `n` keeps pairs apart in the workspace. */
+    function tieIds(n: number) {
+      const tail = String(n).padStart(12, '0');
+      return {
+        low: `00000000-0000-4000-8000-${tail}`,
+        high: `ffffffff-ffff-4fff-bfff-${tail}`,
+      };
+    }
+
+    async function seedTiedFact(
+      client: PoolClient,
+      fact: {
+        readonly id: string;
+        readonly sourceObjectId: string;
+        readonly targetObjectId: string;
+        readonly port: number;
+        readonly activityId: string;
+        readonly state: 'active' | 'superseded' | 'invalidated';
+        readonly supersedesId?: string;
+      },
+    ): Promise<void> {
+      await client.query(
+        `insert into links (workspace_id, id, link_type, source_object_id, target_object_id,
+           properties, epistemic_status, activity_id, asserted_by, supersedes_id,
+           superseded_at, invalidated_at, invalidation_reason)
+         values ($1, $2, 'test.runs_on', $3, $4, $5, 'asserted', $6, $7, $8,
+           case when $9 = 'superseded' then now() end,
+           case when $9 = 'invalidated' then now() end,
+           case when $9 = 'invalidated' then 'legacy 143 test' end)`,
+        [
+          workspaceId,
+          fact.id,
+          fact.sourceObjectId,
+          fact.targetObjectId,
+          { port: fact.port },
+          fact.activityId,
+          ownerId,
+          fact.supersedesId ?? null,
+          fact.state,
+        ],
+      );
+    }
+
+    /** An Activity fed by one new Source, so a Fact on it has that Source as its origin. */
+    async function activityFromNewSource(client: PoolClient): Promise<string> {
+      const source = await registerPrivateSource(client, workspaceId, {
+        kind: 'test.collector',
+        ownerPrincipalId: ownerId,
+      });
+      const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+      await recordSourceObservation(client, workspaceId, {
+        sourceId: source.id,
+        activityId: activity.id,
+      });
+      return activity.id;
+    }
+
+    async function objectPair(client: PoolClient) {
+      const host = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+      const service = await store.upsertObject(client, workspaceId, {
+        objectType: 'test.service',
+      });
+      return { sourceObjectId: service.id, targetObjectId: host.id };
+    }
+
+    it('legacy 143: tied active Facts of one identity come back in one fixed order, and a third origin pairs its Conflict with the first of them', async () => {
+      await asPrincipal(ownerId, async (client) => {
+        const pair = await objectPair(client);
+        const ids = tieIds(1);
+        // Two Sources disagreeing inside one transaction: both Facts stay active.
+        for (const [id, port] of [
+          [ids.low, 1],
+          [ids.high, 2],
+        ] as const) {
+          await seedTiedFact(client, {
+            id,
+            ...pair,
+            port,
+            activityId: await activityFromNewSource(client),
+            state: 'active',
+          });
+        }
+        const tied = await client.query<{ n: string }>(
+          'select count(distinct recorded_at) as n from links where workspace_id = $1 and id = any($2::uuid[])',
+          [workspaceId, [ids.low, ids.high]],
+        );
+        expect(tied.rows[0]?.n).toBe('1');
+
+        const found = await client.query<{ id: string }>(
+          'select id from find_active_fact_for_identity($1, $2, $3, $4)',
+          [workspaceId, 'test.runs_on', pair.sourceObjectId, pair.targetObjectId],
+        );
+        expect(found.rows.map((row) => row.id)).toEqual([ids.high, ids.low]);
+
+        // A third Source disagrees with both: its Fact is paired with the first row, every time.
+        const third = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            ...pair,
+            activityId: await activityFromNewSource(client),
+            properties: { port: 3 },
+          },
+        );
+        const conflicts = await client.query<{ link_a_id: string; link_b_id: string }>(
+          'select link_a_id, link_b_id from conflicts where workspace_id = $1 and link_b_id = $2',
+          [workspaceId, third.id],
+        );
+        expect(conflicts.rows).toEqual([{ link_a_id: ids.high, link_b_id: third.id }]);
+      });
+    });
+
+    it('legacy 143: among tied newest rows of one identity, the newest counts as invalidated only when every one of them is', async () => {
+      await asPrincipal(ownerId, async (client) => {
+        async function latestInvalidated(pair: {
+          sourceObjectId: string;
+          targetObjectId: string;
+        }) {
+          const result = await client.query<{ invalidated: boolean | null }>(
+            'select latest_fact_invalidated_for_identity($1, $2, $3, $4) as invalidated',
+            [workspaceId, 'test.runs_on', pair.sourceObjectId, pair.targetObjectId],
+          );
+          return result.rows[0]?.invalidated;
+        }
+
+        // Each case is its own identity. `low` / `high`: the state of the row with the smaller /
+        // larger id; the smaller id goes into the table first.
+        const cases = [
+          { low: 'invalidated', high: 'active', expected: false },
+          { low: 'active', high: 'invalidated', expected: false },
+          { low: 'invalidated', high: 'invalidated', expected: true },
+          // The smaller one superseded by the larger, which was then invalidated, all in one
+          // transaction (review #493). The chain has ended, but this check does not follow
+          // chains: a row that is not invalidated means "re-read", which costs a bounded loop.
+          { low: 'superseded', high: 'invalidated', expected: false },
+        ] as const;
+        for (const [index, { low, high, expected }] of cases.entries()) {
+          const pair = await objectPair(client);
+          const ids = tieIds(2 + index);
+          const activityId = await activityFromNewSource(client);
+          await seedTiedFact(client, {
+            id: ids.low,
+            ...pair,
+            port: 1,
+            activityId,
+            state: low,
+          });
+          await seedTiedFact(client, {
+            id: ids.high,
+            ...pair,
+            port: 2,
+            activityId,
+            state: high,
+            ...(low === 'superseded' ? { supersedesId: ids.low } : {}),
+          });
+          expect({ low, high, invalidated: await latestInvalidated(pair) }).toEqual({
+            low,
+            high,
+            invalidated: expected,
+          });
+        }
+      });
+    });
   },
 );
