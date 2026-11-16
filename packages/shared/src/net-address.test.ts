@@ -453,6 +453,28 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
     expect(matchesDenySuffix('example.com', ['', '.', '*.'])).toBe(false);
   });
 
+  it('an IP literal pattern matches only that address, however either side spells it', () => {
+    for (const pattern of ['192.0.2.8', '192.0.2.010', '0xc0000208', '3221225992', '192.0.2.8.']) {
+      expect(matchesSuffix('192.0.2.8', [pattern]), pattern).toBe(true);
+      expect(matchesDenySuffix('192.0.2.8', [pattern]), pattern).toBe(true);
+      expect(matchesSuffix('192.0.2.9', [pattern]), pattern).toBe(false);
+    }
+    // A short form is the address it spells, never a suffix of another address.
+    expect(matchesSuffix('192.0.2.7', ['2.7'])).toBe(false);
+    expect(matchesDenySuffix('192.0.2.7', ['2.7', '*.2.7', '.0.2.7'])).toBe(false);
+    expect(matchesSuffix('2.0.0.7', ['2.7'])).toBe(true);
+    // IPv6: any spelling, with or without the brackets a parsed URL keeps.
+    for (const host of ['[2001:db8::1]', '2001:db8::1']) {
+      for (const pattern of ['2001:db8::1', '2001:DB8:0:0:0:0:0:1', '[2001:db8::1]']) {
+        expect(matchesSuffix(host, [pattern]), `${pattern} vs ${host}`).toBe(true);
+      }
+      expect(matchesSuffix(host, ['2001:db8::2'])).toBe(false);
+    }
+    // A name never matches an address, and an address never matches a name.
+    expect(matchesSuffix('192.0.2.8', ['example.com'])).toBe(false);
+    expect(matchesSuffix('a.example.com', ['192.0.2.8'])).toBe(false);
+  });
+
   it('normalizeDenyHostPattern strips exactly one leading `*.` or `.`', () => {
     expect(normalizeDenyHostPattern(' *.Corp.Example. ')).toBe('corp.example');
     expect(normalizeDenyHostPattern('.corp.example')).toBe('corp.example');

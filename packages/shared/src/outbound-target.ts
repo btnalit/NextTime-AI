@@ -3,7 +3,6 @@ import {
   canonicalizeIpLiteral,
   classifyAddress,
   isBareHostname,
-  isIpLiteral,
   isUnspecifiedAddress,
   matchesSuffix,
   normalizeHostname,
@@ -113,16 +112,10 @@ function refuse(reason: OutboundTargetRefusalReason, host: string): OutboundTarg
   return { allowed: false, reason, host };
 }
 
+/** Names by suffix, IP literals exactly in canonical form — `matchesSuffix`'s rule, the one the
+ *  egress proxy's lists use too. */
 function isAllowedHost(host: string, allowHosts: readonly string[] | undefined): boolean {
-  if (!allowHosts || allowHosts.length === 0) return false;
-  if (isIpLiteral(host)) {
-    const canonical = canonicalizeIpLiteral(host);
-    return allowHosts.some((entry) => canonicalizeIpLiteral(entry.trim()) === canonical);
-  }
-  return matchesSuffix(
-    host,
-    allowHosts.filter((entry) => !isIpLiteral(entry.trim())),
-  );
+  return matchesSuffix(host, allowHosts);
 }
 
 /** The decision for `url` (see the module doc comment for the rules, in order). */

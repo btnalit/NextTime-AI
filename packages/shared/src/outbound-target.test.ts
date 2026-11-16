@@ -121,6 +121,10 @@ describe('decideOutboundTarget (R-27: one predicate for every owner-supplied URL
     await expect(
       decideOutboundTarget('http://127.0.0.2/', { ...POLICY, allowHosts: ['0.0.2'] }, resolve),
     ).resolves.toMatchObject({ allowed: false, reason: 'loopback' });
+    // A trailing root dot is the same address, as it is the same name.
+    await expect(
+      decideOutboundTarget('http://127.0.0.2/', { ...POLICY, allowHosts: ['127.0.0.2.'] }, resolve),
+    ).resolves.toEqual({ allowed: true });
     expect(resolve).not.toHaveBeenCalled();
   });
 
