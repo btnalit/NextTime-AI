@@ -17,16 +17,27 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
+import { ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   ADMIN_AGENT_SESSION_KIND,
   HANDLE_SIGNING_ALG,
+  HandleRevoked,
   entryScope,
   issueHandle,
 } from '../../governance/capability/index.js';
-import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { recordMintedConnectionSecret } from '../gates/index.js';
+import {
+  createAdminWithTransaction,
+  createGatekeeperActionExecutor,
+} from '../gateway/action-executor.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { ForbiddenError } from '../gateway/authorize.js';
 import type { CapabilityHandlerContext } from '../gateway/capability-handler.js';
 import {
   ConnectorNotSelfServeError,
@@ -36,8 +47,10 @@ import {
 import { AdminAgentCallRefusedError, dispatchCapability } from '../gateway/dispatch.js';
 import { authenticateHandle } from '../gateway/handle-auth.js';
 import { CAPABILITY_HANDLERS } from '../gateway/handlers.js';
+import { setRequestActionDeps } from '../gateway/request-action-handler.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
+import { PURGE_RETENTION_DAYS, purgeWorkspace } from '../platform/purge-workspace.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
@@ -64,7 +77,9 @@ import {
  *   - demoting the administrator refuses both at once (I-A3);
  *   - in a trial workspace a platform administrator may self-connect an http or mcp system whatever
  *     the platform's connector mode, each use audited on its own row; nobody else, no other kind,
- *     no other workspace.
+ *     no other workspace — and none once the trial workspace is purged;
+ *   - a Worker the admin agent starts asks for an execute Operation as any Worker does: an ordinary
+ *     ActionRequest that waits for the person's `approve`, and only then reaches the gate.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -89,6 +104,21 @@ const DESCRIBED_OPERATIONS: Operation[] = [
     writes: [],
   },
 ];
+
+/** An execute Operation of a trial gate (legacy 641): never auto-approved, and the Worker does not
+ *  wait on the decision — the request is pending until a person decides it. */
+const TICKET_CREATE: Operation = {
+  name: 'ticket.create',
+  binding: { kind: 'http', method: 'POST', path: '/tickets' },
+  params_schema: {},
+  mode: 'execute',
+  blast_radius: 'medium',
+  reversibility: false,
+  auto_approvable: false,
+  await_decision: false,
+  reads: [],
+  writes: [],
+};
 
 /** Never dials anything: describes one observe operation, stores nothing. */
 const FAKE_GATEKEEPER_CLIENT: GatekeeperClient = {
@@ -220,6 +250,46 @@ describe.runIf(DATABASE_URL !== undefined)(
           iat: Math.floor(entryHandle.issuedAt.getTime() / 1000),
           exp: Math.floor(entryHandle.expiresAt.getTime() / 1000),
         } satisfies HandleClaims,
+      };
+    }
+
+    /** The Worker of `taskId` as its Handle presents it: the Task's WorkerRun session and scope. */
+    async function workerOf(
+      taskId: string,
+    ): Promise<{ caller: ResolvedCaller; scope: HandleClaims['scope']; workerRunId: string }> {
+      const row = await withAdminClient(pool, async (client) => {
+        const result = await client.query<{
+          worker_run_id: string;
+          session_id: string;
+          jti: string;
+          on_behalf_of: string;
+          scope: HandleClaims['scope'];
+          expires_at: Date;
+        }>(
+          `select r.id as worker_run_id, h.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
+             from capability_handles h
+             join worker_runs r on r.session_id = h.session_id
+            where r.task_id = $1`,
+          [taskId],
+        );
+        return result.rows[0];
+      });
+      if (!row) throw new Error(`no Worker Handle for Task ${taskId}`);
+      return {
+        caller: {
+          channel: 'handle',
+          claims: {
+            ws: trialWs,
+            sid: row.session_id,
+            obo: row.on_behalf_of,
+            scope: row.scope,
+            jti: row.jti,
+            iat: Math.floor(Date.now() / 1000),
+            exp: Math.floor(new Date(row.expires_at).getTime() / 1000),
+          },
+        },
+        scope: row.scope,
+        workerRunId: row.worker_run_id,
       };
     }
 
@@ -691,24 +761,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         version: 1,
         input: { ticket: 'T-report-1' },
       })) as { id: string };
-      const row = await withAdminClient(pool, async (client) => {
-        const result = await client.query<{
-          session_id: string;
-          jti: string;
-          on_behalf_of: string;
-          scope: HandleClaims['scope'];
-          expires_at: Date;
-        }>(
-          `select h.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
-             from capability_handles h
-             join worker_runs r on r.session_id = h.session_id
-            where r.task_id = $1`,
-          [started.id],
-        );
-        return result.rows[0];
-      });
-      if (!row) throw new Error(`no Worker Handle for Task ${started.id}`);
-      expect(row.scope.capabilities).toContain('report_task_result');
+      const worker = await workerOf(started.id);
+      expect(worker.scope.capabilities).toContain('report_task_result');
 
       // Its own session is no WorkerRun's: refused, and the Worker's Task is untouched by it.
       expect(
@@ -717,19 +771,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       ).toMatchObject({ message: expect.stringMatching(/not bound|not a WorkerRun/i) });
 
-      const worker: ResolvedCaller = {
-        channel: 'handle',
-        claims: {
-          ws: trialWs,
-          sid: row.session_id,
-          obo: row.on_behalf_of,
-          scope: row.scope,
-          jti: row.jti,
-          iat: Math.floor(Date.now() / 1000),
-          exp: Math.floor(new Date(row.expires_at).getTime() / 1000),
-        },
-      };
-      const reported = (await dispatchCapability({ pool }, worker, 'report_task_result', {
+      const reported = (await dispatchCapability({ pool }, worker.caller, 'report_task_result', {
         summary: 'T-report-1 checked',
       })) as { id: string; status: string };
       expect(reported).toMatchObject({ id: started.id, status: 'completed' });
@@ -738,6 +780,112 @@ describe.runIf(DATABASE_URL !== undefined)(
       })) as { status: string; result?: { summary?: string } };
       expect(task.status).toBe('completed');
       expect(task.result?.summary).toBe('T-report-1 checked');
+    });
+
+    it('a Worker the admin agent starts asks for an execute Operation on a trial gate as any Worker does: an ordinary ActionRequest, pending and the gate untouched until the person approves it; neither Handle can decide it (legacy 641)', async () => {
+      const applied: string[] = [];
+      const recordingGate: GatekeeperClient = {
+        ...FAKE_GATEKEEPER_CLIENT,
+        simulate: async () => ({ description: 'would open a ticket (test fake)' }),
+        apply: async (_target, input) => {
+          applied.push(input.operation);
+          return { data: { ticket: 'T-641' }, replayed: false };
+        },
+      };
+      const withTransaction = createAdminWithTransaction(pool);
+      const drainer = new ApprovalDrainer({
+        executor: createGatekeeperActionExecutor({
+          gatekeeperClient: recordingGate,
+          withTransaction,
+        }),
+        withTransaction,
+      });
+      setRequestActionDeps({ gatekeeperClient: recordingGate, drainer });
+
+      const tag = randomUUID().slice(0, 8);
+      const trialGate = await inWs(trialWs, adminPrincipalId, async (client) => {
+        const activity = await startActivity(client, trialWs, {
+          kind: 'test.connection',
+          principalId: adminPrincipalId,
+        });
+        const registered = await registerGatekeeper(client, trialWs, {
+          name: `aa5a1-ticket-gate-${tag}`,
+          transportKind: 'http',
+          target: 'trial-ticket-system',
+          endpoint: unusedEndpoint(),
+          connectionSecretSalt: 'f'.repeat(32),
+          activityId: activity.id,
+          registeredBy: { id: adminPrincipalId, kind: 'human' },
+        });
+        await importManifest(client, trialWs, {
+          gatekeeperId: registered.gatekeeperId,
+          operations: [TICKET_CREATE],
+          proposedBy: { id: adminPrincipalId, kind: 'human' },
+          activityId: activity.id,
+        });
+        await publishOperation(client, trialWs, {
+          gatekeeperId: registered.gatekeeperId,
+          name: TICKET_CREATE.name,
+        });
+        return registered.gatekeeperId;
+      });
+      const definitionId = await publishDefinition(trialWs, adminPrincipalId, {
+        capabilities: ['request_action'],
+        gates: [trialGate],
+      });
+      const { caller: adminAgent } = await agent({ gatekeeper: [trialGate] });
+      const started = (await dispatchCapability({ pool }, adminAgent, 'invoke_worker', {
+        definitionId,
+        version: 1,
+        input: { ticket: 'T-641' },
+      })) as { id: string };
+      const administrator = person(trialWs, adminPrincipalId);
+      const statusOf = async (actionRequestId: string) =>
+        (
+          (await dispatchCapability({ pool }, administrator, 'get_action', {
+            actionRequestId,
+          })) as { status: string }
+        ).status;
+      try {
+        const worker = await workerOf(started.id);
+        const requested = (await dispatchCapability({ pool }, worker.caller, 'request_action', {
+          gatekeeperId: trialGate,
+          operation: TICKET_CREATE.name,
+          params: { title: 'T-641' },
+        })) as { id: string };
+        // The request any Worker's call makes: decided by the policy, which sends it to a person.
+        expect(requested).toMatchObject({
+          status: 'pending_approval',
+          policyDecision: 'require_approval',
+          onBehalfOf: adminPrincipalId,
+          parentWorkerRunId: worker.workerRunId,
+        });
+        // Undecided, it never reaches the gate — not from the call, not from a drain.
+        await drainer.drainGatekeeper(trialWs, adminPrincipalId, trialGate);
+        expect(applied).toEqual([]);
+
+        // Neither the admin agent nor its Worker decides it: `approve` is the person's own, on the
+        // human channel only.
+        for (const handle of [adminAgent, worker.caller]) {
+          const refused = await refusalOf(
+            dispatchCapability({ pool }, handle, 'approve', { actionRequestId: requested.id }),
+          );
+          expect(refused).toBeInstanceOf(ForbiddenError);
+          expect(refused).toMatchObject({ reason: 'human_channel_only' });
+        }
+        expect(await statusOf(requested.id)).toBe('pending_approval');
+
+        // The person approves it, and it runs once, the way every approved request runs.
+        const approved = (await dispatchCapability({ pool }, administrator, 'approve', {
+          actionRequestId: requested.id,
+        })) as { status: string; decidedBy: string | null };
+        expect(approved).toMatchObject({ status: 'approved', decidedBy: adminPrincipalId });
+        await drainer.drainGatekeeper(trialWs, adminPrincipalId, trialGate);
+        expect(applied).toEqual([TICKET_CREATE.name]);
+        expect(await statusOf(requested.id)).toBe('executed');
+      } finally {
+        await dispatchCapability({ pool }, administrator, 'cancel_task', { taskId: started.id });
+      }
     });
 
     it('invoke_worker attributes the Task to the Turn that started it: an admin agent’s Task to its own running Turn, never to an entry Turn running beside it', async () => {
@@ -1223,6 +1371,108 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(row.rows[0]?.status).toBe('requested');
       });
+    });
+
+    it('a purged trial workspace takes the exception with it: its administrator gets none there, no call reaches it, its admin agent’s Handle is dead, and no request or self connection of it is left (legacy 640)', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const purged = await createWorkspaceWithOwner(pool, {
+        name: `aa5a1-purged-trial-${tag}`,
+        owner: { userId: admin.id, displayName: 'AA5a-1 Admin' },
+        ontologyDir: ONTOLOGY_DIR,
+        purpose: 'admin_trial',
+      });
+      const ws = purged.workspaceId;
+      const adminHere = purged.ownerPrincipalId;
+      const exceptionHolds = (workspaceId: string, principalId: string) =>
+        withAdminClient(pool, (client) =>
+          isPlatformAdminInTrialWorkspace(client, workspaceId, principalId),
+        );
+      const rowsOf = async (table: 'connection_requests' | 'workspace_self_connections') => {
+        const result = await withAdminClient(pool, (client) =>
+          client.query<{ n: number }>(
+            `select count(*)::int as n from ${table} where workspace_id = $1`,
+            [ws],
+          ),
+        );
+        return result.rows[0]?.n ?? 0;
+      };
+
+      await withConnectorModes(['http'], 'platform_preset', async () => {
+        // Before: the exception holds here, as in the trial workspace every other test uses. The
+        // admin agent asks twice; the administrator completes one, the other is left open.
+        expect(await exceptionHolds(ws, adminHere)).toBe(true);
+        const issued = await inWs(ws, adminHere, (client) =>
+          issueAdminAgentHandle(client, {
+            workspaceId: ws,
+            principalId: adminHere,
+            ttlSeconds: 600,
+            privateKey,
+          }),
+        );
+        const claims = await authenticateHandle(pool, issued.token, { publicKey }, 'source');
+        const asAgent = (target: string) =>
+          dispatchCapability({ pool }, { channel: 'handle', claims }, 'request_connection', {
+            kind: 'http',
+            target,
+          }) as Promise<{ id: string }>;
+        const completedRequest = await asAgent('purged-trial-completed');
+        const openRequest = await asAgent('purged-trial-left-open');
+        await dispatchCapability({ pool }, person(ws, adminHere), 'create_connection', {
+          connectionRequestId: completedRequest.id,
+          kind: 'http',
+          target: 'purged-trial-completed',
+          endpoint: unusedEndpoint(),
+          connectionSecret: await issuedSecret(ws, adminHere),
+          credentialKind: 'shared',
+        });
+        expect(await rowsOf('connection_requests')).toBe(2);
+        expect(await rowsOf('workspace_self_connections')).toBe(1);
+
+        // Taken out of use, and purged once its retention has passed — the same function and the
+        // same eligibility check the console's purge_workspace runs (no operator `force`).
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `update workspaces set status = 'disabled',
+                    disabled_at = now() - make_interval(days => $2::int + 1)
+              where id = $1`,
+            [ws, PURGE_RETENTION_DAYS],
+          ),
+        );
+        await purgeWorkspace(pool, { workspaceId: ws, confirm: true, actorUserId: admin.id });
+
+        // After: the exception's own check says no for the same platform administrator…
+        expect(await exceptionHolds(ws, adminHere)).toBe(false);
+        // …and nothing reaches it: asking again, or completing the request left open, is refused
+        // before any handler runs, as every call into a workspace that is not active is…
+        const afterPurge = [
+          dispatchCapability({ pool }, person(ws, adminHere), 'request_connection', {
+            kind: 'http',
+            target: 'after-purge-by-hand',
+          }),
+          dispatchCapability({ pool }, person(ws, adminHere), 'create_connection', {
+            connectionRequestId: openRequest.id,
+            kind: 'http',
+            target: 'purged-trial-left-open',
+            endpoint: unusedEndpoint(),
+            connectionSecret: CONNECTION_SECRETS.mint(ws).secret,
+            credentialKind: 'shared',
+          }),
+        ];
+        for (const call of afterPurge) {
+          const refused = await refusalOf(call);
+          expect(refused).toBeInstanceOf(ForbiddenError);
+          expect(refused).toMatchObject({ message: expect.stringMatching(/^workspace_disabled/) });
+        }
+        // …and the admin agent's Handle no longer authenticates.
+        expect(
+          await refusalOf(authenticateHandle(pool, issued.token, { publicKey }, 'source')),
+        ).toBeInstanceOf(HandleRevoked);
+        // Nothing of it is left for the platform to count as a self connection, or to complete.
+        expect(await rowsOf('connection_requests')).toBe(0);
+        expect(await rowsOf('workspace_self_connections')).toBe(0);
+      });
+      // The trial workspace still in use keeps its exception.
+      expect(await exceptionHolds(trialWs, adminPrincipalId)).toBe(true);
     });
   },
 );

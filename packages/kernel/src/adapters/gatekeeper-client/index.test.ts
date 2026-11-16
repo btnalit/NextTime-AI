@@ -825,7 +825,8 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
   it('never repeats the address the error names', async () => {
     for (const port of [REFUSED_PORT, dropsAfterRequestPort, dropsMidAnswerPort]) {
       const failure = await failureOf(applyTo(port));
-      expect(failure.message).not.toMatch(/127\.0\.0\.1|:\d{2,5}\b/);
+      // `\d{1,5}`: the refused case's port is 0 (legacy 770).
+      expect(failure.message).not.toMatch(/127\.0\.0\.1|:\d{1,5}\b/);
     }
   });
 });
