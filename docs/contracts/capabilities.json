@@ -25184,6 +25184,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -25192,6 +25196,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -25206,6 +25221,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -25214,6 +25233,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -25228,6 +25258,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -25236,6 +25270,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -25516,6 +25561,43 @@
                   "human"
                 ],
                 "type": "string"
+              },
+              "params": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gateOwned": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "in": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "enum": [
+                        "string",
+                        "integer",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "required"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
               },
               "proposedBy": {
                 "type": "string"
@@ -45011,6 +45093,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -45019,6 +45105,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -45033,6 +45130,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -45041,6 +45142,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -45055,6 +45167,10 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "gateOwned": {
+                          "const": true,
+                          "type": "boolean"
+                        },
                         "in": {
                           "type": "string"
                         },
@@ -45063,6 +45179,17 @@
                         },
                         "required": {
                           "type": "boolean"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "number",
+                            "boolean",
+                            "object",
+                            "array"
+                          ],
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -45343,6 +45470,43 @@
                   "human"
                 ],
                 "type": "string"
+              },
+              "params": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gateOwned": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "in": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "enum": [
+                        "string",
+                        "integer",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "required"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
               },
               "proposedBy": {
                 "type": "string"

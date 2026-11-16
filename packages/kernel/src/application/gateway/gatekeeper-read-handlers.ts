@@ -23,6 +23,7 @@ import {
   operationDefinitionChange,
   operationDraftDigest,
   operationGovernanceChange,
+  operationParams,
   operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
@@ -173,6 +174,9 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
   // S11 「门确认不存在」 A: which of the target's answers this observe Operation declares mean
   // "does not exist" — the catalog says so, since the gate then answers `absent`.
   const absentAnswers = operationAbsentAnswers(record.operation);
+  // Legacy 465: the params this version declares, so the console knows what an observe Operation
+  // takes (a platform check's params, a fact editor) without reading its JSON Schema.
+  const params = operationParams(record.operation);
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -211,6 +215,7 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     ...(gateOwnedParams.length > 0
       ? { gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })) }
       : {}),
+    ...(params !== undefined ? { params } : {}),
     ...(absentAnswers === undefined
       ? {}
       : 'statuses' in absentAnswers

@@ -80,6 +80,7 @@ export {
   operationContentDigest,
   operationDefinitionDiffers,
   operationDraftDigest,
+  operationParams,
   operationRecordDigest,
   operationRecordDigestOrNull,
 } from './definition.js';

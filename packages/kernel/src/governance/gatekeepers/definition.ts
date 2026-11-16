@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import {
   canonicalJson,
+  gateOwnedParamsOf,
   operationDefinition,
   operationDefinitionDigest,
 } from '@nexttime/gatekeeper-base';
-import type { Operation } from '@nexttime/shared';
+import { type Operation, type OperationParamType, operationParamType } from '@nexttime/shared';
 import { quotedName } from '../redaction/index.js';
 
 /**
@@ -108,17 +109,24 @@ export function operationDefinitionDiffers(
   }
 }
 
-/** One param of an Operation's `params_schema`, as a person reviewing a revision reads it: where
- *  the gate sends it (`x-in`, lower-cased; absent = the request body) and whether it is required. */
+/** One param of an Operation's `params_schema`, as a person reads it: where the gate sends it
+ *  (`x-in`, lower-cased; absent = the request body) and whether it is required; legacy 465: its
+ *  one JSON Schema type (`operationParamType`; absent when it has none), and `gateOwned: true`
+ *  when only the gate sets it (`gateOwnedParamsOf`, the judgment `publish_operation` refuses
+ *  with; absent otherwise). */
 export interface OperationParamSummary {
   readonly name: string;
   readonly in?: string;
   readonly required: boolean;
+  readonly type?: OperationParamType;
+  readonly gateOwned?: true;
 }
 
 /** What publishing `after` over `before` changes in the definition a gate runs (the digest's
  *  fields — governance-only fields are `operationGovernanceChange`'s): which of those fields
- *  differ, and the params added, removed or changed (`after`'s side for a change). */
+ *  differ, and the params added, removed or changed (`after`'s side for a change). A param is
+ *  changed when anything in its own schema (its type included) or whether it is required differs;
+ *  a binding change that makes it one the gate sets shows as `binding` in `changedFields`. */
 export interface OperationDefinitionChange {
   readonly changedFields: string[];
   readonly paramsAdded: OperationParamSummary[];
@@ -126,37 +134,65 @@ export interface OperationDefinitionChange {
   readonly paramsChanged: OperationParamSummary[];
 }
 
+/** By name, so a list reads the same however the definition was stored (jsonb reorders keys). */
+const byParamName = (a: OperationParamSummary, b: OperationParamSummary) =>
+  a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+
+/** The top-level params `operation`'s `params_schema` declares, keyed by name; `undefined` when
+ *  its `params_schema` (or that schema's `properties`) is not a JSON object. */
 function paramsOf(
-  paramsSchema: unknown,
-): Map<string, { readonly summary: OperationParamSummary; readonly canonical: string }> {
+  operation: unknown,
+):
+  | Map<string, { readonly summary: OperationParamSummary; readonly canonical: string }>
+  | undefined {
+  if (operation === null || typeof operation !== 'object') return undefined;
+  const paramsSchema = (operation as { params_schema?: unknown }).params_schema;
+  if (paramsSchema === null || typeof paramsSchema !== 'object' || Array.isArray(paramsSchema)) {
+    return undefined;
+  }
+  const { properties, required } = paramsSchema as { properties?: unknown; required?: unknown };
   const params = new Map<
     string,
     { readonly summary: OperationParamSummary; readonly canonical: string }
   >();
-  if (paramsSchema === null || typeof paramsSchema !== 'object') return params;
-  const { properties, required } = paramsSchema as { properties?: unknown; required?: unknown };
+  if (properties === undefined) return params;
   if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
-    return params;
+    return undefined;
   }
   const requiredNames = new Set(
     Array.isArray(required) ? required.filter((n): n is string => typeof n === 'string') : [],
   );
+  const gateOwned = new Set(gateOwnedParamsOf(operation).map((entry) => entry.param));
   for (const [name, schema] of Object.entries(properties as Record<string, unknown>)) {
     const location =
       schema !== null && typeof schema === 'object'
         ? (schema as Record<string, unknown>)['x-in']
         : undefined;
+    const type = operationParamType(schema);
     const isRequired = requiredNames.has(name);
     params.set(name, {
       summary: {
         name,
         ...(typeof location === 'string' ? { in: location.toLowerCase() } : {}),
         required: isRequired,
+        ...(type !== undefined ? { type } : {}),
+        ...(gateOwned.has(name) ? { gateOwned: true as const } : {}),
       },
       canonical: canonicalJson({ schema, required: isRequired }),
     });
   }
   return params;
+}
+
+/** Legacy 465: the params `operation` declares, by name — what `list_operations` and
+ *  `get_gatekeeper` show of every version, so the console knows what an observe Operation takes.
+ *  `undefined` when its stored `params_schema` cannot be read as one (the console then shows
+ *  none rather than a wrong list); `[]` when it declares none. */
+export function operationParams(operation: unknown): OperationParamSummary[] | undefined {
+  const params = paramsOf(operation);
+  return params === undefined
+    ? undefined
+    : [...params.values()].map((param) => param.summary).sort(byParamName);
 }
 
 /** `undefined` when either side's definition does not parse — there is no reliable diff to show. */
@@ -176,10 +212,9 @@ export function operationDefinitionChange(
   const changedFields = fields
     .filter((key) => canonicalJson(previous[key]) !== canonicalJson(next[key]))
     .sort();
-  const beforeParams = paramsOf(previous.params_schema);
-  const afterParams = paramsOf(next.params_schema);
-  const byName = (a: OperationParamSummary, b: OperationParamSummary) =>
-    a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  const none: ReturnType<typeof paramsOf> = new Map();
+  const beforeParams = paramsOf(previous) ?? none;
+  const afterParams = paramsOf(next) ?? none;
   const paramsAdded: OperationParamSummary[] = [];
   const paramsChanged: OperationParamSummary[] = [];
   for (const [name, param] of afterParams) {
@@ -192,8 +227,8 @@ export function operationDefinitionChange(
     .map(([, param]) => param.summary);
   return {
     changedFields,
-    paramsAdded: paramsAdded.sort(byName),
-    paramsRemoved: paramsRemoved.sort(byName),
-    paramsChanged: paramsChanged.sort(byName),
+    paramsAdded: paramsAdded.sort(byParamName),
+    paramsRemoved: paramsRemoved.sort(byParamName),
+    paramsChanged: paramsChanged.sort(byParamName),
   };
 }
