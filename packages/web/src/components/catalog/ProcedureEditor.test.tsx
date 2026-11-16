@@ -1948,6 +1948,84 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
   });
 
+  it('legacy 775: a copied check’s params turn into fields once its Operation’s params arrive', async () => {
+    const gate = '00000000-0000-4000-8000-000000000776';
+    const waiting: ((value: unknown) => void)[] = [];
+    const listed = (value: unknown) => {
+      for (const resolve of waiting.splice(0)) resolve(value);
+    };
+    const { caller } = http({
+      list_operations: () =>
+        new Promise((resolve) => {
+          waiting.push(resolve);
+        }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={[
+          {
+            id: gate,
+            name: 'svc-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 1,
+            createdAt: '',
+          },
+        ]}
+        copyOf={{
+          id: 'pr-776',
+          version: 1,
+          status: 'published',
+          name: 'Remove',
+          description: 'Remove a service',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Gone.',
+              check: {
+                kind: 'observe_absent',
+                key: 'check-1',
+                check: { gatekeeperId: gate, operation: 'svc.lookup', params: { id: 42 } },
+              },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    // Until the gate's Operations are read, the params are the JSON they were copied as.
+    const json = (await screen.findByTestId('procedure-step-check-params')) as HTMLTextAreaElement;
+    expect(JSON.parse(json.value)).toEqual({ id: 42 });
+    listed({
+      items: [
+        {
+          gatekeeperId: gate,
+          name: 'svc.lookup',
+          mode: 'observe',
+          blastRadius: 'low',
+          autoApprovable: true,
+          version: 1,
+          status: 'published',
+          absentAnswers: { statuses: [404] },
+          absentAnswersReview: {
+            reviewedBy: 'p-owner',
+            reviewedAt: '2026-10-29T00:00:00.000Z',
+          },
+          params: [{ name: 'id', in: 'path', required: true, type: 'integer' }],
+        },
+      ],
+    });
+    // Once they are, the same params show field by field.
+    const id = (await screen.findByTestId(
+      'procedure-step-check-params-param-id',
+    )) as HTMLInputElement;
+    expect(id.value).toBe('42');
+    expect(screen.queryByTestId('procedure-step-check-params')).toBeNull();
+  });
+
   it('legacy 493: a step whose Worker version is not published is said on that step’s version, focused', async () => {
     const { caller } = http({
       propose_procedure: () =>

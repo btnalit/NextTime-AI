@@ -121,6 +121,19 @@ describe('paramsTextFrom (legacy 775)', () => {
     });
   });
 
+  it('keeps a whole number JSON cannot carry exactly as typed, and says so (review #501 P3-1)', () => {
+    const { text, problems } = paramsTextFrom({ id: '9007199254740993' }, fillable);
+    expect(problems).toEqual({ id: 'integer' });
+    expect(JSON.parse(text)).toEqual({ id: '9007199254740993' });
+    expect(paramsTextFrom({ id: '9007199254740991' }, fillable).problems).toEqual({});
+  });
+
+  it('keeps a text param that is only spaces; any other such field is left out', () => {
+    expect(JSON.parse(paramsTextFrom({ name: '  ', count: '  ' }, fillable).text)).toEqual({
+      name: '  ',
+    });
+  });
+
   it('round-trips what paramTextsOf shows', () => {
     const sent = { id: 9, labels: [1, 'b'], name: '', on: false, value: null };
     const texts = paramTextsOf(JSON.stringify(sent), fillable);

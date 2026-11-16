@@ -94,7 +94,9 @@ function paramValue(
       const trimmed = text.trim();
       const number = NUMBER.test(trimmed) ? Number(trimmed) : Number.NaN;
       if (!Number.isFinite(number)) return { value: text, problem: param.type };
-      if (param.type === 'integer' && !Number.isInteger(number)) {
+      // Review #501 on #1296 (P3-1): a whole number past 2^53 is not one JSON can carry
+      // exactly — sent as typed and said, rather than quietly changed to a neighbour.
+      if (param.type === 'integer' && !Number.isSafeInteger(number)) {
         return { value: text, problem: 'integer' };
       }
       return { value: number };
