@@ -1257,7 +1257,7 @@
 | 774 | `packages/shared` 里有两条判断参数类型的规则：target 校验用的 `paramSchemaType`（`action-description.ts`）只认单个类型字符串，`['string','null']` 当成没有类型；参数摘要用的 `operationParamType` 会滤掉 `"null"`。作者认为两者回答不同的问题（target 参数必须不可为 null），应在注释里写明或统一。#493 审 #1293 时提出（可选，评审员注明是另一个遗留问题） | P3 | 共享 | 已关闭（c57cd35，#1299） |
 | 775 | 控制台接入 Operation 参数摘要（#1293 的 `params`：name、in、required、type、gateOwned）：平台检查的「参数」改成按参数逐项填写，谓词 / 事实编辑器按参数类型给出输入；遗留 465 内核侧已关闭 | P3 | 控制台 | 已关闭（cd0a49c，#1296） |
 | 776 | 流程表单保存被拒后，焦点停在「保存」按钮上，第一个出错的字段不在视野里（名称、描述空着时也一样）；应在被拒后聚焦并滚到第一个出错字段。UX 审计复验 #1296 时发现，不是该 PR 引入 | P3 | 控制台 | 开放 |
-| 777 | IPv4 地址里带前导零的 octet（`010.0.0.0/8`、`10.0.0.00/8`）：`packages/shared` 的 `parseCidr` 接受，内核 `createSubnetMatcher`（`isIP`）拒绝，两边规则还差这一处；现有部署不受影响。做的时候顺带补 `parseCidrPrefixLength('0024', 32)` 的用例，钉住「最多 3 位」。#493 审 #1298 时提出（可选） | P3 | 共享 / 内核 | 开放 |
+| 777 | IPv4 地址里带前导零的 octet（某一段写成 `010` 或 `00` 这类形式）：`packages/shared` 的 `parseCidr` 接受，内核 `createSubnetMatcher`（`isIP`）拒绝，两边规则还差这一处；现有部署不受影响。做的时候顺带补 `parseCidrPrefixLength('0024', 32)` 的用例，钉住「最多 3 位」。#493 审 #1298 时提出（可选） | P3 | 共享 / 内核 | 开放 |
 | 778 | #1299（遗留 774）的两处可选补充：① 直接拿声明了 `["string","null"]` 的 Operation 调 `actionTargetOf`（绕过解析），断言它不产出身份；② 拒绝信息回显的声明类型套 `boundedEcho` 加上界（与 `details.operation` 一致）。#493 审 #1299 时提出（可选） | P3 | 共享 | 开放 |
 
 ## 5. 更新规则
