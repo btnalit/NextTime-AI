@@ -212,7 +212,8 @@ export type OperationTarget = z.infer<typeof OperationTargetSchema>;
  *     else (a call touching another type could conflict with calls on it, which no target says);
  *   - `target_params_duplicate`: a param named twice;
  *   - `target_param_not_required_scalar`: a param the call need not carry, or one whose schema type
- *     is not `string` or `integer` (an array or object names more than one instance, or none);
+ *     is not `string` or `integer` (an array or object names more than one instance, or none; a
+ *     nullable type such as `["string", "null"]` is refused too, since a null names none);
  *   - `target_param_secret`: a param whose name names a secret (`namesASecretField`) — a request
  *     keeps its target's values as written and shows them to approvers and in waiting texts, where
  *     no redaction applies, so a value that is a secret must never become one;
@@ -250,7 +251,8 @@ const OPERATION_PARAM_TYPE_SET: ReadonlySet<string> = new Set(OPERATION_PARAM_TY
 
 /** Legacy 465: one param schema's single type, as a person reading the Operation is told it —
  *  `type: X`, or `type: [X, "null"]` in either order; `undefined` for anything else (a union, a
- *  `$ref`, no `type`), so a reader is never shown a guess. */
+ *  `$ref`, no `type`), so a reader is never shown a guess. A `target` param is held to a stricter
+ *  rule that refuses `[X, "null"]` (`targetParamType`, legacy 774). */
 export function operationParamType(schema: unknown): OperationParamType | undefined {
   if (schema === null || typeof schema !== 'object') return undefined;
   const declared = (schema as Record<string, unknown>).type;
@@ -261,14 +263,32 @@ export function operationParamType(schema: unknown): OperationParamType | undefi
     : undefined;
 }
 
-/** The JSON Schema `type` of `params_schema`'s param `name`, when it is a single string. */
-function paramSchemaType(paramsSchema: Record<string, unknown>, name: string): string | undefined {
+/** The `type` that `params_schema` declares for its param `name`, as written (`undefined` when the
+ *  param or its `type` is absent). */
+function declaredParamType(paramsSchema: Record<string, unknown>, name: string): unknown {
   const properties = paramsSchema.properties;
   if (properties === null || typeof properties !== 'object') return undefined;
   const property = (properties as Record<string, unknown>)[name];
   if (property === null || typeof property !== 'object') return undefined;
-  const type = (property as Record<string, unknown>).type;
+  return (property as Record<string, unknown>).type;
+}
+
+/** The type a `target` param is held to: its declared `type` when that is one string, and
+ *  `undefined` otherwise — `[X, "null"]` included. This is a rule of its own, not
+ *  {@link operationParamType} (legacy 774): that one tells a reader what a param is, and a param
+ *  that may be null is still an X to them; a target param's value is the identity calls are
+ *  ordered by, and a null names no instance. So a nullable param is refused as a target param
+ *  where the Operation is parsed ({@link operationTargetProblems}), and a call's value is read by
+ *  the same rule ({@link actionTargetOf}). */
+function targetParamType(paramsSchema: Record<string, unknown>, name: string): string | undefined {
+  const type = declaredParamType(paramsSchema, name);
   return typeof type === 'string' ? type : undefined;
+}
+
+/** A declared `type` as a refusal message shows it: a string bare, anything else as JSON. */
+function shownType(type: unknown): string {
+  if (type === undefined) return 'none';
+  return typeof type === 'string' ? type : JSON.stringify(type);
 }
 
 function requiredParams(paramsSchema: Record<string, unknown>): readonly string[] {
@@ -318,12 +338,12 @@ export function operationTargetProblems(operation: {
       });
     }
     seen.add(name);
-    const type = paramSchemaType(operation.params_schema, name);
+    const type = targetParamType(operation.params_schema, name);
     if (!required.includes(name) || (type !== 'string' && type !== 'integer')) {
       problems.push({
         reason: 'target_param_not_required_scalar',
         path: ['target', 'params', index],
-        message: `param ${JSON.stringify(name)} must be required and of type string or integer (type: ${type ?? 'none'}, required: ${required.includes(name)})`,
+        message: `param ${JSON.stringify(name)} must be required and of type string or integer (type: ${shownType(declaredParamType(operation.params_schema, name))}, required: ${required.includes(name)})`,
       });
     }
     if (namesASecretField(name)) {
@@ -426,7 +446,7 @@ export function actionTargetOf(
   const identity: (string | number)[] = [];
   for (const name of target.params) {
     const value = params[name];
-    const type = paramSchemaType(operation.params_schema, name);
+    const type = targetParamType(operation.params_schema, name);
     if (type === 'string' && typeof value === 'string') identity.push(value);
     else if (type === 'integer' && typeof value === 'number' && Number.isSafeInteger(value)) {
       identity.push(value);
