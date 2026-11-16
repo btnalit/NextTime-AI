@@ -9,6 +9,14 @@ import { HttpTransport } from './http.js';
 import { McpTransport } from './mcp.js';
 
 /**
+ * The port a "connection refused" case calls: nothing can listen on port 0 (`listen(0)` means "any
+ * free port"), so on Linux a connect to it is always refused. A port taken from a listener that was
+ * then closed could be handed to the next `listen(0)` — here or in a test file running beside this
+ * one — and the call would reach that server instead (legacy 437).
+ */
+const REFUSED_PORT = 0;
+
+/**
  * Legacy 287 (review of #586: #493 M3, #501 P2-2): the gate→target hop of the http and mcp
  * transports, against real loopback targets. Only a proven "not sent" and the target's own
  * verdict are plain failures; a call that may have reached the target and has no verdict is
@@ -61,7 +69,6 @@ async function failure(call: Promise<unknown>): Promise<Error> {
 }
 
 describe('http and mcp transports: a call that failed (legacy 287)', () => {
-  let refusedPort: number;
   const servers: net.Server[] = [];
   const ports: Record<string, number> = {};
 
@@ -113,9 +120,6 @@ describe('http and mcp transports: a call that failed (legacy 287)', () => {
   };
 
   beforeAll(async () => {
-    const closed = net.createServer();
-    refusedPort = await listen(closed);
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
     for (const [name, server] of Object.entries(targets)) {
       ports[name] = await listen(server);
       servers.push(server);
@@ -136,7 +140,7 @@ describe('http and mcp transports: a call that failed (legacy 287)', () => {
 
   describe('http', () => {
     it('a refused connection was not sent: a plain failure', async () => {
-      const err = await failure(httpTo(refusedPort).invoke(httpOperation, {}, {}));
+      const err = await failure(httpTo(REFUSED_PORT).invoke(httpOperation, {}, {}));
       expect(err).toBeInstanceOf(TransportInvokeError);
       expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
       expect(err.message).toBe(
@@ -206,7 +210,7 @@ describe('http and mcp transports: a call that failed (legacy 287)', () => {
 
   describe('mcp', () => {
     it('a refused connection was not sent: a plain failure', async () => {
-      const err = await failure(mcpTo(refusedPort).invoke(mcpOperation, {}, {}));
+      const err = await failure(mcpTo(REFUSED_PORT).invoke(mcpOperation, {}, {}));
       expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
       expect(err.message).toContain('not sent — could not connect to the target (ECONNREFUSED)');
     });

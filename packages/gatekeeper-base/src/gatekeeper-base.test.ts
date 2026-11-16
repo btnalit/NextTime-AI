@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
-import net from 'node:net';
+import type net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +26,14 @@ import {
 import { HttpTransport } from './kinds/http.js';
 import type { Transport } from './kinds/types.js';
 import { operationDefinitionDigest } from './operation-digest.js';
+
+/**
+ * The port a "connection refused" case calls: nothing can listen on port 0 (`listen(0)` means "any
+ * free port"), so on Linux a connect to it is always refused. A port taken from a listener that was
+ * then closed could be handed to the next `listen(0)` — here or in a test file running beside this
+ * one — and the call would reach that server instead (legacy 437).
+ */
+const REFUSED_PORT = 0;
 
 function observeOp(overrides: Partial<Operation> = {}): Operation {
   return {
@@ -655,7 +663,6 @@ describe('GatekeeperBase: a transport call that failed on the network (legacy 28
   });
   let dropsAfterRequestPort: number;
   let answers500Port: number;
-  let refusedPort: number;
 
   const listen = (server: net.Server) =>
     new Promise<number>((resolve) => {
@@ -665,9 +672,6 @@ describe('GatekeeperBase: a transport call that failed on the network (legacy 28
   beforeAll(async () => {
     dropsAfterRequestPort = await listen(dropsAfterRequest);
     answers500Port = await listen(answers500);
-    const closed = net.createServer();
-    refusedPort = await listen(closed);
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
   });
 
   afterAll(async () => {
@@ -713,7 +717,7 @@ describe('GatekeeperBase: a transport call that failed on the network (legacy 28
   });
 
   it('a refused connection sent nothing: a plain failure, never outcome unknown', async () => {
-    const { gate, invoke } = gateCalling(refusedPort);
+    const { gate, invoke } = gateCalling(REFUSED_PORT);
     const first = gate.apply('stock.adjust', { qty: 1 }, 'req-n2');
     await expect(first).rejects.toBeInstanceOf(TransportInvokeError);
     await expect(first).rejects.not.toBeInstanceOf(ApplyOutcomeUnknownError);

@@ -2,13 +2,21 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
+import type net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TransportInvokeError } from './errors.js';
 import { networkFailureCode, networkFailureDelivery } from './network-failure.js';
+
+/**
+ * The port a "connection refused" case calls: nothing can listen on port 0 (`listen(0)` means "any
+ * free port"), so on Linux a connect to it is always refused. A port taken from a listener that was
+ * then closed could be handed to the next `listen(0)` — here or in a test file running beside this
+ * one — and the call would reach that server instead (legacy 437).
+ */
+const REFUSED_PORT = 0;
 
 /**
  * Legacy 287: `networkFailureDelivery` against the errors Node's own `fetch` really throws — real
@@ -40,7 +48,6 @@ function listen(server: net.Server): Promise<number> {
 }
 
 describe('networkFailureDelivery (real sockets)', () => {
-  let refusedPort: number;
   /** Reads the whole request, then drops the connection without answering. */
   const dropAfterRequest = http.createServer((req) => {
     req.resume();
@@ -62,9 +69,6 @@ describe('networkFailureDelivery (real sockets)', () => {
   let silentPort: number;
 
   beforeAll(async () => {
-    const closed = net.createServer();
-    refusedPort = await listen(closed);
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
     dropAfterRequestPort = await listen(dropAfterRequest);
     dropMidAnswerPort = await listen(dropMidAnswer);
     silentPort = await listen(silent);
@@ -78,7 +82,7 @@ describe('networkFailureDelivery (real sockets)', () => {
   });
 
   it('a refused connection was not sent', async () => {
-    const err = await fetchError(`http://127.0.0.1:${refusedPort}/gate/apply`);
+    const err = await fetchError(`http://127.0.0.1:${REFUSED_PORT}/gate/apply`);
     expect(networkFailureDelivery(err)).toBe('not_sent');
     expect(networkFailureCode(err)).toBe('ECONNREFUSED');
   });
@@ -109,7 +113,7 @@ describe('networkFailureDelivery (real sockets)', () => {
   });
 
   it('reads the cause a transport wrapped it in', async () => {
-    const err = await fetchError(`http://127.0.0.1:${refusedPort}/x`);
+    const err = await fetchError(`http://127.0.0.1:${REFUSED_PORT}/x`);
     const wrapped = new TransportInvokeError('http transport: request failed', { cause: err });
     expect(networkFailureDelivery(wrapped)).toBe('not_sent');
   });
