@@ -1,9 +1,11 @@
 import type { PoolClient } from 'pg';
 import type { ChatRow } from '../chat/index.js';
 import {
+  CHAT_AUTO_TITLE_MAX_CHARS,
   findChatIdForActionPending,
   listChats,
   newChat,
+  normalizeChatTitle,
   requireChatAccess,
 } from '../chat/index.js';
 import { getGoalRun } from '../goal/index.js';
@@ -27,16 +29,23 @@ import { readTaskGoalStep, taskForWorkerRun } from '../task/index.js';
 /** The most recently created entry Chat `principalId` owns, or a newly created one if they have
  *  none yet. Used both as the ActionRequest-holder target and as the Task-chat fallback below.
  *  S11 AA4c: never an admin agent's Chat — what the entry agent's work leaves for the person (a
- *  Task's outcome, an approval) goes where the entry agent reads it. */
+ *  Task's outcome, an approval) goes where the entry agent reads it. `titleIfNew` names the Chat
+ *  only when one is created here (legacy 467); an existing Chat keeps its title. */
 export async function resolveDefaultChat(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
+  titleIfNew?: string,
 ): Promise<ChatRow> {
   const chats = await listChats(client, workspaceId, principalId); // ordered created_at desc
   const mostRecent = chats.find((chat) => chat.agentKind === 'entry');
   if (mostRecent) return mostRecent;
-  return newChat(client, workspaceId, principalId, {});
+  return newChat(
+    client,
+    workspaceId,
+    principalId,
+    titleIfNew === undefined ? {} : { title: titleIfNew },
+  );
 }
 
 /**
@@ -128,13 +137,22 @@ export async function resolveTaskChat(
 export async function resolveGoalChat(
   client: PoolClient,
   workspaceId: string,
-  goal: { readonly onBehalfOf: string; readonly originatedInTurnId: string | null },
+  goal: {
+    readonly onBehalfOf: string;
+    readonly originatedInTurnId: string | null;
+    readonly statement: string;
+  },
 ): Promise<ChatRow> {
   if (goal.originatedInTurnId) {
     const chatId = await activityChatId(client, workspaceId, goal.originatedInTurnId);
     if (chatId) return requireChatAccess(client, workspaceId, chatId);
   }
-  return resolveDefaultChat(client, workspaceId, goal.onBehalfOf);
+  // Legacy 467: a requester with no conversation yet gets one named after the goal, by the rule a
+  // first message's auto-title follows (`normalizeChatTitle`, the first 40 characters) — not an
+  // untitled one the chat list shows as 「新对话」. A title set here is kept like any other: the
+  // auto-title only fills a null one.
+  const title = normalizeChatTitle(goal.statement, CHAT_AUTO_TITLE_MAX_CHARS) ?? undefined;
+  return resolveDefaultChat(client, workspaceId, goal.onBehalfOf, title);
 }
 
 async function activityChatId(

@@ -14,7 +14,7 @@ import type {
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
-import { newChat } from '../chat/index.js';
+import { listChats, newChat } from '../chat/index.js';
 import {
   advanceGoalRun,
   confirmGoalRun,
@@ -150,12 +150,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    async function propose(requesterId: string, originatedInTurnId?: string): Promise<string> {
+    async function propose(
+      requesterId: string,
+      originatedInTurnId?: string,
+      statement = 'keep the stock list current',
+    ): Promise<string> {
       const created = await inTx(requesterId, (client) =>
         createGoalRun(client, workspaceId, {
           requesterId,
           proposedBy: requesterId,
-          statement: 'keep the stock list current',
+          statement,
           plan: { steps: [{ key: 'collect', worker, input: { step: 'collect' } }] },
           budget: BUDGET,
           ...(originatedInTurnId ? { originatedInTurnId } : {}),
@@ -335,6 +339,37 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await goalUpdates(requester, goalRunId)).map((row) => row.chat_id)).toEqual([
         latest.id,
       ]);
+    });
+
+    // Legacy 467: not an untitled chat the console lists as 「新对话」.
+    it('a requester with no chat yet gets one named after the goal, and keeps it for the next change', async () => {
+      const requester = await newPrincipal();
+      const goalRunId = await propose(
+        requester,
+        undefined,
+        '  Keep the stock list current\n  and tell me before anything runs out  ',
+      );
+      await deliverGoalChange(goalRunId, 'propose');
+      await confirm(requester, goalRunId);
+      await deliverGoalChange(goalRunId, 'confirm');
+      const chats = await inTx(requester, (client) => listChats(client, workspaceId, requester));
+      // One line, whitespace runs collapsed, cut to the auto-title's 40 characters.
+      expect(chats.map((chat) => chat.title)).toEqual(['Keep the stock list current and tell me']);
+      expect((await goalUpdates(requester, goalRunId)).map((row) => row.chat_id)).toEqual([
+        chats[0]?.id,
+        chats[0]?.id,
+      ]);
+    });
+
+    it('a goal reaching a chat that already exists leaves its title alone', async () => {
+      const requester = await newPrincipal();
+      const untitled = await inTx(requester, (client) =>
+        newChat(client, workspaceId, requester, {}),
+      );
+      const goalRunId = await propose(requester);
+      await deliverGoalChange(goalRunId, 'propose');
+      const chats = await inTx(requester, (client) => listChats(client, workspaceId, requester));
+      expect(chats.map((chat) => [chat.id, chat.title])).toEqual([[untitled.id, null]]);
     });
 
     it("a pause says why; an owner's hold and its release say who may resume; a change read after the run moved on keeps only its own status", async () => {
