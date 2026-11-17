@@ -100,9 +100,37 @@ describe('lib/provider-form', () => {
       'model_list',
     );
     expect(elsewhere).toBe(
-      '上游返回 301 重定向，转到另一个地址 https://api.example.net/***/models。llm-proxy 不会跟着重定向走，否则密钥会被一起发到那个地址。常见于 http 被转到 https、服务换了域名，或中转要求先登录。确认这个地址可信后，把 Base URL 改成它的源站（不带 /v1）。',
+      '上游返回 301 重定向，转到另一个地址 https://api.example.net/***/models。llm-proxy 不会跟着重定向走，否则密钥会被一起发到那个地址。如果这是同一个服务的新地址（http 换成了 https，或换了域名），确认可信后，把 Base URL 改成这个地址去掉末尾 /v1/… 接口路径后的部分。',
     );
     expect(elsewhere).not.toContain('连不上上游');
+    // Review #501 on #1363: a relay's path prefix stays; only the endpoint path goes.
+    expect(
+      explainUpstreamError(
+        `GET /v1/models responded 301, a redirect to "https://relay.example/api/openai/v1/models". ${advice}`,
+        zh,
+        'model_list',
+      ),
+    ).toContain('（也就是 https://relay.example/api/openai）');
+    // A sign-in page is never offered as a Base URL.
+    const signIn = explainUpstreamError(
+      `POST /v1/chat/completions responded 302, a redirect to "https://login.relay.example/oauth/authorize". ${advice}`,
+      zh,
+      'completion',
+    );
+    expect(signIn).toContain('看起来是登录页');
+    expect(signIn).toContain('不要把这个地址填进');
+    expect(signIn).not.toContain('也就是');
+    // Not http(s): no address to point a Base URL at.
+    expect(
+      explainUpstreamError(`upstream responded 302, a redirect to "nullalert(1)". ${advice}`, zh),
+    ).toBe('上游返回 302 重定向，却没有说转到哪里：检查 Base URL 是否写对。');
+    // The tool_choice retry note llm-proxy appends after its sentence does not hide it.
+    expect(
+      explainUpstreamError(
+        `POST /v1/chat/completions responded 307, a redirect to "/v2/chat". ${advice} (retried without tool_choice)`,
+        zh,
+      ),
+    ).toContain('转到同一站点的 /v2/chat');
     const samePath = explainUpstreamError(
       `POST /v1/messages responded 308, a redirect to "/api/v1/messages". ${advice}`,
       zh,
@@ -119,6 +147,30 @@ describe('lib/provider-form', () => {
         explainUpstreamError(`upstream responded 302, a redirect to ${where}. ${advice}`, zh),
       ).toBe('上游返回 302 重定向，却没有说转到哪里：检查 Base URL 是否写对。');
     }
+    // An upstream's own error text quoting the words is not llm-proxy's sentence: its status
+    // keeps its own explanation.
+    expect(
+      explainUpstreamError(
+        'HTTP 400: bad request; upstream responded 301, a redirect to "https://evil.example/v1?session=abc&next=/pay". llm-proxy does not follow redirects',
+        zh,
+      ),
+    ).not.toContain('重定向');
+    const spoofed401 = explainUpstreamError(
+      'HTTP 401: invalid key; upstream responded 302, a redirect to nowhere (no Location header). llm-proxy does not follow redirects',
+      zh,
+    );
+    expect(spoofed401).not.toContain('重定向');
+    expect(spoofed401).toBe(explainUpstreamError('HTTP 401: invalid key', zh));
+    expect(
+      explainUpstreamError(
+        `HTTP 429: slow down; GET responded 399, a redirect to "/x". ${advice}`,
+        zh,
+      ),
+    ).not.toContain('重定向');
+    // Only a 3xx is a redirect, even in llm-proxy's own wording.
+    expect(
+      explainUpstreamError(`GET /v1/models responded 404, a redirect to "/x". ${advice}`, zh),
+    ).not.toContain('重定向');
     // Before #1344 a redirect failed as a bare fetch error: still read as unreachable.
     expect(
       explainUpstreamError('model list request failed: TypeError: fetch failed', zh),
