@@ -115,49 +115,6 @@ describe('kit/discard-guard in kit/sheet (legacy 497)', () => {
     expect(screen.queryByTestId('discard-confirm')).toBeNull();
   });
 
-  it('#1398 UX P2: a click in a toast is not outside: the sheet stays open, edited or not', async () => {
-    function Page() {
-      const [open, setOpen] = useState(true);
-      return (
-        <>
-          <span data-testid="state">{open ? 'open' : 'closed'}</span>
-          <button type="button" data-testid="elsewhere">
-            elsewhere
-          </button>
-          <section className="toast-region">
-            <button type="button" data-testid="in-toast">
-              details
-            </button>
-          </section>
-          <Sheet open={open} onOpenChange={setOpen}>
-            <SheetContent data-testid="sheet">
-              <SheetTitle>Edit</SheetTitle>
-              <Form onCancel={() => setOpen(false)} />
-            </SheetContent>
-          </Sheet>
-        </>
-      );
-    }
-    render(<Page />);
-    await screen.findByTestId('sheet');
-    // Let Radix register its outside listeners (they attach on the next tick).
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    fireEvent.change(screen.getByLabelText('name'), { target: { value: 'half' } });
-    // jsdom's pointer has no type, which Radix handles on the click that follows.
-    const press = (element: HTMLElement) => {
-      fireEvent.pointerDown(element);
-      fireEvent.pointerUp(element);
-      fireEvent.click(element);
-    };
-    press(screen.getByTestId('in-toast'));
-    fireEvent.focus(screen.getByTestId('in-toast'));
-    expect(screen.getByTestId('state').textContent).toBe('open');
-    expect(screen.queryByTestId('discard-confirm')).toBeNull();
-    // Control: anywhere else outside still asks before dropping the edit.
-    press(screen.getByTestId('elsewhere'));
-    expect(await screen.findByTestId('discard-confirm')).toBeTruthy();
-  });
-
   it('hands focus back to the plain button that opened the sheet, not <body> (#794 UX P3-3)', async () => {
     function Page() {
       const [open, setOpen] = useState(false);

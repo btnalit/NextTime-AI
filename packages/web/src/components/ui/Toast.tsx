@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import type { ErrorToastDetails } from '../../lib/errors.js';
+import { TOAST_REGION_CLASS, markToastPointerDown } from '../../lib/toast-region.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { Button } from './Button.js';
 import { Icon, type IconName } from './Icon.js';
@@ -59,7 +60,7 @@ const TONE_ICON: Readonly<Record<ToastTone, IconName>> = {
 
 /** components/ui/Toast: transient notices (WS pushes, action results). 5s, stacked bottom-right;
  *  the countdown pauses while the toast is pointed at or focused. The region stays clickable over
- *  a modal drawer or dialog (`styles/ui.css` `.toast-region`, `kit/discard-guard`). */
+ *  a modal drawer or dialog (`styles/ui.css` `.toast-region`, `lib/toast-region`). */
 export function ToastProvider({ children }: { readonly children: ReactNode }) {
   const [toasts, setToasts] = useState<readonly ToastRecord[]>([]);
   const nextId = useRef(1);
@@ -146,7 +147,12 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <section className="toast-region" aria-label="Notifications">
+      <section
+        className={TOAST_REGION_CLASS}
+        aria-label="Notifications"
+        // #1398 UX P2: known as inside the toasts even after a close removed its target.
+        onPointerDownCapture={(event) => markToastPointerDown(event.nativeEvent)}
+      >
         {toasts.map((toast) => {
           const tone = toast.tone ?? 'info';
           return (

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LangProvider } from '../../lib/i18n.js';
+import { TOAST_REGION_CLASS, markToastPointerDown } from '../../lib/toast-region.js';
 import { Confirm, type ConfirmLevel, type ConfirmProps } from './confirm.js';
 
 afterEach(cleanup);
@@ -631,12 +632,16 @@ describe('kit/Confirm — a field the caller collects asks before it is lost (di
     fireEvent.input(await screen.findByTestId('reason'), { target: { value: 'x' } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     const region = document.body.appendChild(document.createElement('section'));
-    region.className = 'toast-region';
+    region.className = TOAST_REGION_CLASS;
     const inToast = region.appendChild(document.createElement('button'));
+    // What `components/ui/Toast` does in its capture phase; the press then removes the toast
+    // before Radix's deferred outside event, as its close does.
+    region.addEventListener('pointerdown', (event) => markToastPointerDown(event), true);
+    inToast.addEventListener('click', () => inToast.remove());
     fireEvent.pointerDown(inToast);
     fireEvent.pointerUp(inToast);
     fireEvent.click(inToast);
-    fireEvent.focus(inToast);
+    expect(inToast.isConnected).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId('discard-confirm')).toBeNull();
     expect(screen.getByTestId('confirm')).toBeTruthy();

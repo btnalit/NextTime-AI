@@ -963,7 +963,7 @@
   z-index: 60;
   width: min(360px, calc(100vw - 2 * var(--space-4)));
   /* #1398 UX P2: a modal drawer or dialog sets pointer-events: none on <body>; the toasts above
-     it stay clickable (its outside-click handling ignores them, kit/discard-guard). */
+     it stay clickable (its outside-click handling ignores them, lib/toast-region). */
   pointer-events: auto;
 }
 

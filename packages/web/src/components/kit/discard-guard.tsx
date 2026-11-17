@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { cn } from '../../lib/cn.js';
 import { useT } from '../../lib/i18n.js';
+import { isInToasts } from '../../lib/toast-region.js';
 import { Button, type ButtonProps } from './button.js';
 import { focusOrigin } from './focus-origin.js';
 
@@ -284,13 +285,6 @@ export function GuardedCancelButton({
   return <Button {...rest} onClick={() => guarded(onCancel)} />;
 }
 
-/** #1398 UX P2: the toast region (`components/ui/Toast`) sits outside every drawer, dialog and
- *  popover; a click or focus there — a toast's 「技术细节」 or its close — is not an outside
- *  interaction that closes one or asks to discard it. */
-export function isInToasts(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest('.toast-region') !== null;
-}
-
 export interface GuardedDialogContentProps
   extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   /** The guard to use — for a caller that hands it to content it renders elsewhere (a portal,
@@ -355,7 +349,7 @@ export const GuardedDialogContent = forwardRef<
       onInteractOutside={(event) => {
         // #1398 UX P2: a click or focus in a toast (its 「技术细节」, its close) is not a click
         // outside — it neither closes this nor asks to discard.
-        if (isInToasts(event.target)) {
+        if (isInToasts(event)) {
           event.preventDefault();
           return;
         }

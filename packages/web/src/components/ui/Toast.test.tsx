@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { useEffect } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
 import { ToastProvider, useToast } from './Toast.js';
 
 function PushFailure() {
@@ -108,5 +109,74 @@ describe('ToastProvider', () => {
     await act(async () => view.getByRole('button', { name: 'elsewhere' }).focus());
     act(() => vi.advanceTimersByTime(5_000));
     expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
+});
+
+/** #1398 UX P2: a modal drawer sets pointer-events: none on <body> and closes on any outside
+ *  press; the toasts above it are not outside (`lib/toast-region`). Real timers: Radix attaches
+ *  its outside listeners on the next tick. */
+describe('ToastProvider over a modal sheet', () => {
+  afterEach(cleanup);
+
+  function Page() {
+    const [open, setOpen] = useState(true);
+    return (
+      <ToastProvider>
+        <PushFailure />
+        <span data-testid="state">{open ? 'open' : 'closed'}</span>
+        <button type="button" data-testid="elsewhere">
+          elsewhere
+        </button>
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetContent data-testid="sheet">
+            <SheetTitle>Edit</SheetTitle>
+            <form>
+              <input aria-label="name" />
+            </form>
+          </SheetContent>
+        </Sheet>
+      </ToastProvider>
+    );
+  }
+
+  // jsdom's pointer has no type, which Radix handles on the click that follows. In a browser the
+  // close has removed the toast by then (React flushes between listeners); here it is removed just
+  // after, so the detached-target case itself is covered in lib/toast-region.test and
+  // kit/confirm.test.
+  function press(element: HTMLElement): void {
+    fireEvent.pointerDown(element);
+    fireEvent.pointerUp(element);
+    fireEvent.click(element);
+  }
+
+  async function opened(): Promise<void> {
+    await screen.findByTestId('sheet');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it('opening the details or closing the toast keeps an untouched sheet open', async () => {
+    render(<Page />);
+    await opened();
+    press(screen.getByText('技术细节'));
+    expect(screen.getByTestId('state').textContent).toBe('open');
+    // The modal hides everything else from assistive tech, the toast included.
+    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(screen.getByTestId('state').textContent).toBe('open');
+  });
+
+  it('closing the toast over an edited sheet neither closes it nor asks to discard', async () => {
+    render(<Page />);
+    await opened();
+    fireEvent.change(screen.getByLabelText('name'), { target: { value: 'half' } });
+    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId('state').textContent).toBe('open');
+    expect(screen.queryByTestId('discard-confirm')).toBeNull();
+    expect((screen.getByLabelText('name') as HTMLInputElement).value).toBe('half');
+    // Control: anywhere else outside still asks before dropping the edit.
+    press(screen.getByTestId('elsewhere'));
+    expect(await screen.findByTestId('discard-confirm')).toBeTruthy();
   });
 });
