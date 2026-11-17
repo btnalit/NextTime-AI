@@ -157,6 +157,27 @@ describe('deliverToClient (legacy 161)', () => {
     expect(cutOffs).toEqual([]);
   });
 
+  it('a client that left before the answer began is gone from the start: never written to, never ended, never reported cut off', async () => {
+    // Legacy 815: the client went away while the upstream had not yet sent its headers, so its
+    // `close` came before deliverToClient could listen for it. Only the response's own state says
+    // it is gone.
+    const client = fakeClient(16);
+    client.res.destroy();
+    await settle();
+    const write = vi.spyOn(client.res, 'write');
+    const end = vi.spyOn(client.res, 'end');
+    const { delivery, cutOffs } = start(client);
+
+    expect(delivery.gone()).toBe(true);
+    delivery.forward(bytes(64));
+    expect(write).not.toHaveBeenCalled();
+    await delivery.end();
+    expect(end).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+    expect(cutOffs).toEqual([]);
+    expect(delivery.gone()).toBe(true);
+  });
+
   it('a client that took the whole answer is not gone', async () => {
     const client = fakeClient(16);
     client.take();
