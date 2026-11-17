@@ -361,7 +361,9 @@ type GateHealthWire = (typeof GateHealthWireSchema.options)[number];
 export const GATE_HEALTH_TONES: Readonly<Record<GateHealthWire, ChipStyle>> = {
   ok: { tone: 'ok', label: { zh: '健康', en: 'Healthy' } },
   unreachable: { tone: 'danger', label: { zh: '不可达', en: 'Unreachable' } },
-  unauthorized: { tone: 'danger', label: { zh: '未授权', en: 'Unauthorized' } },
+  // #1394 UX P2: 「未授权」 also means "no Grant" (the systems checklist's 只读（未授权）), so one
+  // row read 「只读（未授权） 未授权」; the gate refused the platform's credential, so say that.
+  unauthorized: { tone: 'danger', label: { zh: '凭据被拒', en: 'Credentials rejected' } },
   unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 

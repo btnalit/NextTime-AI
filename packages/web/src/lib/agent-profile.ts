@@ -7,6 +7,8 @@
  * 默认").
  */
 
+import type { GateHealthWire } from '@nexttime/shared';
+
 /** One (workspace, principal) row — a `null` scalar means "inherit"; the three lists are
  *  *exclusion* lists (console redesign D1, governance 0012): `[]` excludes nothing, so a system
  *  granted or a Skill / Worker published later is picked up automatically. */
@@ -40,6 +42,27 @@ export interface AvailableGatekeeper {
   readonly gatekeeperId: string;
   readonly granted: boolean;
   readonly inUse: boolean;
+  /** Legacy 200 / 812: how the gate stands — only on a `get_agent_profile` read made with
+   *  `includeGateHealth: true` (a platform gate's stored health; a self-connected gate probed
+   *  live), never on `set_agent_profile`'s result. */
+  readonly health?: GateHealthWire;
+}
+
+/** Legacy 812: `saved` (a `set_agent_profile` result, which probes no gate and so carries no
+ *  health) with each gate's health from the profile it replaces — the save changed what the agent
+ *  uses, not how the gates stand. A gate the earlier read had no health for stays without. */
+export function keepGateHealth(saved: AgentProfile, previous: AgentProfile): AgentProfile {
+  const health = new Map<string, GateHealthWire>();
+  for (const gate of previous.availableGatekeepers) {
+    if (gate.health !== undefined) health.set(gate.gatekeeperId, gate.health);
+  }
+  return {
+    ...saved,
+    availableGatekeepers: saved.availableGatekeepers.map((gate) => {
+      const known = gate.health ?? health.get(gate.gatekeeperId);
+      return known === undefined ? gate : { ...gate, health: known };
+    }),
+  };
 }
 
 export interface EffectiveAgentProfile {
