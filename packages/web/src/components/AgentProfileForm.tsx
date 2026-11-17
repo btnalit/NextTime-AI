@@ -337,13 +337,13 @@ export function AgentProfileForm({
                 <span className="text-warn" data-testid="agent-profile-gate-health-error">
                   {t(
                     '。无法检查各系统的连接状态，没有标记不代表连接正常。',
-                    '. Could not check each system’s connection; no mark does not mean it is healthy.',
+                    '. Could not check each system’s connection; a system without a mark may still be unreachable.',
                   )}
                   {onRetryGateHealth !== undefined ? (
                     <>
                       {' '}
                       <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="s"
                         onClick={onRetryGateHealth}
                         data-testid="agent-profile-gate-health-retry"
