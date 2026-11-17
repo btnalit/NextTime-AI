@@ -111,7 +111,13 @@ export const GOVERN_NAV: readonly NavItem[] = [
     icon: 'flask',
     href: hrefs.evaluation(),
   },
-  { section: 'models', label: '模型与配额', sub: 'Models', icon: 'sparkle', href: hrefs.models() },
+  {
+    section: 'models',
+    label: '模型与配额',
+    sub: 'Models & Quotas',
+    icon: 'sparkle',
+    href: hrefs.models(),
+  },
   {
     section: 'audit',
     label: '审计',
