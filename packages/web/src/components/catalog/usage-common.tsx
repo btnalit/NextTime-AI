@@ -108,8 +108,8 @@ export function runNumbers(
       key: 'runs',
       label: t('运行', 'Runs'),
       value: t(
-        `${usage.runs} 次 · 最近 ${formatRelative(usage.lastUsedAt, t)}`,
-        `${usage.runs} · last ${formatRelative(usage.lastUsedAt, t)}`,
+        `${usage.runs} 次 · 最近一次 ${formatRelative(usage.lastUsedAt, t)}`,
+        `${usage.runs} · last run ${formatRelative(usage.lastUsedAt, t)}`,
       ),
     },
     {

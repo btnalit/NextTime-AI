@@ -218,7 +218,7 @@ export function TaskDetail({
           {task.durationLimitSec ? (
             <span className="text-3">
               {' '}
-              {t('/ 上限', 'limit')} {task.durationLimitSec}s
+              {t(`/ 上限 ${task.durationLimitSec} 秒`, `limit ${task.durationLimitSec}s`)}
             </span>
           ) : null}
         </>
