@@ -133,7 +133,9 @@ function maskResultTextParts(
 }
 
 /** A tool call's arguments with secret-looking keys and values replaced, read only as far as their
- *  record shows — the shape is kept, so the live console renders it as before. */
+ *  record shows — the shape is kept, so the live console renders it as before, except that past
+ *  the read bound the rest of an object or array is one `[…]` entry or item (`redactSecrets`'s
+ *  `maxChars`). */
 export function redactToolArgs(value: unknown, toolName?: string | null): RedactedValue {
   return redactPayload(value, toolName, ARGS_READ_CHARS);
 }
