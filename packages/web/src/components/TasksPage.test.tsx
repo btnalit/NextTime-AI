@@ -504,6 +504,6 @@ describe('TasksPage: a Task on a deprecated Worker version (legacy 264)', () => 
       { definitionId: 'wd-9abcdef0', version: 1 },
     ]);
     const detail = await screen.findByTestId('task-detail');
-    expect(within(detail).getByTestId('task-definition-deprecated').textContent).toBe('已弃用');
+    expect(within(detail).getByTestId('task-definition-deprecated').textContent).toBe('v1 已弃用');
   });
 });

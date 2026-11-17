@@ -133,8 +133,13 @@ export function TaskDetail({
             testId="task-definition"
           />
           {definitionDeprecated ? (
+            // UX P3 on #1419: the chip truncates its name at 390 and its version with it, so the
+            // mark says which version it means.
             <span className="text-warn text-small" data-testid="task-definition-deprecated">
-              {t('已弃用', 'deprecated')}
+              {t(
+                `v${task.workerDefinitionVersion} 已弃用`,
+                `v${task.workerDefinitionVersion} deprecated`,
+              )}
             </span>
           ) : null}
         </span>
