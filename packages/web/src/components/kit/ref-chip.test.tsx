@@ -5,6 +5,7 @@ import { useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { RefChip, useResolveRefs } from './ref-chip.js';
 
 afterEach(cleanup);
@@ -137,13 +138,28 @@ describe('kit/RefChip', () => {
     );
     expect(screen.getByTestId('agent').textContent).toMatch(/^智能体entry/);
     expect(screen.getByTestId('agent').textContent).not.toContain('(agent)');
-    expect(screen.getByTestId('human').textContent).toMatch(/^用户Ada/);
+    expect(screen.getByTestId('human').textContent).toMatch(/^账号Ada/);
     expect(screen.getByTestId('unknown').textContent).toMatch(/^账号New/);
     expect(screen.getByRole('button', { name: /^复制智能体 id$/ })).toBeTruthy();
   });
 
-  // Legacy 615: 「成员」 read as a role (「成员 Administrator」 on an owner); a person reads as a user,
-  // a Principal of unknown kind as an account.
+  // Legacy 615: 「成员」 read as a role (「成员 Administrator」 on an owner). A person reads 「账号」
+  // like a Principal of unknown kind, so the same person reads the same on every page.
+  // #1425 UX: the English copy button names the kind in lower case, as prose.
+  it('names its English copy button in lower case', () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <RefChip kind="principal" id="p-1" name="Ada" typeName="human" />
+        </LangProvider>,
+      );
+      expect(screen.getByRole('button', { name: 'Copy account id' })).toBeTruthy();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
+  });
+
   it('never labels a Principal with the member role word', () => {
     render(
       <>
@@ -151,7 +167,7 @@ describe('kit/RefChip', () => {
         <RefChip kind="principal" id="p-any" name="Administrator" testId="any" />
       </>,
     );
-    expect(screen.getByTestId('h').textContent).toMatch(/^用户Administrator/);
+    expect(screen.getByTestId('h').textContent).toMatch(/^账号Administrator/);
     expect(screen.getByTestId('any').textContent).toMatch(/^账号Administrator/);
     expect(screen.getByTestId('h').textContent).not.toContain('成员');
     expect(screen.getByTestId('any').textContent).not.toContain('成员');
