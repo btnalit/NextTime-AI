@@ -438,6 +438,35 @@ describe('SshTransport', () => {
       expect(execImpl).not.toHaveBeenCalled();
     });
 
+    it("the README's pattern admits plain arguments and refuses a second command; a loose `.*` tail does not (#1346 review)", async () => {
+      const { transport, execImpl } = transportWith();
+      const recommended = withPattern('show( [A-Za-z0-9_./:@%+=,-]+)*');
+      for (const command of ['show', 'show interfaces', 'show ip route 192.0.2.0/24']) {
+        await transport.invoke(recommended, { command }, {});
+      }
+      const riders = [
+        'show x; reboot',
+        'show x && reboot',
+        'show $(reboot)',
+        'show `reboot`',
+        'show x | sh',
+        'show x > /tmp/out',
+        "show 'a b'",
+      ];
+      for (const command of riders) {
+        await expect(transport.invoke(recommended, { command }, {})).rejects.toThrow(
+          SshCommandRejectedError,
+        );
+      }
+      expect(execImpl).toHaveBeenCalledTimes(3);
+      // What the README warns about: anything may follow, so every rider matches in full.
+      const loose = withPattern('show\\b.*');
+      for (const command of riders) {
+        await transport.invoke(loose, { command }, {});
+      }
+      expect(execImpl).toHaveBeenCalledTimes(3 + riders.length);
+    });
+
     it('a policy table rule is still searched for anywhere: classification is unchanged', () => {
       expect(classifyCommand('rm -rf /data', POLICY_TABLE).blastRadius).toBe('high');
       expect(classifyCommand('show interfaces', POLICY_TABLE).mode).toBe('observe');

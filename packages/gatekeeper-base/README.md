@@ -83,9 +83,14 @@ kind:
   or a regex class the **whole** of a literal `params.command` must match (see "Command policy
   table" below). The gate holds the pattern at both ends as `^(?:…)$` (legacy 195): the line goes to
   the remote shell as is, so a pattern that only had to occur somewhere would let `show x; reboot`
-  through `^show\b`. Write the whole line — `show [a-z0-9]+`, or `show\b.*` if anything may follow
-  (then every such line is what the Operation declares). A pattern that does not compile on its own
-  is a plain failure (legacy 310); an empty one matches no command.
+  through `^show\b`. Write the whole line, and let the arguments hold only characters the remote
+  shell reads as plain text: `show( [A-Za-z0-9_./:@%+=,-]+)*` (the set `shellQuote` passes through
+  unquoted). `.*`, `\S+`, `[^ ]+` or any class that admits `;`, `&`, `|`, `$`, a backtick, `<`, `>`
+  or a quote lets a second command ride along — `show x; reboot`, `show $(reboot)`, `show x | sh` —
+  and the policy table below does not stop it: its rules are searched for, so `^show\b` classifies
+  `show x; reboot` as observe. Avoid nested quantifiers such as `(\w+\s?)+`: held at both ends, a
+  command that almost matches makes the match backtrack exponentially. A pattern that does not
+  compile on its own is a plain failure (legacy 310); an empty one matches no command.
 
 ### Answers that mean "not there" (`absent_statuses` / `absent_exit_codes`)
 
