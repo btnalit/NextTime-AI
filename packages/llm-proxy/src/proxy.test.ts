@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import zlib from 'node:zlib';
-import { HANDLE_SIGNING_ALG } from '@nexttime/shared';
+import { HANDLE_SIGNING_ALG, LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import { SignJWT, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -2685,16 +2685,16 @@ describe('createProxyServer — usage figures that are not token counts (legacy 
 
   it('records the largest count it reads, without a cost that would not fit the record', async () => {
     const { proxyPort, token, records, lines } = await setup({
-      jsonBody: `{"id":"c1","choices":[],"usage":{"prompt_tokens":${Number.MAX_SAFE_INTEGER},"completion_tokens":1}}`,
-      // 2^53 - 1 tokens at $200 per million is about 1.8 × 10^12 USD.
-      cost: { input: 200, output: 8, cacheRead: 0.5, cacheWrite: 1 },
+      jsonBody: `{"id":"c1","choices":[],"usage":{"prompt_tokens":${LLM_USAGE_TOKENS_MAX},"completion_tokens":1}}`,
+      // 10^12 tokens at $2,000,000 per million is 2 × 10^12 USD.
+      cost: { input: 2_000_000, output: 8, cacheRead: 0.5, cacheWrite: 1 },
     });
 
     await call(proxyPort, token);
 
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
-      inputTokens: Number.MAX_SAFE_INTEGER,
+      inputTokens: LLM_USAGE_TOKENS_MAX,
       outputTokens: 1,
       status: 'completed',
     });
@@ -2704,7 +2704,9 @@ describe('createProxyServer — usage figures that are not token counts (legacy 
         msg: 'llm-proxy: the cost computed for this call cannot be recorded (negative, not finite, or 10^12 USD or more); its usage is recorded without a cost',
         provider: 'openai',
         model: 'gpt-example',
-        costUsd: String((200 / 1_000_000) * Number.MAX_SAFE_INTEGER + (8 / 1_000_000) * 1 + 0 + 0),
+        costUsd: String(
+          (2_000_000 / 1_000_000) * LLM_USAGE_TOKENS_MAX + (8 / 1_000_000) * 1 + 0 + 0,
+        ),
       }),
     ]);
   });

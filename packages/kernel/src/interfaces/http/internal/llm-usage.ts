@@ -73,23 +73,28 @@ import {
  *
  * One record never stalls the batch (legacy 829). The body must be a JSON array (else 400
  * `invalid_body`), but each element is checked against `LlmUsageRecordSchema` on its own: one that
- * fails — a token count that is not a non-negative safe integer, a cost `llm_usage.cost_usd`
- * cannot hold, a missing field — is dropped, never grouped, never retried, and counted as
- * `invalid` next to `groups` (only when there are any). One warn line per request names the first
- * few by their index in the body, with the failing fields and, where they are well-formed, the
- * record's workspace and request id; never a field's value. Refusing the whole batch instead
- * answered 400 without groups, so llm-proxy requeued all of it: one bad record held back every
- * workspace's usage until the queue overflowed. Nothing can make such a record valid on a resend,
- * so dropping it loses nothing a retry could recover.
+ * fails — a token count that is not an integer from 0 to `LLM_USAGE_TOKENS_MAX`, a cost
+ * `llm_usage.cost_usd` cannot hold, a missing field — is dropped, never grouped, never retried, and
+ * counted as `invalid` next to `groups` (only when there are any). One warn line per request names
+ * the first few by their index in the body, with the failing fields and, where they are
+ * well-formed, the record's workspace and request id; never a field's value. Refusing the whole
+ * batch instead answered 400 without groups, so llm-proxy requeued all of it: one bad record held
+ * back every workspace's usage until the queue overflowed. Nothing can make such a record valid on
+ * a resend, so dropping it loses nothing a retry could recover.
  *
  * Except a record from a newer llm-proxy: one whose only faults are a field this kernel does not
  * know (`unrecognized_keys`, the schema is strict) or a value outside a closed set it knows
  * (`invalid_value`, today only `refusalScope`). It is not malformed, just ahead of this kernel —
  * in the window of an upgrade where llm-proxy restarts first, or after a rollback of the kernel
  * alone — and becomes valid once the kernel catches up. Dropping it would lose real usage, so it
- * is held instead: its workspace's group is answered `retry` without being recorded (a 500, so
- * llm-proxy resends that workspace), and a separate warn line says so. A record with any other
- * fault besides is dropped: a missing or malformed field is wrong whichever version sent it.
+ * is held instead: its workspace's group is answered `retry` (a 500, so llm-proxy resends that
+ * workspace), and a separate warn line says so. The workspace's valid records are still recorded
+ * now, so its metering and budgets do not pause; on the resend they replay as no-ops (the
+ * `requestId` key). A record with any other fault besides is dropped: a missing or malformed field
+ * is wrong whichever version sent it. So is a held record that started more than
+ * `HOLD_LIMIT_MS` ago: an upgrade window is minutes, so a record still not understood after a
+ * day is a fault of the llm-proxy that sends it (a field it should not send), and holding it
+ * longer would keep its workspace answering `retry` until llm-proxy's queue overflows.
  *
  * Per-Task budget accounting (docs/development-tasks.md S2.7 "usage reports carry sessionId; a
  * Worker session's usage must count against its Task's budget ... same layer-legal shape as the
@@ -163,6 +168,9 @@ const NEWER_RECORD_ISSUE_CODES: ReadonlySet<string> = new Set([
   'invalid_value',
 ]);
 
+/** How long after it started a record is held at most (see the module doc comment). */
+const HOLD_LIMIT_MS = 24 * 60 * 60 * 1000;
+
 /** A record that failed validation as a warn line describes it — field paths and issue codes
  *  only, never a value (such a record may carry anything). */
 interface InvalidUsageRecord {
@@ -170,6 +178,8 @@ interface InvalidUsageRecord {
   readonly workspaceId?: string;
   readonly requestId?: string;
   readonly issues: readonly { readonly path: string; readonly code: string }[];
+  /** Set on a record that would be held but started more than `HOLD_LIMIT_MS` ago. */
+  readonly heldTooLong?: true;
 }
 
 const GuidSchema = z.guid();
@@ -183,7 +193,10 @@ function wellFormedGuid(value: unknown): string | undefined {
 /** Checks every element of the body on its own (legacy 829 — see the module doc comment): `valid`
  *  records are grouped and recorded, `invalid` ones dropped, `held` ones (from a newer llm-proxy,
  *  always with a `workspaceId`) keep their workspace's group for a resend. */
-function validateEach(items: readonly unknown[]): {
+function validateEach(
+  items: readonly unknown[],
+  now: number,
+): {
   readonly valid: LlmUsageRecord[];
   readonly invalid: InvalidUsageRecord[];
   readonly held: (InvalidUsageRecord & { readonly workspaceId: string })[];
@@ -207,7 +220,13 @@ function validateEach(items: readonly unknown[]): {
     }));
     // Faults only of these kinds imply a well-formed `workspaceId` (a bad one is a fault of its
     // own); the check is for the type.
-    if (workspaceId && issues.every((issue) => NEWER_RECORD_ISSUE_CODES.has(issue.code))) {
+    const newer =
+      workspaceId !== undefined &&
+      issues.every((issue) => NEWER_RECORD_ISSUE_CODES.has(issue.code));
+    // A record whose faults are only these has a well-formed `startedAt` (a bad one is a fault of
+    // its own).
+    const heldTooLong = newer && now - Date.parse(String(fields.startedAt)) > HOLD_LIMIT_MS;
+    if (workspaceId && newer && !heldTooLong) {
       held.push({ index, workspaceId, ...(requestId ? { requestId } : {}), issues });
       return;
     }
@@ -216,6 +235,7 @@ function validateEach(items: readonly unknown[]): {
       ...(workspaceId ? { workspaceId } : {}),
       ...(requestId ? { requestId } : {}),
       issues,
+      ...(heldTooLong ? { heldTooLong: true as const } : {}),
     });
   });
   return { valid, invalid, held };
@@ -251,7 +271,7 @@ export async function registerLlmUsageRoutes(
         error: { code: 'invalid_body', message: 'the body must be a JSON array of usage records' },
       };
     }
-    const { valid, invalid, held } = validateEach(request.body);
+    const { valid, invalid, held } = validateEach(request.body, Date.now());
     if (invalid.length > 0) {
       app.log?.warn?.(
         { invalid: invalid.length, records: invalid.slice(0, INVALID_RECORDS_DESCRIBED) },
@@ -274,13 +294,12 @@ export async function registerLlmUsageRoutes(
     const results: LlmUsageGroupResult[] = [];
 
     for (const [workspaceId, records] of groups) {
-      if (heldWorkspaces.has(workspaceId)) {
-        // Not recorded now: llm-proxy resends the whole workspace, its valid records included.
-        results.push({ workspaceId, outcome: 'retry' });
+      const holding = heldWorkspaces.has(workspaceId);
+      const first = records[0];
+      if (!first) {
+        if (holding) results.push({ workspaceId, outcome: 'retry' });
         continue;
       }
-      const first = records[0];
-      if (!first) continue;
       try {
         // Idempotent inserts — a group that fails partway through rolls back and is safe to
         // retry as a whole on the caller's next flush; a sibling group's committed work is
@@ -329,12 +348,18 @@ export async function registerLlmUsageRoutes(
             'llm-usage: dropped usage records whose session or Handle no longer exists (workspace purged)',
           );
         }
-        results.push({
-          workspaceId,
-          outcome: 'recorded',
-          inserted: result.inserted,
-          rejected: result.rejected,
-        });
+        // A held workspace's valid records are recorded all the same; `retry` brings the held
+        // ones back, and the rest replay as no-ops.
+        results.push(
+          holding
+            ? { workspaceId, outcome: 'retry' }
+            : {
+                workspaceId,
+                outcome: 'recorded',
+                inserted: result.inserted,
+                rejected: result.rejected,
+              },
+        );
       } catch (err) {
         if (
           isForeignKeyViolation(err) &&

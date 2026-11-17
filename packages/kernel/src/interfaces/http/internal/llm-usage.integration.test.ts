@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -234,7 +235,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     // Legacy 829: a record that passes the schema always fits its columns — the largest token
-    // count and cost it allows are stored as sent — and one that fails it is dropped alone.
+    // count and cost it allows are stored as sent — and one that fails it is dropped alone
+    // (year 0000 included: zod's datetime accepts it, Postgres does not).
     it('records the valid records of a batch at the largest counts and cost the schema allows, and drops the invalid ones', async () => {
       const workspaceId = await adminInsertWorkspace('llm-usage-route-829');
       const principalId = await adminInsertPrincipal(workspaceId);
@@ -258,10 +260,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         ...overrides,
       });
       const largest = usage({
-        inputTokens: Number.MAX_SAFE_INTEGER,
-        outputTokens: Number.MAX_SAFE_INTEGER,
-        cacheReadTokens: Number.MAX_SAFE_INTEGER,
-        cacheWriteTokens: Number.MAX_SAFE_INTEGER,
+        inputTokens: LLM_USAGE_TOKENS_MAX,
+        outputTokens: LLM_USAGE_TOKENS_MAX,
+        cacheReadTokens: LLM_USAGE_TOKENS_MAX,
+        cacheWriteTokens: LLM_USAGE_TOKENS_MAX,
         costUsd: 999_999_999_999.9998,
       });
       const res = await app.inject({
@@ -271,7 +273,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           usage({ inputTokens: -1 }),
           largest,
           usage({ costUsd: 1e12 }),
-          usage({ outputTokens: Number.MAX_SAFE_INTEGER + 1 }),
+          usage({ outputTokens: LLM_USAGE_TOKENS_MAX + 1 }),
+          usage({ cacheWriteTokens: Number.MAX_SAFE_INTEGER }),
+          usage({ startedAt: '0000-01-01T00:00:00Z' }),
         ],
       });
 
@@ -281,7 +285,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         result: {
           inserted: 1,
           groups: [{ workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 }],
-          invalid: 3,
+          invalid: 5,
         },
       });
       const rows = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
@@ -296,10 +300,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rows).toEqual([
         {
           request_id: largest.requestId,
-          input_tokens: '9007199254740991',
-          output_tokens: '9007199254740991',
-          cache_read_tokens: '9007199254740991',
-          cache_write_tokens: '9007199254740991',
+          input_tokens: '1000000000000',
+          output_tokens: '1000000000000',
+          cache_read_tokens: '1000000000000',
+          cache_write_tokens: '1000000000000',
           cost_usd: '999999999999.999800',
         },
       ]);

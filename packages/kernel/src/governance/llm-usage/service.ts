@@ -1,5 +1,6 @@
 import {
   LLM_USAGE_COST_USD_LIMIT,
+  LLM_USAGE_TOKENS_MAX,
   type LlmRefusalScope,
   LlmRefusalScopeSchema,
   type LlmUsageStatus,
@@ -45,6 +46,13 @@ export const COMPLETED_USAGE_STATUS = 'completed' satisfies LlmUsageStatus;
  * prose uses when describing this shape — that prose names DB columns, not a wire-format mandate
  * (assumption, see PR body "假设").
  */
+const TokenCountSchema = z.number().int().nonnegative().max(LLM_USAGE_TOKENS_MAX);
+
+const StoredInstantSchema = z
+  .string()
+  .datetime()
+  .refine((value) => !value.startsWith('0000'), 'year 0000 cannot be stored');
+
 export const LlmUsageRecordSchema = z
   .object({
     workspaceId: z.guid(),
@@ -52,19 +60,21 @@ export const LlmUsageRecordSchema = z
     jti: z.guid(),
     provider: z.string().min(1),
     model: z.string().min(1),
-    /** Token counts: non-negative safe integers (zod's `int()`), which every `bigint` column
-     *  holds. */
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    cacheReadTokens: z.number().int().nonnegative().optional(),
-    cacheWriteTokens: z.number().int().nonnegative().optional(),
+    /** Token counts: integers from 0 to `LLM_USAGE_TOKENS_MAX` (legacy 829), so that a Task's
+     *  `tokens_used` (`bigint`, all four figures of every record) cannot overflow. */
+    inputTokens: TokenCountSchema,
+    outputTokens: TokenCountSchema,
+    cacheReadTokens: TokenCountSchema.optional(),
+    cacheWriteTokens: TokenCountSchema.optional(),
     /** USD, from the provider's configured `ModelCost` rates when present (design doc §7.7:
      *  "成本元数据复用 pi-ai 的 ModelCost"). Omitted when the model has no configured cost. Below
      *  `LLM_USAGE_COST_USD_LIMIT` (legacy 829): `cost_usd` is `numeric(18, 6)`, so a larger cost
      *  is refused here, with its record alone, instead of failing the insert. */
     costUsd: z.number().nonnegative().lt(LLM_USAGE_COST_USD_LIMIT).optional(),
-    startedAt: z.string().datetime(),
-    finishedAt: z.string().datetime().optional(),
+    /** ISO instants in UTC. Not year 0000, which zod accepts and Postgres does not store
+     *  (legacy 829: a record that passes this schema always inserts). */
+    startedAt: StoredInstantSchema,
+    finishedAt: StoredInstantSchema.optional(),
     /** Free-text outcome, any non-empty value accepted (see the migration's own header comment
      *  for why) — so a record from a newer llm-proxy is never dropped, and its tokens still count.
      *  The values llm-proxy writes are `LLM_USAGE_STATUS_VALUES` (packages/shared enums.ts:

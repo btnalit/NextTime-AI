@@ -459,6 +459,16 @@ export type LlmUsageStatus = (typeof LLM_USAGE_STATUS_VALUES)[number];
 export const LLM_USAGE_COST_USD_LIMIT = 1e12;
 
 /**
+ * Legacy 829: the most tokens one usage figure counts (`inputTokens`, `outputTokens`,
+ * `cacheReadTokens`, `cacheWriteTokens` each) — 10^12, far beyond any real model call. A Task's
+ * `tokens_used` is a `bigint` that adds all four figures of every record of its WorkerRun: at
+ * `Number.MAX_SAFE_INTEGER` each, 257 records overflow it, the insert fails, and its workspace's
+ * group is answered `retry` on every resend from then on. At this bound it takes over two million
+ * records. The kernel refuses a larger figure on its own; llm-proxy reads one as missing.
+ */
+export const LLM_USAGE_TOKENS_MAX = 1e12;
+
+/**
  * Legacy 589: which platform budget llm-proxy refused a model call for (`llm_usage.refusal_scope`
  * on a `refused` usage record; the 402 `budget_exhausted` body's `scope`): the workspace's daily
  * token sum (`LLM_DAILY_TOKEN_BUDGET`) or its daily cost quota (`task.daily_cost_budget_usd`), both

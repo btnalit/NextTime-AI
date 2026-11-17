@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
@@ -287,7 +288,7 @@ describe('POST /internal/llm-usage', () => {
 
       const wsA = randomUUID();
       const wsB = randomUUID();
-      const goodA = baseRecord({ workspaceId: wsA, inputTokens: Number.MAX_SAFE_INTEGER });
+      const goodA = baseRecord({ workspaceId: wsA, inputTokens: LLM_USAGE_TOKENS_MAX });
       const goodB = baseRecord({ workspaceId: wsB, costUsd: 999_999_999_999.9998 });
       const requestId = randomUUID();
       const payload: unknown[] = [
@@ -295,7 +296,7 @@ describe('POST /internal/llm-usage', () => {
         { ...baseRecord({ workspaceId: wsA, requestId }), inputTokens: -1 },
         { ...baseRecord({ workspaceId: wsB }), outputTokens: 1.5 },
         { ...baseRecord(), inputTokens: '10' },
-        { ...baseRecord(), cacheReadTokens: Number.MAX_SAFE_INTEGER + 1 },
+        { ...baseRecord(), cacheReadTokens: LLM_USAGE_TOKENS_MAX + 1 },
         { ...baseRecord(), costUsd: 1e12 },
         { ...baseRecord(), workspaceId: 'not-a-workspace-id' },
         null,
@@ -383,7 +384,7 @@ describe('POST /internal/llm-usage', () => {
 
     // A record from a newer llm-proxy (a field, or a closed-set value, this kernel does not know)
     // is not malformed: it is held for a resend, not dropped.
-    it('holds the workspace of a record from a newer llm-proxy for a resend, and records the others', async () => {
+    it('holds the workspace of a record from a newer llm-proxy for a resend, recording its valid records now', async () => {
       const lines: Record<string, unknown>[] = [];
       app = capturingApp(lines);
       const recordUsage = vi.fn(async (_client: unknown, records: readonly LlmUsageRecord[]) => ({
@@ -423,7 +424,7 @@ describe('POST /internal/llm-usage', () => {
       });
       expect(
         recordUsage.mock.calls.map((call) => (call[1] as LlmUsageRecord[])[0]?.workspaceId),
-      ).toEqual([wsOther]);
+      ).toEqual([wsNewer, wsOther]);
       const held = lines.filter((line) => line.level === 40 && 'held' in line);
       expect(held).toEqual([
         expect.objectContaining({
@@ -458,6 +459,75 @@ describe('POST /internal/llm-usage', () => {
           ],
         }),
       ]);
+    });
+
+    it('drops a record it would hold once it started more than a day ago, and still holds a newer one', async () => {
+      const lines: Record<string, unknown>[] = [];
+      app = capturingApp(lines);
+      const recordUsage = vi.fn(async (_client: unknown, records: readonly LlmUsageRecord[]) => ({
+        inserted: records.length,
+        rejected: 0,
+      }));
+      await registerLlmUsageRoutes(app, { pool: fakePool(), recordUsage });
+
+      const hour = 60 * 60 * 1000;
+      const wsStale = randomUUID();
+      const wsRecent = randomUUID();
+      const payload: unknown[] = [
+        {
+          ...baseRecord({
+            workspaceId: wsStale,
+            startedAt: new Date(Date.now() - 25 * hour).toISOString(),
+          }),
+          reasoningTokens: 3,
+        },
+        {
+          ...baseRecord({
+            workspaceId: wsRecent,
+            startedAt: new Date(Date.now() - 23 * hour).toISOString(),
+          }),
+          reasoningTokens: 3,
+        },
+      ];
+      const res = await app.inject({ method: 'POST', url: '/internal/llm-usage', payload });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error.details).toEqual({
+        groups: [{ workspaceId: wsRecent, outcome: 'retry' }],
+        invalid: 1,
+      });
+      expect(recordUsage).not.toHaveBeenCalled();
+      expect(lines.filter((line) => line.level === 40 && 'invalid' in line)).toEqual([
+        expect.objectContaining({
+          invalid: 1,
+          records: [
+            {
+              index: 0,
+              workspaceId: wsStale,
+              issues: [{ path: '', code: 'unrecognized_keys' }],
+              heldTooLong: true,
+            },
+          ],
+        }),
+      ]);
+    });
+
+    it('drops a record that starts or finishes in year 0000, which Postgres cannot store', async () => {
+      app = Fastify();
+      const recordUsage = vi.fn();
+      await registerLlmUsageRoutes(app, { pool: fakePool(), recordUsage });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/llm-usage',
+        payload: [
+          baseRecord({ startedAt: '0000-01-01T00:00:00Z' }),
+          baseRecord({ finishedAt: '0000-12-31T23:59:59Z' }),
+        ],
+      });
+
+      expect(res.json()).toEqual({ ok: true, result: { inserted: 0, groups: [], invalid: 2 } });
+      expect(recordUsage).not.toHaveBeenCalled();
     });
 
     it('logs nothing about dropped records when there are none', async () => {

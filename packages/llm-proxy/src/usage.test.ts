@@ -1,3 +1,4 @@
+import { LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_USAGE_SCAN_CHARS,
@@ -303,8 +304,8 @@ describe('createStreamUsageAccumulator — anthropic-messages', () => {
   });
 });
 
-// Legacy 829: every count that leaves the module is a non-negative safe integer, whatever the
-// provider's answer held.
+// Legacy 829: every count that leaves the module is an integer from 0 to LLM_USAGE_TOKENS_MAX,
+// whatever the provider's answer held.
 describe('usage figures that are not token counts (legacy 829)', () => {
   const NOT_COUNTS: ReadonlyArray<readonly [string, unknown]> = [
     ['a negative number', -1],
@@ -312,8 +313,9 @@ describe('usage figures that are not token counts (legacy 829)', () => {
     ['Infinity (a JSON number too large for a double)', JSON.parse('1e400')],
     ['-Infinity', Number.NEGATIVE_INFINITY],
     ['NaN', Number.NaN],
-    ['a number past the safe integers', Number.MAX_SAFE_INTEGER + 1],
-    ['a fraction that rounds past the safe integers', Number.MAX_SAFE_INTEGER + 0.5],
+    ['one past the largest count', LLM_USAGE_TOKENS_MAX + 1],
+    ['a fraction that rounds past the largest count', LLM_USAGE_TOKENS_MAX + 0.5],
+    ['the largest safe integer', Number.MAX_SAFE_INTEGER],
     ['a numeric string', '100'],
     ['a boolean', true],
     ['an object', { value: 1 }],
@@ -351,31 +353,31 @@ describe('usage figures that are not token counts (legacy 829)', () => {
     });
   });
 
-  it('keeps the largest safe integer, and missing figures (null) carry no note', () => {
+  it('keeps the largest count (and a fraction that rounds down to it); null carries no note', () => {
     expect(
       parseAnthropicUsage({
-        input_tokens: Number.MAX_SAFE_INTEGER,
+        input_tokens: LLM_USAGE_TOKENS_MAX,
         output_tokens: null,
-        cache_creation_input_tokens: Number.MAX_SAFE_INTEGER,
+        cache_creation_input_tokens: LLM_USAGE_TOKENS_MAX + 0.4,
       } as never),
     ).toEqual({
-      inputTokens: Number.MAX_SAFE_INTEGER,
+      inputTokens: LLM_USAGE_TOKENS_MAX,
       outputTokens: 0,
-      cacheWriteTokens: Number.MAX_SAFE_INTEGER,
+      cacheWriteTokens: LLM_USAGE_TOKENS_MAX,
     });
   });
 
   it('nets the OpenAI input against checked cache figures, so it stays a count', () => {
     expect(
       parseOpenAiUsage({
-        prompt_tokens: Number.MAX_SAFE_INTEGER,
+        prompt_tokens: LLM_USAGE_TOKENS_MAX,
         completion_tokens: 0,
-        prompt_tokens_details: { cached_tokens: Number.MAX_SAFE_INTEGER, cache_write_tokens: -9 },
+        prompt_tokens_details: { cached_tokens: LLM_USAGE_TOKENS_MAX, cache_write_tokens: -9 },
       }),
     ).toEqual({
       inputTokens: 0,
       outputTokens: 0,
-      cacheReadTokens: Number.MAX_SAFE_INTEGER,
+      cacheReadTokens: LLM_USAGE_TOKENS_MAX,
       invalidFields: ['prompt_tokens_details.cache_write_tokens'],
     });
     expect(

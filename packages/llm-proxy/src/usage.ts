@@ -1,4 +1,4 @@
-import { LLM_USAGE_COST_USD_LIMIT } from '@nexttime/shared';
+import { LLM_USAGE_COST_USD_LIMIT, LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import type { ModelCost, ProviderApiKind } from './config.js';
 
 /**
@@ -21,8 +21,8 @@ import type { ModelCost, ProviderApiKind } from './config.js';
  *
  * Every figure is checked as it is read (legacy 829, `readCount`): the provider's answer, or a
  * relay in front of it, decides what is in it, so a figure may be negative, fractional, a string,
- * or too large for a double. Each count that leaves this module is a non-negative safe integer,
- * the only kind the kernel's usage record accepts.
+ * or too large for a double. Each count that leaves this module is an integer from 0 to
+ * `LLM_USAGE_TOKENS_MAX`, the only kind the kernel's usage record accepts.
  */
 
 export interface ParsedUsage {
@@ -39,17 +39,17 @@ export interface ParsedUsage {
  * One usage figure as the provider reported it (legacy 829). A count is a finite number ≥ 0; a
  * fraction is rounded to the nearest integer. Anything else is not a count — a string, a boolean,
  * an object, a negative number, a non-finite one (a JSON number too large for a double parses as
- * `Infinity`), or one past `Number.MAX_SAFE_INTEGER` — and reads as missing, exactly like an
+ * `Infinity`), or one past `LLM_USAGE_TOKENS_MAX` — and reads as missing, exactly like an
  * absent field, with its name added to `invalid`. `undefined` and `null` are missing without a
  * note. Before this, such a figure went into the usage record as it was; the kernel refused the
  * whole batch carrying it, and every workspace's usage waited behind it.
  */
 function readCount(value: unknown, field: string, invalid: string[]): number | undefined {
   if (value === undefined || value === null) return undefined;
-  // NaN fails `>= 0`; Infinity rounds to itself and fails the safe-integer bound.
+  // NaN fails `>= 0`; Infinity rounds to itself and fails the upper bound.
   if (typeof value === 'number' && value >= 0) {
     const count = Math.round(value);
-    if (count <= Number.MAX_SAFE_INTEGER) return count;
+    if (count <= LLM_USAGE_TOKENS_MAX) return count;
   }
   invalid.push(field);
   return undefined;
@@ -482,10 +482,10 @@ export function computeCostUsd(cost: ModelCost, usage: ParsedUsage): number {
 /**
  * Whether a cost from `computeCostUsd` fits a usage record (legacy 829): finite, ≥ 0 and below
  * `LLM_USAGE_COST_USD_LIMIT`, the most `llm_usage.cost_usd` holds. Counts are checked
- * (`readCount`), but a count can still be any safe integer, and the configured rates are not
- * bounded at all (a negative rate is a config error the schema lets through), so the product can
- * fall outside. proxy.ts then sends the record without a cost, as for a model with no configured
- * cost, so the kernel still meters its tokens, and logs why.
+ * (`readCount`), but a count can still be up to `LLM_USAGE_TOKENS_MAX`, and the configured rates
+ * are not bounded at all (a negative rate is a config error the schema lets through), so the
+ * product can fall outside. proxy.ts then sends the record without a cost, as for a model with no
+ * configured cost, so the kernel still meters its tokens, and logs why.
  */
 export function isRecordableCostUsd(costUsd: number): boolean {
   // NaN fails both comparisons and Infinity the second, so no separate finiteness check.
