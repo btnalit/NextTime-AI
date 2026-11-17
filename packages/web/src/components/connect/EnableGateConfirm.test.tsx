@@ -385,6 +385,65 @@ describe('EnableGateConfirm', () => {
     expect(absent.textContent).toContain('到能力目录逐个确认');
   });
 
+  it('legacy 800: an announced entry carrying suspected credentials is imported as a draft, not counted as published, and said once even when it also declares answers that mean “not there”', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        emptyPreview({
+          operationsToImport: [
+            { name: 'stock.get', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            {
+              name: 'stock.login',
+              mode: 'execute',
+              blastRadius: 'low',
+              autoApprovable: false,
+              suspectedSecretValues: 2,
+            },
+            {
+              name: 'stock.lookup',
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              absentAnswers: { statuses: [404] },
+              suspectedSecretValues: 1,
+            },
+            {
+              name: 'stock.reserve',
+              mode: 'execute',
+              blastRadius: 'low',
+              autoApprovable: false,
+              gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+              suspectedSecretValues: 1,
+            },
+          ],
+        }),
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Stock"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    const toPublish = within(confirm).getByTestId('enable-preview-import');
+    expect(toPublish.textContent).toContain('将发布 1 个');
+    expect(toPublish.textContent).not.toContain('stock.login');
+    const credentials = within(confirm).getByTestId('enable-preview-credentials');
+    expect(credentials.textContent).toContain('2 个 Operation 只导入为草稿，不会发布');
+    expect(credentials.textContent).toContain('stock.login：2 处疑似凭据');
+    expect(credentials.textContent).toContain('stock.lookup：1 处疑似凭据');
+    // The kernel's order: a gate-owned param first, credentials next, "not there" last.
+    expect(credentials.textContent).not.toContain('stock.reserve');
+    expect(within(confirm).getByTestId('enable-preview-held').textContent).toContain(
+      'stock.reserve',
+    );
+    expect(within(confirm).queryByTestId('enable-preview-absent')).toBeNull();
+  });
+
   it('S11 「门确认不存在」 B-a: a gate announcing only such entries is not “no Operations yet”', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () =>

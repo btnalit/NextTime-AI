@@ -9,11 +9,13 @@ import { type CapabilityListResult, useCapabilityList } from '../hooks/useCapabi
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
+import { draftsLeftForAPerson } from '../lib/connections.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { AbsentAnswerDraftsNotice } from './connect/AbsentAnswerDrafts.js';
 import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
+import { CredentialDraftsNotice } from './connect/CredentialDrafts.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 import { HeldDraftsNotice } from './connect/GateOwnedParams.js';
 // Bugfix (PR #324 review): "待启用的平台实例" was still the legacy dashed-border EmptyState —
@@ -104,9 +106,9 @@ export function AvailableGateInstancesSection({
   ): void {
     setEnabledResults((previous) => new Map(previous).set(row.gateId, result));
     const skipped = result.skippedOperationNames.length;
-    // S11 「门确认不存在」 B-a: drafts left for a person to confirm count as not published too.
-    const held =
-      (result.gateOwnedParamDrafts?.length ?? 0) + (result.absentAnswerDrafts?.length ?? 0);
+    // S11 「门确认不存在」 B-a, legacy 800: drafts left for a person to confirm (answers that mean
+    // "does not exist", suspected credentials) count as not published too.
+    const held = draftsLeftForAPerson(result);
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
@@ -413,6 +415,12 @@ function AvailableGateWorkspaceCell({
             gatekeeperId={enabledResult.gatekeeperId}
             fix="align"
             testId={`available-gate-held-${row.gateId}`}
+          />
+          <CredentialDraftsNotice
+            drafts={enabledResult.credentialDrafts}
+            gatekeeperId={enabledResult.gatekeeperId}
+            fix="align"
+            testId={`available-gate-credentials-${row.gateId}`}
           />
           <AbsentAnswerDraftsNotice
             drafts={enabledResult.absentAnswerDrafts}

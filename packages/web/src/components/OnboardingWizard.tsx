@@ -244,6 +244,16 @@ export function OnboardingWizard({
                   </li>
                 ))}
               </ul>
+              {/* Legacy 800: the kernel also holds back a draft whose definition carries
+               *  suspected credentials, which the draft list does not say — the result does. */}
+              {plan.publishable.length > 0 ? (
+                <p className="field-hint" data-testid="wizard-publish-credentials">
+                  {t(
+                    '其中定义里有疑似凭据的（比如描述里写了 Authorization: Bearer <token>，或 password 字段带了 example）会留作草稿、不发布，这里还看不出来；发布后会列出它们，逐个核对后再发布。',
+                    'Any of them whose definition holds a suspected credential (say Authorization: Bearer <token> in a description, or an example on a password field) stays a draft and is not published, which this list cannot tell yet; publishing lists them, to check and publish one by one.',
+                  )}
+                </p>
+              ) : null}
               {plan.proposals.length > 0 ? (
                 <p className="field-hint" data-testid="wizard-publish-proposals">
                   {t(

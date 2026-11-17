@@ -145,6 +145,11 @@ describe('OnboardingWizard', () => {
     expect(absent.textContent).toContain('另有 1 个草稿暂不发布');
     expect(absent.textContent).toContain('accept_s2_mcp_lookup');
     expect(absent.textContent).toContain('确认门用的凭据看得到要查的东西');
+    // Legacy 800: the draft list cannot tell which carry suspected credentials, so it says the
+    // publish may hold some back and that the result lists them.
+    const credentials = within(publishStep).getByTestId('wizard-publish-credentials');
+    expect(credentials.textContent).toContain('会留作草稿、不发布');
+    expect(credentials.textContent).toContain('发布后会列出它们');
   });
 
   it('walks kind → connect → publish → review → done, calling create_connection/publish_manifest', async () => {
