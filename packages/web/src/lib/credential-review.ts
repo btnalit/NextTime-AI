@@ -91,12 +91,17 @@ export function usePublishCredentialReview(subjectKey: string | null): PublishCr
 }
 
 /** The console's names for the top-level fields of a draft's reviewed content (the kernel's
- *  `skillReviewContent` / `procedureReviewContent`), so a flagged path reads as the editor's own
- *  label (`markdown` → 正文). */
+ *  `skillReviewContent` / `procedureReviewContent`, and an Operation's stored definition), so a
+ *  flagged path reads as the editor's own label (`markdown` → 正文). An Operation's are the same in
+ *  every place that lists them — the catalog's Publish, the wizard's review and a bulk publish's
+ *  held drafts (UX acceptance of #1370: `params_schema` read two ways). */
 export function reviewFieldNames(
-  kind: 'skill' | 'procedure',
+  kind: 'skill' | 'procedure' | 'operation',
   t: Translate,
 ): Readonly<Record<string, string>> {
+  if (kind === 'operation') {
+    return { description: t('描述', 'Description'), params_schema: t('参数定义', 'Parameters') };
+  }
   const common = { name: t('名称', 'Name'), description: t('描述', 'Description') };
   return kind === 'skill'
     ? { ...common, markdown: t('正文', 'Markdown body'), applicable: t('适用范围', 'Applies to') }

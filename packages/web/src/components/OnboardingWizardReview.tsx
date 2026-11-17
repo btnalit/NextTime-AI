@@ -17,7 +17,7 @@ import {
   reclassifiedOperationPayload,
   searchItems,
 } from '../lib/connections.js';
-import { usePublishCredentialReview } from '../lib/credential-review.js';
+import { reviewFieldNames, usePublishCredentialReview } from '../lib/credential-review.js';
 import { actionKindTagText, prettyJsonVisible } from '../lib/format.js';
 import {
   type OperationCatalogRow,
@@ -171,37 +171,51 @@ export function currentRevisions(
   return rows.filter((row) => byName.get(row.name) === row);
 }
 
-const NO_HELD: ReadonlyMap<string, readonly GateOwnedParamWire[]> = new Map();
+/** What `list_operations` says of this gate's rows that the graph search does not: which declare a
+ *  param only the gate sets, and (legacy 806) which of the gate's own import drafts carry
+ *  suspected credentials — step ③ leaves those for a person to publish in the catalog. */
+interface CatalogMarks {
+  readonly held: ReadonlyMap<string, readonly GateOwnedParamWire[]>;
+  readonly suspectedSecrets: ReadonlyMap<string, number>;
+}
+
+const NO_MARKS: CatalogMarks = { held: new Map(), suspectedSecrets: new Map() };
 
 function heldKey(row: { readonly name: string; readonly status: string }): string {
   return `${row.status}\u0000${row.name}`;
 }
 
 /** `list_operations` for this gate, keyed by status and name (a name has at most one draft and
- *  one published revision): the rows declaring a gate-owned param. A failed read marks nothing —
- *  the reclassification then fails the way it always did, with the kernel's own refusal. */
-async function loadGateOwnedParams(
+ *  one published revision): the rows declaring a gate-owned param, and the import drafts carrying
+ *  suspected credentials. A failed read marks nothing — the reclassification then fails the way it
+ *  always did, with the kernel's own refusal. */
+async function loadCatalogMarks(
   http: CapabilityCaller,
   gatekeeperId: string,
-): Promise<ReadonlyMap<string, readonly GateOwnedParamWire[]>> {
+): Promise<CatalogMarks> {
   try {
     const result = await http.call<{ readonly items: readonly OperationCatalogRow[] }>(
       'list_operations',
       { gatekeeperId },
     );
     const held = new Map<string, readonly GateOwnedParamWire[]>();
+    const suspectedSecrets = new Map<string, number>();
     for (const row of result.items) {
-      if (
-        row.gatekeeperId === gatekeeperId &&
-        row.gateOwnedParams &&
-        row.gateOwnedParams.length > 0
-      ) {
+      if (row.gatekeeperId !== gatekeeperId) continue;
+      if (row.gateOwnedParams && row.gateOwnedParams.length > 0) {
         held.set(heldKey(row), row.gateOwnedParams);
       }
+      if (
+        row.status === 'draft' &&
+        row.origin === 'import' &&
+        (row.suspectedSecretValues ?? 0) > 0
+      ) {
+        suspectedSecrets.set(heldKey(row), row.suspectedSecretValues ?? 0);
+      }
     }
-    return held;
+    return { held, suspectedSecrets };
   } catch {
-    return NO_HELD;
+    return NO_MARKS;
   }
 }
 
@@ -232,14 +246,15 @@ function OnboardingWizardReviewBody({
   const t = useT();
   const can = useRoleCan(http);
   // Review N1 of #567: which rows declare a param only the gate sets — `list_operations` carries
-  // the kernel's own judgment (`gateOwnedParams`), read only when the role surely may.
+  // the kernel's own judgment (`gateOwnedParams`, and `suspectedSecretValues` for legacy 806), read
+  // only when the role surely may.
   const readsCatalog = can('list_operations') === true;
   const loadOperations = useCallback(async () => {
-    const [rows, held] = await Promise.all([
+    const [rows, marks] = await Promise.all([
       loadGateOperations(http, gatekeeperId),
-      readsCatalog ? loadGateOwnedParams(http, gatekeeperId) : Promise.resolve(NO_HELD),
+      readsCatalog ? loadCatalogMarks(http, gatekeeperId) : Promise.resolve(NO_MARKS),
     ]);
-    return { rows: currentRevisions(rows), held };
+    return { rows: currentRevisions(rows), marks };
   }, [http, gatekeeperId, readsCatalog]);
   const operations = useResource(loadOperations);
 
@@ -284,7 +299,12 @@ function OnboardingWizardReviewBody({
                   row={row}
                   gateOwnedParams={
                     operations.state.status === 'ready'
-                      ? operations.state.data.held.get(heldKey(row))
+                      ? operations.state.data.marks.held.get(heldKey(row))
+                      : undefined
+                  }
+                  suspectedSecretValues={
+                    operations.state.status === 'ready'
+                      ? operations.state.data.marks.suspectedSecrets.get(heldKey(row))
                       : undefined
                   }
                   onChanged={() => void operations.reload()}
@@ -310,6 +330,7 @@ function OperationReviewRow({
   http,
   row,
   gateOwnedParams,
+  suspectedSecretValues,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
@@ -317,6 +338,10 @@ function OperationReviewRow({
   /** Review N1 of #567: set when this revision declares a param only the gate sets — then no
    *  reclassification is offered (a proposed draft of it could never be published). */
   readonly gateOwnedParams: readonly GateOwnedParamWire[] | undefined;
+  /** Legacy 806 (UX acceptance of #1377, P2): set on the gate's import draft whose definition
+   *  carries suspected credentials — step ③ left it for a person, and `propose_operation` refuses
+   *  it (409) until it is published in the catalog with the credential confirmation. */
+  readonly suspectedSecretValues: number | undefined;
   readonly onChanged: () => void;
 }) {
   const t = useT();
@@ -428,7 +453,16 @@ function OperationReviewRow({
   // leaves the gate's for a person — is published in the catalog with that confirmation, not
   // reclassified here: the gate's import draft is nobody's own proposal, so `propose_operation`
   // refuses it (409) until it is published. Same rule as review N1 of #567 (`held`).
-  const awaitsAbsentReview = !held && row.status === 'draft' && declaredAbsent !== undefined;
+  // Legacy 806: the kernel's order is gate-owned params, then credentials, then answers that mean
+  // "does not exist" — a draft is told about the first that holds it back.
+  const awaitsCredentialReview =
+    !held && row.status === 'draft' && (suspectedSecretValues ?? 0) > 0;
+  const awaitsAbsentReview =
+    !held && !awaitsCredentialReview && row.status === 'draft' && declaredAbsent !== undefined;
+  const draftHref = hrefs.catalog(
+    'operations',
+    typeof row.raw.draftOf === 'string' ? revisionDraftKey(row) : operationKey(row),
+  );
   const changeItem = pendingChange ? { name: row.name, ...pendingChange } : null;
   const consequences = changeItem ? governanceConsequences(changeItem, t, false) : [];
 
@@ -438,6 +472,15 @@ function OperationReviewRow({
         <td>
           <span className="mono">{actionKindTagText(row.name)}</span>
           <GateOwnedParamsMark params={gateOwnedParams} testId="wizard-review-held" />
+          {awaitsCredentialReview ? (
+            <span className="stack-s" data-testid="wizard-review-credential-draft">
+              <span>
+                <span className="chip chip-s">
+                  {t('草稿，等核对凭据后发布', 'Draft, published once its credentials are checked')}
+                </span>
+              </span>
+            </span>
+          ) : null}
           {awaitsAbsentReview ? (
             <span className="stack-s" data-testid="wizard-review-absent-draft">
               <span>
@@ -471,6 +514,18 @@ function OperationReviewRow({
                 'Cannot be reclassified or published until the gate’s manifest drops these params',
               )}
             </span>
+          ) : awaitsCredentialReview ? (
+            <span className="stack-s text-small" data-testid="wizard-review-reclassify-credentials">
+              <span className="text-3">
+                {t(
+                  `定义里有 ${suspectedSecretValues} 处看起来像密钥、令牌或密码的值。先到能力目录核对并发布，之后才能重分类。`,
+                  `Its definition holds ${suspectedSecretValues} value(s) that look like a key, token or password. Check and publish it in the catalog first; it can be reclassified after that.`,
+                )}
+              </span>
+              <RouteLink href={draftHref} testId="wizard-review-credential-draft-link">
+                {t('到目录里的这个草稿', 'Open this draft in the catalog')}
+              </RouteLink>
+            </span>
           ) : awaitsAbsentReview ? (
             <span className="stack-s text-small" data-testid="wizard-review-reclassify-absent">
               <span className="text-3">
@@ -479,13 +534,7 @@ function OperationReviewRow({
                   `It declares that ${absentAnswersWhenText(declaredAbsent, t)}, the thing looked up does not exist. Confirm in the catalog that the gate’s credentials can see what it looks up and publish it first; it can be reclassified after that.`,
                 )}
               </span>
-              <RouteLink
-                href={hrefs.catalog(
-                  'operations',
-                  typeof row.raw.draftOf === 'string' ? revisionDraftKey(row) : operationKey(row),
-                )}
-                testId="wizard-review-absent-draft-link"
-              >
+              <RouteLink href={draftHref} testId="wizard-review-absent-draft-link">
                 {t('到目录里的这个草稿', 'Open this draft in the catalog')}
               </RouteLink>
             </span>
@@ -496,7 +545,7 @@ function OperationReviewRow({
           )}
         </td>
       </tr>
-      {editing && !held && !awaitsAbsentReview ? (
+      {editing && !held && !awaitsCredentialReview && !awaitsAbsentReview ? (
         <tr data-expanded-detail="">
           <td colSpan={6}>
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
@@ -562,6 +611,7 @@ function OperationReviewRow({
               <CredentialReview
                 count={credentialReview.count}
                 paths={credentialReview.paths}
+                fieldNames={reviewFieldNames('operation', t)}
                 subject="publish"
                 where={
                   <a

@@ -181,6 +181,71 @@ describe('OnboardingWizardReview — an Operation held back for a gate-owned par
   });
 });
 
+// Legacy 806 (UX acceptance of #1377, P2): step ③ leaves the gate's import draft carrying suspected
+// credentials for a person to publish in the catalog; `propose_operation` refuses it (409) until
+// then, so the row says so and links to the draft instead of offering a reclassification.
+describe('OnboardingWizardReview — an import draft held back for suspected credentials', () => {
+  function heldHttp(extra: Record<string, unknown> = {}) {
+    const login = operationObject('gk-1', 'crm.login');
+    return {
+      call: vi.fn(async (name: string) => {
+        if (name === 'search') {
+          return {
+            items: [
+              operationObject('gk-1', 'crm.list'),
+              {
+                ...login,
+                properties: { ...login.properties, status: 'draft', origin: 'import', ...extra },
+              },
+            ],
+          };
+        }
+        if (name === 'list_operations') {
+          return {
+            items: [
+              { gatekeeperId: 'gk-1', name: 'crm.list', status: 'published' },
+              {
+                gatekeeperId: 'gk-1',
+                name: 'crm.login',
+                status: 'draft',
+                origin: 'import',
+                suspectedSecretValues: 2,
+              },
+            ],
+          };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+  }
+
+  it('is marked a draft waiting for the check, links to it and offers no reclassification', async () => {
+    render(<OnboardingWizardReview http={heldHttp()} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const mark = await screen.findByTestId('wizard-review-credential-draft');
+    expect(mark.textContent).toBe('草稿，等核对凭据后发布');
+    const rows = screen.getAllByTestId('wizard-review-row');
+    const heldRow = rows.find((row) => row.textContent?.includes('crm.login')) as HTMLElement;
+    const okRow = rows.find((row) => row.textContent?.includes('crm.list')) as HTMLElement;
+    expect(within(heldRow).queryByRole('button', { name: /提议重分类/ })).toBeNull();
+    const why = within(heldRow).getByTestId('wizard-review-reclassify-credentials');
+    expect(why.textContent).toContain('2 处看起来像密钥、令牌或密码的值');
+    expect(
+      within(why).getByTestId('wizard-review-credential-draft-link').getAttribute('href'),
+    ).toBe(hrefs.catalog('operations', 'gk-1::crm.login'));
+    expect(within(okRow).getByRole('button', { name: /提议重分类/ })).toBeTruthy();
+  });
+
+  it('a draft also declaring answers that mean “not there” is told about the credentials only, in the kernel’s order', async () => {
+    const http = heldHttp({
+      binding: { kind: 'http', method: 'GET', path: '/login', absent_statuses: [404] },
+    });
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    await screen.findByTestId('wizard-review-credential-draft');
+    expect(screen.queryByTestId('wizard-review-absent-draft')).toBeNull();
+    expect(screen.queryByTestId('wizard-review-reclassify-absent')).toBeNull();
+  });
+});
+
 // Decision 2026-10-09 "二次确认": the reclassification's publish is refused while its definition
 // carries suspected credentials; the row asks, and the next Submit carries the confirmation.
 describe('OnboardingWizardReview — credential confirmation', () => {
@@ -199,7 +264,8 @@ describe('OnboardingWizardReview — credential confirmation', () => {
               'credentials_review_required',
               {
                 subject: 'operation',
-                suspectedSecretValues: 1,
+                suspectedSecretValues: 2,
+                suspectedSecretPaths: ['description', 'params_schema.properties.password.example'],
               },
             );
           }
@@ -214,7 +280,13 @@ describe('OnboardingWizardReview — credential confirmation', () => {
     fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
 
     const review = await within(form).findByTestId('credential-review');
-    expect(review.getAttribute('data-count')).toBe('1');
+    expect(review.getAttribute('data-count')).toBe('2');
+    // Legacy 807: the places read as the catalog and a bulk publish's result name them.
+    expect(
+      Array.from(
+        within(review).getByTestId('credential-review-paths').querySelectorAll('code'),
+      ).map((code) => code.textContent),
+    ).toEqual(['描述', '参数定义.properties.password.example']);
     expect(within(form).getByTestId('wizard-review-draft-kept')).toBeTruthy();
     const submit = within(form).getByRole('button', { name: /提交/ }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);

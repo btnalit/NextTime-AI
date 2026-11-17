@@ -1434,7 +1434,11 @@ function OperationDetailView({
       ) : null}
       {canPublish && row.status === 'draft' && !heldBack ? (
         <>
-          <PublishCredentialSlot review={credentialReview} busy={busy} />
+          <PublishCredentialSlot
+            review={credentialReview}
+            busy={busy}
+            fieldNames={reviewFieldNames('operation', t)}
+          />
           <AbsentAnswersReviewSlot review={absentReview} busy={busy} />
         </>
       ) : null}

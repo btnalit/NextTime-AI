@@ -13,6 +13,7 @@ import { addressText } from '../../lib/connections.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { connectorModeLabel, principalShownName, transportKindLabel } from '../../lib/labels.js';
+import { launcherStepsText } from '../../lib/launcher-steps.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { type IntegrationsTab, hrefs, navigate, readIntegrationsTab } from '../../lib/router.js';
 import { deriveGateInstanceStatus, deriveSelfConnectionStatus } from '../../lib/status-tone.js';
@@ -161,7 +162,7 @@ export function PlatformIntegrationsPage({
         open={launcherOpen}
         onClose={() => setLauncherOpen(false)}
         title={t('接入一个系统', 'Connect a system')}
-        subtitle="选类型 → 连接与凭证 → 能力与策略 → 握手验证"
+        subtitle={launcherStepsText(t)}
         wide
         testId="connect-system-drawer"
       >

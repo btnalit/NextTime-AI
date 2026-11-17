@@ -244,16 +244,6 @@ export function OnboardingWizard({
                   </li>
                 ))}
               </ul>
-              {/* Legacy 800: the kernel also holds back a draft whose definition carries
-               *  suspected credentials, which the draft list does not say — the result does. */}
-              {plan.publishable.length > 0 ? (
-                <p className="field-hint" data-testid="wizard-publish-credentials">
-                  {t(
-                    '其中定义里有疑似凭据的（比如描述里写了 Authorization: Bearer <token>，或 password 字段带了 example）会留作草稿、不发布，这里还看不出来；发布后会列出它们，逐个核对后再发布。',
-                    'Any of them whose definition holds a suspected credential (say Authorization: Bearer <token> in a description, or an example on a password field) stays a draft and is not published, which this list cannot tell yet; publishing lists them, to check and publish one by one.',
-                  )}
-                </p>
-              ) : null}
               {plan.proposals.length > 0 ? (
                 <p className="field-hint" data-testid="wizard-publish-proposals">
                   {t(
@@ -267,6 +257,16 @@ export function OnboardingWizard({
                   {t(
                     `另有 ${plan.gateOwned.length} 个草稿暂不发布：${plan.gateOwned.map(actionKindTagText).join('、')}。它们声明了只能由门设置的参数，发布后的结果页会说明怎么处理。`,
                     `${plan.gateOwned.length} draft(s) are held back: ${plan.gateOwned.map(actionKindTagText).join(', ')}. They declare params only the gate sets; the result page after publishing says what to do.`,
+                  )}
+                </p>
+              ) : null}
+              {/* Legacy 801: the draft rows now say which carry suspected credentials, so the
+               *  list above is what the kernel publishes and these are named before publishing. */}
+              {plan.credentials.length > 0 ? (
+                <p className="field-hint" data-testid="wizard-publish-credentials">
+                  {t(
+                    `另有 ${plan.credentials.length} 个草稿暂不发布：${plan.credentials.map(actionKindTagText).join('、')}。它们的定义里有看起来像密钥、令牌或密码的值（常见的是文档里的示例，比如描述里写的 Authorization: Bearer <token>、password 字段的 example），要由人在能力目录里核对后逐个发布，发布后的结果页会列出这些值在定义里的位置。`,
+                    `${plan.credentials.length} draft(s) are held back: ${plan.credentials.map(actionKindTagText).join(', ')}. Their definitions hold values that look like a key, token or password (often an example in the document, such as Authorization: Bearer <token> in a description or a password field’s example); a person checks and publishes each in the catalog, and the result page after publishing lists where in each definition those values are.`,
                   )}
                 </p>
               ) : null}
