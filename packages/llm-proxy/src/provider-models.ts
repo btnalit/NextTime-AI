@@ -1,4 +1,8 @@
-import { type LlmProviderDiscoveredModelWire, isRedirectStatus } from '@nexttime/shared';
+import {
+  type LlmProviderDiscoveredModelWire,
+  LlmProviderModelIdInputWireSchema,
+  isRedirectStatus,
+} from '@nexttime/shared';
 import type { ProviderApiKind } from './config.js';
 import { readUpstreamJson } from './http-util.js';
 import { checkProviderKey } from './provider-keys.js';
@@ -154,7 +158,8 @@ export async function listUpstreamModels(
   for (const item of data) {
     if (!isRecord(item) || typeof item.id !== 'string') continue;
     const id = item.id.trim();
-    if (id.length === 0 || id.length > 200 || seen.has(id)) continue;
+    // Only an id a write would take — offering one the save then refuses helps nobody.
+    if (!LlmProviderModelIdInputWireSchema.safeParse(id).success || seen.has(id)) continue;
     seen.add(id);
     const name =
       typeof item.display_name === 'string' && item.display_name.trim().length > 0

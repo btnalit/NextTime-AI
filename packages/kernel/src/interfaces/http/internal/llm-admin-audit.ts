@@ -1,3 +1,4 @@
+import { LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { PoolLike } from '../../../adapters/db/pool.js';
@@ -34,7 +35,10 @@ import { recordLlmAdminAudit } from '../../../application/platform/index.js';
 
 const DetailsSchema = z
   .record(z.string().max(64), z.unknown())
-  .refine((value) => JSON.stringify(value).length <= 4096, 'details too large');
+  .refine(
+    (value) => JSON.stringify(value).length <= LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS,
+    'details too large',
+  );
 
 export const LlmAdminAuditEventSchema = z
   .object({

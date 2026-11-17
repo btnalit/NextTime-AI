@@ -61,15 +61,56 @@ export const LlmProviderModelCostWireSchema = z
   .strict();
 export type LlmProviderModelCostWire = z.infer<typeof LlmProviderModelCostWireSchema>;
 
+/** True when `value` has a C0 control character (0x00–0x1F), DEL (0x7F), or a UTF-16 surrogate
+ *  without its pair. A char-code loop like `hasControlCharacter` below (biome's
+ *  `noControlCharactersInRegex`); ES2022 has no `String.prototype.isWellFormed`. Postgres `jsonb`
+ *  refuses U+0000 and an unpaired surrogate, so a name carrying one cannot be stored in the
+ *  kernel's platform audit row (legacy 151); the rest are surely a paste mistake in a name. */
+function hasControlOrUnpairedSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+    if (code >= 0xdc00 && code <= 0xdfff) return true;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    }
+  }
+  return false;
+}
+
+/** Longest model id a write accepts, and the longest one model discovery offers. */
+export const LLM_PROVIDER_MODEL_ID_MAX_CHARS = 200;
+
+/** A model id as a write, a probe or a test takes it: 1–200 characters, none of them a control
+ *  character or an unpaired surrogate (legacy 151 — such an id would lose the audit row that names
+ *  it). llm-proxy's model discovery offers only ids this accepts. Responses keep the plain
+ *  `z.string()` shape, so a provider stored before this rule still reads. */
+export const LlmProviderModelIdInputWireSchema = z
+  .string()
+  .min(1)
+  .max(LLM_PROVIDER_MODEL_ID_MAX_CHARS)
+  .refine(
+    (value) => !hasControlOrUnpairedSurrogate(value),
+    'model id must not contain control characters or unpaired surrogates',
+  );
+
 export const LlmProviderModelWireSchema = z
   .object({
-    id: z.string().min(1).max(200),
+    id: z.string().min(1).max(LLM_PROVIDER_MODEL_ID_MAX_CHARS),
     /** Shown in the console and written to `models.json` as pi's `name`; `null` = use `id`. */
     displayName: z.string().min(1).max(120).nullable(),
     cost: LlmProviderModelCostWireSchema.nullable(),
   })
   .strict();
 export type LlmProviderModelWire = z.infer<typeof LlmProviderModelWireSchema>;
+
+/** A model as `POST /providers` and `PUT /providers/:id` take it: the response shape with the
+ *  write's model id rule. */
+export const LlmProviderModelInputWireSchema = LlmProviderModelWireSchema.extend({
+  id: LlmProviderModelIdInputWireSchema,
+}).strict();
 
 export const LlmProviderTestOutcomeWireSchema = z.enum(['ok', 'error', 'skipped']);
 
@@ -173,9 +214,26 @@ export function upstreamBaseUrlProblem(raw: string): string | null {
   return null;
 }
 
+/** The kernel's limit on an llm-proxy platform audit row's `details`, as
+ *  `JSON.stringify(details).length` (`POST /internal/llm-admin-audit`). A row over it is refused,
+ *  so llm-proxy keeps every row it sends inside it (legacy 151). */
+export const LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS = 4096;
+
+/** Longest `upstreamBaseUrl` a write accepts (legacy 151). A real base is a host and a short path,
+ *  well under 200 characters; the cap keeps an audit row that carries a base — twice, when a
+ *  provider moves to another upstream — inside `LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS`. */
+export const LLM_PROVIDER_UPSTREAM_BASE_URL_MAX_CHARS = 1024;
+
 export const LlmProviderUpstreamBaseUrlWireSchema = z
   .string()
+  .max(LLM_PROVIDER_UPSTREAM_BASE_URL_MAX_CHARS)
   .url()
+  // `new URL` takes a NUL or an unpaired surrogate in the path and encodes it, but the base is
+  // stored and audited as typed (legacy 151).
+  .refine(
+    (value) => !hasControlOrUnpairedSurrogate(value),
+    'upstreamBaseUrl must not contain control characters or unpaired surrogates',
+  )
   .superRefine((value, ctx) => {
     const problem = upstreamBaseUrlProblem(value);
     if (problem)
@@ -197,7 +255,7 @@ export const LlmProviderInputWireSchema = z
     authHeader: LlmProviderAuthHeaderWireSchema,
     authScheme: z.literal('Bearer').nullable().optional(),
     apiKeyEnv: LlmProviderApiKeyEnvWireSchema.optional(),
-    models: z.array(LlmProviderModelWireSchema).min(1).max(200),
+    models: z.array(LlmProviderModelInputWireSchema).min(1).max(200),
     enabled: z.boolean().optional(),
   })
   .strict();
@@ -205,8 +263,16 @@ export type LlmProviderInputWire = z.infer<typeof LlmProviderInputWireSchema>;
 
 export const LlmProviderTestInputWireSchema = z
   .object({
-    /** Defaults to the provider's first model. */
-    model: z.string().min(1).optional(),
+    /** Defaults to the provider's first model. Must be one of the provider's models; no length
+     *  cap of its own, since an operator's `llm-providers.yaml` sets none. */
+    model: z
+      .string()
+      .min(1)
+      .refine(
+        (value) => !hasControlOrUnpairedSurrogate(value),
+        'model must not contain control characters or unpaired surrogates',
+      )
+      .optional(),
   })
   .strict();
 export type LlmProviderTestInputWire = z.infer<typeof LlmProviderTestInputWireSchema>;
@@ -320,7 +386,10 @@ export const LLM_PROVIDER_PROBE_MAX_MODELS = 6;
  *  models are the ones the administrator picked. Nothing is stored. */
 export const LlmProviderModelProbeInputWireSchema = LlmProviderModelDiscoveryInputWireSchema.extend(
   {
-    models: z.array(z.string().trim().min(1).max(200)).min(1).max(LLM_PROVIDER_PROBE_MAX_MODELS),
+    models: z
+      .array(z.string().trim().pipe(LlmProviderModelIdInputWireSchema))
+      .min(1)
+      .max(LLM_PROVIDER_PROBE_MAX_MODELS),
   },
 ).strict();
 export type LlmProviderModelProbeInputWire = z.infer<typeof LlmProviderModelProbeInputWireSchema>;
