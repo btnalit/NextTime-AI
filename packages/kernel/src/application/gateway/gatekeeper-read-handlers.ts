@@ -25,6 +25,7 @@ import {
   operationGovernanceChange,
   operationParams,
   operationVisibleTo,
+  suspectedCredentialValuesOf,
 } from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import type { GatekeeperPlatformPolicy } from '../gates/index.js';
@@ -177,6 +178,10 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
   // Legacy 465: the params this version declares, so the console knows what an observe Operation
   // takes (a platform check's params, a fact editor) without reading its JSON Schema.
   const params = operationParams(record.operation);
+  // Legacy 801: what `publish_operation` asks the person publishing a draft to confirm, and what a
+  // bulk publish leaves for one — counted on a draft only, so the catalog knows before anyone clicks.
+  const suspectedSecretValues =
+    record.status === 'draft' ? suspectedCredentialValuesOf(record.operation) : 0;
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -208,6 +213,7 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     // Review #493 on #583: what the catalog shows of a draft, handed back to discard / publish it
     // so a draft revised in place since is refused rather than acted on unseen.
     ...(record.status === 'draft' ? { draftDigest: operationDraftDigest(record) } : {}),
+    ...(suspectedSecretValues > 0 ? { suspectedSecretValues } : {}),
     ...(revision !== undefined ? { governanceChange: revision.governanceChange } : {}),
     ...(revision?.definitionChange !== undefined
       ? { definitionChange: revision.definitionChange }
