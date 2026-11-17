@@ -9,7 +9,7 @@ import { useToast } from './components/ui/Toast.js';
 import { RouteAccessProvider, useCanOpen } from './hooks/useCanOpen.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
-import { describeError, errorToastText } from './lib/errors.js';
+import { describeError, errorToast } from './lib/errors.js';
 import { type Translate, useT } from './lib/i18n.js';
 import { roleMayOpen } from './lib/route-access.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
@@ -209,18 +209,20 @@ function useWorkspaceSwitchFailureToast(
     // (a page left open across an upgrade). Only a reload cures that, so the notice offers it,
     // straight into the workspace asked for, and stays until it is used or dismissed.
     const transport = describeError(failure.error).code === 'connection_closed';
+    const failed = transport ? null : errorToast(failure.error, t);
     toast.push({
       tone: 'danger',
       key: 'workspace-switch-failed',
       title: t(`没能切换到工作区「${name}」`, `Could not switch to workspace "${name}"`),
       // UX review of #1003: with the button there, "reload the page" would send the reader to F5,
       // which lands back in the current workspace — the description points at the button instead.
-      description: transport
-        ? t(
+      description: failed
+        ? `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${failed.description}`
+        : t(
             '仍在当前工作区。和平台的连接断了，点下面的按钮刷新页面并直接进入它。',
             'You are still in the current workspace. The connection to the platform closed — use the button below to reload straight into it.',
-          )
-        : `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
+          ),
+      ...(failed?.details ? { details: failed.details } : {}),
       ...(transport
         ? {
             action: {

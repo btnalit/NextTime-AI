@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { cn } from '../../lib/cn.js';
 import { useT } from '../../lib/i18n.js';
+import { isInToasts } from '../../lib/toast-region.js';
 import { Button, type ButtonProps } from './button.js';
 import { focusOrigin } from './focus-origin.js';
 
@@ -295,7 +296,8 @@ export interface GuardedDialogContentProps
  * A Radix `Dialog.Content` with the rule above: `kit/sheet`'s `SheetContent` and `kit/dialog`'s
  * `DialogContent` both render it. An edited form is not lost to a stray Escape or outside click —
  * it asks first — and a form's own 取消 asks the same through `useGuardedClose`. A caller's own
- * `onEscapeKeyDown` / `onInteractOutside` runs first; one that prevents the close keeps it.
+ * `onEscapeKeyDown` / `onInteractOutside` runs first; one that prevents the close keeps it. A
+ * click in a toast is never outside (#1398 UX P2).
  */
 export const GuardedDialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
@@ -345,6 +347,12 @@ export const GuardedDialogContent = forwardRef<
         discard.guard(close);
       }}
       onInteractOutside={(event) => {
+        // #1398 UX P2: a click or focus in a toast (its 「技术细节」, its close) is not a click
+        // outside — it neither closes this nor asks to discard.
+        if (isInToasts(event)) {
+          event.preventDefault();
+          return;
+        }
         onInteractOutside?.(event);
         if (event.defaultPrevented || !discard.edited()) return;
         event.preventDefault();

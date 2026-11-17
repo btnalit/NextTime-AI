@@ -12,7 +12,7 @@ import { type Resource, useResource } from '../../hooks/useResource.js';
 import { alwaysAllowUnpublishedText } from '../../lib/always-allow.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { credentialReviewParams } from '../../lib/credential-review.js';
-import { errorToastText, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
+import { errorToast, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
 import { actionKindTagText, actionKindToastLabel } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import type { Translate } from '../../lib/i18n.js';
@@ -300,11 +300,11 @@ export function useApprovalQueue({
             'Approved, but the auto-approval rule was not written',
           ),
           // Every refusal says why (UX acceptance of #592), not only a definition change.
-          description: isVersionChangedError(err)
-            ? alwaysAllowStaleText(t)
-            : errorToastText(err, t, {
+          ...(isVersionChangedError(err)
+            ? { description: alwaysAllowStaleText(t) }
+            : errorToast(err, t, {
                 not_found: alwaysAllowUnpublishedText(t, row.actionKindTag),
-              }),
+              })),
         });
       }
     }
