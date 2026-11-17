@@ -175,7 +175,12 @@ none (ajv refuses it there). The gate checks params against JSON Schema draft-07
 A request body
 that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
 or is nothing but a reference to itself is not read: the Operation takes only its parameters.
-Request bodies that are an array, or of another media type, still add nothing.
+Neither is one that is not a JSON object — the call sends what is left of its params as one JSON
+object with `content-type: application/json`, so a body of another media type (`multipart/…`, a
+`+json` type such as `application/merge-patch+json`), an array or a string is not offered either;
+`application/json; charset=…` counts as JSON. To call such an endpoint with a body, write the
+gate's manifest by hand. An object body that names no properties, and `application/json` with no
+schema, still take any params, as before.
 
 ## Command policy table (`ssh`/`cli`)
 

@@ -914,6 +914,100 @@ describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
     }
   });
 
+  // Legacy 798: the call sends what is left of its params as one JSON object, so a body that is
+  // not one is not read — the Operation takes its parameters and nothing else, never `{}`.
+  it('a request body that cannot be a JSON object — another media type, an array, a string — takes nothing', () => {
+    const json = (schema?: Record<string, unknown>) => ({
+      content: { 'application/json': schema === undefined ? {} : { schema } },
+    });
+    const operations = importOpenApi({
+      paths: {
+        '/files/{id}': {
+          put: {
+            operationId: 'upload',
+            parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+            requestBody: {
+              content: {
+                'multipart/form-data': {
+                  schema: { type: 'object', properties: { file: { type: 'string' } } },
+                },
+              },
+            },
+          },
+        },
+        '/batch': {
+          post: {
+            operationId: 'batch',
+            requestBody: json({ type: 'array', items: { type: 'object' } }),
+          },
+          put: { operationId: 'note', requestBody: json({ type: 'string' }) },
+          patch: { operationId: 'unspecified', requestBody: json() },
+          delete: {
+            operationId: 'merge_patch',
+            requestBody: {
+              content: {
+                'application/merge-patch+json': {
+                  schema: { type: 'object', properties: { name: { type: 'string' } } },
+                },
+              },
+            },
+          },
+        },
+        '/pets': {
+          post: {
+            operationId: 'pets_charset',
+            requestBody: {
+              content: {
+                'application/json; charset=utf-8': {
+                  schema: {
+                    type: ['object', 'null'],
+                    properties: { name: { type: 'string' } },
+                    required: ['name'],
+                  },
+                },
+              },
+            },
+          },
+          put: { operationId: 'free_form', requestBody: json({ type: 'object' }) },
+          patch: {
+            operationId: 'untyped',
+            requestBody: json({ properties: { name: { type: 'string' } } }),
+          },
+        },
+      },
+    });
+    const upload = schemaOf(operations, 'upload');
+    expect(upload).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string', 'x-in': 'path' } },
+      required: ['id'],
+    });
+    expect(() => assertParamsValid('upload', upload, { id: 'a', file: 'x' })).toThrow(
+      ParamsValidationError,
+    );
+    for (const name of ['batch', 'note', 'merge_patch']) {
+      expect([name, schemaOf(operations, name)]).toEqual([
+        name,
+        { type: 'object', properties: {} },
+      ]);
+    }
+    // JSON written with a parameter is still JSON.
+    expect(schemaOf(operations, 'pets_charset')).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    });
+    // A body that declares no `type` is read as before.
+    expect(schemaOf(operations, 'untyped')).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+    });
+    // An object body that names no properties takes any object, as it did; so does JSON with no
+    // schema, which may be anything.
+    expect(schemaOf(operations, 'free_form')).toEqual({});
+    expect(schemaOf(operations, 'unspecified')).toEqual({});
+  });
+
   it('a document with no path item parameters and no $ref imports exactly as before', () => {
     const [operation] = importOpenApi({
       paths: {
