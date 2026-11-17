@@ -173,8 +173,19 @@ export function upstreamBaseUrlProblem(raw: string): string | null {
   return null;
 }
 
+/** The kernel's limit on an llm-proxy platform audit row's `details`, as
+ *  `JSON.stringify(details).length` (`POST /internal/llm-admin-audit`). A row over it is refused,
+ *  so llm-proxy keeps every row it sends inside it (legacy 151). */
+export const LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS = 4096;
+
+/** Longest `upstreamBaseUrl` a write accepts (legacy 151). A real base is a host and a short path,
+ *  well under 200 characters; the cap keeps an audit row that carries a base — twice, when a
+ *  provider moves to another upstream — inside `LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS`. */
+export const LLM_PROVIDER_UPSTREAM_BASE_URL_MAX_CHARS = 1024;
+
 export const LlmProviderUpstreamBaseUrlWireSchema = z
   .string()
+  .max(LLM_PROVIDER_UPSTREAM_BASE_URL_MAX_CHARS)
   .url()
   .superRefine((value, ctx) => {
     const problem = upstreamBaseUrlProblem(value);
