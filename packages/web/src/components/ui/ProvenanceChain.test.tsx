@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { LangProvider } from '../../lib/i18n.js';
 import { ProvenanceChain } from './ProvenanceChain.js';
 
 afterEach(cleanup);
@@ -147,5 +148,24 @@ describe('ProvenanceChain — text the kernel read out masked (legacy 420)', () 
     expect(screen.getByTestId('prov-human-attestation-link').getAttribute('href')).toBe(
       'https://wiki.example/page',
     );
+  });
+
+  it('legacy 525: in the English console its times read in English', () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000 - 10_000).toISOString();
+    try {
+      localStorage.setItem('nexttime.lang', 'en');
+      render(
+        <LangProvider>
+          <ProvenanceChain
+            fact={{ id: 'f', lastObservation: { id: 'o', createdAt: fiveMinutesAgo } }}
+            testId="chain"
+          />
+        </LangProvider>,
+      );
+      expect(screen.getByText('5 minutes ago')).toBeTruthy();
+      expect(screen.queryByText('5 分钟前')).toBeNull();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });

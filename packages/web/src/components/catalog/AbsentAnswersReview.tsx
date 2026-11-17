@@ -172,8 +172,8 @@ export function AbsentAnswersReviewedLine({
       <RefChip kind="principal" id={review.reviewedBy} http={http} size="s" />
       <span title={review.reviewedAt}>
         {t(
-          `确认于 ${formatRelative(review.reviewedAt)}：门用的凭据看得到要查的东西，只有它不存在时目标系统才这样回答。`,
-          `confirmed ${formatRelative(review.reviewedAt)}: the gate’s credentials can see what it looks up, and the target answers this way only when it is not there.`,
+          `确认于 ${formatRelative(review.reviewedAt, t)}：门用的凭据看得到要查的东西，只有它不存在时目标系统才这样回答。`,
+          `confirmed ${formatRelative(review.reviewedAt, t)}: the gate’s credentials can see what it looks up, and the target answers this way only when it is not there.`,
         )}
       </span>
     </span>

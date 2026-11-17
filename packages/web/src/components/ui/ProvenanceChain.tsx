@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { formatDateTime, formatRelative, prettyJsonVisible } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import {
   activityKindLabel,
   activityStatusLabel,
@@ -100,9 +100,9 @@ function principalChip(
   );
 }
 
-function when(iso: string | null | undefined): ReactNode {
+function when(iso: string | null | undefined, t: Translate): ReactNode {
   if (!iso) return <span className="text-3">—</span>;
-  return <time title={formatDateTime(iso)}>{formatRelative(iso)}</time>;
+  return <time title={formatDateTime(iso)}>{formatRelative(iso, t)}</time>;
 }
 
 /** Only an http(s) link is ever rendered as an anchor — the kernel already refuses any other
@@ -163,7 +163,7 @@ function HumanAttestations({
                   {t('人工确认', 'Human attestation')}
                 </span>
                 {principalChip(attestation.attestedByPrincipal, hrefFor)}
-                <span className="text-3 text-small">{when(attestation.createdAt)}</span>
+                <span className="text-3 text-small">{when(attestation.createdAt, t)}</span>
               </div>
               <p className="prov-attestation-note">{attestation.note}</p>
               {link ? (
@@ -249,7 +249,7 @@ export function ProvenanceChain({
                 {fact.lastObservation ? (
                   <>
                     <dt>{t('最近观测', 'Last observed')}</dt>
-                    <dd>{when(fact.lastObservation.createdAt)}</dd>
+                    <dd>{when(fact.lastObservation.createdAt, t)}</dd>
                   </>
                 ) : null}
                 {fact.invalidatedAt ? (
@@ -257,7 +257,7 @@ export function ProvenanceChain({
                     <dt className="text-danger">{t('失效', 'Invalidated')}</dt>
                     <dd className="stack-s">
                       <span>
-                        {when(fact.invalidatedAt)}
+                        {when(fact.invalidatedAt, t)}
                         {fact.invalidationReason ? (
                           <span className="text-2"> — {fact.invalidationReason}</span>
                         ) : null}
@@ -309,11 +309,11 @@ export function ProvenanceChain({
                   </>
                 ) : null}
                 <dt>{t('开始', 'Started')}</dt>
-                <dd>{when(activity.createdAt)}</dd>
+                <dd>{when(activity.createdAt, t)}</dd>
                 {activity.endedAt ? (
                   <>
                     <dt>{t('结束', 'Ended')}</dt>
-                    <dd>{when(activity.endedAt)}</dd>
+                    <dd>{when(activity.endedAt, t)}</dd>
                   </>
                 ) : null}
               </dl>

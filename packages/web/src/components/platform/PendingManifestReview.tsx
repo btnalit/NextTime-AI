@@ -164,7 +164,7 @@ export function PendingManifestReview({
           </span>
         ))}{' '}
         <time title={formatDateTime(pending.announcedAt)}>
-          {formatRelative(pending.announcedAt)}
+          {formatRelative(pending.announcedAt, t)}
         </time>
       </Notice>
       <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>

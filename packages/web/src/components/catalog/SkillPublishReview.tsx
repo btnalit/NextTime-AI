@@ -326,6 +326,7 @@ function EvaluationLine({
   readonly note: string | null;
   readonly testId: string;
 }) {
+  const t = useT();
   return (
     <li data-testid={testId} data-evaluation-id={row.id}>
       <span className="row-wrap">
@@ -342,7 +343,9 @@ function EvaluationLine({
         <RouteLink href={hrefs.evaluation('drafts', row.id)} className="link-inline">
           {suiteText(row)}
         </RouteLink>
-        <span className="text-3 text-small">{formatRelative(row.finishedAt ?? row.createdAt)}</span>
+        <span className="text-3 text-small">
+          {formatRelative(row.finishedAt ?? row.createdAt, t)}
+        </span>
       </span>
       {note !== null ? <span className="text-2 text-small">{note}</span> : null}
     </li>
@@ -378,7 +381,7 @@ function EvidenceCard({
         />
         <span style={{ fontWeight: 600 }}>{suiteText(evidence)}</span>
         <span className="text-3 text-small">
-          {formatRelative(evidence.finishedAt ?? evidence.createdAt)}
+          {formatRelative(evidence.finishedAt ?? evidence.createdAt, t)}
         </span>
         <RouteLink
           href={hrefs.evaluation('drafts', evidence.id)}
@@ -622,7 +625,7 @@ export function PublishAcknowledgeSheet({
                   {suiteText(group.evaluation)}
                 </RouteLink>
                 <span className="text-3 text-small">
-                  {formatRelative(group.evaluation.finishedAt ?? group.evaluation.createdAt)}
+                  {formatRelative(group.evaluation.finishedAt ?? group.evaluation.createdAt, t)}
                 </span>
               </div>
               {group.items.map((item) => {

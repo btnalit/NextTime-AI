@@ -197,7 +197,7 @@ export function AbsenceBaselineLine({
           </span>
           {baseline.settledAt ? (
             <time title={formatDateTime(baseline.settledAt)}>
-              {formatRelative(baseline.settledAt)}
+              {formatRelative(baseline.settledAt, t)}
             </time>
           ) : null}
           {baseline.observationId ? (

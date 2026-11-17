@@ -245,7 +245,7 @@ export function GateInstanceDetailPanel({
                 t('从未', 'Never')
               ) : (
                 <time title={formatDateTime(instance.lastSeenAt)}>
-                  {formatRelative(instance.lastSeenAt)}
+                  {formatRelative(instance.lastSeenAt, t)}
                 </time>
               )}
             </dd>
@@ -476,7 +476,7 @@ export function GateInstanceDetailPanel({
                 <dt>{t('检查时间', 'Checked')}</dt>
                 <dd>
                   <time title={formatDateTime(testResult.checkedAt)}>
-                    {formatRelative(testResult.checkedAt)}
+                    {formatRelative(testResult.checkedAt, t)}
                   </time>
                 </dd>
               </dl>

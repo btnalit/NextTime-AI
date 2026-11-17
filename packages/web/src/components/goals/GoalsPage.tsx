@@ -229,7 +229,7 @@ function GoalsList({ state, rows, total, principalNames, onRetry, onOpen }: Goal
                   ) : null}
                 </span>
                 <time className="text-3" title={formatDateTime(goal.createdAt)}>
-                  {formatRelative(goal.createdAt)}
+                  {formatRelative(goal.createdAt, t)}
                 </time>
               </span>
               <span className="truncate">{excerpt(goal.statement, 120)}</span>

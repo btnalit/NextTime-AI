@@ -168,7 +168,7 @@ function GateAddressChangeRow({
                   {change.proposedByName ?? t('工作区所有者', 'A workspace owner')}
                   {' · '}
                   <time dateTime={change.createdAt} title={formatDateTime(change.createdAt)}>
-                    {formatRelative(change.createdAt)}
+                    {formatRelative(change.createdAt, t)}
                   </time>
                 </>
               ),
@@ -177,7 +177,7 @@ function GateAddressChangeRow({
               label: t('过期于', 'Expires'),
               value: (
                 <time dateTime={change.expiresAt} title={formatDateTime(change.expiresAt)}>
-                  {formatRelative(change.expiresAt)}
+                  {formatRelative(change.expiresAt, t)}
                 </time>
               ),
             },

@@ -367,7 +367,7 @@ function AdoptedRevision({
         <StatusChip machine="planningRound" status="applied" size="s" />
         {round.settledAt ? (
           <time className="text-3 text-small" title={formatDateTime(round.settledAt)}>
-            {formatRelative(round.settledAt)}
+            {formatRelative(round.settledAt, t)}
           </time>
         ) : null}
       </span>
@@ -452,7 +452,7 @@ function RoundItem({
           {t(`基于第 ${round.basedOnRevision} 版`, `on v${round.basedOnRevision}`)}
         </span>
         <time className="text-3" title={formatDateTime(round.createdAt)}>
-          {formatRelative(round.createdAt)}
+          {formatRelative(round.createdAt, t)}
         </time>
         {round.taskId ? (
           <RefChip
@@ -720,7 +720,7 @@ function PlannerProposal({
             : t('等请求人决定', 'Waiting for the requester')}
         </span>
         <time className="text-3 text-small" title={formatDateTime(proposal.createdAt)}>
-          {formatRelative(proposal.createdAt)}
+          {formatRelative(proposal.createdAt, t)}
         </time>
       </span>
       {round ? (

@@ -315,7 +315,7 @@ export function ChatListPane({
                             title={formatDateTime(timeValue)}
                             data-testid={archived ? 'chat-archived-at' : 'chat-last-activity-at'}
                           >
-                            {formatRelative(timeValue)}
+                            {formatRelative(timeValue, t)}
                           </time>
                           <span className="text-3" aria-hidden>
                             ·
@@ -344,7 +344,7 @@ export function ChatListPane({
                               <span>
                                 {t('· 创建于', 'created')}{' '}
                                 <time title={formatDateTime(chat.createdAt)}>
-                                  {formatRelative(chat.createdAt)}
+                                  {formatRelative(chat.createdAt, t)}
                                 </time>
                               </span>
                             </span>

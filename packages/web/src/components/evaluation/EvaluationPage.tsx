@@ -349,7 +349,7 @@ function SuitesList({ t, suites, rows, definitionRows, selectedId, onSelect }: S
                 ) : null}
                 <span className="meta-sep" />
                 <time title={formatDateTime(suite.updatedAt)}>
-                  {formatRelative(suite.updatedAt)}
+                  {formatRelative(suite.updatedAt, t)}
                 </time>
               </span>
             </ListRow>

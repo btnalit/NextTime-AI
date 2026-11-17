@@ -89,7 +89,7 @@ function RevisionItem({
           <span className="text-small text-3">{t('已被后来的版本取代', 'Replaced since')}</span>
         ) : null}
         <time className="text-3 text-small" title={formatDateTime(revision.createdAt)}>
-          {formatRelative(revision.createdAt)}
+          {formatRelative(revision.createdAt, t)}
         </time>
       </span>
       <span className="row-wrap text-small">
@@ -138,7 +138,7 @@ function RevisionItem({
             ) : null}
             {revision.decidedAt ? (
               <time className="text-3" title={formatDateTime(revision.decidedAt)}>
-                {formatRelative(revision.decidedAt)}
+                {formatRelative(revision.decidedAt, t)}
               </time>
             ) : null}
           </>

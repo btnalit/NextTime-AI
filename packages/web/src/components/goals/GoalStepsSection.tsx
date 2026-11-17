@@ -470,7 +470,7 @@ function StepItem({
               <span className="text-3">{t('批准人', 'Approved by')}</span>
               <RefChip kind="principal" id={approval.approvedBy} http={http} size="s" />
               <time className="text-3" title={formatDateTime(approval.approvedAt)}>
-                {formatRelative(approval.approvedAt)}
+                {formatRelative(approval.approvedAt, t)}
               </time>
             </span>
           ))
@@ -694,7 +694,7 @@ function Attempts({
               </span>
             ) : null}
             <time className="text-3" title={formatDateTime(attempt.createdAt)}>
-              {formatRelative(attempt.createdAt)}
+              {formatRelative(attempt.createdAt, t)}
             </time>
           </span>
           {attempt.rework ? (

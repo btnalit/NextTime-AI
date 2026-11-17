@@ -458,7 +458,7 @@ export function AdminProposalsTab({
                     title={formatDateTime(segment.proposal.proposedAt)}
                     data-volatile=""
                   >
-                    {formatRelative(segment.proposal.proposedAt)}
+                    {formatRelative(segment.proposal.proposedAt, t)}
                   </time>
                 </span>
               </ListRow>

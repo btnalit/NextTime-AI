@@ -454,7 +454,7 @@ export function GateAddressChangeOutcome({
   if (outcome.status === 'withdrawn') return null;
   const ended = (
     <time dateTime={outcome.endedAt} title={formatDateTime(outcome.endedAt)}>
-      {formatRelative(outcome.endedAt)}
+      {formatRelative(outcome.endedAt, t)}
     </time>
   );
   const sameGateWayBack = t(
@@ -559,7 +559,7 @@ export function PendingGateAddressChange({
               label: t('提出于', 'Proposed'),
               value: (
                 <time dateTime={change.createdAt} title={formatDateTime(change.createdAt)}>
-                  {formatRelative(change.createdAt)}
+                  {formatRelative(change.createdAt, t)}
                 </time>
               ),
             },
@@ -567,7 +567,7 @@ export function PendingGateAddressChange({
               label: t('没人审批就过期于', 'Expires unless decided'),
               value: (
                 <time dateTime={change.expiresAt} title={formatDateTime(change.expiresAt)}>
-                  {formatRelative(change.expiresAt)}
+                  {formatRelative(change.expiresAt, t)}
                 </time>
               ),
             },

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   ACTION_KIND_FULL_MAX,
   ACTION_KIND_INLINE_MAX,
+  ZH,
   actionKindLabel,
   actionKindRaw,
   actionKindTagText,
@@ -58,9 +59,18 @@ describe('format', () => {
   });
 
   it('formatDuration renders s / m s / h m', () => {
-    expect(formatDuration('2026-09-03T11:59:48.000Z', null, NOW)).toBe('12s');
-    expect(formatDuration('2026-09-03T11:56:56.000Z', '2026-09-03T12:00:00.000Z')).toBe('3m 04s');
-    expect(formatDuration('2026-09-03T10:58:00.000Z', null, NOW)).toBe('1h 02m');
+    expect(formatDuration('2026-09-03T11:59:48.000Z', null, ZH, NOW)).toBe('12 秒');
+    expect(formatDuration('2026-09-03T11:56:56.000Z', '2026-09-03T12:00:00.000Z', ZH)).toBe(
+      '3 分 04 秒',
+    );
+    expect(formatDuration('2026-09-03T10:58:00.000Z', null, ZH, NOW)).toBe('1 小时 02 分');
+    // Legacy 525: the English console keeps the short English units.
+    const EN: Translate = (_zh, en) => en;
+    expect(formatDuration('2026-09-03T11:59:48.000Z', null, EN, NOW)).toBe('12s');
+    expect(formatDuration('2026-09-03T11:56:56.000Z', '2026-09-03T12:00:00.000Z', EN)).toBe(
+      '3m 04s',
+    );
+    expect(formatDuration('2026-09-03T10:58:00.000Z', null, EN, NOW)).toBe('1h 02m');
   });
 
   it('humanizeKind matches the kernel label convention', () => {
@@ -127,35 +137,35 @@ describe('format', () => {
 
   describe('formatRelative — bad input', () => {
     it('tolerates null/unparsable input', () => {
-      expect(formatRelative(null, NOW)).toBe('—');
-      expect(formatRelative('not a date', NOW)).toBe('—');
+      expect(formatRelative(null, ZH, NOW)).toBe('—');
+      expect(formatRelative('not a date', ZH, NOW)).toBe('—');
     });
   });
 
   describe('formatRelative — 刚刚 (±60s, no direction, no "0m ago")', () => {
     it('is "刚刚" from 60s in the past through 60s in the future, inclusive', () => {
-      expect(formatRelative(new Date(NOW - 60_000).toISOString(), NOW)).toBe('刚刚');
-      expect(formatRelative(new Date(NOW - 10_000).toISOString(), NOW)).toBe('刚刚');
-      expect(formatRelative(new Date(NOW).toISOString(), NOW)).toBe('刚刚');
-      expect(formatRelative(new Date(NOW + 10_000).toISOString(), NOW)).toBe('刚刚');
-      expect(formatRelative(new Date(NOW + 60_000).toISOString(), NOW)).toBe('刚刚');
+      expect(formatRelative(new Date(NOW - 60_000).toISOString(), ZH, NOW)).toBe('刚刚');
+      expect(formatRelative(new Date(NOW - 10_000).toISOString(), ZH, NOW)).toBe('刚刚');
+      expect(formatRelative(new Date(NOW).toISOString(), ZH, NOW)).toBe('刚刚');
+      expect(formatRelative(new Date(NOW + 10_000).toISOString(), ZH, NOW)).toBe('刚刚');
+      expect(formatRelative(new Date(NOW + 60_000).toISOString(), ZH, NOW)).toBe('刚刚');
     });
 
     it('never renders "0 分钟前/后" just past the ±60s window', () => {
-      expect(formatRelative(new Date(NOW - 61_000).toISOString(), NOW)).toBe('1 分钟前');
-      expect(formatRelative(new Date(NOW + 61_000).toISOString(), NOW)).toBe('1 分钟后');
+      expect(formatRelative(new Date(NOW - 61_000).toISOString(), ZH, NOW)).toBe('1 分钟前');
+      expect(formatRelative(new Date(NOW + 61_000).toISOString(), ZH, NOW)).toBe('1 分钟后');
     });
   });
 
   describe('formatRelative — minutes and hours, symmetric', () => {
     it('past: minutes then hours', () => {
-      expect(formatRelative('2026-09-03T11:55:00.000Z', NOW)).toBe('5 分钟前');
-      expect(formatRelative('2026-09-03T09:00:00.000Z', NOW)).toBe('3 小时前');
+      expect(formatRelative('2026-09-03T11:55:00.000Z', ZH, NOW)).toBe('5 分钟前');
+      expect(formatRelative('2026-09-03T09:00:00.000Z', ZH, NOW)).toBe('3 小时前');
     });
 
     it('future: minutes then hours — never clamped to "刚刚"/zero (PW1)', () => {
-      expect(formatRelative('2026-09-03T12:05:00.000Z', NOW)).toBe('5 分钟后');
-      expect(formatRelative('2026-09-03T15:00:00.000Z', NOW)).toBe('3 小时后');
+      expect(formatRelative('2026-09-03T12:05:00.000Z', ZH, NOW)).toBe('5 分钟后');
+      expect(formatRelative('2026-09-03T15:00:00.000Z', ZH, NOW)).toBe('3 小时后');
     });
 
     it('an elapsed minute bucket wins over a real midnight crossing', () => {
@@ -163,41 +173,59 @@ describe('format', () => {
       // calendar day apart. Reader intuition ("a few minutes ago") beats the calendar: this must
       // read "10 分钟前", not "昨天 23:55".
       const midnightNow = Date.parse('2026-09-03T00:05:00.000Z');
-      expect(formatRelative('2026-09-02T23:55:00.000Z', midnightNow)).toBe('10 分钟前');
+      expect(formatRelative('2026-09-02T23:55:00.000Z', ZH, midnightNow)).toBe('10 分钟前');
     });
   });
 
   describe('formatRelative — 昨天/明天 (calendar day, not a fixed 24h/48h window)', () => {
     it('past: 昨天 + the target clock time', () => {
       // 26h01m elapsed, but a full calendar day apart.
-      expect(formatRelative('2026-09-02T09:59:00.000Z', NOW)).toBe('昨天 09:59');
+      expect(formatRelative('2026-09-02T09:59:00.000Z', ZH, NOW)).toBe('昨天 09:59');
     });
 
     it('future: 明天 + the target clock time', () => {
-      expect(formatRelative('2026-09-04T09:05:00.000Z', NOW)).toBe('明天 09:05');
+      expect(formatRelative('2026-09-04T09:05:00.000Z', ZH, NOW)).toBe('明天 09:05');
     });
   });
 
   describe('formatRelative — N 天前/后 (2–6 calendar days)', () => {
     it('past', () => {
-      expect(formatRelative('2026-09-01T12:00:00.000Z', NOW)).toBe('2 天前');
-      expect(formatRelative('2026-08-29T12:00:00.000Z', NOW)).toBe('5 天前');
+      expect(formatRelative('2026-09-01T12:00:00.000Z', ZH, NOW)).toBe('2 天前');
+      expect(formatRelative('2026-08-29T12:00:00.000Z', ZH, NOW)).toBe('5 天前');
     });
 
     it('future — this is PW1: an ephemeral workspace expiring in 2 days must read "2 天后", never "expires just now"', () => {
-      expect(formatRelative('2026-09-05T12:00:00.000Z', NOW)).toBe('2 天后');
-      expect(formatRelative('2026-09-08T12:00:00.000Z', NOW)).toBe('5 天后');
+      expect(formatRelative('2026-09-05T12:00:00.000Z', ZH, NOW)).toBe('2 天后');
+      expect(formatRelative('2026-09-08T12:00:00.000Z', ZH, NOW)).toBe('5 天后');
     });
   });
 
   describe('formatRelative — beyond a week: a short absolute date', () => {
     it('past and future, same year (no year prefix)', () => {
-      expect(formatRelative('2026-08-01T12:00:00.000Z', NOW)).toBe('08-01');
-      expect(formatRelative('2026-10-01T12:00:00.000Z', NOW)).toBe('10-01');
+      expect(formatRelative('2026-08-01T12:00:00.000Z', ZH, NOW)).toBe('08-01');
+      expect(formatRelative('2026-10-01T12:00:00.000Z', ZH, NOW)).toBe('10-01');
     });
 
     it('a different year gets a year prefix', () => {
-      expect(formatRelative('2025-08-01T12:00:00.000Z', NOW)).toBe('2025-08-01');
+      expect(formatRelative('2025-08-01T12:00:00.000Z', ZH, NOW)).toBe('2025-08-01');
+    });
+  });
+
+  describe('formatRelative — English (legacy 525 / 594 / 621)', () => {
+    const EN: Translate = (_zh, en) => en;
+
+    it('every bucket, past and future, singular and plural', () => {
+      expect(formatRelative(new Date(NOW - 10_000).toISOString(), EN, NOW)).toBe('just now');
+      expect(formatRelative(new Date(NOW - 61_000).toISOString(), EN, NOW)).toBe('1 minute ago');
+      expect(formatRelative('2026-09-03T11:55:00.000Z', EN, NOW)).toBe('5 minutes ago');
+      expect(formatRelative('2026-09-03T12:05:00.000Z', EN, NOW)).toBe('in 5 minutes');
+      expect(formatRelative('2026-09-03T11:00:00.000Z', EN, NOW)).toBe('1 hour ago');
+      expect(formatRelative('2026-09-03T15:00:00.000Z', EN, NOW)).toBe('in 3 hours');
+      expect(formatRelative('2026-09-02T09:59:00.000Z', EN, NOW)).toBe('yesterday 09:59');
+      expect(formatRelative('2026-09-04T09:05:00.000Z', EN, NOW)).toBe('tomorrow 09:05');
+      expect(formatRelative('2026-09-01T12:00:00.000Z', EN, NOW)).toBe('2 days ago');
+      expect(formatRelative('2026-09-08T12:00:00.000Z', EN, NOW)).toBe('in 5 days');
+      expect(formatRelative('2026-08-01T12:00:00.000Z', EN, NOW)).toBe('08-01');
     });
   });
 
@@ -266,10 +294,10 @@ describe('format — time zone label and calendar boundary across real zones', (
     const now = Date.parse('2026-09-03T12:00:00.000Z');
     expect(formatDateTime('2026-09-03T12:00:00.000Z', now)).toBe('09-03 20:00 (UTC+8)');
     // 09:00Z the same day is 17:00 Shanghai the same calendar day — an hours-bucket, not 昨天.
-    expect(formatRelative('2026-09-03T09:00:00.000Z', now)).toBe('3 小时前');
+    expect(formatRelative('2026-09-03T09:00:00.000Z', ZH, now)).toBe('3 小时前');
     // 2026-09-02T20:00:00Z is 2026-09-03 04:00 Shanghai — still "today" in Shanghai, so this is an
     // hours-bucket too even though it crossed a UTC-day boundary.
-    expect(formatRelative('2026-09-02T20:00:00.000Z', now)).toBe('16 小时前');
+    expect(formatRelative('2026-09-02T20:00:00.000Z', ZH, now)).toBe('16 小时前');
   });
 
   it('a zone with a non-hour offset (Asia/Kolkata, UTC+5:30)', () => {
@@ -277,7 +305,7 @@ describe('format — time zone label and calendar boundary across real zones', (
     const now = Date.parse('2026-09-03T12:00:00.000Z'); // 17:30 IST
     expect(formatDateTime('2026-09-03T12:00:00.000Z', now)).toBe('09-03 17:30 (UTC+5:30)');
     // A day earlier at the same UTC instant is exactly one IST calendar day back.
-    expect(formatRelative('2026-09-02T12:00:00.000Z', now)).toBe('昨天 17:30');
+    expect(formatRelative('2026-09-02T12:00:00.000Z', ZH, now)).toBe('昨天 17:30');
   });
 });
 

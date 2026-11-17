@@ -156,8 +156,8 @@ export function auditRecentSource(resourceType: string, t: Translate): PickerSou
             id,
             label: name ?? action,
             detail: name
-              ? `${action} · ${formatRelative(row.createdAt)}`
-              : formatRelative(row.createdAt),
+              ? `${action} · ${formatRelative(row.createdAt, t)}`
+              : formatRelative(row.createdAt, t),
           };
         }),
       );
@@ -183,8 +183,8 @@ export function auditActorSource(t: Translate): PickerSource {
             id: row.actorPrincipalId,
             label: names.get(row.actorPrincipalId) ?? t('未知成员', 'Unknown member'),
             detail: t(
-              `最近：${formatRelative(row.createdAt)}`,
-              `Last seen ${formatRelative(row.createdAt)}`,
+              `最近：${formatRelative(row.createdAt, t)}`,
+              `Last seen ${formatRelative(row.createdAt, t)}`,
             ),
           })),
         ),
@@ -208,7 +208,7 @@ export function decisionSource(t: Translate): PickerSource {
         page.items.map((decision) => ({
           id: decision.id,
           label: decisionPickerLabel(decision, t),
-          detail: `${decisionStatusLabel(decision.status, t)} · ${formatRelative(decision.createdAt)}`,
+          detail: `${decisionStatusLabel(decision.status, t)} · ${formatRelative(decision.createdAt, t)}`,
         })),
       );
     },
@@ -440,7 +440,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
   chat: listSource<ChatWire>('list_chats', { includeArchived: true }, (chat, t) => ({
     id: chat.id,
     label: chat.title ?? t('未命名对话', 'Untitled chat'),
-    detail: formatRelative(chat.lastActivityAt),
+    detail: formatRelative(chat.lastActivityAt, t),
   })),
   object: (t) => objectSource(t),
   ontology_type: listSource<OntologyTypeWire>('list_types', {}, (type, t) => ({
@@ -461,7 +461,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
   task: listSource<TaskWire>('list_tasks', { limit: PICKER_LIMIT }, (task, t) => ({
     id: task.id,
     label: statusText('task', task.status, t),
-    detail: formatRelative(task.createdAt),
+    detail: formatRelative(task.createdAt, t),
   })),
   decision: (t) => decisionSource(t),
 };

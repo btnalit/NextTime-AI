@@ -88,7 +88,7 @@ export function RejectedDrafts({
               <RefChip kind="principal" id={item.rejectedBy} http={http} size="s" />
               <span>·</span>
               <time dateTime={item.rejectedAt} title={formatDateTime(item.rejectedAt)}>
-                {formatRelative(item.rejectedAt)}
+                {formatRelative(item.rejectedAt, t)}
               </time>
             </span>
             <span className="wrap-anywhere" data-testid={`${testId}-reason`}>

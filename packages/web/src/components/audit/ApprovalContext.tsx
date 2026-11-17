@@ -124,7 +124,9 @@ export function ApprovalContext({
           <dl className="definition-list">
             <dt>{t('请求于', 'Requested')}</dt>
             <dd>
-              <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+              <time title={formatDateTime(row.requestedAt)}>
+                {formatRelative(row.requestedAt, t)}
+              </time>
             </dd>
             {row.decidedBy ? (
               <>
@@ -139,7 +141,7 @@ export function ApprovalContext({
                   />
                   {row.decidedAt ? (
                     <time className="text-3" title={formatDateTime(row.decidedAt)}>
-                      {formatRelative(row.decidedAt)}
+                      {formatRelative(row.decidedAt, t)}
                     </time>
                   ) : null}
                 </dd>

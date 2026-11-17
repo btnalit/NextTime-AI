@@ -221,7 +221,7 @@ export function SuiteDetail({
             size="s"
           />
           <time className="text-3" title={formatDateTime(data.createdAt)}>
-            {formatRelative(data.createdAt)}
+            {formatRelative(data.createdAt, t)}
           </time>
         </span>
       ),
@@ -374,7 +374,7 @@ export function SuiteDetail({
                   />
                   <span className="meta-sep" />
                   <time title={formatDateTime(entry.createdAt)}>
-                    {formatRelative(entry.createdAt)}
+                    {formatRelative(entry.createdAt, t)}
                   </time>
                 </span>
                 {entry.reason !== null ? (

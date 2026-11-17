@@ -85,7 +85,7 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             {t('平台暂停了这个门', 'The platform has suspended this gate')}
             {' · '}
             <time title={formatDateTime(suspension.suspendedAt)}>
-              {formatRelative(suspension.suspendedAt)}
+              {formatRelative(suspension.suspendedAt, t)}
             </time>
           </strong>
           <p className="text-small wrap-anywhere">
@@ -144,7 +144,7 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
         <dd>{gate.operationCount}</dd>
         <dt>{t('创建于', 'Created')}</dt>
         <dd>
-          <time title={formatDateTime(gate.createdAt)}>{formatRelative(gate.createdAt)}</time>
+          <time title={formatDateTime(gate.createdAt)}>{formatRelative(gate.createdAt, t)}</time>
         </dd>
       </dl>
 

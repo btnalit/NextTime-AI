@@ -209,7 +209,7 @@ export function PrincipalDetail({
       label: t('创建', 'Created'),
       value: (
         <time title={formatDateTime(principal.createdAt)}>
-          {formatRelative(principal.createdAt)}
+          {formatRelative(principal.createdAt, t)}
         </time>
       ),
     },
@@ -220,7 +220,7 @@ export function PrincipalDetail({
       label: t('停用于', 'Disabled'),
       value: (
         <time title={formatDateTime(principal.disabledAt)}>
-          {formatRelative(principal.disabledAt)}
+          {formatRelative(principal.disabledAt, t)}
         </time>
       ),
     });

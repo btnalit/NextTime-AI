@@ -40,7 +40,7 @@ export function GraphFreshnessNotice({ http }: GraphFreshnessNoticeProps) {
             {' · '}
             {t('最近观测', 'Last observed')}{' '}
             <time title={formatDateTime(workspaceLastObservedAt)}>
-              {formatRelative(workspaceLastObservedAt)}
+              {formatRelative(workspaceLastObservedAt, t)}
             </time>
           </>
         ) : null}
@@ -68,7 +68,7 @@ export function GraphFreshnessNotice({ http }: GraphFreshnessNoticeProps) {
                 <>
                   {' — '}
                   <time title={formatDateTime(source.lastObservedAt)}>
-                    {formatRelative(source.lastObservedAt)}
+                    {formatRelative(source.lastObservedAt, t)}
                   </time>
                 </>
               ) : null}

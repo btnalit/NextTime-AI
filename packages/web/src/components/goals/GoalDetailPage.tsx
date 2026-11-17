@@ -514,9 +514,10 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
 }
 
 function When({ iso }: { readonly iso: string }) {
+  const t = useT();
   return (
     <>
-      <time title={formatDateTime(iso)}>{formatRelative(iso)}</time>
+      <time title={formatDateTime(iso)}>{formatRelative(iso, t)}</time>
       <span className="text-3"> · {formatDateTime(iso)}</span>
     </>
   );

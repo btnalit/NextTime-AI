@@ -429,7 +429,7 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
                     title={formatDateTime(segment.appliedAt)}
                     data-volatile=""
                   >
-                    {formatRelative(segment.appliedAt)}
+                    {formatRelative(segment.appliedAt, t)}
                   </time>
                 </span>
               </ListRow>

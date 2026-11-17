@@ -98,7 +98,7 @@ export function ProviderTestResult({ result, testId }: ProviderTestResultProps) 
         </span>
         <span className="text-small text-3 mono">
           {result.model} · {result.latencyMs} ms ·{' '}
-          <time title={formatDateTime(result.testedAt)}>{formatRelative(result.testedAt)}</time>
+          <time title={formatDateTime(result.testedAt)}>{formatRelative(result.testedAt, t)}</time>
         </span>
       </div>
       {result.error ? (
