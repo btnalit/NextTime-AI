@@ -35,65 +35,93 @@ const ajv = new Ajv({ allErrors: true, strict: false });
  * `maxContains` were ignored (looser than written), `prefixItems` beside `items: false` refused
  * every non-empty array, and a `$schema` naming 2019-09 or 2020-12 failed every call (ajv has no
  * such meta-schema). Now:
- *   - `$schema` naming 2020-12 or 2019-09 → that dialect;
+ *   - `$schema` naming 2020-12, 2019-09 or draft-07 → that dialect;
  *   - `$schema` naming anything else → draft-07, as before (an unknown one is still refused);
- *   - no `$schema` → 2020-12 when the schema uses a keyword only 2019-09 / 2020-12 give a meaning
- *     (`DIALECT_2020_KEYWORDS`), draft-07 otherwise. draft-07 never gave those words a meaning, so a
- *     schema that uses them was written for the later dialect; one that does not checks the same
- *     either way, except draft-07's array-form `items`, which 2020-12 refuses — so it stays draft-07.
+ *   - no `$schema` → by the keywords the schema uses (`laterDialectByKeywords`): 2020-12 for one
+ *     only 2020-12 gives a meaning (`DIALECT_2020_12_KEYWORDS`); else 2019-09 for one draft-07 has
+ *     no meaning for and 2019-09 does (`DIALECT_2019_09_KEYWORDS` — 2020-12 reads them alike, and
+ *     2019-09 keeps draft-07's array-form `items`, which 2020-12 refuses); else draft-07. draft-07
+ *     never gave those words a meaning, so a schema that uses them was written for a later dialect;
+ *     one that does not checks the same in any of the three, except array-form `items`.
  */
 const ajv2019 = new Ajv2019({ allErrors: true, strict: false });
 const ajv2020 = new Ajv2020({ allErrors: true, strict: false });
 
-/** `$schema` URIs of the two later dialects, `http` or `https`, with or without the empty fragment. */
+/** `$schema` URIs, `http` or `https`, with or without the empty fragment. */
 const DIALECT_2020_12 = /^https?:\/\/json-schema\.org\/draft\/2020-12\/schema#?$/;
 const DIALECT_2019_09 = /^https?:\/\/json-schema\.org\/draft\/2019-09\/schema#?$/;
+const DIALECT_DRAFT_07 = /^https?:\/\/json-schema\.org\/draft-07\/schema#?$/;
 
-/** Keywords draft-07 has no meaning for and 2019-09 / 2020-12 do. */
-const DIALECT_2020_KEYWORDS = new Set([
-  'prefixItems',
+/** Keywords only 2020-12 gives a meaning. */
+const DIALECT_2020_12_KEYWORDS = new Set(['prefixItems', '$dynamicRef', '$dynamicAnchor']);
+
+/** Keywords draft-07 has no meaning for and 2019-09 does. */
+const DIALECT_2019_09_KEYWORDS = new Set([
   'unevaluatedProperties',
   'unevaluatedItems',
   'dependentRequired',
   'dependentSchemas',
   'minContains',
   'maxContains',
-  '$dynamicRef',
-  '$dynamicAnchor',
+  '$recursiveRef',
+  '$recursiveAnchor',
 ]);
 
-/** Keywords whose value maps names to schemas: the names are the schema's data, not keywords (a
- *  property called `prefixItems` says nothing about the dialect). */
-const SCHEMA_MAP_KEYWORDS = new Set([
+/** Where a schema holds further schemas — the only places `laterDialectByKeywords` looks. Anything
+ *  else is data or an annotation whose keys are not keywords: a property called `prefixItems`, an
+ *  `enum` / `default` / `examples` value, an `x-` extension, `discriminator.mapping`, `externalDocs`. */
+const SUBSCHEMA_KEYWORDS = new Set([
+  'additionalProperties',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  'additionalItems',
+  'items', // one schema, or (draft-07 / 2019-09) a list of them
+  'contains',
+  'propertyNames',
+  'not',
+  'if',
+  'then',
+  'else',
+]);
+const SUBSCHEMA_LIST_KEYWORDS = new Set(['allOf', 'anyOf', 'oneOf', 'prefixItems']);
+const SUBSCHEMA_MAP_KEYWORDS = new Set([
   'properties',
   'patternProperties',
   '$defs',
   'definitions',
-  'dependencies',
+  'dependentSchemas',
+  'dependencies', // a schema, or a list of property names (no keywords in it)
 ]);
 
-/** Keywords whose value is data, never a schema (and every `x-` extension, below). */
-const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example', 'required']);
+function subschemasOf(keyword: string, value: unknown): readonly unknown[] {
+  if (value === null || typeof value !== 'object') return [];
+  if (SUBSCHEMA_KEYWORDS.has(keyword)) return Array.isArray(value) ? value : [value];
+  if (SUBSCHEMA_LIST_KEYWORDS.has(keyword)) return Array.isArray(value) ? value : [];
+  if (SUBSCHEMA_MAP_KEYWORDS.has(keyword)) return Array.isArray(value) ? [] : Object.values(value);
+  return [];
+}
 
-/** Whether `schema`, anywhere in it, uses one of `DIALECT_2020_KEYWORDS`. */
-function usesLaterDialectKeywords(schema: unknown): boolean {
-  if (Array.isArray(schema)) return schema.some(usesLaterDialectKeywords);
-  if (schema === null || typeof schema !== 'object') return false;
-  for (const [keyword, value] of Object.entries(schema)) {
-    if (DIALECT_2020_KEYWORDS.has(keyword)) return true;
-    if (DATA_KEYWORDS.has(keyword) || keyword.startsWith('x-')) continue;
-    if (SCHEMA_MAP_KEYWORDS.has(keyword) && value !== null && typeof value === 'object') {
-      if (Object.values(value).some(usesLaterDialectKeywords)) return true;
-      continue;
+/** The later dialect `schema` was written for, judged by the keywords it uses anywhere in it
+ *  (legacy 803, above) — `undefined`: none, draft-07. */
+function laterDialectByKeywords(schema: unknown): '2019-09' | '2020-12' | undefined {
+  let uses2020 = false;
+  let uses2019 = false;
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const [keyword, value] of Object.entries(node)) {
+      if (DIALECT_2020_12_KEYWORDS.has(keyword)) uses2020 = true;
+      if (DIALECT_2019_09_KEYWORDS.has(keyword)) uses2019 = true;
+      for (const subschema of subschemasOf(keyword, value)) visit(subschema);
     }
-    if (usesLaterDialectKeywords(value)) return true;
-  }
-  return false;
+  };
+  visit(schema);
+  if (uses2020) return '2020-12';
+  return uses2019 ? '2019-09' : undefined;
 }
 
 /** The validator for `schema`'s dialect (legacy 803, above), and the schema it compiles: without a
- *  `$schema` that named 2019-09 or 2020-12 — the validator is that dialect already, and ajv knows
- *  each meta-schema by one spelling only. */
+ *  `$schema` that named one of the three — the validator is that dialect already, and ajv knows each
+ *  meta-schema by one spelling only. */
 function dialectOf(schema: JsonSchemaObject): {
   readonly validator: Ajv | Ajv2019 | Ajv2020;
   readonly schema: JsonSchemaObject;
@@ -102,22 +130,30 @@ function dialectOf(schema: JsonSchemaObject): {
   if (typeof declared === 'string') {
     if (DIALECT_2020_12.test(declared)) return { validator: ajv2020, schema: rest };
     if (DIALECT_2019_09.test(declared)) return { validator: ajv2019, schema: rest };
+    if (DIALECT_DRAFT_07.test(declared)) return { validator: ajv, schema: rest };
     return { validator: ajv, schema };
   }
-  return { validator: usesLaterDialectKeywords(schema) ? ajv2020 : ajv, schema };
+  const later = laterDialectByKeywords(schema);
+  const validator = later === '2020-12' ? ajv2020 : later === '2019-09' ? ajv2019 : ajv;
+  return { validator, schema };
 }
 
 const compiledCache = new WeakMap<object, ValidateFunction>();
 
 /** Adds `additionalProperties: false` only when the schema declares `properties` and does not
  *  already say one way or the other — an explicit `additionalProperties: true` is left alone, and
- *  so is a schema that says it with `unevaluatedProperties` (legacy 803: adding it there would also
- *  refuse the properties an `allOf` beside it declares, which `unevaluatedProperties` lets through). */
-function withDefaultAdditionalProperties(schema: JsonSchemaObject): JsonSchemaObject {
+ *  so is a schema checked in 2019-09 / 2020-12 that says it with `unevaluatedProperties` (legacy 803:
+ *  adding it there would also refuse the properties an `allOf` beside it declares, which
+ *  `unevaluatedProperties` lets through). draft-07 ignores `unevaluatedProperties`, so there the
+ *  default still applies. */
+function withDefaultAdditionalProperties(
+  schema: JsonSchemaObject,
+  readsUnevaluated: boolean,
+): JsonSchemaObject {
   if (
     schema.properties !== undefined &&
     schema.additionalProperties === undefined &&
-    schema.unevaluatedProperties === undefined
+    !(readsUnevaluated && schema.unevaluatedProperties !== undefined)
   ) {
     return { ...schema, additionalProperties: false };
   }
@@ -130,7 +166,9 @@ function compile(operationName: string, schema: JsonSchemaObject): ValidateFunct
   let validate: ValidateFunction;
   try {
     const dialect = dialectOf(schema);
-    validate = dialect.validator.compile(withDefaultAdditionalProperties(dialect.schema));
+    validate = dialect.validator.compile(
+      withDefaultAdditionalProperties(dialect.schema, dialect.validator !== ajv),
+    );
   } catch (err) {
     throw new ParamsSchemaInvalidError(operationName, err);
   }

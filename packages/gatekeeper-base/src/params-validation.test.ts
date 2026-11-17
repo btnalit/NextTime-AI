@@ -69,15 +69,30 @@ describe('assertParamsValid', () => {
       refused(tuple2019, ['a', 'b']);
     });
 
-    it('a $schema naming draft-07 is checked as before, and an unknown one is still refused', () => {
-      const draft07 = {
-        $schema: 'http://json-schema.org/draft-07/schema#',
-        type: 'array',
-        items: [{ type: 'string' }],
-        additionalItems: false,
-      };
-      ok(draft07, ['a']);
-      refused(draft07, ['a', 'b']);
+    it('a $schema naming draft-07 is checked as before (https too), and an unknown one is still refused', () => {
+      for (const dialect of [
+        'http://json-schema.org/draft-07/schema#',
+        'https://json-schema.org/draft-07/schema',
+      ]) {
+        const draft07 = {
+          $schema: dialect,
+          type: 'array',
+          items: [{ type: 'string' }],
+          additionalItems: false,
+        };
+        ok(draft07, ['a']);
+        refused(draft07, ['a', 'b']);
+        // draft-07 ignores unevaluatedProperties, so the gate's own default still refuses an
+        // unexpected key (#493 review of #1387).
+        const unevaluated = {
+          $schema: dialect,
+          type: 'object',
+          properties: { a: { type: 'string' } },
+          unevaluatedProperties: false,
+        };
+        ok(unevaluated, { a: 'x' });
+        refused(unevaluated, { a: 'x', c: 'y' });
+      }
       expect(() =>
         assertParamsValid('op', { $schema: 'https://example.test/my-dialect', type: 'object' }, {}),
       ).toThrow(ParamsSchemaInvalidError);
@@ -98,6 +113,14 @@ describe('assertParamsValid', () => {
       ok(schema, { pair: ['a'] });
       refused(schema, { pair: ['a', 'b'] });
       refused(schema, { pair: ['a', 1, 2] });
+      // A 2019-09 keyword beside it does not pull the schema back to 2019-09, which has no prefixItems.
+      const withDependent = {
+        ...schema,
+        properties: { ...schema.properties, label: { type: 'string' } },
+        dependentRequired: { pair: ['label'] },
+      };
+      ok(withDependent, { pair: ['a', 1], label: 'x' });
+      refused(withDependent, { pair: ['a', 'b'], label: 'x' });
     });
 
     it('unevaluatedProperties:false lets through what an allOf declares, and nothing else', () => {
@@ -125,6 +148,65 @@ describe('assertParamsValid', () => {
       };
       ok(contains, { tags: ['x', 'y'] });
       refused(contains, { tags: ['x', 'x'] });
+      const atLeast = {
+        type: 'object',
+        properties: { ids: { type: 'array', contains: { type: 'integer' }, minContains: 2 } },
+      };
+      ok(atLeast, { ids: [1, 'a', 2] });
+      refused(atLeast, { ids: [1, 'a'] });
+    });
+
+    it('a later-dialect keyword inside an allOf / anyOf / oneOf list counts', () => {
+      const schema = {
+        type: 'object',
+        anyOf: [{ dependentRequired: { card: ['cvc'] } }],
+      };
+      ok(schema, { card: '1', cvc: '2' });
+      refused(schema, { card: '1' });
+    });
+
+    it('2019-09 keywords beside draft-07 array-form items are checked in 2019-09, which keeps that form', () => {
+      const schema = {
+        type: 'object',
+        dependentRequired: { pair: ['label'] },
+        properties: {
+          label: { type: 'string' },
+          pair: { type: 'array', items: [{ type: 'string' }, { type: 'integer' }] },
+        },
+      };
+      ok(schema, { label: 'x', pair: ['a', 1] });
+      refused(schema, { label: 'x', pair: ['a', 'b'] });
+      refused(schema, { pair: ['a', 1] });
+    });
+
+    it('a later-dialect keyword inside an array-form items entry counts', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          rows: {
+            type: 'array',
+            items: [{ type: 'array', contains: { const: 'x' }, maxContains: 1 }],
+          },
+        },
+      };
+      ok(schema, { rows: [['x', 'y']] });
+      refused(schema, { rows: [['x', 'x']] });
+    });
+
+    it('$recursiveRef, $dynamicRef and unevaluatedItems without a $schema are checked', () => {
+      const recursive = { type: 'object', properties: { child: { $recursiveRef: '#' } } };
+      ok(recursive, { child: { child: {} } });
+      refused(recursive, { child: 5 });
+      refused(recursive, { child: { evil: 'x' } });
+      const dynamic = { type: 'object', properties: { child: { $dynamicRef: '#' } } };
+      ok(dynamic, { child: {} });
+      refused(dynamic, { child: 5 });
+      const items = {
+        type: 'object',
+        properties: { list: { type: 'array', unevaluatedItems: { type: 'string' } } },
+      };
+      ok(items, { list: ['a'] });
+      refused(items, { list: [1] });
     });
 
     it('a property called prefixItems does not switch the dialect: draft-07 array items still work', () => {
@@ -149,6 +231,20 @@ describe('assertParamsValid', () => {
         },
       };
       ok(schema, { mode: { prefixItems: 1 }, pair: ['a'] });
+      refused(schema, { pair: ['a', 'b'] });
+    });
+
+    it('the keys of an annotation (discriminator.mapping, externalDocs) are not keywords', () => {
+      const schema = {
+        type: 'object',
+        discriminator: { propertyName: 'kind', mapping: { prefixItems: '#/components/schemas/A' } },
+        externalDocs: { url: 'https://docs.example.test', unevaluatedProperties: false },
+        properties: {
+          kind: { type: 'string' },
+          pair: { type: 'array', items: [{ type: 'string' }], additionalItems: false },
+        },
+      };
+      ok(schema, { kind: 'a', pair: ['a'] });
       refused(schema, { pair: ['a', 'b'] });
     });
   });

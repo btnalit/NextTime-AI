@@ -175,10 +175,14 @@ at. An annotation (`description`, `example`, `discriminator`, an `x-` extension)
 referenced schema, or write the Operation's `params_schema` by hand. OpenAPI 3.0's `nullable: true`
 beside a `$ref` lets that use be null where the target has a `type`, and is left out where it has
 none (ajv refuses it there). The gate checks params in the schema's own JSON Schema dialect
-(legacy 803): 2020-12 or 2019-09 when its `$schema` names one, or when it has no `$schema` and uses
-a keyword only those give a meaning (`unevaluated*`, `dependentRequired`, `dependentSchemas`,
-`prefixItems`, `minContains`/`maxContains`), so those are checked; draft-07 otherwise, as before
-(its array-form `items` keeps working). `discriminator` stays in the schema but is not checked.
+(legacy 803): the one its `$schema` names (2020-12, 2019-09 or draft-07, `http` or `https`).
+Without a `$schema`, by the keywords it uses: 2020-12 for `prefixItems` or `$dynamicRef` /
+`$dynamicAnchor`; else 2019-09 for `unevaluated*`, `dependentRequired`, `dependentSchemas`,
+`minContains`/`maxContains` or `$recursiveRef`/`$recursiveAnchor` (the same meaning in both, and
+2019-09 keeps draft-07's array-form `items`); else draft-07, as before. A key inside an annotation
+such as `discriminator` or `externalDocs` is not a keyword. Checked as draft-07,
+`unevaluatedProperties` has no effect, and a schema with `properties` still refuses unexpected
+keys by default. `discriminator` stays in the schema but is not checked.
 A request body
 that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
 or is nothing but a reference to itself is not read: the Operation takes only its parameters.
