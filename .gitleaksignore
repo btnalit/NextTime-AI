@@ -9,3 +9,9 @@
 # #900 (S11 AA2a): a synthetic vendor-key value in the platform-state integration fixture of the
 # PR's first commit; the next commit spelled it from the alphabet (the .gitleaks.toml allowlist).
 c09e53aa57a177781658c44d47f10ab2abfd6c05:packages/kernel/src/application/admin-agent/platform-state.integration.test.ts:generic-api-key:67
+#
+# #1344 (legacy 221): synthetic provider-key and scrubbed-value fixtures for the redirect-target
+# scrub tests in the PR's third commit, assigned to variables named `KEY` / `secret`; the next
+# commit renamed them (`ECHOED` / `hidden`), which the generic-api-key rule does not match.
+99e9b775d663686cb8be5730054f56ca03b1277a:packages/llm-proxy/src/proxy.test.ts:generic-api-key:1864
+99e9b775d663686cb8be5730054f56ca03b1277a:packages/shared/src/redirect.test.ts:generic-api-key:47

@@ -1861,7 +1861,10 @@ const epistemicCapabilities = [
     description:
       'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
       'why), optional `relatedFactIds` (the ids of the Facts it rests on) and `relatedTaskId` — ' +
-      'both uuids as returned by the graph and task tools, else 400 invalid_params. Automatically ' +
+      'both uuids as returned by the graph and task tools, else 400 invalid_params. Each ' +
+      'relatedFactIds entry must be a Fact you can read (explain finds it), else 400 ' +
+      'unresolved_references (details: unresolved.relatedFactIds, the ids that do not resolve) and ' +
+      'nothing is recorded. Automatically ' +
       'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
       'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
       'Not for routine observations — only for real choices worth tracing.',
@@ -3406,6 +3409,19 @@ const membersCapabilities = [
 // Gatekeeper call — `write`, never `execute` (S3.13's own spec: "变更是即时的、不走 propose/approve").
 // -------------------------------------------------------------------------------------------
 
+/** Legacy 305: how many entries one AgentProfile exclusion list or AgentPolicy allow-list may
+ *  hold. Each only narrows what the agent is given, so it is a bound on stored size, not on
+ *  authority — far above any workspace's catalog, so the console's whole-list write never meets it. */
+export const AGENT_PROFILE_LIST_MAX = 1000;
+
+/** Legacy 305: how long one entry of the Skill / Gatekeeper / Worker definition lists may be. Every
+ *  entry is an id, never a name — the console ticks `s.id`, and the kernel resolves the lists
+ *  against published Skill / Worker definition ids and granted Gatekeeper ids, all uuids (36
+ *  characters). References are not checked, so this bounds size only; it is not a uuid rule. */
+export const AGENT_PROFILE_LIST_ENTRY_MAX = 64;
+
+const agentListIds = z.array(id.max(AGENT_PROFILE_LIST_ENTRY_MAX)).max(AGENT_PROFILE_LIST_MAX);
+
 const agentProfileCapabilities = [
   {
     name: 'get_agent_profile',
@@ -3434,9 +3450,9 @@ const agentProfileCapabilities = [
         // exclusion lists (console redesign D1): `[]` excludes nothing, so later grants / publishes
         // flow in automatically.
         model: z.string().min(1).nullable().optional(),
-        excludedSkills: z.array(z.string().min(1)).optional(),
-        excludedGatekeepers: z.array(id).optional(),
-        excludedWorkerDefinitions: z.array(id).optional(),
+        excludedSkills: agentListIds.optional(),
+        excludedGatekeepers: agentListIds.optional(),
+        excludedWorkerDefinitions: agentListIds.optional(),
         promptAddendum: z.string().nullable().optional(),
         autoApproveLow: z.boolean().nullable().optional(),
       })
@@ -3464,12 +3480,12 @@ const agentProfileCapabilities = [
     minRole: 'owner',
     paramsSchema: z
       .object({
-        allowedModels: z.array(z.string().min(1)).optional(),
+        allowedModels: z.array(z.string().min(1)).max(AGENT_PROFILE_LIST_MAX).optional(),
         defaultModel: z.string().min(1).nullable().optional(),
         memberCanEditProfile: z.boolean().optional(),
         maxPromptAddendumChars: z.number().int().positive().optional(),
-        allowedSkills: z.array(z.string().min(1)).optional(),
-        allowedGatekeepers: z.array(id).optional(),
+        allowedSkills: agentListIds.optional(),
+        allowedGatekeepers: agentListIds.optional(),
         allowMemberAutoApproveLow: z.boolean().optional(),
       })
       .strict(),

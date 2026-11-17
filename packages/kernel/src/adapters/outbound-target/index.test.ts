@@ -67,7 +67,14 @@ describe('adapters/outbound-target (R-27)', () => {
   it('logs and drops an allow-host entry that could never match, naming the variable and the entry', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      const entries = ['.lab.example', '*.lab.example', 'http://lab.example', 'lab.example:8443'];
+      const entries = [
+        '.lab.example',
+        '*.lab.example',
+        'http://lab.example',
+        'lab.example:8443',
+        // Legacy 786: brackets hold an IPv6 literal only.
+        '[192.0.2.9]',
+      ];
       const policy = outboundTargetPolicyFromEnv({
         NEXTTIME_CONNECTION_ALLOW_HOSTS: ['ok.example', ...entries].join(','),
         NEXTTIME_CONNECTION_FIXTURE_HOSTS: 'accept-s2-mcp,.bad',
@@ -89,9 +96,10 @@ describe('adapters/outbound-target (R-27)', () => {
       errorSpy.mockClear();
       expect(
         outboundTargetPolicyFromEnv({
-          NEXTTIME_CONNECTION_ALLOW_HOSTS: 'lab.example,203.0.113.9,::1',
+          // Legacy 786: an IPv6 literal in brackets, as a URL writes it, is kept.
+          NEXTTIME_CONNECTION_ALLOW_HOSTS: 'lab.example,203.0.113.9,::1,[2001:db8::9]',
         }).allowHosts,
-      ).toEqual(['lab.example', '203.0.113.9', '::1']);
+      ).toEqual(['lab.example', '203.0.113.9', '::1', '[2001:db8::9]']);
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();

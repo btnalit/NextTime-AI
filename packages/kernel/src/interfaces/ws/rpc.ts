@@ -91,6 +91,7 @@ import {
   ConnectorNotSelfServeError,
   DecisionNotFoundError,
   DecisionQuerySinceInvalidError,
+  DecisionReferenceError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotActiveError,
@@ -514,6 +515,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Legacy 302: mirrors HTTP 400 `unresolved_references` (capability-route.ts).
   if (err instanceof WorkerDefinitionReferenceError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 308: mirrors HTTP 400 `unresolved_references` for `record_decision` (capability-route.ts).
+  if (err instanceof DecisionReferenceError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S11 「门确认不存在」 B-a: mirrors HTTP 400 `absent_answers_review_required` (capability-route.ts).

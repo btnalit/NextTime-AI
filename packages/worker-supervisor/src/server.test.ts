@@ -365,6 +365,47 @@ describe('POST /resident/spawn', () => {
     expect(docker.createCalls).toHaveLength(0);
   });
 
+  it('logs whose container a 409 refused: the principal, or the Task and its WorkerRun (legacy 435)', async () => {
+    const { app, docker } = setup({ WORKER_IMAGE_ALLOWLIST: 'old-runtime-image' });
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: ['old-runtime-image'],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+    const warned: unknown[][] = [];
+    app.addHook('onRequest', async (request) => {
+      request.log = Object.assign(Object.create(request.log), {
+        warn: (...args: unknown[]) => {
+          warned.push(args);
+        },
+      });
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AGENT_HOST_AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', image: 'old-runtime-image' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: { ...validTaskSpawnBody, image: 'old-runtime-image' },
+    });
+    const refused = { code: 'runtime_image_incompatible', image: 'old-runtime-image' };
+    expect(warned).toEqual([
+      [
+        { principalId: ALICE, ...refused, found: null },
+        'resident/spawn refused: runtime_image_incompatible',
+      ],
+      [
+        { taskId: TASK_ID, workerRunId: WORKER_RUN_ID, ...refused, found: null },
+        'task/spawn refused: runtime_image_incompatible',
+      ],
+    ]);
+  });
+
   it('200s an explicitly allowlisted image and spawns the container with it', async () => {
     const { app, docker } = setup({ WORKER_IMAGE_ALLOWLIST: 'some-approved-image' });
     const res = await app.inject({

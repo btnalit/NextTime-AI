@@ -3,6 +3,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { type CidrRange, parseCidr } from '@nexttime/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAdminServer } from './admin.js';
 import { createEgressMetrics } from './metrics.js';
@@ -62,6 +63,7 @@ async function startTestProxy(
     allowLoopbackForTests?: boolean;
     maxTunnelsPerSource?: number;
     denyUnknownSource?: boolean;
+    trustedResolvedCidrs?: readonly CidrRange[];
   } = {},
 ): Promise<TestProxy> {
   const recordings: EgressObservation[] = [];
@@ -79,6 +81,7 @@ async function startTestProxy(
     reporter: { record: (o) => recordings.push(o) },
     maxTunnelsPerSource: overrides.maxTunnelsPerSource,
     denyUnknownSource: overrides.denyUnknownSource,
+    trustedResolvedCidrs: overrides.trustedResolvedCidrs,
     connectTimeoutMs: 2000,
     idleTimeoutMs: 2000,
   });
@@ -346,6 +349,34 @@ describe('createProxyServer', () => {
         sourceId: 'worker-eval',
       });
     }
+  });
+
+  // Legacy 786: a parsed URL keeps an IPv6 host's brackets, so the plain http:// path used to hand
+  // the policy `[fd00:db8::1]`, which looked like a name — it skipped the rule that a literal
+  // target never gets the trusted-resolved-CIDR exemption, and went to the resolver.
+  it('legacy 786: a plain http:// IPv6 target is the literal it is, as over CONNECT', async () => {
+    const resolveHost = vi.fn<Resolver>(async () => ['fd00:db8::1']);
+    const proxy = await startTestProxy({
+      resolveHost,
+      resolveSource: () => ({ sourceId: 'worker-1', allow: ['fd00:db8::1'] }),
+      trustedResolvedCidrs: [parseCidr('fd00::/8')],
+    });
+    cleanups.push(proxy.close);
+
+    const res = await httpGetThroughProxy(proxy.port, 'http://[fd00:db8::1]:8080/');
+    expect(res.status).toBe(403);
+    const tunnel = await rawConnect(proxy.port, '[fd00:db8::1]:443');
+    expect(tunnel.statusLine).toContain('403');
+
+    await vi.waitFor(() => expect(proxy.recordings).toHaveLength(2));
+    for (const recording of proxy.recordings) {
+      expect(recording).toMatchObject({
+        domain: 'fd00:db8::1',
+        allowed: false,
+        reason: 'private-address',
+      });
+    }
+    expect(resolveHost.mock.calls).toEqual([['fd00:db8::1'], ['fd00:db8::1']]);
   });
 
   it('tunnels a CONNECT stream end to end and reports both byte directions', async () => {

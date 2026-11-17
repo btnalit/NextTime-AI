@@ -288,6 +288,23 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     });
     expect(unstorable?.message).toContain('不需要你处理');
     expect(unstorable?.message).toMatch(/^字段「operation\.name」里/);
+    // Legacy 326: a Worker's refused proposal, as get_task's result carries it to the chat's
+    // tool row — the kernel's detail (worker-result-handler.ts) names the field before "holds".
+    expect(
+      gateReasonNextStep(
+        JSON.stringify({
+          proposedOperationsRejected: [
+            {
+              index: 0,
+              reason: 'unstorable_text',
+              detail:
+                'Operation "svc.restart": the text at field "binding.path" holds U+0000 (NUL), which cannot be stored, so this proposal was not written; only a description may hold it (stored as \\u{0})',
+            },
+          ],
+        }),
+        zh,
+      )?.message,
+    ).toMatch(/^字段「binding\.path」里/);
     // The same text inside a tool result shown as JSON: its quotes arrive escaped.
     expect(
       gateReasonNextStep(

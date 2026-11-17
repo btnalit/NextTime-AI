@@ -7,6 +7,7 @@ import {
   canonicalizeIpLiteral,
   isValidCorrelationId,
   normalizeAddress,
+  withoutIpv6Brackets,
 } from '@nexttime/shared';
 import type { EgressMetrics } from './metrics.js';
 import type { PolicyConfig, PolicyDecision, Resolver, SourcePolicy } from './policy.js';
@@ -59,16 +60,12 @@ async function defaultResolveHost(hostname: string): Promise<string[]> {
   return results.map((r) => r.address);
 }
 
-function stripBrackets(hostname: string): string {
-  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-}
-
 /** CONNECT's `req.url` is `host:port` (optionally an IPv6 literal in brackets), not a full URI. */
 function parseConnectTarget(target: string): { hostname: string; port: number } | undefined {
   try {
     const url = new URL(`http://${target}`);
     if (!url.hostname) return undefined;
-    return { hostname: stripBrackets(url.hostname), port: url.port ? Number(url.port) : 443 };
+    return { hostname: withoutIpv6Brackets(url.hostname), port: url.port ? Number(url.port) : 443 };
   } catch {
     return undefined;
   }
@@ -169,7 +166,12 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
 
-    const hostname = target.hostname;
+    // As CONNECT reads its target (`parseConnectTarget`): an IPv6 host without the brackets a
+    // parsed URL keeps, so the policy sees it as the IP literal it is (legacy 786) — before, the
+    // brackets made it look like a name: it skipped the literal rule and went to the resolver.
+    // `decideEgress` takes them off too (legacy 788); taking them off here as well keeps the
+    // recorded domain the address.
+    const hostname = withoutIpv6Brackets(target.hostname);
     const port = target.port ? Number(target.port) : 80;
     const source = options.resolveSource(clientIp);
     const decision = await decideEgress({

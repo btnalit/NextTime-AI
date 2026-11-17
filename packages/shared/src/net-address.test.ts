@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   canonicalizeIpLiteral,
@@ -5,6 +6,7 @@ import {
   hostPatternProblem,
   isInCidr,
   isIpLiteral,
+  isIpLiteralPattern,
   matchesDenySuffix,
   matchesSuffix,
   normalizeAddress,
@@ -14,6 +16,7 @@ import {
   parseIPv4,
   parseIPv4Literal,
   parseIPv6,
+  withoutIpv6Brackets,
 } from './net-address.js';
 
 /**
@@ -33,6 +36,21 @@ describe('parseIPv4', () => {
 
   it.each(['1.2.3', '1.2.3.4.5', '1.2.3.256', 'a.b.c.d', ''])('rejects %s', (input) => {
     expect(parseIPv4(input)).toBeNull();
+  });
+
+  // Legacy 777: a part with a leading zero is octal to inet_aton and the WHATWG URL parser, so the
+  // strict parser refuses it as inet_pton and Node's net.isIP do (the kernel's subnet matcher).
+  it.each(['192.0.2.07', '192.00.2.7', '198.051.100.7', '0192.0.2.7'])(
+    'rejects %s (a leading zero), as net.isIP does',
+    (input) => {
+      expect(parseIPv4(input)).toBeNull();
+      expect(isIP(input)).toBe(0);
+    },
+  );
+
+  it('still accepts a lone zero part', () => {
+    expect(parseIPv4('0.0.0.0')).toEqual([0, 0, 0, 0]);
+    expect(parseIPv4('192.0.2.0')).toEqual([192, 0, 2, 0]);
   });
 });
 
@@ -67,6 +85,82 @@ describe('parseIPv4Literal (lane-6 review P3 — inet_aton-compatible alternate 
 
   it('allows mixed notations across parts', () => {
     expect(parseIPv4Literal('0x7f.0.0.1')).toEqual([127, 0, 0, 1]);
+  });
+
+  // Legacy 777: a dotted-quad with a leading-zero part was read as decimal by the strict path, so
+  // `192.0.2.010` came back as `.10` while a parsed URL's host is `.8`.
+  it('reads a leading-zero part as octal, the way a parsed URL reads the host', () => {
+    for (const spelling of [
+      '192.0.2.010',
+      '0300.0.2.7',
+      '192.00.2.7',
+      '192.0.02.7',
+      '198.051.100.7',
+    ]) {
+      const urlHost = new URL(`http://${spelling}/`).hostname;
+      expect({ spelling, canonical: canonicalizeIpLiteral(spelling) }).toEqual({
+        spelling,
+        canonical: urlHost,
+      });
+    }
+    expect(parseIPv4Literal('192.0.2.010')).toEqual([192, 0, 2, 8]);
+  });
+
+  // Legacy 781: a bare `0x` part has no hex digits, and a parsed URL reads it as 0.
+  it('reads a bare 0x part as 0, the way a parsed URL reads the host', () => {
+    for (const spelling of ['0x', '0X', '0x.0x', '192.0.2.0x', '0x.0.2.7', '198.51.0x.7', '0x.1']) {
+      const urlHost = new URL(`http://${spelling}/`).hostname;
+      expect({ spelling, canonical: canonicalizeIpLiteral(spelling) }).toEqual({
+        spelling,
+        canonical: urlHost,
+      });
+    }
+    expect(parseIPv4Literal('192.0.2.0x')).toEqual([192, 0, 2, 0]);
+    expect(parseIPv4Literal('0x.0xg')).toBeNull();
+    expect(parseIPv4Literal('0xx')).toBeNull();
+  });
+
+  // Every 1–4-part spelling from a set of parts: where a parsed URL reads an IPv4 address, this
+  // reads the same one; where the URL refuses the host or keeps it as a name, this reads none.
+  it('agrees with a parsed URL on every spelling of a small part set', () => {
+    const parts = [
+      '0',
+      '0x',
+      '0X',
+      '00',
+      '08',
+      '010',
+      '0x1',
+      '0xff',
+      '0x100',
+      '1',
+      '255',
+      '256',
+      '65535',
+      '4294967295',
+      'a',
+    ];
+    const spellings: string[] = [];
+    const extend = (prefix: string[], depth: number): void => {
+      if (prefix.length > 0) spellings.push(prefix.join('.'));
+      if (depth === 0) return;
+      for (const part of parts) extend([...prefix, part], depth - 1);
+    };
+    extend([], 4);
+    const disagreements: string[] = [];
+    for (const spelling of spellings) {
+      let urlV4: string | null = null;
+      try {
+        const host = new URL(`http://${spelling}/`).hostname;
+        urlV4 = parseIPv4(host) ? host : null;
+      } catch {
+        urlV4 = null;
+      }
+      const ours = canonicalizeIpLiteral(spelling);
+      if (ours !== urlV4) disagreements.push(`${spelling}: url ${urlV4} ours ${ours}`);
+    }
+    expect(spellings.length).toBeGreaterThan(50_000);
+    expect(disagreements).toEqual([]);
   });
 
   it('rejects a part exceeding its own bit width', () => {
@@ -212,6 +306,12 @@ describe('parseCidr / isInCidr', () => {
     expect(() => parseCidr('198.51.100.0/99')).toThrow();
   });
 
+  it('refuses an address with a leading-zero part, as the kernel subnet matcher does (legacy 777)', () => {
+    for (const bad of ['198.051.100.0/24', '192.0.2.00/24', '::ffff:192.0.2.07/128']) {
+      expect(() => parseCidr(bad), bad).toThrow(/invalid CIDR address/);
+    }
+  });
+
   it('reads the prefix length strictly: digits only, nothing after them (legacy 772)', () => {
     for (const bad of [
       '198.51.100.0/24abc',
@@ -238,6 +338,8 @@ describe('parseCidr / isInCidr', () => {
     expect(parseCidrPrefixLength('33', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('128', 128)).toBe(128);
     expect(parseCidrPrefixLength('1000', 128)).toBeUndefined();
+    // Legacy 777: at most three digits, even when the value would fit.
+    expect(parseCidrPrefixLength('0024', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('', 32)).toBeUndefined();
     expect(parseCidrPrefixLength('24abc', 32)).toBeUndefined();
   });
@@ -353,6 +455,75 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
     expect(matchesDenySuffix('example.com', ['', '.', '*.'])).toBe(false);
   });
 
+  it('an IP literal pattern matches only that address, however either side spells it', () => {
+    for (const pattern of ['192.0.2.8', '192.0.2.010', '0xc0000208', '3221225992', '192.0.2.8.']) {
+      expect(matchesSuffix('192.0.2.8', [pattern]), pattern).toBe(true);
+      expect(matchesDenySuffix('192.0.2.8', [pattern]), pattern).toBe(true);
+      expect(matchesSuffix('192.0.2.9', [pattern]), pattern).toBe(false);
+    }
+    // A short form is the address it spells, never a suffix of another address.
+    expect(matchesSuffix('192.0.2.7', ['2.7'])).toBe(false);
+    expect(matchesDenySuffix('192.0.2.7', ['2.7', '*.2.7', '.0.2.7'])).toBe(false);
+    expect(matchesSuffix('2.0.0.7', ['2.7'])).toBe(true);
+    // IPv6: any spelling, with or without the brackets a parsed URL keeps.
+    for (const host of ['[2001:db8::1]', '2001:db8::1']) {
+      for (const pattern of ['2001:db8::1', '2001:DB8:0:0:0:0:0:1', '[2001:db8::1]']) {
+        expect(matchesSuffix(host, [pattern]), `${pattern} vs ${host}`).toBe(true);
+      }
+      expect(matchesSuffix(host, ['2001:db8::2'])).toBe(false);
+    }
+    // Legacy 786: brackets hold an IPv6 literal only — `[192.0.2.8]` names no address.
+    expect(matchesSuffix('192.0.2.8', ['[192.0.2.8]'])).toBe(false);
+    expect(matchesDenySuffix('192.0.2.8', ['[192.0.2.8]'])).toBe(false);
+    // A name never matches an address, and an address never matches a name.
+    expect(matchesSuffix('192.0.2.8', ['example.com'])).toBe(false);
+    expect(matchesSuffix('a.example.com', ['192.0.2.8'])).toBe(false);
+  });
+
+  it('isIpLiteralPattern: an IP literal in any spelling, or an IPv6 literal in brackets (legacy 786)', () => {
+    for (const ok of ['192.0.2.8', '192.0.2.010', '0xc0000208', ' 192.0.2.8. ', '2001:db8::1']) {
+      expect(isIpLiteralPattern(ok), ok).toBe(true);
+    }
+    for (const ok of ['[2001:db8::1]', '[2001:DB8:0::1]', '[::1]', '[::ffff:192.0.2.8]']) {
+      expect(isIpLiteralPattern(ok), ok).toBe(true);
+      // The bracketed form is the one a URL writes and parses.
+      expect(new URL(`http://${ok}/`).hostname, ok).toMatch(/^\[.*\]$/);
+    }
+    for (const no of ['[192.0.2.8]', '[example.com]', '[::1', '::1]', 'example.com', '']) {
+      expect(isIpLiteralPattern(no), no).toBe(false);
+    }
+  });
+
+  it('withoutIpv6Brackets takes off the brackets a URL writes around an IPv6 host, and only those (legacy 788)', () => {
+    for (const [host, expected] of [
+      ['[2001:db8::1]', '2001:db8::1'],
+      ['[::1]', '::1'],
+      ['[::ffff:192.0.2.8]', '::ffff:192.0.2.8'],
+      ['[fe80::1%eth0]', 'fe80::1%eth0'],
+    ] as const) {
+      expect(withoutIpv6Brackets(host), host).toBe(expected);
+      // The address a parsed URL reads in that host (a zone is no URL host).
+      if (!host.includes('%')) {
+        const urlHost = new URL(`http://${host}/`).hostname;
+        expect(canonicalizeIpLiteral(urlHost.slice(1, -1)), host).toBe(
+          canonicalizeIpLiteral(expected),
+        );
+      }
+    }
+    for (const host of [
+      '[192.0.2.8]',
+      '[example.com]',
+      '[]',
+      '[::1',
+      '::1]',
+      '2001:db8::1',
+      'example.com',
+      '',
+    ]) {
+      expect(withoutIpv6Brackets(host), host).toBe(host);
+    }
+  });
+
   it('normalizeDenyHostPattern strips exactly one leading `*.` or `.`', () => {
     expect(normalizeDenyHostPattern(' *.Corp.Example. ')).toBe('corp.example');
     expect(normalizeDenyHostPattern('.corp.example')).toBe('corp.example');
@@ -369,6 +540,9 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       'a_b-c.example',
       '203.0.113.7',
       '::1',
+      // Legacy 786: an IPv6 literal in brackets, as a URL writes it, matches that address.
+      '[::1]',
+      '[2001:DB8::1]',
     ]) {
       expect(hostPatternProblem(ok), ok).toBeNull();
     }
@@ -381,10 +555,42 @@ describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
       'example.com:443',
       '198.51.100.0/24',
       'a b',
-      '[::1]',
+      // Brackets hold an IPv6 literal only; a URL refuses anything else in them.
+      '[192.0.2.8]',
+      '[example.com]',
+      '[::1',
       'a..b',
     ]) {
       expect(hostPatternProblem(bad), bad).toContain('not a host name');
+    }
+  });
+
+  // Legacy 777: a name whose last label is a number is read by a URL as an IPv4 address and
+  // refused when it is not one, so it can never match a request host; said, not taken as a name.
+  it('hostPatternProblem: a name ending in a number that is no IP literal is refused (legacy 777)', () => {
+    for (const bad of [
+      '008.8.8.8',
+      '192.0.2.09',
+      '1.2.3.4.5',
+      'example.123',
+      'host.0x1f',
+      'host.0x',
+    ]) {
+      expect(hostPatternProblem(bad), bad).toContain('ends in a number');
+      expect(() => new URL(`http://${bad}/`), bad).toThrow();
+    }
+    for (const ok of [
+      'host.0xg',
+      'a1.b2',
+      'example.com1',
+      '127.1',
+      '192.0.2.010',
+      '2130706433',
+      // Legacy 781: a bare `0x` part is 0, so these are IP literals, not names.
+      '192.0.2.0x',
+      '0x',
+    ]) {
+      expect(hostPatternProblem(ok), ok).toBeNull();
     }
   });
 });

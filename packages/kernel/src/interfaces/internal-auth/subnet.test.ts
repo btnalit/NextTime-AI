@@ -57,6 +57,9 @@ describe('createSubnetMatcher', () => {
       // Legacy 772: what `parseCidr` (@nexttime/shared) refuses too.
       '203.0.113.0/24abc',
       '203.0.113.0/+24',
+      // Legacy 777: a leading-zero part, which `parseCidr` now refuses as `isIP` does here.
+      '198.051.100.0/24',
+      '203.0.113.00/24',
     ]) {
       expect(() => createSubnetMatcher(bad), bad).toThrow(InvalidCidrError);
     }

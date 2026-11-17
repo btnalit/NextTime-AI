@@ -18,6 +18,7 @@ import {
 import {
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
+  DecisionReferenceError,
   ForbiddenError,
   InvalidCapabilityParamsError,
   UnknownOperationError,
@@ -83,6 +84,8 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
     err instanceof UnknownOperationError ||
     err instanceof OperationNameInvalidError ||
     err instanceof UnstorableTextError ||
+    // Legacy 308: `record_decision` relating Facts that are not there — the message lists them.
+    err instanceof DecisionReferenceError ||
     // S11 AA3b-1: an admin proposal, refused or not found — the code says whether to
     // ask its administrator for another target, leave a value out, wait for the next day, or stop.
     err instanceof AdminProposalTargetNotChosenError ||

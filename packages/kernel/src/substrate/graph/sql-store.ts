@@ -31,6 +31,7 @@ import {
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
+  buildReadableFactIdsQuery,
   buildRecentFactsQuery,
   buildSearchQuery,
   buildStateAtFactsQuery,
@@ -912,5 +913,17 @@ export class SqlGraphStore implements GraphStore {
       query.values as unknown[],
     );
     return result.rows.map((row) => ({ linkType: row.link_type, count: row.count }));
+  }
+
+  async readableFactIds(
+    client: PoolClient,
+    workspaceId: string,
+    factIds: readonly string[],
+    viewer?: GraphReadViewer,
+  ): Promise<ReadonlySet<string>> {
+    if (factIds.length === 0) return new Set();
+    const query = buildReadableFactIdsQuery(workspaceId, factIds, viewer);
+    const result = await client.query<{ id: string }>(query.text, query.values as unknown[]);
+    return new Set(result.rows.map((row) => row.id));
   }
 }

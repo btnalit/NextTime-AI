@@ -1086,7 +1086,7 @@ SQL 列出的自连门清单就是要逐个确认的范围。
 - 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.50.0 起改写 6 类：#620（core 0045）加
   `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34），#637 加 `gatekeeperNames`
   （Gatekeeper 的 `name`）与 `connectedSystems`（门旁 ConnectedSystem 的 identity key `name`、`target`、`name`）。名字按读侧的显示规则改写；
-  剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。
+  剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。0.69.2 之后的下一版起改写 7 类（#1322，遗留 375）：加 `connectionActivities`，即遗留 186 之前写入的自接门落地活动（`governance.create_connection`）的 `metadata.target`，按读侧的显示规则（`target` 规则）改写：整段查询和片段去掉，带密码时连用户名也去掉，主机和路径保留；只改 `target` 一个键，不需要单独处置，清洗报告的类别行里多出这一类。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
   备份里。
@@ -3312,6 +3312,93 @@ select 'reconcile', count(*) from action_requests r
 
 - **升级顺序**：不限。上一版内核写 Observation 的方式不变，照常通过新触发器。
 - **回滚**：只回退代码即可，不需要删触发器。要撤 schema：删两个验收检查触发器、reconcile 触发器与对应函数，再删 `schema_migrations` 里 goal 20 与 governance 46 两行。
+- 下一次主机升级的提示要带上本节。
+
+### 3.196 IPv4 前导零段与以数字结尾的主机条目（#1305，遗留 777，0.69.2 之后的下一版）
+
+无迁移。改的是配置与已存 Worker 定义的解析，其中一处改变了旧版本已接受的值的含义，所以加一节可选的升级前只读检查。
+
+- **含义变化**：内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里带前导零的 IP 条目，以前按十进制读，现在与 URL 解析一致按八进制读，放行的会是另一个地址。同一批里还有一处放宽（#1316，遗留 781）：这两个变量里带单独 `0x` 段的条目（如 `192.0.2.0x`）以前不算 IP、记 error 后被忽略，现在与 URL 一致把该段读成 0，放行对应地址（这里是 `192.0.2.0`）。下面检查 (a) 会把这类条目列在「ends in a number」一行，按本意改写成十进制地址或删掉，脚本不用改。
+- **解析变严**：已存 WorkerDefinition（任何 status）的 `egressDeny` 里以数字结尾、却不是 IP 的条目不再通过校验，组合候选与管理员提议读到这个版本时当作解析不了；`EGRESS_TRUSTED_RESOLVED_CIDRS` 里带前导零的条目记 error 并忽略（收窄）。
+- **无需担心**：`NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` 带前导零时 Docker 与内核本来就拒绝，正在运行的主机不会是这种值，下面的脚本顺带检查。`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES` 与映射文件里以数字结尾的条目只多一条 error 日志，以前也拦不住任何东西。
+- **升级前检查（可选，只读，结果记 `docs/private/`）**：
+  - (a) 在项目目录下检查 `.env`，正常输出为空。有输出时升级前处理：前导零的 IP / CIDR 改写成本意的十进制（尤其是 ALLOW_HOSTS），以数字结尾的非 IP 条目删掉（它们以前就匹配不到任何主机）。
+
+    ```sh
+    grep -E '^(NEXTTIME_SUBNET_CONTROL|NEXTTIME_SUBNET_WORKERS|EGRESS_TRUSTED_RESOLVED_CIDRS|NEXTTIME_CONNECTION_ALLOW_HOSTS|NEXTTIME_CONNECTION_FIXTURE_HOSTS|DENY_HOSTS|EGRESS_DENY_HOST_SUFFIXES)=' .env |
+    awk 'function strict(h,  p, k, n) { n = split(h, p, "."); if (n != 4) return 0
+           for (k = 1; k <= 4; k++) if (p[k] !~ /^(0|[1-9][0-9]*)$/ || length(p[k]) > 3 || p[k] + 0 > 255) return 0
+           return 1 }
+    {
+      name = $0; sub(/=.*/, "", name); v = substr($0, length(name) + 2); gsub(/["\047[:space:]]/, "", v)
+      n = split(v, e, ",")
+      for (i = 1; i <= n; i++) {
+        h = tolower(e[i]); sub(/\/.*/, "", h); sub(/\.+$/, "", h)
+        if (h == "" || h ~ /:/) continue
+        if (h ~ /^[0-9.]+$/ && h ~ /(^|\.)0[0-9]/) print name ": leading-zero part: " e[i]
+        else if (h ~ /(^|\.)(0x[0-9a-f]*|[0-9]+)$/ && !strict(h)) print name ": ends in a number but is not an IPv4 address: " e[i]
+      }
+    }'
+    ```
+
+  - (b) 已存定义里的 `egressDeny`。**必须用表属主跑（`psql -U nexttime`）**：`worker_definitions` 开了 RLS。正常结果为空；有行时升级照常，升级后对这些定义发一个去掉该条目的新版本（条目本来就拦不住请求，去掉不会放宽出口）。
+
+    ```sql
+    select workspace_id, id, version, kind, status, e as entry
+      from worker_definitions,
+           jsonb_array_elements_text(case when jsonb_typeof(definition -> 'egressDeny') = 'array'
+                                          then definition -> 'egressDeny' else '[]'::jsonb end) e
+     where rtrim(lower(e), '.') ~ '(^|\.)(0x[0-9a-f]*|[0-9]+)$'
+     order by workspace_id, id, version;
+    ```
+
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
+### 3.197 主机列表里的 IP 条目按地址精确匹配（#1320，遗留 785，0.69.2 之后的下一版）
+
+无迁移。出口代理的 allow / deny 条目与内核 `NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 里的 IP 条目，以前按文本后缀比较，现在按它表示的地址精确匹配，任何写法都认（前导零、整数、十六进制、末尾点、方括号）。
+
+- **含义变化**：
+  - 拒绝列表里写法不规范的 IP 条目开始生效（多拒，收窄）；出口代理拒绝列表里写法不规范或带方括号的 IPv6 条目同样开始生效。
+  - 内核允许列表里带末尾点的 IP 条目（如 `203.0.113.8.`）开始生效（放宽，以前永远匹配不到）。
+  - 短写法（如 `2.7`）不再按后缀匹配以它结尾的其他地址：拒绝侧不再多拒（放宽，属非预期用法），映射文件允许侧不再多放。
+  - 带方括号的 IPv6 条目（如 `[2001:db8::1]`）在内核允许列表里也开始生效（放宽，#1324，遗留 786）；方括号里不是 IPv6 的条目（如 `[192.0.2.8]`）不匹配任何地址，记 error。出口代理纯 HTTP 请求的 IPv6 字面量目标与 CONNECT 一样按字面量处理：已列入允许列表的公网 IPv6 地址以前被拒（`dns-error`），现在放行。下面的扫描只看 IPv4 形状的条目，不受影响。
+  - 出口代理的 allow 放行后仍要过地址分类，不会因此放出私网地址。默认的 `DENY_HOSTS` 与默认拒绝后缀里没有 IP 条目，映射文件的 allow / deny 由 worker-supervisor 写、正常不会有 IP 条目，正常部署不受影响。
+- **升级前检查（可选，只读，结果记 `docs/private/`）**：在项目目录下运行，列出 `.env` 里以数字结尾、却不是四段十进制的条目，正常输出为空。有输出时，把条目改写成本意的四段十进制地址。列出的条目有两种：写法不规范的 IP（如 `192.0.2.010`、`0xcb007108`、`2.7`、`203.0.113.8.`），升级后按它表示的地址匹配；根本不是 IP 的（如 `256.1.1.1`、`08.8.8.8`、五段写法），什么也匹配不到。能处理行首空格、`export` 前缀、引号与行尾 ` # 注释`；只用 POSIX awk 特性（mawk 1.3.4 实测，gawk 结果相同为推断）。
+
+    ```sh
+    grep -E '^[[:space:]]*(export[[:space:]]+)?(NEXTTIME_CONNECTION_ALLOW_HOSTS|NEXTTIME_CONNECTION_FIXTURE_HOSTS|DENY_HOSTS|EGRESS_DENY_HOST_SUFFIXES)=' .env |
+    awk 'function strict(h,  p, k, n) { n = split(h, p, "."); if (n != 4) return 0
+           for (k = 1; k <= 4; k++) if (p[k] !~ /^(0|[1-9][0-9]*)$/ || length(p[k]) > 3 || p[k] + 0 > 255) return 0
+           return 1 }
+    {
+      line = $0; sub(/^[[:space:]]*/, "", line); sub(/^export[[:space:]]+/, "", line)
+      name = line; sub(/=.*/, "", name); v = substr(line, length(name) + 2)
+      sub(/[[:space:]]+#.*$/, "", v); gsub(/["\047[:space:]]/, "", v)
+      n = split(v, e, ",")
+      for (i = 1; i <= n; i++) {
+        h = tolower(e[i]); if (!sub(/^[*][.]/, "", h)) sub(/^[.]/, "", h)
+        if (h ~ /^((0x[0-9a-f]*|[0-9]+)[.])*(0x[0-9a-f]*|[0-9]+)[.]?$/ && !strict(h))
+          print name ": entry ends in a number but is not four plain decimal parts; rewrite it as the address you mean: " e[i]
+      }
+    }'
+    ```
+
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
+### 3.198 门宿主拉 OpenAPI 文档时不跟随重定向（#1342，遗留 199，0.69.2 之后的下一版）
+
+无迁移。门宿主给 http 实例拉 OpenAPI `manifestSource` 时，以前跟随重定向，现在与内核（R-27）和门的 transport 一致，不跟随。
+
+- **含义变化（收窄）**：OpenAPI 文档地址会重定向的 http 实例，升级后不再构建、不再接管、不再公告。原因写在门宿主的 warn 日志和 `/healthz` 里，原文含 `does not follow redirects`。门宿主每轮 tick 照常重试。
+- **影响范围**：内核在创建连接时本来就拒绝会重定向的 `manifestSource`，所以只影响创建之后地址才开始重定向的实例。mcp 实例、预置连接器实例、没有 `manifestSource` 的 http 实例不受影响。
+- **升级后核对（可选，只读，结果记 `docs/private/`）**：在门宿主日志里查 `does not follow redirects`。正常没有命中。有命中时，把该实例的 OpenAPI 文档地址改成日志里给出的最终地址。
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
 ## 4. Hotfix 流程

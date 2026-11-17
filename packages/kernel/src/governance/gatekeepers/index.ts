@@ -39,6 +39,7 @@ export { lockSelfConnectionState } from './self-connection-lock.js';
 export {
   importManifest,
   storableManifestOperation,
+  unstorableActedText,
   proposeOperation,
   operationOriginOf,
   getOperation,

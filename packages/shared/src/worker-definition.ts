@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { WorkerDefinitionKind } from './enums.js';
 import {
   hostPatternProblem,
-  isIpLiteral,
+  isIpLiteralPattern,
   normalizeDenyHostPattern,
   normalizeHostname,
 } from './net-address.js';
@@ -84,7 +84,7 @@ const WorkerDefinitionContentBaseSchema = z.object({
 export const EgressDenyListSchema = z.array(z.string().min(1)).transform((entries, ctx) =>
   entries.map((raw) => {
     const entry = normalizeDenyHostPattern(raw);
-    const problem = isIpLiteral(entry)
+    const problem = isIpLiteralPattern(entry)
       ? 'is an IP address — egressDeny holds host names only (the egress proxy already denies private ranges by address)'
       : hostPatternProblem(entry);
     if (problem) {

@@ -442,6 +442,59 @@ describe('target declarations (S11 GO12)', () => {
     expect(OPERATION_TARGET_REFUSAL_VALUES).toContain('target_arity_inconsistent');
   });
 
+  it('refuses a nullable param as a target param, though a reader is told its type (legacy 774)', () => {
+    // `[X, "null"]` is an X to a person reading the Operation, and no instance to order calls by.
+    for (const type of [
+      ['string', 'null'],
+      ['null', 'integer'],
+    ]) {
+      const id = { type };
+      const nullable = OperationSchema.safeParse({
+        ...restart,
+        params_schema: { ...restart.params_schema, properties: { id } },
+      });
+      expect(operationParamType(id)).toBe(type.find((entry) => entry !== 'null'));
+      expect(nullable.success).toBe(false);
+      expect(operationTargetRefusalOf(nullable.error?.issues ?? [])).toEqual({
+        reason: 'target_param_not_required_scalar',
+        at: [],
+        path: ['target', 'params', 0],
+        // The message shows the type as declared, not as none.
+        message: `param "id" must be required and of type string or integer (type: ${JSON.stringify(type)}, required: true)`,
+      });
+    }
+    // A param with no type at all still says so.
+    const untyped = OperationSchema.safeParse({
+      ...restart,
+      params_schema: { ...restart.params_schema, properties: { id: {} } },
+    });
+    expect(operationTargetRefusalOf(untyped.error?.issues ?? [])?.message).toBe(
+      'param "id" must be required and of type string or integer (type: none, required: true)',
+    );
+  });
+
+  it('reads no instance from a nullable target param of an Operation never parsed (legacy 778)', () => {
+    // `actionTargetOf` reads the declared type by the same rule the parse refuses `[X, "null"]` by,
+    // so a row that skipped the parse still never orders calls by a value that may be null.
+    const declaring = (type: unknown) => ({
+      params_schema: { type: 'object', properties: { id: { type } }, required: ['id'] },
+      target: { object_type: 'Container', params: ['id'] },
+    });
+    for (const type of [
+      ['string', 'null'],
+      ['null', 'integer'],
+    ]) {
+      expect(actionTargetOf(declaring(type), { id: 'web-1' }), JSON.stringify(type)).toBeNull();
+      expect(actionTargetOf(declaring(type), { id: 7 }), JSON.stringify(type)).toBeNull();
+      expect(actionTargetOf(declaring(type), { id: null }), JSON.stringify(type)).toBeNull();
+    }
+    expect(actionTargetOf(declaring('string'), { id: 'web-1' })).toEqual({
+      type: 'Container',
+      params: ['id'],
+      identity: ['web-1'],
+    });
+  });
+
   it('operationTargetRefusalOf recovers the reason and places from a parse, alone or nested', () => {
     const alone = OperationSchema.safeParse({
       ...restart,

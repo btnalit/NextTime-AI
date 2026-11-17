@@ -31,7 +31,7 @@ import {
   OntologyLinkEndpointError,
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
-import { UnknownOperationError } from '../../application/gateway/index.js';
+import { DecisionReferenceError, UnknownOperationError } from '../../application/gateway/index.js';
 import {
   GoalPlanValidationError,
   GoalRunForbiddenError,
@@ -270,6 +270,14 @@ describe('mapDispatchError — legacy 175 observe params', () => {
     const err = new WorkerDefinitionReferenceError('WorkerDefinition wd-1@2', {
       gates: ['gk-gone'],
     });
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('DecisionReferenceError (legacy 308) maps to INVALID_PARAMS with its message', () => {
+    const err = new DecisionReferenceError(['00000000-0000-4000-8000-000000000001']);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

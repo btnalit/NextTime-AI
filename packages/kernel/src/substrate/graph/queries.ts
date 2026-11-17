@@ -753,6 +753,28 @@ export function buildFactCountsByLinkTypeQuery(
   };
 }
 
+/** `readableFactIds` (store.ts): which of `factIds` name a Fact this caller can read — any status,
+ *  superseded or invalidated included (`explain` reads those too), same visibility as every Fact
+ *  read here (the private-source rule, and `viewer`'s Operation drafts). */
+export function buildReadableFactIdsQuery(
+  workspaceId: string,
+  factIds: readonly string[],
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const filter = linkViewerFilter(viewer, 3);
+  return {
+    text: `
+      select id
+      from links l
+      where workspace_id = $1
+        and id = any($2::uuid[])
+        and ${LINK_VISIBLE_PREDICATE}
+        ${filter.sql}
+    `,
+    values: [workspaceId, factIds, ...filter.values],
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // bitemporal read
 // -------------------------------------------------------------------------------------------

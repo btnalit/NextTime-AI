@@ -17,6 +17,7 @@ export * from './echoed-text.js';
 export * from './gate-tool-name.js';
 export * from './storable-text.js';
 export * from './http.js';
+export * from './redirect.js';
 export * from './handle-token.js';
 export * from './handle-binding.js';
 export * from './gate-host-token.js';

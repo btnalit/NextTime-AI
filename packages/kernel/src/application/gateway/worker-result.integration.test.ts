@@ -1625,6 +1625,145 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(written.audit).toEqual([expect.objectContaining({ unstorableEscaped: 5 })]);
         });
 
+        it('legacy 326: a proposed Operation holding U+0000 in any field but its description costs that entry only, as an import refuses it', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const inBinding = `demo.binding.${marker}`;
+          const inSchemaKey = `demo.key.${marker}`;
+          const inDescription = `demo.described.${marker}`;
+          const goodName = `demo.good.${marker}`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'proposed four Operations',
+            proposedOperations: [
+              {
+                gatekeeperId,
+                operation: {
+                  ...proposalOperation(inBinding),
+                  binding: { kind: 'http' as const, method: 'GET' as const, path: '/up\u0000' },
+                },
+              },
+              {
+                gatekeeperId,
+                operation: {
+                  ...proposalOperation(inSchemaKey),
+                  params_schema: { type: 'object', properties: { 'a\u0000b': { type: 'string' } } },
+                },
+              },
+              {
+                gatekeeperId,
+                operation: {
+                  ...proposalOperation(inDescription),
+                  description: 'reads \u0000 bytes',
+                },
+              },
+              { gatekeeperId, operation: proposalOperation(goodName) },
+            ],
+          })) as {
+            status: string;
+            proposedOperationsRejected: { index: number; reason: string; detail?: string }[];
+          };
+          expect(result.status).toBe('completed');
+          // Each refused entry says where, its name and key shown visibly.
+          expect(result.proposedOperationsRejected).toEqual([
+            {
+              index: 0,
+              gatekeeperId,
+              reason: 'unstorable_text',
+              // The place right before "holds", where the console reads it (web/src/lib/errors.ts).
+              detail: expect.stringContaining('the text at field "binding.path" holds U+0000'),
+            },
+            {
+              index: 1,
+              gatekeeperId,
+              reason: 'unstorable_text',
+              detail: expect.stringContaining(
+                'the key at field "params_schema.properties.a\\u0000b" holds U+0000',
+              ),
+            },
+          ]);
+          expect(result.proposedOperationsRejected[0]?.detail).toMatch(
+            new RegExp(`^Operation "${inBinding.replaceAll('.', '\\.')}": `),
+          );
+          expect(
+            result.proposedOperationsRejected.some(({ detail }) => detail?.includes('\u0000')),
+          ).toBe(false);
+
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.result.proposedOperationsRejected).toEqual(
+            result.proposedOperationsRejected,
+          );
+          // No row for either refused entry — not under an escaped binding or key either.
+          expect(stored.operations).toEqual([
+            { name: inDescription, proposed_by: ownerId },
+            { name: goodName, proposed_by: ownerId },
+          ]);
+          expect(stored.audit).toEqual([
+            expect.objectContaining({ proposalIndex: 0, reason: 'unstorable_text' }),
+            expect.objectContaining({ proposalIndex: 1, reason: 'unstorable_text' }),
+          ]);
+          // The description alone is prose for a reader: stored with it escaped.
+          const description = await inTx(ownerId, async (client) => {
+            const { rows } = await client.query<{ description: string }>(
+              `select properties ->> 'description' as description from objects
+               where workspace_id = $1 and object_type = 'Operation'
+                 and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3`,
+              [workspaceId, gatekeeperId, inDescription],
+            );
+            return rows[0]?.description;
+          });
+          expect(description).toBe('reads \\u{0} bytes');
+        });
+
+        it('legacy 780: an entry refused for two reasons is refused once, for its unknown Gatekeeper', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const missingGatekeeperId = randomUUID();
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const goodName = `demo.good.${marker}`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'proposed four Operations',
+            proposedOperations: [
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: {
+                  ...proposalOperation(`demo.binding.${marker}`),
+                  binding: { kind: 'http' as const, method: 'GET' as const, path: '/up\u0000' },
+                },
+              },
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: proposalOperation(`demo.name.${marker}\u0000`),
+              },
+              // U+0001 passes the pre-check (only U+0000 is unstorable) and fails the name rule
+              // later: refused for its Gatekeeper only because that lookup ends the entry.
+              {
+                gatekeeperId: missingGatekeeperId,
+                operation: proposalOperation(`demo.control.${marker}\u0001`),
+              },
+              { gatekeeperId, operation: proposalOperation(goodName) },
+            ],
+          })) as {
+            status: string;
+            proposedOperationsRejected: Record<string, unknown>[];
+          };
+          expect(result.status).toBe('completed');
+          // The Gatekeeper is looked up first: an entry naming none is refused for that alone,
+          // whatever else it holds — one rejection per entry, never a second for its U+0000.
+          expect(result.proposedOperationsRejected).toEqual([
+            { index: 0, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+            { index: 1, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+            { index: 2, gatekeeperId: missingGatekeeperId, reason: 'gatekeeper_not_found' },
+          ]);
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.result.proposedOperationsRejected).toEqual(
+            result.proposedOperationsRejected,
+          );
+          expect(stored.operations).toEqual([{ name: goodName, proposed_by: ownerId }]);
+        });
+
         it('postWorkerResult: a refusal the pre-check did not see (a concurrent write) still costs that entry only', async () => {
           const marker = randomUUID().slice(0, 8);
           const gatekeeperId = await registerTestGate(marker);

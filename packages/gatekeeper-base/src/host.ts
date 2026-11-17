@@ -24,7 +24,15 @@ import { ConnectedAccountStore, HostedCredentialResolver } from './credentials/i
 import { createGateAuthGuard, loadGateKernelToken } from './gate-auth.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { JsonFileIdempotencyStore } from './idempotency-store.js';
-import { HttpTransport, McpTransport, importMcpTools, importOpenApi } from './kinds/index.js';
+import {
+  HttpTransport,
+  McpTransport,
+  NO_REDIRECTS,
+  importMcpTools,
+  importOpenApi,
+  isRedirectStatus,
+  redirectRefusalMessage,
+} from './kinds/index.js';
 import type { OpenApiDocumentLike } from './kinds/index.js';
 import type { Transport } from './kinds/types.js';
 import { createGateMetrics } from './metrics.js';
@@ -197,18 +205,22 @@ async function fetchJsonWithTimeout(
   timeoutMs: number,
   setTimer: typeof setTimeout,
   clearTimer: typeof clearTimeout,
-): Promise<{ status: number; ok: boolean; json: unknown }> {
+): Promise<{ status: number; ok: boolean; json: unknown; headers: Headers }> {
   const controller = new AbortController();
   const timeout = setTimer(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal });
     let json: unknown = undefined;
-    try {
-      json = await response.json();
-    } catch {
-      json = undefined;
+    if (isRedirectStatus(response.status)) {
+      await response.body?.cancel().catch(() => {});
+    } else {
+      try {
+        json = await response.json();
+      } catch {
+        json = undefined;
+      }
     }
-    return { status: response.status, ok: response.ok, json };
+    return { status: response.status, ok: response.ok, json, headers: response.headers };
   } finally {
     clearTimer(timeout);
   }
@@ -389,14 +401,26 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
           : undefined;
       operations = importMcpTools(await (transport as McpTransport).listTools(shared));
     } else if (definition.manifestSource) {
+      // Legacy 199 (#532 review P): never followed, as the kernel's own fetch of the same URL
+      // (`create_connection`, R-27) and the gate's transports (`kinds/redirect.ts`). No credential
+      // goes along, but a redirect would read the Operations from an address nobody set — one the
+      // kernel's outbound-target check never saw.
       const fetched = await fetchJsonWithTimeout(
         targetFetch,
         definition.manifestSource,
-        { method: 'GET' },
+        { method: 'GET', redirect: NO_REDIRECTS },
         BUILD_TIMEOUT_MS,
         setTimer,
         clearTimer,
       );
+      if (isRedirectStatus(fetched.status)) {
+        throw new Error(
+          redirectRefusalMessage('OpenAPI document', fetched, definition.manifestSource, {
+            follower: 'The gate host does not follow redirects for an owner-supplied URL',
+            fix: 'set manifestSource to the final address',
+          }),
+        );
+      }
       if (!fetched.ok || fetched.json === undefined) {
         throw new Error(`OpenAPI document responded ${fetched.status}`);
       }
