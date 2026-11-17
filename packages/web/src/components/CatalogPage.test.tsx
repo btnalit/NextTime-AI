@@ -1913,6 +1913,76 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('legacy 245: deprecating a Worker closes its detail once the lists drop it, never 「未找到」', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: deprecated
+          ? []
+          : [
+              {
+                id: 'wd-1',
+                version: 1,
+                kind: 'worker',
+                status: 'published',
+                definition: { name: 'Fixer' },
+              },
+            ],
+      }),
+      deprecate_worker_definition: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('worker-deprecate-confirm-wd-1@1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('catalog-row')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement?.getAttribute('role')).toBe('tab');
+  });
+
+  it('legacy 245: the card and the Workers tab share one readiness read, on load and after a publish', async () => {
+    let published = false;
+    const http = scriptedHttp({
+      execution_readiness: () => ({ ready: true, gates: [], workers: [], missing: [] }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: published ? 'published' : 'draft',
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+      list_capability_names: () => ({ items: [] }),
+      publish_worker_definition: () => {
+        published = true;
+        return {};
+      },
+    });
+    const reads = () => http.calls.filter((c) => c.name === 'execution_readiness').length;
+    renderPage(http, 'workers');
+    const detail = await selectRow((await screen.findAllByTestId('catalog-row'))[0] as HTMLElement);
+    await screen.findByTestId('execution-readiness-body');
+    expect(reads()).toBe(1);
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'publish_worker_definition')).toBe(true),
+    );
+    await waitFor(() => expect(reads()).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reads()).toBe(2);
+  });
+
   // S8 W2 U2 (audit CW1): the entry definition renders in its own section with no Deprecate
   // action at all (deprecating it would break this workspace's entry agent) — a Worker row still
   // gets one.
