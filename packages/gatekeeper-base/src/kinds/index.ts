@@ -12,6 +12,8 @@ export {
   importOpenApi,
   isGateOwnedHeader,
   isGateOwnedQueryParam,
+  MAX_OPENAPI_DOCUMENT_BYTES,
+  readOpenApiDocument,
   resolveBindingUrl,
 } from './http.js';
 export type {
@@ -21,7 +23,7 @@ export type {
   OpenApiDocumentLike,
 } from './http.js';
 
-export { McpTransport, importMcpTools } from './mcp.js';
+export { MAX_MCP_TOOLS_LIST_BYTES, McpTransport, importMcpTools } from './mcp.js';
 export type { McpTransportOptions, McpToolLike, McpToolsListResult } from './mcp.js';
 
 export {

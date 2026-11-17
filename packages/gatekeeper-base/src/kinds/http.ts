@@ -1,4 +1,5 @@
 import type { Operation } from '@nexttime/shared';
+import { readBodyWithin } from '../bounded-body.js';
 import {
   BindingKindMismatchError,
   GateOwnedParamRefusedError,
@@ -1067,6 +1068,22 @@ function writeParamsSchema(
   // offered — and the schema is not left empty either, which would take anything.
   if (Object.keys(properties).length === 0 && !unread) return {};
   return { type: 'object', properties, ...(required.length > 0 ? { required } : {}) };
+}
+
+/** Legacy 797: the largest OpenAPI document read from an owner-supplied `manifestSource` — by the
+ *  kernel (`create_connection`) and by the gate host — so a URL answering with hundreds of MB
+ *  cannot fill either process's memory before anything parses it. Large public API descriptions
+ *  run to several MB; the expansion budget (`MAX_INLINED_UNITS_PER_DOCUMENT`) bounds what the
+ *  import then does with one. */
+export const MAX_OPENAPI_DOCUMENT_BYTES = 16 * 1024 * 1024;
+
+/** An OpenAPI document (JSON) read from `response`, at most {@link MAX_OPENAPI_DOCUMENT_BYTES} —
+ *  `ResponseBodyTooLargeError` past that; a body that is not JSON throws as `JSON.parse` does. */
+export async function readOpenApiDocument(response: Response): Promise<unknown> {
+  const text = await readBodyWithin(response, MAX_OPENAPI_DOCUMENT_BYTES, 'the OpenAPI document', {
+    fix: 'serve a document with only the paths this gate needs, or write its manifest by hand',
+  });
+  return JSON.parse(text);
 }
 
 /** Imports an OpenAPI document into a manifest draft — one Operation per (path, method). Every
