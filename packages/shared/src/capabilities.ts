@@ -3435,7 +3435,7 @@ const agentProfileCapabilities = [
     paramsSchema: z.object({ principalId: id.optional() }).strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Read one Principal’s AgentProfile — raw fields (scalars: null = inherit; lists: what the member excluded) plus the resolved `effective` values: everything currently granted / published minus the exclusions, capped by the workspace AgentPolicy. Omit principalId for the caller’s own; naming another principal requires owner.',
+      'Read one Principal’s AgentProfile — raw fields (scalars: null = inherit; lists: what the member excluded) plus the resolved `effective` values: everything currently granted / published minus the exclusions, capped by the workspace AgentPolicy. Omit principalId for the caller’s own; naming another principal requires owner. Legacy 200: each availableGatekeepers row carries health — for a gate enabled from the platform catalog, its instance’s stored health (unknown until the gate has announced); for a gate the workspace connected itself, a live probe of the gate’s own health endpoint (3 s timeout, all gates at once; ok, unreachable or unauthorized).',
   },
   {
     name: 'set_agent_profile',
@@ -3462,7 +3462,7 @@ const agentProfileCapabilities = [
       .strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — the Skill / Gatekeeper / Worker lists are exclusion lists and can only narrow; 400 invalid_params on a model outside the whitelist, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it; autoApproveLow false narrows, null and true follow the policy). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
+      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — the Skill / Gatekeeper / Worker lists are exclusion lists and can only narrow; 400 invalid_params on a model outside the whitelist, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it; autoApproveLow false narrows, null and true follow the policy). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope. Its availableGatekeepers rows carry no health: a write does not probe the gates (read the profile again for it).',
   },
   {
     name: 'get_agent_policy',

@@ -69,6 +69,7 @@ import {
   landGatekeeper,
   operationPlatformStatus,
   readGatekeeperPlatformPolicy,
+  recordGateInstanceCheck,
   recordMintedConnectionSecret,
   upsertAnnouncement,
 } from '../gates/index.js';
@@ -100,6 +101,7 @@ import {
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { listGraphNodesForExplorer, searchGraphForExplorer } from './explorer-read-service.js';
+import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
 import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
@@ -2248,7 +2250,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           )) as AgentProfileWire;
           expect(
             profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
-          ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: true });
+          ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: true, health: 'ok' });
           expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
         });
         // With the Grant back in place the same gate is offered as granted, and is in the
@@ -2263,8 +2265,57 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId: cGatekeeperId,
           granted: true,
           inUse: true,
+          health: 'ok',
         });
         expect(granted.effective.enabledGatekeepers).toContain(cGatekeeperId);
+      });
+
+      // Legacy 200 (kernel half): a gate the workspace enabled from the catalog shows its
+      // instance's stored health (kept by the gate's announcements, the value
+      // `list_available_gate_instances` shows) — My Agent never probes it.
+      it('legacy 200: a catalog gate on My Agent carries its instance’s stored health, never a probe', async () => {
+        let probes = 0;
+        setGatekeeperReadHandlerDeps({
+          gatekeeperClient: {
+            health: async () => {
+              probes += 1;
+              return { status: 'ok' };
+            },
+          } as unknown as GatekeeperClient,
+        });
+        await withPlatform(pool, { userId: admin.id }, (client) =>
+          recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'unauthorized'),
+        );
+        try {
+          const profile = (await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+            'get_agent_profile',
+            {},
+          )) as AgentProfileWire;
+          expect(
+            profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId)?.health,
+          ).toBe('unauthorized');
+
+          await withPlatform(pool, { userId: admin.id }, (client) =>
+            recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'unknown'),
+          );
+          const unseen = (await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+            'get_agent_profile',
+            {},
+          )) as AgentProfileWire;
+          expect(
+            unseen.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId)?.health,
+          ).toBe('unknown');
+          expect(probes).toBe(0);
+        } finally {
+          setGatekeeperReadHandlerDeps({});
+          await withPlatform(pool, { userId: admin.id }, (client) =>
+            recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'ok'),
+          );
+        }
       });
 
       it('no Grant + excluded on My Agent: My Agent still offers it (not in use), reachability says excluded_by_profile, and every Handle path — entry, Worker-shaped, delegated Worker — refuses and projects nothing', async () => {
@@ -2279,7 +2330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(profile.excludedGatekeepers).toEqual([cGatekeeperId]);
             expect(
               profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
-            ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: false });
+            ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: false, health: 'ok' });
             expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
 
             const reach = await reachForMember();

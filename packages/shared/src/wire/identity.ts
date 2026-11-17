@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PrincipalKindSchema, RoleSchema } from '../enums.js';
 import { ProviderHealthWireSchema } from '../provider-health.js';
+import { GateHealthWireSchema } from './platform.js';
 
 /**
  * wire/identity: Principal / Workspace / AgentProfile / AgentPolicy wire shapes
@@ -81,12 +82,23 @@ const EffectiveAgentProfileWireSchema = z
  *  readable without a Grant (`granted: false` — design doc §11 "门上的观察": registered, with a
  *  published observe-class Operation not on the platform deny list). `inUse`: the member's agent
  *  uses it now — not in `excludedGatekeepers` and inside the AgentPolicy gate cap (the check every
- *  observe call makes); for a granted gate it equals membership of `effective.enabledGatekeepers`. */
+ *  observe call makes); for a granted gate it equals membership of `effective.enabledGatekeepers`.
+ *
+ *  `health` (legacy 200, kernel half): how the gate stands, on `get_agent_profile` only — never on
+ *  `set_agent_profile`'s result (a write does not probe; read the profile again for it). Two
+ *  sources, the same values as `GateInstanceWire.health`:
+ *    - a gate the workspace enabled from the platform catalog: its instance's stored health, kept
+ *      by the gate's own announcements (`list_available_gate_instances` shows the same value);
+ *      `unknown` until one has been seen;
+ *    - a gate the workspace connected itself: probed live, as `get_gatekeeper` probes it (the gate's
+ *      own `/gate/health`, 3 s timeout, all gates at once) — `ok`, `unreachable` or
+ *      `unauthorized`, never `unknown`. */
 export const AvailableGatekeeperWireSchema = z
   .object({
     gatekeeperId: z.string(),
     granted: z.boolean(),
     inUse: z.boolean(),
+    health: GateHealthWireSchema.optional(),
   })
   .strict();
 export type AvailableGatekeeperWire = z.infer<typeof AvailableGatekeeperWireSchema>;

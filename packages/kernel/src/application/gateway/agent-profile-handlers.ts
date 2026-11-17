@@ -21,16 +21,19 @@ import {
   revokeEntrySessionHandles,
   revokeWorkspaceEntrySessionHandles,
 } from '../../governance/capability/index.js';
-import { listGatekeepers } from '../../governance/gatekeepers/index.js';
-import type { ObserveExclusions } from '../gates/index.js';
+import { getGatekeeper, listGatekeepers } from '../../governance/gatekeepers/index.js';
+import type { GateHealth, ObserveExclusions } from '../gates/index.js';
 import {
   observableGatekeeperIds,
   observeExclusionsOf,
   observeGateExclusion,
+  readCatalogGateHealths,
 } from '../gates/index.js';
 import { listPublishedSkillIds, listWorkerDefinitions } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { type ResolvedGateTarget, resolveGateTarget } from './gate-target.js';
+import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
 import { PrincipalNotFoundError } from './members-handlers.js';
 import { readModelCatalog } from './models-catalog-handler.js';
 
@@ -175,6 +178,43 @@ interface AvailableGatekeeper {
   readonly gatekeeperId: string;
   readonly granted: boolean;
   readonly inUse: boolean;
+  /** Legacy 200: `get_agent_profile` only (`offeredGateHealths`). */
+  readonly health?: GateHealth;
+}
+
+/**
+ * Legacy 200 (kernel half): how each gate My Agent offers stands, for `get_agent_profile` — the
+ * system list showed a self-connected gate with no status at all. Two sources
+ * (`AvailableGatekeeperWire.health`):
+ *   - a gate the workspace enabled from the platform catalog: its instance's stored health
+ *     (`readCatalogGateHealths`, kept by the gate's own announcements) — no call to the gate;
+ *   - any other: the gate's own `/gate/health`, probed as `get_gatekeeper` probes it
+ *     (`probeGatekeeperHealth`: 3 s timeout, never throws), through the credential every call to
+ *     that gate uses (`resolveGateTarget`). All at once, so a read waits at most as long as its
+ *     slowest gate; the probe asks whether the gate is up and never runs an Operation.
+ * `set_agent_profile` does not call this: a write is not slowed by the network for a field it only
+ * displays.
+ */
+async function offeredGateHealths(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperIds: readonly string[],
+): Promise<ReadonlyMap<string, GateHealth>> {
+  const stored = await readCatalogGateHealths(client, workspaceId);
+  const probes: { readonly gatekeeperId: string; readonly target: ResolvedGateTarget }[] = [];
+  for (const gatekeeperId of gatekeeperIds) {
+    if (stored.has(gatekeeperId)) continue;
+    const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
+    if (!gatekeeper) continue;
+    probes.push({ gatekeeperId, target: await resolveGateTarget(client, workspaceId, gatekeeper) });
+  }
+  const probed = await Promise.all(
+    probes.map(
+      async ({ gatekeeperId, target }) =>
+        [gatekeeperId, await probeGatekeeperHealth(target)] as const,
+    ),
+  );
+  return new Map<string, GateHealth>([...stored, ...probed]);
 }
 
 /**
@@ -190,12 +230,14 @@ interface AvailableGatekeeper {
  * `resources.gatekeeper` is minted from (`ensureEntryHandle`) — is still granted ∩ not excluded;
  * an ungranted gate listed here never becomes execute authority. Listed in `listGatekeepers`
  * order (registration time); a Grant naming a gate no longer registered is not offered.
+ * `withHealth` (legacy 200): each row's `health` too (`offeredGateHealths`) — `get_agent_profile`.
  */
 async function resolveAvailableGatekeepers(
   client: PoolClient,
   workspaceId: string,
   available: AvailableAgentResources,
   exclusions: ObserveExclusions,
+  options: { readonly withHealth: boolean },
 ): Promise<readonly AvailableGatekeeper[]> {
   const gates = await listGatekeepers(client, workspaceId);
   const observable = await observableGatekeeperIds(
@@ -204,13 +246,25 @@ async function resolveAvailableGatekeepers(
     gates.map((gate) => gate.gatekeeperId),
   );
   const granted = new Set(available.grantedGatekeeperIds);
-  return gates
-    .filter((gate) => granted.has(gate.gatekeeperId) || observable.has(gate.gatekeeperId))
-    .map((gate) => ({
+  const offered = gates.filter(
+    (gate) => granted.has(gate.gatekeeperId) || observable.has(gate.gatekeeperId),
+  );
+  const healths = options.withHealth
+    ? await offeredGateHealths(
+        client,
+        workspaceId,
+        offered.map((gate) => gate.gatekeeperId),
+      )
+    : undefined;
+  return offered.map((gate) => {
+    const health = healths?.get(gate.gatekeeperId);
+    return {
       gatekeeperId: gate.gatekeeperId,
       granted: granted.has(gate.gatekeeperId),
       inUse: observeGateExclusion(exclusions, gate.gatekeeperId) === undefined,
-    }));
+      ...(health !== undefined ? { health } : {}),
+    };
+  });
 }
 
 function toWireAgentProfile(
@@ -292,6 +346,7 @@ export const getAgentProfileHandler: CapabilityHandler = async (
     workspaceId,
     available,
     observeExclusionsOf(profile, policy),
+    { withHealth: true },
   );
 
   return {
@@ -386,6 +441,7 @@ export const setAgentProfileHandler: CapabilityHandler = async (
     workspaceId,
     available,
     observeExclusionsOf(updated, policy),
+    { withHealth: false },
   );
   return {
     result: toWireAgentProfile(target, updated, effective, availableGatekeepers),

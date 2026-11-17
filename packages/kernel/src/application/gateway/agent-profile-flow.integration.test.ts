@@ -4,12 +4,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role } from '@nexttime/shared';
+import type { AgentProfileWire, Role } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import {
+  type GateTarget,
+  type GatekeeperClient,
+  GatekeeperClientError,
+} from '../../adapters/gatekeeper-client/index.js';
 import { entryScope, grantCapability, issueHandle } from '../../governance/capability/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/keys.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
@@ -19,6 +24,7 @@ import { AgentProfileValidationError } from './agent-profile-handlers.js';
 import { hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
+import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
 import { authenticateHandle } from './handle-auth.js';
 import { PrincipalNotFoundError } from './members-handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -381,6 +387,134 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           dispatchCapability({ pool }, owner, 'get_agent_profile', { principalId: randomUUID() }),
         ).rejects.toThrow(PrincipalNotFoundError);
+      });
+    });
+
+    // Legacy 200 (kernel half): every gate My Agent offers says how it stands. A gate the workspace
+    // connected itself is probed live on `get_agent_profile` (as `get_gatekeeper` probes it); the
+    // catalog-gate half (stored instance health, no probe) is in platform-gates.integration.test.ts.
+    describe('get_agent_profile — gate health (legacy 200)', () => {
+      type Answer = 'ok' | 'degraded' | 'unauthorized' | 'refused';
+      let probed: string[] = [];
+      let inFlight = 0;
+      let mostInFlight = 0;
+
+      function fakeHealthClient(answers: ReadonlyMap<string, Answer>): GatekeeperClient {
+        return {
+          health: async (target: GateTarget) => {
+            probed.push(target.endpoint);
+            inFlight += 1;
+            mostInFlight = Math.max(mostInFlight, inFlight);
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              const answer = answers.get(target.endpoint);
+              if (answer === 'ok') return { status: 'ok' };
+              if (answer === 'degraded') return { status: 'degraded' };
+              if (answer === 'unauthorized') {
+                throw new GatekeeperClientError('gate refused the kernel', {
+                  code: 'unauthorized',
+                  status: 401,
+                });
+              }
+              throw new Error('connection refused');
+            } finally {
+              inFlight -= 1;
+            }
+          },
+        } as unknown as GatekeeperClient;
+      }
+
+      afterEach(() => {
+        setGatekeeperReadHandlerDeps({});
+        probed = [];
+        inFlight = 0;
+        mostInFlight = 0;
+      });
+
+      async function selfConnectedGates() {
+        const ws = await adminInsertWorkspace('agent-profile-flow-gate-health-workspace');
+        const owner = await adminInsertPrincipal(ws, 'owner', 'HealthOwner');
+        const memberId = await adminInsertPrincipal(ws, 'member', 'HealthMember');
+        const gate = async (role: Answer) => {
+          const name = `health-${role}-${randomUUID()}`;
+          const gatekeeperId = await registerTestGatekeeper(ws, owner, name);
+          await grantGatekeeper(ws, owner, memberId, gatekeeperId);
+          return {
+            gatekeeperId,
+            endpoint: `https://gate.agent-profile-test.invalid/${name}`,
+          };
+        };
+        const gates = {
+          up: await gate('ok'),
+          degraded: await gate('degraded'),
+          locked: await gate('unauthorized'),
+          down: await gate('refused'),
+        };
+        setGatekeeperReadHandlerDeps({
+          gatekeeperClient: fakeHealthClient(
+            new Map<string, Answer>([
+              [gates.up.endpoint, 'ok'],
+              [gates.degraded.endpoint, 'degraded'],
+              [gates.locked.endpoint, 'unauthorized'],
+              [gates.down.endpoint, 'refused'],
+            ]),
+          ),
+        });
+        return { ws, memberId, gates };
+      }
+
+      it('a self-connected gate carries its live /gate/health — ok, unreachable (degraded or no answer) or unauthorized — every gate probed once, all at once', async () => {
+        const { ws, memberId, gates } = await selfConnectedGates();
+
+        const profile = (await dispatchCapability(
+          { pool },
+          humanCaller(ws, memberId, 'member'),
+          'get_agent_profile',
+          {},
+        )) as AgentProfileWire;
+
+        expect(
+          new Map(profile.availableGatekeepers.map((g) => [g.gatekeeperId, g.health])),
+        ).toEqual(
+          new Map([
+            [gates.up.gatekeeperId, 'ok'],
+            [gates.degraded.gatekeeperId, 'unreachable'],
+            [gates.locked.gatekeeperId, 'unauthorized'],
+            [gates.down.gatekeeperId, 'unreachable'],
+          ]),
+        );
+        expect([...probed].sort()).toEqual(
+          [gates.up, gates.degraded, gates.locked, gates.down].map((g) => g.endpoint).sort(),
+        );
+        expect(mostInFlight).toBe(4);
+      });
+
+      it('set_agent_profile probes nothing and its rows carry no health; the next get_agent_profile does', async () => {
+        const { ws, memberId, gates } = await selfConnectedGates();
+        const member = humanCaller(ws, memberId, 'member');
+
+        const written = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          excludedGatekeepers: [gates.down.gatekeeperId],
+        })) as AgentProfileWire;
+        expect(written.availableGatekeepers).toHaveLength(4);
+        for (const row of written.availableGatekeepers) expect(row).not.toHaveProperty('health');
+        expect(probed).toEqual([]);
+
+        const read = (await dispatchCapability(
+          { pool },
+          member,
+          'get_agent_profile',
+          {},
+        )) as AgentProfileWire;
+        expect(
+          read.availableGatekeepers.find((g) => g.gatekeeperId === gates.down.gatekeeperId),
+        ).toEqual({
+          gatekeeperId: gates.down.gatekeeperId,
+          granted: true,
+          inUse: false,
+          health: 'unreachable',
+        });
+        expect(probed).toHaveLength(4);
       });
     });
 

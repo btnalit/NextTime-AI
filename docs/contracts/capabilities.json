@@ -19517,6 +19517,15 @@
               "granted": {
                 "type": "boolean"
               },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
+              },
               "inUse": {
                 "type": "boolean"
               }
@@ -76842,6 +76851,15 @@
               },
               "granted": {
                 "type": "boolean"
+              },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
               },
               "inUse": {
                 "type": "boolean"
