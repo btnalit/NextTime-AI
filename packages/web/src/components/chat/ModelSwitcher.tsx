@@ -14,7 +14,7 @@ import {
   policyLetsEditOwnProfile,
 } from '../../lib/agent-profile.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { errorToastText, isForbiddenError } from '../../lib/errors.js';
+import { errorToast, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
@@ -193,7 +193,7 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
       toast.push({
         tone: 'danger',
         title: t('切换模型失败', 'Could not switch the model'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
         key: 'chat-model-switch',
       });
     } finally {

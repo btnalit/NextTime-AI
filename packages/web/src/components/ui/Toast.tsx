@@ -8,6 +8,8 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ErrorToastDetails } from '../../lib/errors.js';
+import { ErrorDetails } from '../kit/error-details.js';
 import { Button } from './Button.js';
 import { Icon, type IconName } from './Icon.js';
 
@@ -17,6 +19,9 @@ export interface ToastInput {
   readonly tone?: ToastTone;
   readonly title: string;
   readonly description?: string;
+  /** Legacy 212: a failure's 「技术细节」 (`lib/errors.ts` `errorToast`), folded under the
+   *  description. Opening it keeps the toast until it is dismissed. */
+  readonly details?: ErrorToastDetails;
   readonly action?: { readonly label: string; readonly onClick: () => void };
   /** Default 5000ms. `0` keeps it until dismissed. */
   readonly durationMs?: number;
@@ -56,6 +61,13 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
       for (const timer of pending.values()) clearTimeout(timer);
       pending.clear();
     };
+  }, []);
+
+  // Legacy 212: the reader opened the 「技术细节」 — the toast stays until they dismiss it.
+  const hold = useCallback((id: number) => {
+    const timer = timers.current.get(id);
+    if (timer) clearTimeout(timer);
+    timers.current.delete(id);
   }, []);
 
   const dismiss = useCallback((id: number) => {
@@ -106,6 +118,14 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
                 <p className="toast-title">{toast.title}</p>
                 {toast.description ? (
                   <p className="toast-description">{toast.description}</p>
+                ) : null}
+                {toast.details ? (
+                  <ErrorDetails
+                    code={toast.details.code}
+                    raw={toast.details.raw}
+                    testId="toast"
+                    onOpen={() => hold(toast.id)}
+                  />
                 ) : null}
                 {toast.action ? (
                   <div className="toast-actions">

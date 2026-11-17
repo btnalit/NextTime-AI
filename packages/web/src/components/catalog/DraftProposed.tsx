@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useFocusWhenKeyLost } from '../../hooks/useFocusWhenLost.js';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
 import { definitionReferenceRefusalOf } from '../../lib/definition-reference.js';
-import { errorToastText } from '../../lib/errors.js';
+import { errorToast } from '../../lib/errors.js';
 import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { CredentialReview } from '../kit/credential-review.js';
@@ -122,7 +122,7 @@ export function DraftProposed({
       toast.push({
         tone: 'danger',
         title: t(`无法发布 ${shownName}`, `Could not publish ${shownName}`),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(false);

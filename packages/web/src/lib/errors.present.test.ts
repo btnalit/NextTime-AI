@@ -5,6 +5,7 @@ import {
   CODE_TITLES_ZH,
   ERROR_NEXT_STEPS,
   composerUnstorableTextStep,
+  errorToast,
   errorToastText,
   gateReasonNextStep,
   presentError,
@@ -177,6 +178,28 @@ describe('presentError', () => {
     expect(errorToastText(new HttpError('capability_error', 'x', 'forbidden'), zh)).toContain(
       '(forbidden)',
     );
+  });
+
+  it('legacy 212: a toast keeps the kernel text a console sentence replaced, under the details', () => {
+    const curated = new HttpError(
+      'capability_error',
+      'get_agent_profile: member 只能看自己',
+      'forbidden',
+    );
+    const shown = errorToast(curated, zh);
+    expect(shown.description).toContain('工作区所有者或平台管理员');
+    expect(shown.description).not.toContain('(forbidden)');
+    expect(shown.details).toEqual({
+      code: 'forbidden',
+      raw: 'get_agent_profile: member 只能看自己',
+    });
+    // No console sentence: the kernel's text is the line itself, nothing is folded away.
+    const unknown = new HttpError('capability_error', 'something specific', 'brand_new_code');
+    expect(errorToast(unknown, zh)).toEqual({ description: 'something specific (brand_new_code)' });
+    // A console sentence with no kernel text beyond it: the code stays in the line.
+    const bare = new HttpError('capability_error', '', 'forbidden');
+    expect(errorToast(bare, zh)).toEqual({ description: errorToastText(bare, zh) });
+    expect(errorToast(bare, zh).description).toContain('(forbidden)');
   });
 
   it('the gate-side codes have copy ready before the kernel relays them', () => {
