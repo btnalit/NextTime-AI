@@ -11,6 +11,7 @@ import {
 } from '../errors.js';
 import {
   SshCommandRejectedError,
+  type SshExecFn,
   type SshPolicyRule,
   SshTransport,
   assertClassificationAllowed,
@@ -322,6 +323,125 @@ describe('SshTransport', () => {
       TransportInvokeError,
     );
     expect(execImpl).not.toHaveBeenCalled();
+  });
+
+  describe('legacy 195: a command_pattern must match the whole command', () => {
+    const transportWith = (
+      execImpl = vi.fn<SshExecFn>(async () => ({ stdout: '', stderr: '' })),
+    ) => ({
+      execImpl,
+      transport: new SshTransport({
+        target: { host: '198.51.100.10', user: 'admin' },
+        policyTable: POLICY_TABLE,
+        execImpl,
+      }),
+    });
+    const withPattern = (command_pattern: string): Operation => ({
+      ...patternOperation,
+      binding: { kind: 'ssh', command_pattern },
+    });
+
+    it('refuses a command that only starts with, ends with or contains a match — nothing runs', async () => {
+      const { transport, execImpl } = transportWith();
+      const show = withPattern('^show [a-z0-9]+');
+      for (const command of ['show eth0; reboot', 'show eth0 && reboot', 'show eth0 $(reboot)']) {
+        await expect(transport.invoke(show, { command }, {})).rejects.toSatisfy(
+          (err) =>
+            err instanceof SshCommandRejectedError &&
+            /does not match operation "run_command"'s own command_pattern \(the whole command must match it\)/.test(
+              (err as Error).message,
+            ),
+        );
+      }
+      // Without `^`/`$` the declared text still has to be the whole line.
+      const uptime = withPattern('uptime');
+      await expect(transport.invoke(uptime, { command: 'reboot; uptime' }, {})).rejects.toThrow(
+        SshCommandRejectedError,
+      );
+      await expect(transport.invoke(uptime, { command: 'uptime -p' }, {})).rejects.toThrow(
+        SshCommandRejectedError,
+      );
+      // simulate (the preview) refuses the same command.
+      await expect(transport.simulate(show, { command: 'show eth0; reboot' })).rejects.toThrow(
+        SshCommandRejectedError,
+      );
+      expect(execImpl).not.toHaveBeenCalled();
+    });
+
+    it('runs a command the pattern matches in full, whether or not the pattern writes ^ and $', async () => {
+      const { transport, execImpl } = transportWith();
+      await transport.invoke(withPattern('^show [a-z0-9]+'), { command: 'show eth0' }, {});
+      await transport.invoke(withPattern('uptime'), { command: 'uptime' }, {});
+      // An alternation is held at both ends as a whole, not just its first and last branch.
+      const either = withPattern('uptime|show [a-z0-9]+');
+      await transport.invoke(either, { command: 'show eth1' }, {});
+      for (const command of ['uptime; reboot', 'reboot; show eth1']) {
+        await expect(transport.invoke(either, { command }, {})).rejects.toThrow(
+          SshCommandRejectedError,
+        );
+      }
+      // The accept-s2 fixture's `.*` still admits any single-line command.
+      await transport.invoke(withPattern('.*'), { command: 'show eth0; uptime' }, {});
+      expect(execImpl.mock.calls.map((call) => call[1])).toEqual([
+        'show eth0',
+        'uptime',
+        'show eth1',
+        'show eth0; uptime',
+      ]);
+    });
+
+    it('compiles the declared pattern on its own first: an unbalanced ")" is refused, not wrapped into a valid one', async () => {
+      const { transport, execImpl } = transportWith();
+      // `^(?:show)|(reboot)$` would compile, with neither branch held at both ends.
+      const unbalanced = withPattern('show)|(reboot');
+      await expect(transport.invoke(unbalanced, { command: 'show; rm x' }, {})).rejects.toThrow(
+        /command_pattern is not a valid regular expression/,
+      );
+      await expect(
+        transport.invoke(unbalanced, { command: 'show; rm x' }, {}),
+      ).rejects.toBeInstanceOf(TransportInvokeError);
+      expect(execImpl).not.toHaveBeenCalled();
+    });
+
+    it('an empty command_pattern matches no command; an empty command_template is a plain failure, no longer a fall-through to params.command', async () => {
+      const { transport, execImpl } = transportWith();
+      await expect(transport.invoke(withPattern(''), { command: 'reboot' }, {})).rejects.toThrow(
+        SshCommandRejectedError,
+      );
+      for (const command_template of ['', ' ']) {
+        const emptyTemplate: Operation = {
+          ...patternOperation,
+          binding: { kind: 'ssh', command_template },
+        };
+        await expect(transport.invoke(emptyTemplate, { command: 'reboot' }, {})).rejects.toThrow(
+          /command_template is empty/,
+        );
+        await expect(
+          transport.invoke(emptyTemplate, { command: 'reboot' }, {}),
+        ).rejects.toBeInstanceOf(TransportInvokeError);
+      }
+      expect(execImpl).not.toHaveBeenCalled();
+    });
+
+    it('a binding with neither a template nor a pattern is a plain failure, not a pass', async () => {
+      const { transport, execImpl } = transportWith();
+      const neither = {
+        ...patternOperation,
+        binding: { kind: 'ssh' },
+      } as unknown as Operation;
+      await expect(transport.invoke(neither, { command: 'reboot' }, {})).rejects.toThrow(
+        /has neither a command_template nor a command_pattern/,
+      );
+      await expect(transport.invoke(neither, { command: 'reboot' }, {})).rejects.toBeInstanceOf(
+        TransportInvokeError,
+      );
+      expect(execImpl).not.toHaveBeenCalled();
+    });
+
+    it('a policy table rule is still searched for anywhere: classification is unchanged', () => {
+      expect(classifyCommand('rm -rf /data', POLICY_TABLE).blastRadius).toBe('high');
+      expect(classifyCommand('show interfaces', POLICY_TABLE).mode).toBe('observe');
+    });
   });
 
   it('renders a command_template binding like the cli transport', async () => {
