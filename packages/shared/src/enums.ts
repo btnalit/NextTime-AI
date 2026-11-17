@@ -425,6 +425,31 @@ export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
 
 /**
+ * How one metered model call ended (`llm_usage.status`; llm-proxy's `LlmUsageRecord.status`). The
+ * column stays free text (migrations/llm-usage/0001's header) and the kernel accepts any non-empty
+ * value, so a record from a newer llm-proxy is never refused; these are the values the platform
+ * writes, and the only ones it branches on:
+ *   - `completed`: the provider answered and the client was sent the whole answer — the only
+ *     value that counts as the model having answered (`sessionRefusedOnly`, `entryTurnRefusedOnly`);
+ *   - `error`: the upstream answered non-2xx, its stream broke, or the proxy gave up on it (idle
+ *     timeout), whether or not the client was still there — the tokens are whatever the provider
+ *     reported before that;
+ *   - `refused` (legacy 589): the proxy answered 402 `budget_exhausted` without forwarding the
+ *     call — no tokens, no cost, and `refusal_scope` names the budget;
+ *   - `client_closed` (legacy 161): the client went away before the whole answer reached it, or
+ *     fell too far or too long behind and was cut off (llm-proxy's per-request buffer limit and
+ *     `CLIENT_STALL_TIMEOUT_MS`). The proxy still read the upstream answer to its end at the
+ *     upstream's own pace, discarding the rest, so the tokens and cost are the provider's full
+ *     count — never an estimate and never a partial one: a client cannot shrink what a call is
+ *     metered at by disconnecting or by not reading.
+ * Every token and cost sum (budgets, Task quotas, evaluation cost, the platform rollup) counts every
+ * row whatever its status; a `refused` row carries zeros. The platform rollup's call count leaves
+ * `refused` out (it never reached a provider).
+ */
+export const LLM_USAGE_STATUS_VALUES = ['completed', 'error', 'refused', 'client_closed'] as const;
+export type LlmUsageStatus = (typeof LLM_USAGE_STATUS_VALUES)[number];
+
+/**
  * Legacy 589: which platform budget llm-proxy refused a model call for (`llm_usage.refusal_scope`
  * on a `refused` usage record; the 402 `budget_exhausted` body's `scope`): the workspace's daily
  * token sum (`LLM_DAILY_TOKEN_BUDGET`) or its daily cost quota (`task.daily_cost_budget_usd`), both

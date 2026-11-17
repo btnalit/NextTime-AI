@@ -332,6 +332,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
     upstreamIdleTimeoutMs: config.upstreamIdleTimeoutMs,
+    clientStallTimeoutMs: config.clientStallTimeoutMs,
     resolveConsoleKey: (providerId: string) => keyStore.get(providerId),
     resolveApiKey,
     // Leftover 87: `GET /internal/metrics` requires the same internal-plane token this process

@@ -482,7 +482,7 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
   的用量：0 token、0 费用，`refusal_scope` 是 `workspace_daily_tokens` 或 `workspace_daily_cost`，带
   `requestId` 和请求的模型（migrations/llm-usage/0003）。它立刻把记录送给内核，等内核收下（最多 5 s）
   才回 402。模型不在白名单的 403 照旧不计量。
-- **判定「只被拒」**：至少一条 `refused`，且没有一条 `completed`；`error` 两边都不算。Worker 按它自己的会话
+- **判定「只被拒」**：至少一条 `refused`，且没有一条 `completed`；`error` 和 `client_closed`（遗留 161，见下）两边都不算。Worker 按它自己的会话
   判；入口 Turn 只看这个 Turn 自己的调用，而且只看入口会话的（Worker 替同一个人干活，它的调用也挂在这个
   Turn 上，不算）。命中后：
   - Worker Task：`report_task_result` 时 Task 失败 `model_refused`（平台失败），WorkerRun 终止、Handle 撤销，
@@ -505,6 +505,30 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
   UTC 0 点，而且客户端自己重试了）。回答的那条用量按批量送达，通常晚不到 2 s，内核暂时收不下时按退避最多晚 60 s；如果 Worker 恰好在这段时间里上报，
   内核会看到「只有被拒」，把它判成 `model_refused`，丢掉真实结果。这个窗口有意不补；真要补，就让被拒过的
   会话之后的回答也像拒绝一样先送达再回。
+
+**遗留 161（慢客户端与中途断开）**：llm-proxy 始终按上游自己的速度把回答读完，不会因为客户端慢而暂停，也不会因为
+客户端走了而中止。客户端还没取走的部分放在这个请求自己的缓冲里，缓冲有上限。
+- **为什么不暂停读上游**：llm-proxy 一停读，TCP 背压会一直传到供应商。供应商前端一般有发送超时（nginx 缺省 60 s），
+  超时后会先断流。这时这次调用只能记 `error`，OpenAI 那两种接口的用量只在最后一个事件里给，会记成 0。
+- **中途断开**：客户端在回答没收完时断开（包括 Worker 被终止），llm-proxy 不再往它写，但**不中止上游**：照样把
+  上游的回答读完（丢弃），按供应商给的完整用量记一条 `llm_usage.status = 'client_closed'`，打一行 info
+  `client went away before the whole answer reached it`。不中止也是同一个原因：中止后用量记不全，客户端可以故意
+  在快读完时断开，让日预算拦不住。代价是供应商会把没人读的回答生成完，上限和以前一样，是请求自己的 `max_tokens`
+  和上游空闲超时。
+- **客户端跟不上**：下面两条先到哪条就按哪条处理。llm-proxy 断开这个客户端，之后和中途断开一样：上游读完，
+  记 `client_closed`，用量完整。
+  - 积压超过**缓冲上限**（每个请求 8 MiB，不含内核的 socket 缓冲），打一行 warn
+    `client fell further behind than the buffer limit; cutting it off`。上限管的是积压，不是回答的长度：正常读的客户端
+    跟得上模型生成的速度（每秒几十 KiB），回答再长积压也接近 0。只有客户端不读、上游又发得很快时才会碰到；模型还在
+    生成时停读的客户端会先碰到下面的停滞超时。llm-proxy 进程为慢客户端多占的内存因此最多是「并发请求数 × 8 MiB」。
+  - 积压在 `CLIENT_STALL_TIMEOUT_MS`（缺省 15 s）内没取走，打一行 warn
+    `client left the answer untaken for the stall timeout; cutting it off`。从客户端开始跟不上时算起，取走积压就重新
+    计时；回答结束后还没取走的部分也按这个时间算。这个值和 `UPSTREAM_IDLE_TIMEOUT_MS` 在同一处设置（llm-proxy 的
+    env 文件），应明显短于供应商的发送超时。
+- **记账时机**：上游读完后，要等客户端取走全部回答（最多等停滞超时）才能判断是 `completed` 还是 `client_closed`，
+  所以用量记录会在这之后才发出。
+- **统计**：`client_closed` 行和 `completed` 一样计入预算、Task 的 token 数、试跑费用、平台「运行状态」的调用次数和
+  `scripts/report-usage.sh` 的 `calls`；只是不算「模型回答过」。上游自己出错时记 `error`，不管客户端还在不在。
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
