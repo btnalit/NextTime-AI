@@ -7,7 +7,12 @@ import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderConfig } from './config.js';
 import { createLlmProxyMetrics } from './metrics.js';
-import { createProxyServer } from './proxy.js';
+import {
+  bodyDecodedByFetch,
+  createProxyServer,
+  fetchDecodedCodings,
+  fetchDecodesZstd,
+} from './proxy.js';
 import { LlmUsageReporter } from './report.js';
 import type { LlmUsageRecord } from './report.js';
 
@@ -2025,6 +2030,214 @@ describe('createProxyServer — upstream error bodies (review of #549, B5)', () 
 // for the client — and metered in full; a client that leaves (or is cut off for falling behind)
 // is metered as `client_closed`.
 // -------------------------------------------------------------------------------------------
+
+describe('createProxyServer — a compressed answer the upstream sent anyway (legacy 257)', () => {
+  /** An upstream that ignores `accept-encoding: identity` and compresses its 200 answer. */
+  async function proxyToCompressing(
+    body: string,
+    contentType: string,
+    coding: string,
+    encode: (plain: Buffer) => Buffer,
+  ): Promise<{ port: number; records: LlmUsageRecord[]; seenAcceptEncoding: string[] }> {
+    const seenAcceptEncoding: string[] = [];
+    const upstream = http.createServer((req, res) => {
+      seenAcceptEncoding.push(String(req.headers['accept-encoding']));
+      const encoded = encode(Buffer.from(body));
+      res.writeHead(200, {
+        'content-type': contentType,
+        'content-encoding': coding,
+        'content-length': encoded.byteLength,
+      });
+      res.end(encoded);
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const records: LlmUsageRecord[] = [];
+    const proxy = createProxyServer({
+      providers: { openai: openAiProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: (r) => records.push(r) },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: () => {},
+    });
+    const port = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    compressingToken = await signHandle(privateKey);
+    return { port, records, seenAcceptEncoding };
+  }
+  let compressingToken = '';
+  const callCompressing = (port: number, stream: boolean) =>
+    rawRequest({
+      port,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${compressingToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream }),
+    });
+
+  const JSON_ANSWER = JSON.stringify({
+    id: 'c1',
+    choices: [{ message: { role: 'assistant', content: 'hi' } }],
+    usage: { prompt_tokens: 10, completion_tokens: 3 },
+  });
+
+  it.each([
+    ['gzip', (b: Buffer) => zlib.gzipSync(b)],
+    ['x-gzip', (b: Buffer) => zlib.gzipSync(b)],
+    ['deflate', (b: Buffer) => zlib.deflateSync(b)],
+    ['br', (b: Buffer) => zlib.brotliCompressSync(b)],
+    ['GZIP', (b: Buffer) => zlib.gzipSync(b)],
+    ['gzip, br', (b: Buffer) => zlib.brotliCompressSync(zlib.gzipSync(b))],
+  ])(
+    'a JSON answer in %s reaches the client as fetch decoded it, labelled as such',
+    async (coding, encode) => {
+      const { port, records, seenAcceptEncoding } = await proxyToCompressing(
+        JSON_ANSWER,
+        'application/json',
+        coding,
+        encode,
+      );
+      const res = await callCompressing(port, false);
+      expect(seenAcceptEncoding).toEqual(['identity']);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-encoding']).toBeUndefined();
+      expect(res.body.toString('utf8')).toBe(JSON_ANSWER);
+      // The upstream's content-length counted the compressed bytes.
+      expect(res.headers['content-length']).toBeUndefined();
+      await waitUntil(() => records.length === 1);
+      expect(records[0]).toMatchObject({ status: 'completed', inputTokens: 10, outputTokens: 3 });
+    },
+  );
+
+  it('a gzip SSE answer reaches the client decoded, and its usage is read', async () => {
+    const { port, records } = await proxyToCompressing(
+      OPENAI_SSE_BODY,
+      'text/event-stream',
+      'gzip',
+      (b) => zlib.gzipSync(b),
+    );
+    const res = await callCompressing(port, true);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.headers['content-length']).toBeUndefined();
+    expect(res.body.toString('utf8')).toBe(OPENAI_SSE_BODY);
+    await waitUntil(() => records.length === 1);
+    expect(records[0]).toMatchObject({ status: 'completed', inputTokens: 10, outputTokens: 3 });
+  });
+
+  it('a coding fetch does not decode reaches the client as sent, header and length included', async () => {
+    const raw = Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]);
+    const { port } = await proxyToCompressing(
+      JSON_ANSWER,
+      'application/json',
+      'x-custom',
+      () => raw,
+    );
+    const res = await callCompressing(port, false);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-encoding']).toBe('x-custom');
+    expect(Number(res.headers['content-length'])).toBe(raw.byteLength);
+    expect(Buffer.compare(res.body, raw)).toBe(0);
+  });
+
+  it('a list with one coding fetch does not decode is not decoded at all, so it is passed on as sent', async () => {
+    // fetch decodes a list only when it knows every coding in it (undici).
+    const encoded = zlib.gzipSync(Buffer.from(JSON_ANSWER));
+    const { port } = await proxyToCompressing(
+      JSON_ANSWER,
+      'application/json',
+      'gzip, x-custom',
+      () => encoded,
+    );
+    const res = await callCompressing(port, false);
+    expect(res.headers['content-encoding']).toBe('gzip, x-custom');
+    expect(Number(res.headers['content-length'])).toBe(encoded.byteLength);
+    expect(Buffer.compare(res.body, encoded)).toBe(0);
+  });
+
+  it('bodyDecodedByFetch follows fetch: every coding known, or none decoded', () => {
+    for (const zstd of [false, true]) {
+      const codings = fetchDecodedCodings(zstd);
+      for (const decoded of [
+        'gzip',
+        'x-gzip',
+        'deflate',
+        'br',
+        ' GZIP ',
+        'gzip, br',
+        'gzip,gzip',
+      ]) {
+        expect(bodyDecodedByFetch(decoded, codings), decoded).toBe(true);
+      }
+      for (const asSent of [null, '', 'identity', 'gzip, identity', 'gzip,', 'x-custom']) {
+        expect(bodyDecodedByFetch(asSent, codings), String(asSent)).toBe(false);
+      }
+      expect(bodyDecodedByFetch('zstd', codings)).toBe(zstd);
+      expect(bodyDecodedByFetch('gzip, ZSTD', codings)).toBe(zstd);
+    }
+  });
+
+  it('fetchDecodesZstd is undici’s own condition: 7.11.0 or later, with a zlib zstd decoder', () => {
+    const cases: Array<[string | undefined, boolean, boolean]> = [
+      ['6.29.1', true, false],
+      ['7.10.0', true, false],
+      ['7.11.0', true, true],
+      ['7.30.2', true, true],
+      ['8.0.0', true, true],
+      ['7.11.0', false, false],
+      ['8.0.0', false, false],
+      [undefined, true, false],
+      ['', true, false],
+      ['seven', true, false],
+      ['7', true, false],
+    ];
+    for (const [version, zlibHasZstd, decodes] of cases) {
+      expect(fetchDecodesZstd(version, zlibHasZstd), `${version} ${zlibHasZstd}`).toBe(decodes);
+    }
+  });
+
+  it.each([
+    ['zstd', (b: Buffer) => zlib.zstdCompressSync(b)],
+    ['gzip, zstd', (b: Buffer) => zlib.zstdCompressSync(zlib.gzipSync(b))],
+  ])(
+    'a %s answer reaches the client labelled as it is, whatever this runtime’s fetch decodes',
+    async (coding, encode) => {
+      const { port } = await proxyToCompressing(JSON_ANSWER, 'application/json', coding, encode);
+      const res = await callCompressing(port, false);
+      expect(res.status).toBe(200);
+      // A client that decodes by the label it gets reads the original answer…
+      let body = res.body;
+      const label = res.headers['content-encoding'];
+      for (const applied of (label ?? '').split(',').reverse()) {
+        const name = applied.trim().toLowerCase();
+        if (name === 'zstd') body = zlib.zstdDecompressSync(body);
+        else if (name === 'gzip') body = zlib.gunzipSync(body);
+      }
+      expect(body.toString('utf8')).toBe(JSON_ANSWER);
+      // …and a length, when there is one, counts the bytes it got.
+      const length = res.headers['content-length'];
+      if (length !== undefined) expect(Number(length)).toBe(res.body.byteLength);
+      expect(label === undefined).toBe(bodyDecodedByFetch(coding));
+    },
+  );
+
+  it('an uncompressed answer keeps its content-length', async () => {
+    const { port } = await proxyToCompressing(
+      JSON_ANSWER,
+      'application/json',
+      'identity',
+      (b) => b,
+    );
+    const res = await callCompressing(port, false);
+    expect(res.body.toString('utf8')).toBe(JSON_ANSWER);
+    expect(Number(res.headers['content-length'])).toBe(Buffer.byteLength(JSON_ANSWER));
+  });
+});
 
 describe('createProxyServer — slow and departed clients (legacy 161)', () => {
   const USAGE_FRAME =
