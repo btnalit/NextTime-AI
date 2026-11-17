@@ -34,6 +34,30 @@ describe('ToastProvider', () => {
     vi.useRealTimers();
   });
 
+  // Legacy 652: the action is a secondary button, not a ghost one that reads as text; the close
+  // button is named in the reader's language.
+  it('draws the action as a secondary button and names the close button', () => {
+    const onClick = vi.fn();
+    function PushWithAction() {
+      const toast = useToast();
+      useEffect(() => {
+        toast.push({ title: 'Draft deleted', action: { label: 'Undo', onClick } });
+      }, [toast]);
+      return null;
+    }
+    render(
+      <ToastProvider>
+        <PushWithAction />
+      </ToastProvider>,
+    );
+    const action = screen.getByRole('button', { name: 'Undo' });
+    expect(action.className).toContain('btn-secondary');
+    expect(action.className).not.toContain('btn-ghost');
+    fireEvent.click(action);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryAllByTestId('toast')).toHaveLength(0);
+  });
+
   it('clears pending dismiss timers when it unmounts', () => {
     const { unmount, getAllByTestId } = render(
       <ToastProvider>
@@ -103,7 +127,7 @@ describe('ToastProvider', () => {
         </ToastProvider>
       </>,
     );
-    const close = view.getByRole('button', { name: 'Dismiss' });
+    const close = view.getByRole('button', { name: '关闭提示' });
     act(() => close.focus());
     act(() => vi.advanceTimersByTime(60_000));
     expect(view.getAllByTestId('toast')).toHaveLength(1);
@@ -200,7 +224,7 @@ describe('ToastProvider over a modal sheet', () => {
     await opened();
     press(screen.getByText('技术细节'));
     expect(screen.getByTestId('state').textContent).toBe('open');
-    press(screen.getByRole('button', { name: 'Dismiss' }));
+    press(screen.getByRole('button', { name: '关闭提示' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId('toast')).toBeNull();
     expect(screen.getByTestId('state').textContent).toBe('open');
@@ -210,7 +234,7 @@ describe('ToastProvider over a modal sheet', () => {
     render(<Page />);
     await opened();
     fireEvent.change(screen.getByLabelText('name'), { target: { value: 'half' } });
-    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    press(screen.getByRole('button', { name: '关闭提示', hidden: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.getByTestId('state').textContent).toBe('open');
     expect(screen.queryByTestId('discard-confirm')).toBeNull();
@@ -259,7 +283,7 @@ describe('ToastProvider over a modal sheet', () => {
     const name = screen.getByLabelText('name');
     act(() => name.focus());
     // Not hidden from assistive tech while the modal is open.
-    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '关闭提示' })).toBeTruthy();
     expect(screen.getByLabelText('Notifications').getAttribute('aria-keyshortcuts')).toBe('F8');
     // #1407 UX P3: the key is shown too, and the way back once there.
     expect(screen.getByTestId('toast-hint').textContent).toBe('F8 聚焦到提示');
@@ -289,7 +313,7 @@ describe('ToastProvider over a modal sheet', () => {
     act(() => key('F8'));
     await settle();
     expect(inToasts()).toBe(true);
-    act(() => screen.getByRole('button', { name: 'Dismiss' }).click());
+    act(() => screen.getByRole('button', { name: '关闭提示' }).click());
     await settle();
     expect(screen.queryByTestId('toast')).toBeNull();
     expect(document.activeElement).toBe(name);
@@ -306,7 +330,7 @@ describe('ToastProvider over a modal sheet', () => {
     expect(first?.contains(document.activeElement)).toBe(true);
     act(() =>
       within(first as HTMLElement)
-        .getByRole('button', { name: 'Dismiss' })
+        .getByRole('button', { name: '关闭提示' })
         .click(),
     );
     await settle();

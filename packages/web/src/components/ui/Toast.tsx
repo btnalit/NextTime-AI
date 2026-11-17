@@ -297,8 +297,10 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
               ) : null}
               {toast.action ? (
                 <div className="toast-actions">
+                  {/* Legacy 652: a secondary button, so the action reads as one (a ghost one read
+                      as a line of text). */}
                   <Button
-                    variant="ghost"
+                    variant="secondary"
                     size="s"
                     onClick={() => {
                       toast.action?.onClick();
@@ -330,7 +332,7 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
               size="s"
               icon="close"
               iconOnly
-              aria-label="Dismiss"
+              aria-label={t('关闭提示', 'Dismiss')}
               onClick={() => dismiss(toast.id)}
             />
           </output>
