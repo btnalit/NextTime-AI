@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HandleClaims } from '@nexttime/shared';
+import { LLM_USAGE_TOKENS_MAX } from '@nexttime/shared';
 import Fastify from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -413,6 +414,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stored.rows).toEqual([{ status: 'refused', refusal_scope: 'workspace_daily_tokens' }]);
     });
 
+    // Legacy 829: each such record is dropped on its own (the rest of a batch is still recorded).
     it('the ingest schema refuses a refused record with tokens, or without its scope, and a scope on any other status', async () => {
       const { claims } = await spawnWorkerRun();
       for (const bad of [
@@ -426,8 +428,52 @@ describe.runIf(DATABASE_URL !== undefined)(
           url: '/internal/llm-usage',
           payload: [bad],
         });
-        expect(res.statusCode).toBe(400);
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true, result: { inserted: 0, groups: [], invalid: 1 } });
       }
+    });
+
+    // Legacy 829: tasks.tokens_used is a bigint that adds all four figures of every answered
+    // record. At 2^53 - 1 per figure, 257 records overflowed it: the insert failed and the
+    // workspace's group was answered retry on every resend from then on. Each figure is now at
+    // most LLM_USAGE_TOKENS_MAX, and a larger one is dropped with its record alone.
+    it('a figure above LLM_USAGE_TOKENS_MAX is dropped on its own, so tokens_used cannot overflow', async () => {
+      const { taskId, workerRunId, claims } = await spawnWorkerRun();
+      const largest = {
+        status: 'completed',
+        refusalScope: undefined,
+        inputTokens: LLM_USAGE_TOKENS_MAX,
+        outputTokens: LLM_USAGE_TOKENS_MAX,
+        cacheReadTokens: LLM_USAGE_TOKENS_MAX,
+        cacheWriteTokens: LLM_USAGE_TOKENS_MAX,
+      } as const;
+      const send = async (records: LlmUsageRecord[]) => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/internal/llm-usage',
+          payload: records,
+        });
+        expect(res.statusCode).toBe(200);
+        return res.json().result;
+      };
+
+      expect(
+        await send([
+          usage(claims, largest),
+          usage(claims, { ...largest, inputTokens: Number.MAX_SAFE_INTEGER }),
+        ]),
+      ).toEqual({
+        inserted: 1,
+        groups: [{ workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 }],
+        invalid: 1,
+      });
+      await ingest([usage(claims, largest)]);
+      const state = await readState(taskId, workerRunId, claims.jti);
+      expect(state.task?.tokens_used).toBe('8000000000000');
+
+      // A bigint holds over two million records at the largest figures.
+      const perRecord = 4n * BigInt(LLM_USAGE_TOKENS_MAX);
+      expect((2n ** 63n - 1n) / perRecord).toBeGreaterThan(2_000_000n);
     });
 
     it('the table holds the same invariant (llm-usage/0003 llm_usage_refusal)', async () => {
