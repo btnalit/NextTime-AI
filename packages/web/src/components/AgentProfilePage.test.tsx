@@ -475,6 +475,40 @@ describe('AgentProfilePage', () => {
     ).toBe('不可达');
   });
 
+  it('legacy 816 (#1429 review P3): a failed health read says so and can be retried — no mark is never read as healthy', async () => {
+    let healthReads = 0;
+    const http = scriptedHttp({
+      get_agent_profile: (params) => {
+        if (!isHealthRead(params)) {
+          return profile({
+            availableGatekeepers: [{ gatekeeperId: 'gk-self', granted: true, inUse: true }],
+          });
+        }
+        healthReads += 1;
+        if (healthReads === 1) throw new Error('probe read failed');
+        return profile({
+          availableGatekeepers: [
+            { gatekeeperId: 'gk-self', granted: true, inUse: true, health: 'unreachable' },
+          ],
+        });
+      },
+      list_gatekeepers: () => ({
+        items: [{ id: 'gk-self', name: 'local', kind: 'http', status: 'active' }],
+      }),
+    });
+    renderPage(http);
+    const gatesField = await screen.findByTestId('agent-profile-gatekeepers');
+    const error = await within(gatesField).findByTestId('agent-profile-gate-health-error');
+    expect(error.textContent).toContain('无法检查各系统的连接状态');
+    expect(within(gatesField).queryByTestId('agent-profile-gate-health-pending')).toBeNull();
+
+    fireEvent.click(within(gatesField).getByTestId('agent-profile-gate-health-retry'));
+    const tag = await within(gatesField).findByTestId('agent-profile-gatekeepers-health-gk-self');
+    expect(tag.textContent).toBe('不可达');
+    expect(within(gatesField).queryByTestId('agent-profile-gate-health-error')).toBeNull();
+    expect(healthReads).toBe(2);
+  });
+
   it("legacy 812: saving keeps each gate's health — set_agent_profile probes no gate and returns none", async () => {
     const gates = (withHealth: boolean) => [
       {

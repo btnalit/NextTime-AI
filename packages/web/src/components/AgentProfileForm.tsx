@@ -46,9 +46,12 @@ export interface AgentProfileFormProps {
   /** Legacy 200 / 812: each system's health — a platform gate's stored health, a self-connected
    *  gate's probed live; absent for a gate with no health signal. */
   readonly gateHealth?: ReadonlyMap<string, GateHealthWire>;
-  /** Legacy 816: the health read is still out (a self-connected gate's probe can take seconds), so
-   *  no system's lack of a mark means it is healthy yet. */
-  readonly gateHealthPending?: boolean;
+  /** Legacy 816: where the separate health read stands. While it is out (a self-connected gate's
+   *  probe can take seconds) or after it failed, no system's lack of a mark means it is healthy, so
+   *  the field says so. */
+  readonly gateHealthStatus?: 'loading' | 'error' | 'ready';
+  /** Legacy 816 (#1429 review P3): reads the gates' health again after a failed read. */
+  readonly onRetryGateHealth?: () => void;
   readonly workerDefinitions: readonly WorkerDefinitionSummary[];
   /** `true` for a member editing their own profile when policy says they may not
    *  (`memberCanEditProfile === false`) — disables every control instead of offering a Save that
@@ -109,7 +112,8 @@ export function AgentProfileForm({
   skills,
   gatekeepers,
   gateHealth,
-  gateHealthPending = false,
+  gateHealthStatus = 'ready',
+  onRetryGateHealth,
   workerDefinitions,
   editForbidden,
   forbiddenBy = 'policy',
@@ -319,15 +323,38 @@ export function AgentProfileForm({
         <ChecklistField
           title={t('系统接入', 'Connected systems')}
           subtitle={
-            gateHealthPending && allowedGatekeepers.length > 0
-              ? t(
-                  '本工作区可读的系统，以及授权给你的系统。正在检查各系统的连接状态…',
-                  'Systems readable in this workspace, and those granted to you. Checking each system’s connection…',
-                )
-              : t(
-                  '本工作区可读的系统，以及授权给你的系统',
-                  'Systems readable in this workspace, and those granted to you',
-                )
+            <>
+              {t(
+                '本工作区可读的系统，以及授权给你的系统',
+                'Systems readable in this workspace, and those granted to you',
+              )}
+              {allowedGatekeepers.length > 0 && gateHealthStatus === 'loading' ? (
+                <span data-testid="agent-profile-gate-health-pending">
+                  {t('。正在检查各系统的连接状态…', '. Checking each system’s connection…')}
+                </span>
+              ) : null}
+              {allowedGatekeepers.length > 0 && gateHealthStatus === 'error' ? (
+                <span className="text-warn" data-testid="agent-profile-gate-health-error">
+                  {t(
+                    '。无法检查各系统的连接状态，没有标记不代表连接正常。',
+                    '. Could not check each system’s connection; no mark does not mean it is healthy.',
+                  )}
+                  {onRetryGateHealth !== undefined ? (
+                    <>
+                      {' '}
+                      <Button
+                        variant="ghost"
+                        size="s"
+                        onClick={onRetryGateHealth}
+                        data-testid="agent-profile-gate-health-retry"
+                      >
+                        {t('重新检查', 'Check again')}
+                      </Button>
+                    </>
+                  ) : null}
+                </span>
+              ) : null}
+            </>
           }
           options={allowedGatekeepers.map((g) => ({
             id: g.gatekeeperId,
@@ -487,7 +514,7 @@ function ChecklistField({
   empty,
 }: {
   readonly title: string;
-  readonly subtitle: string;
+  readonly subtitle: ReactNode;
   /** `note`: a short qualifier shown after the label (the systems list's 读写 / 只读). */
   readonly options: readonly {
     readonly id: string;

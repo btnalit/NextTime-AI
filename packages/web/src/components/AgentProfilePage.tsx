@@ -112,7 +112,6 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     }
     return map;
   }, [healthRead.state]);
-  const gateHealthPending = healthRead.state.status === 'loading';
 
   // B3 (§5.8 "id → 名称"): the effective panel's ids resolve against the lists this page already
   // loads for the form — the same rows, no extra read (a `kit/ref-chip` self-resolve would add a
@@ -147,8 +146,8 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     // A save changes what the agent uses, not how the gates stand: the health read stays as it is.
     profile.mutate(() => saved);
     // #1394 review P3-1: a read still in flight (a remount shows the cached profile while it
-    // reloads, and this read waits on the gates' probes) started before the save and would land
-    // the profile from before it. Read again, so the newest read is one made after the save.
+    // reloads) started before the save and would land the profile from before it. Read again, so
+    // the newest read is one made after the save.
     if (profile.state.status === 'ready' && profile.state.refreshing) void profile.reload();
     toast.push({ tone: 'ok', title: t('已保存', 'Saved') });
   }
@@ -254,7 +253,8 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 skills={skills.state.status === 'ready' ? skills.state.data.items : []}
                 gatekeepers={gatekeepers.rows ?? []}
                 gateHealth={gateHealth}
-                gateHealthPending={gateHealthPending}
+                gateHealthStatus={healthRead.state.status}
+                onRetryGateHealth={() => void healthRead.reload()}
                 workerDefinitions={
                   workerDefinitions.state.status === 'ready'
                     ? workerDefinitions.state.data.items
