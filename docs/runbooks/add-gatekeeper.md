@@ -321,9 +321,14 @@ true`，等 owner 逐条审核后再发布，I17）——不需要手写每一�
 `importOpenApi` 会读 path 级的 `parameters`（Operation 自己声明的同名同位置参数覆盖它），并把
 指向同一文档的 `$ref`（`#/components/…`）原地展开；自我引用的 schema 在重复处写成 `{}`。跟不了的
 `$ref`（指向别的文档、指针不存在）不猜：这个 Operation 的 `params_schema` 只收读得到的参数，不再是
-接受一切的 `{}`；一个 Operation 展开超过 10000 个 schema 对象后剩下的保留 `$ref`，调用一律 400
-`invalid_operation_schema`。不是 `application/json` 对象（数组、`oneOf`、`allOf`、其他媒体类型）
-的请求体仍然不进 `params_schema`，导入后要人工补。
+接受一切的 `{}`。展开引用复制出来的内容有上限：每个 Operation 10000 个单位，整份文档 100000 个
+单位（一个 schema 值算一个单位，文字每 64 个字符再算一个；Operation 自己原地写的不算），嵌套最多
+512 层。超过的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，ajv 编译
+不了，调用一律 400 `invalid_operation_schema`：换一份小一些的文档导入，或者手写门的清单。`$ref`
+旁边的兄弟关键字如果会盖掉目标自己的约束（目标 `maxLength: 3`，旁边写 `maxLength: 100`），两者
+放进 `allOf` 同时生效，不会放宽；`description`、`example` 这类注解照常覆盖。请求体顶层是组合
+（`allOf`、`anyOf`、`oneOf`、`not`，包括上面兄弟关键字产生的 `allOf`）或者只是引用自己时读不出来：
+这个 Operation 只收参数。数组、其他媒体类型的请求体仍然不进 `params_schema`，导入后要人工补。
 
 ## 7. 注册、导入清单、发布——capability 路径
 

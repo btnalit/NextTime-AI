@@ -151,10 +151,17 @@ await_decision: true` — an owner must review and publish before it takes effec
 out in place: the gate's validator has no document to resolve one against. A schema that contains
 itself becomes `{}` where it recurs. A reference it cannot follow — another document's, a pointer
 that leads nowhere — is not guessed at: the Operation's `params_schema` takes only what it could
-read (`{"type":"object","properties":{…}}`, so nothing else passes), never `{}`. Past 10,000
-schema objects for one Operation the rest stay `$ref`, ajv cannot compile them, and calls are
-refused (400 `invalid_operation_schema`). Request bodies other than an `application/json` object
-with `properties` (an array, `oneOf`, `allOf`, another media type) still add nothing.
+read (`{"type":"object","properties":{…}}`, so nothing else passes), never `{}`. What references
+copy is bounded: 10,000 units for one Operation and 100,000 for the whole document (a unit is one
+schema value, or 64 characters of text; what an Operation writes in place does not count), and a
+schema at most 512 levels deep. An Operation past one of them gets `params_schema:
+{"$ref":"#/x-nexttime-inline-limit"}`: ajv cannot compile it and calls are refused (400
+`invalid_operation_schema`) — import a smaller document, or write the gate's manifest by hand. A
+`$ref`'s sibling that would replace one of the target's own constraints is kept beside it under
+`allOf`, never instead of it; an annotation (`description`, `example`, …) replaces. A request body
+that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
+or is nothing but a reference to itself is not read: the Operation takes only its parameters.
+Request bodies that are an array, or of another media type, still add nothing.
 
 ## Command policy table (`ssh`/`cli`)
 
