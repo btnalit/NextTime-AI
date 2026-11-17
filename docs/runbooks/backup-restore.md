@@ -74,7 +74,10 @@ API key）与 `providers.json` 一并进了 `files-<ts>.tgz`；`tar` 默认保�
 现在和 `secrets/` 一样敏感**：只给能读 `secrets/` 的运维人员访问 `backups/` 目录与其中的
 `files-*.tgz`；异地转存 / 拷贝这些归档时按密钥材料对待（加密传输、加密静态存储，绝不进公开或共享
 存储）；轮换某个供应商的 key 后，旧的 `files-*.tgz` 里仍留着已轮换前的旧 key，按
-`BACKUP_RETENTION` 自然过期，不做特殊清除。`models/` 只含 `models.json`（可用 `make gen-models`
+`BACKUP_RETENTION` 自然过期，不做特殊清除。同目录的 `tested-keys.json`（同样 `0600`，遗留
+202 / 203）记着每个供应商最近一次测试所用密钥的 scrypt 摘要，env / 密钥文件来源的密钥也在内：这类
+密钥本身留在 `secrets/`、不进档，但它的摘要进档。随机生成的厂商密钥无法从摘要反推；人设的短口令
+（比如自建网关的）拿到归档的人可以离线逐个猜，scrypt 让每猜一次都要几十毫秒。`models/` 只含 `models.json`（可用 `make gen-models`
 重建，非敏感，一并备份只是图省事）。
 
 每类各保留最新 `BACKUP_RETENTION`（默认 7）份，旧的自动删除；成功后写

@@ -146,6 +146,18 @@ export function createProviderKeyResolver(options: {
   };
 }
 
+/** The key a request to this provider would carry now: its console key, else the env var / key
+ *  file named by `apiKeyEnv` (S7-A order — proxy.ts's `resolveConsoleKey ?? resolveApiKey`, the
+ *  admin API's `/test`), else `undefined`. */
+export function currentProviderKey(
+  providerId: string,
+  apiKeyEnv: string | undefined,
+  consoleKey: (id: string) => string | undefined,
+  resolveApiKey: (name: string) => string | undefined,
+): string | undefined {
+  return consoleKey(providerId) ?? (apiKeyEnv ? resolveApiKey(apiKeyEnv) : undefined);
+}
+
 /** What the platform can say about a provider's credential without exposing it: where it would
  *  come from (S7-A order — a console key, then the env var / key file named by `apiKeyEnv`, else
  *  none) and whether it can go in a header at all. Shared by the admin API's provider rows and the
