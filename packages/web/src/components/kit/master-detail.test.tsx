@@ -1,7 +1,7 @@
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Dialog, DialogContent, DialogTitle } from './dialog.js';
 import { MasterDetail } from './master-detail.js';
@@ -85,6 +85,60 @@ describe('kit/MasterDetail', () => {
 
     fireEvent.keyDown(sheet, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe('the sheet close button (legacy 613)', () => {
+    function renderNarrow(detail: ReactNode) {
+      mockMatchMedia(true);
+      const onClose = vi.fn();
+      render(
+        <MasterDetail
+          list={<div>list</div>}
+          detail={detail}
+          open={true}
+          onClose={onClose}
+          sheetTitle="Detail title"
+          detailTestId="md-detail"
+        />,
+      );
+      return onClose;
+    }
+
+    it('closes the sheet: a phone has no overlay to tap and no Esc', () => {
+      const onClose = renderNarrow(<div>detail</div>);
+      fireEvent.click(screen.getByTestId('md-detail-close'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks first when a form in the detail was edited', () => {
+      const onClose = renderNarrow(
+        <form>
+          <input aria-label="note" data-testid="note" defaultValue="" />
+        </form>,
+      );
+      const note = screen.getByTestId('note');
+      fireEvent.focus(note);
+      fireEvent.input(note, { target: { value: 'half written' } });
+      fireEvent.click(screen.getByTestId('md-detail-close'));
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('discard-confirm-discard'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not on the wide layout, which has nothing to close', () => {
+      mockMatchMedia(false);
+      render(
+        <MasterDetail
+          list={<div>list</div>}
+          detail={<div>detail</div>}
+          open={true}
+          onClose={() => {}}
+          sheetTitle="Detail title"
+          detailTestId="md-detail"
+        />,
+      );
+      expect(screen.queryByTestId('md-detail-close')).toBeNull();
+    });
   });
 
   describe('closeFocusFallback (UX acceptance of #782, R-1)', () => {
