@@ -512,8 +512,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: OBSERVE_CONFIG_OP.name,
         params: {},
-      })) as { status: string };
+      })) as { status: string; data: unknown };
       expect(result.status).toBe('ok');
+      // Only the record is redacted: the Worker gets the result as the gate sent it.
+      expect(result.data).toEqual(OBSERVE_CONFIG_DATA);
 
       const gateCalls = await gateCallActivities(workerRunId);
       expect(gateCalls).toHaveLength(1);
