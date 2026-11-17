@@ -16,10 +16,29 @@ const READINESS_CHANGED_EVENT = 'nexttime:execution-readiness-changed';
  * The cached read is kept, not dropped: a mounted read reloads in the background (the current
  * data stays on screen, marked refreshing), so a grant or a revoke on 系统与授权 — whose whole
  * list is drawn from this read — does not blank the page and close the drawer it was made from.
- * `_http` is kept in the signature for the callers; every session shares the one window event.
+ * Every session shares the one window event; `http` drops a read of it still in flight, which
+ * began before the change and must not answer the reloads that follow it (legacy 245).
  */
-export function announceReadinessChange(_http: CapabilityCaller): void {
+export function announceReadinessChange(http: CapabilityCaller): void {
+  inFlight.delete(http);
   window.dispatchEvent(new Event(READINESS_CHANGED_EVENT));
+}
+
+/** Legacy 245: the read in flight per session. A page can mount more than one readiness read (能力
+ *  目录's card above the tabs and its Workers tab), and each reloads on the event above — they
+ *  share one `execution_readiness` call instead of asking twice for the same answer. */
+const inFlight = new WeakMap<CapabilityCaller, Promise<ExecutionReadinessWire>>();
+
+function readShared(caller: CapabilityCaller): Promise<ExecutionReadinessWire> {
+  const pending = inFlight.get(caller);
+  if (pending !== undefined) return pending;
+  const read = caller.call<ExecutionReadinessWire>('execution_readiness', {});
+  inFlight.set(caller, read);
+  const settle = () => {
+    if (inFlight.get(caller) === read) inFlight.delete(caller);
+  };
+  read.then(settle, settle);
+  return read;
 }
 
 /**
@@ -34,7 +53,15 @@ export function useExecutionReadiness(
   http: CapabilityCaller,
   options: { readonly enabled?: boolean } = {},
 ): Resource<ExecutionReadinessWire> {
-  const readiness = useCapability<ExecutionReadinessWire>(http, 'execution_readiness', {}, options);
+  const readiness = useCapability<ExecutionReadinessWire>(
+    http,
+    'execution_readiness',
+    {},
+    {
+      ...options,
+      load: ({ caller }) => readShared(caller),
+    },
+  );
   const { reload } = readiness;
   useEffect(() => {
     const onChange = () => void reload();
