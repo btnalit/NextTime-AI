@@ -263,11 +263,12 @@ export function describeUpstreamRedirect(
 ): string {
   // Not cut at ERROR_TEXT_MAX_LENGTH: the text is this proxy's own, and the one part the upstream
   // chose (where it pointed) is already bounded by `redirectTargetForDisplay`. Scrubbed a path
-  // segment at a time, so an ordinary long path still shows (#1344 review).
-  return scrubTokenLikeSegments(
-    describeRedirect(label, response, requestUrl, UPSTREAM_REDIRECT_ADVICE),
-    realKey,
-  );
+  // segment at a time, so an ordinary long path still shows (#1344 review by #493) — and that
+  // part before it is bounded, so a key echoed across the bound is never cut in half and shown
+  // as its leading characters (#1344 review by #501). The whole sentence is scrubbed again for
+  // the label, which can carry the configured Base URL's own path.
+  const scrub = (text: string): string => scrubTokenLikeSegments(text, realKey);
+  return scrub(describeRedirect(label, response, requestUrl, UPSTREAM_REDIRECT_ADVICE, scrub));
 }
 
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */

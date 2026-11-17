@@ -42,6 +42,26 @@ describe('redirectTargetForDisplay', () => {
     const long = redirectTargetForDisplay(`/${'a'.repeat(400)}`, REQUEST);
     expect(long).toBe(JSON.stringify(`/${'a'.repeat(299)}…`));
   });
+
+  it("runs a caller's scrub before the bound, so a secret across it is hidden whole (#1344 review by #501)", () => {
+    const secret = 'SECRET-0123456789-abcdef';
+    const location = `/${'b'.repeat(289)}/${secret}/x`;
+    const hide = (shown: string): string => shown.split(secret).join('***');
+    expect(redirectTargetForDisplay(location, REQUEST, hide)).toBe(
+      JSON.stringify(`/${'b'.repeat(289)}/***/x`),
+    );
+    // Without it the bound cuts the secret first: its leading part is what shows.
+    expect(redirectTargetForDisplay(location, REQUEST)).toBe(
+      JSON.stringify(`/${'b'.repeat(289)}/SECRET-01…`),
+    );
+    // The scrub sees the origin too when the target is another origin, never the query.
+    const seen: string[] = [];
+    redirectTargetForDisplay('https://other.example.net/p?q=1', REQUEST, (shown) => {
+      seen.push(shown);
+      return shown;
+    });
+    expect(seen).toEqual(['https://other.example.net/p']);
+  });
 });
 
 describe('describeRedirect', () => {
@@ -55,5 +75,15 @@ describe('describeRedirect', () => {
     ).toBe(
       'mcp transport: tools/list responded 307, a redirect to "/mcp/". The gate does not follow redirects: set the target URL to the final address.',
     );
+  });
+
+  it("passes the caller's scrub on to the target", () => {
+    const response = { status: 301, headers: new Headers({ location: '/k/abc/models' }) };
+    const advice = { follower: 'f', fix: 'x' };
+    expect(
+      describeRedirect('GET /v1/models', response, 'http://api.test/v1/models', advice, (shown) =>
+        shown.replace('abc', '***'),
+      ),
+    ).toBe('GET /v1/models responded 301, a redirect to "/k/***/models". f: x.');
   });
 });

@@ -23,10 +23,15 @@ const MAX_SHOWN_TARGET_CHARS = 300;
  * else the other origin and the path. Never its query string, fragment or userinfo — a login
  * redirect's query can carry a token. The target chose it, so it goes through the URL parser
  * (percent-encoded, no control characters) and is bounded.
+ *
+ * `scrub` (optional) runs on that origin and path **before** the bound is applied, so a secret it
+ * would hide is never cut in half first and shown as its leading part (#1344 review by #501: a key
+ * echoed across the 300th character). A caller that holds a secret the target may echo passes it.
  */
 export function redirectTargetForDisplay(
   location: string | null,
   requestUrl: string | URL,
+  scrub?: (shown: string) => string,
 ): string {
   if (!location) return 'nowhere (no Location header)';
   let target: URL;
@@ -36,7 +41,8 @@ export function redirectTargetForDisplay(
     return 'an unparseable Location header';
   }
   const sameOrigin = target.origin === new URL(requestUrl).origin;
-  const shown = sameOrigin ? target.pathname : `${target.origin}${target.pathname}`;
+  const unscrubbed = sameOrigin ? target.pathname : `${target.origin}${target.pathname}`;
+  const shown = scrub ? scrub(unscrubbed) : unscrubbed;
   return JSON.stringify(
     shown.length > MAX_SHOWN_TARGET_CHARS ? `${shown.slice(0, MAX_SHOWN_TARGET_CHARS)}…` : shown,
   );
@@ -49,13 +55,14 @@ export interface RedirectAdvice {
 }
 
 /** The readable failure for a redirect `response` to `requestUrl` (`label`: what was being
- *  called, e.g. `mcp transport: tools/list`). */
+ *  called, e.g. `mcp transport: tools/list`; `scrub`: as `redirectTargetForDisplay`'s). */
 export function describeRedirect(
   label: string,
   response: { readonly status: number; readonly headers: Pick<Headers, 'get'> },
   requestUrl: string | URL,
   advice: RedirectAdvice,
+  scrub?: (shown: string) => string,
 ): string {
-  const where = redirectTargetForDisplay(response.headers.get('location'), requestUrl);
+  const where = redirectTargetForDisplay(response.headers.get('location'), requestUrl, scrub);
   return `${label} responded ${response.status}, a redirect to ${where}. ${advice.follower}: ${advice.fix}.`;
 }
