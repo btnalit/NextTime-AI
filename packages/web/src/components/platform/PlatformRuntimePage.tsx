@@ -181,7 +181,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   return (
     <div className="page" data-testid="platform-runtime-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformRuntime')}
+        breadcrumb={breadcrumbFor('platformRuntime', t)}
         title={t('运行层', 'Runtime')}
         description={t(
           '跑的是哪个版本的 pi / 镜像 / 扩展，谁待重建，怎么升、怎么回滚。',

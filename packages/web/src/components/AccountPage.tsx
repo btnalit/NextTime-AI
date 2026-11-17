@@ -100,7 +100,7 @@ export function AccountPage({
   if (!user) {
     return (
       <div className="page">
-        <PageHeader breadcrumb={breadcrumbFor('account')} title={t('我的账户', 'My Account')} />
+        <PageHeader breadcrumb={breadcrumbFor('account', t)} title={t('我的账户', 'My Account')} />
         {http ? (
           <ClaimPasswordCardForCaller
             http={http}
@@ -119,7 +119,7 @@ export function AccountPage({
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('account')}
+        breadcrumb={breadcrumbFor('account', t)}
         title={t('我的账户', 'My Account')}
         description={user.login}
       />

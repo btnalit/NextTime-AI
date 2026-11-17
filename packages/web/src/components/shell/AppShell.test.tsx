@@ -5,6 +5,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { WireUser } from '../../lib/auth-api.js';
 import { type CapabilityCaller, SILENT_PUSH_SOURCE } from '../../lib/clients.js';
 import { HttpClient, HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { AppShell, type AppShellProps } from './AppShell.js';
 
 afterEach(cleanup);
@@ -202,6 +203,35 @@ describe('AppShell', () => {
       // Still exactly one — the drawer's own connection line renders (visually complete) but
       // does not carry the testid a second time (NavDrawer's `wsStatusTestId={false}`).
       expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
+    });
+
+    // Legacy 611 / 572: the top bar's page title is the nav's own name, in the console's language.
+    it('titles the page in English in the English console', async () => {
+      stubNarrow();
+      localStorage.setItem('nexttime.lang', 'en');
+      try {
+        const http = scriptedHttp(baseHandlers());
+        render(
+          <LangProvider>
+            <PermissionsProvider>
+              <AppShell
+                active="approvals"
+                http={http}
+                pushes={SILENT_PUSH_SOURCE}
+                authMode="cookie"
+                onLogout={vi.fn()}
+                selectedWorkspaceId="ws-1"
+              >
+                <div data-testid="page-body">page</div>
+              </AppShell>
+            </PermissionsProvider>
+          </LangProvider>,
+        );
+        await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
+        expect(document.querySelector('.mobile-topbar-title')?.textContent).toBe('Approvals');
+      } finally {
+        localStorage.removeItem('nexttime.lang');
+      }
     });
 
     it("closes the drawer on a click on the current page's own nav link (no route change)", async () => {

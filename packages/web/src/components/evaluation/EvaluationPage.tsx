@@ -132,7 +132,7 @@ export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPage
   return (
     <div className="page evaluation-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('evaluation')}
+        breadcrumb={breadcrumbFor('evaluation', t)}
         title={t('评测', 'Evaluation')}
         description={t(
           '用例集钉住一个 Worker 版本，把它要用的门冻结成夹具门，评测时不调用真实系统。用例集只给人看，智能体读不到。',

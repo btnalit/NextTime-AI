@@ -416,7 +416,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('models')}
+        breadcrumb={breadcrumbFor('models', t)}
         title={t('模型与配额', 'Models & Quotas')}
         description={t(
           '模型清单、工作区策略、配额与策略规则。',

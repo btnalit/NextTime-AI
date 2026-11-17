@@ -12,6 +12,7 @@ import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { keepDraftsOf } from '../../lib/drafts.js';
 import { useExplorerAvailable } from '../../lib/explorer-probe.js';
 import type { WorkspaceInfo } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import type { NavSection } from '../../lib/router.js';
 import { MobileTopBar, NavDrawer, Sidebar, scopedWorkspacePurpose } from './Sidebar.js';
@@ -87,6 +88,7 @@ export function AppShell({
     : workspace.state.status === 'ready'
       ? { displayName: workspace.state.data.caller.displayName }
       : null;
+  const t = useT();
   const isNarrow = useNarrowViewport(NARROW_BREAKPOINT_PX);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Closes the drawer on navigation (kit/sheet's own doc comment on `NavDrawer`) when `active`
@@ -94,7 +96,7 @@ export function AppShell({
   // closes itself on any nav link click.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only `active` should retrigger this
   useEffect(() => setDrawerOpen(false), [active]);
-  const pageTitle = breadcrumbFor(active).at(-1)?.label ?? '';
+  const pageTitle = breadcrumbFor(active, t).at(-1)?.label ?? '';
   const sidebarProps = {
     active,
     pendingCount,

@@ -192,7 +192,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   );
   useEffect(() => pushes.onResynced(reloadAll), [pushes, reloadAll]);
 
-  const breadcrumb = breadcrumbFor('goals').map((crumb, index, all) =>
+  const breadcrumb = breadcrumbFor('goals', t).map((crumb, index, all) =>
     index === all.length - 1 ? { ...crumb, href: hrefs.goals() } : crumb,
   );
   const refreshing = detail.state.status === 'ready' && detail.state.refreshing;
