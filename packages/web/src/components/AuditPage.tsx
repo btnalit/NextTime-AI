@@ -78,7 +78,7 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('audit')}
+        breadcrumb={breadcrumbFor('audit', t)}
         title={t('审计', 'Audit')}
         description={t(
           '按 ID 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',

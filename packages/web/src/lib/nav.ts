@@ -1,4 +1,5 @@
 import type { BreadcrumbItem } from '../components/kit/page-header.js';
+import type { Translate } from './i18n.js';
 import type { NavSection } from './router.js';
 import { hrefs } from './router.js';
 
@@ -22,8 +23,9 @@ export interface NavItem {
  *  an internal hash route. */
 export interface ExternalNavItem {
   readonly testId: string;
-  readonly label: string;
-  readonly sub: string;
+  /** What it opens, a proper name the same in both languages (`Explorer`). The Sidebar labels the
+   *  item 「打开 <name>」 / "Open <name>" (legacy 612: a bare 「打开」 did not say what it opens). */
+  readonly name: string;
   readonly icon: string;
   readonly href: string;
 }
@@ -45,11 +47,7 @@ export interface NavGroup {
  *  built (`explorerAvailable !== false`, `lib/explorer-probe.ts`). */
 export const EXPLORER_NAV: ExternalNavItem = {
   testId: 'nav-explorer',
-  // S8 W1-A10 (i18n remainder): 'label'/'sub' follow the same zh-main/en-sub convention every
-  // other nav item below uses (both always shown, not a t() language pick) — was a single merged
-  // "打开 Explorer" label with the unrelated tag "third-party" as its sub.
-  label: '打开',
-  sub: 'Explorer',
+  name: 'Explorer',
   icon: 'search',
   href: '/explorer/',
 };
@@ -248,19 +246,21 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 
 /** Every kit `PageHeader`'s breadcrumb: `[{group}, {page}]`, read from `NAV_GROUPS` above. The
  *  group crumb has no `href` — none of the three groups has a landing page of its own to link to
- *  — and renders as plain text (`kit/page-header.tsx`'s own rule: no `href` = plain text). Chinese
- *  only, no "中文 English" pairing: F5 (docs/development-tasks.md §5e) makes the console Chinese-
- *  first for now (English moves into a later language-switch lane, not built here), and audit S4
- *  found that exact pairing was the main cause of header text wrapping at 1280/768 — pairing it
- *  back in here would reintroduce the same failure this lane's `PageHeader` layout fix addresses.
+ *  — and renders as plain text (`kit/page-header.tsx`'s own rule: no `href` = plain text). One
+ *  language per crumb, the reader's (`t`): the group's `titleZh`/`titleEn` and the item's
+ *  `label`/`sub`, the same pair the Sidebar's own `t(item.label, item.sub)` shows, so a breadcrumb
+ *  and the narrow top bar's page title (`AppShell`, its last crumb) never drift from the nav's
+ *  wording in either language (legacy 611 / 572: both were Chinese in the English console). Never
+ *  the "中文 English" pairing — audit S4 found that pairing was the main cause of header text
+ *  wrapping at 1280/768. `t` is required so a new caller cannot forget the language.
  *  Returns `[]` for a section with no nav entry (routes that are drawers over another page's own
  *  route, e.g. `chat`'s `chatId` detail — `router.ts`'s `sectionOf` already collapses that onto
  *  `chats` before anything would call this with a value that isn't in `NAV_GROUPS`). */
-export function breadcrumbFor(section: NavSection): readonly BreadcrumbItem[] {
+export function breadcrumbFor(section: NavSection, t: Translate): readonly BreadcrumbItem[] {
   for (const group of NAV_GROUPS) {
     const item = group.items.find((candidate) => candidate.section === section);
     if (item !== undefined) {
-      return [{ label: group.titleZh }, { label: item.label }];
+      return [{ label: t(group.titleZh, group.titleEn) }, { label: t(item.label, item.sub) }];
     }
   }
   return [];

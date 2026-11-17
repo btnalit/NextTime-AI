@@ -262,7 +262,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformOverview')}
+        breadcrumb={breadcrumbFor('platformOverview', t)}
         title={t('概览', 'Overview')}
         description={t(
           '内核版本、服务健康、首次运行清单与最近的平台审计。',

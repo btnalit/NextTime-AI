@@ -97,7 +97,7 @@ export function PlatformAdminAgentPage({
           '你自己的管理员智能体：它只在试验工作区里替你试做改动，做好后向你选的目标工作区提出管理员提案；平台部分在「管理员提案」里审阅，工作区部分由各工作区的所有者决定。它用的模型额度算在你的用户预算里，和入口智能体一样。',
           'Your own admin agent: it tries changes out for you in trial workspaces only, then makes an admin proposal to the target workspaces you choose; its platform part is reviewed in Admin proposals, and each workspace part is decided by that workspace’s owner. Its model use counts towards your own user budget, as the entry agent’s does.',
         )}
-        breadcrumb={breadcrumbFor('platformAdminAgent')}
+        breadcrumb={breadcrumbFor('platformAdminAgent', t)}
         actions={
           <>
             <Button variant="ghost" onClick={() => void reload()} data-testid="admin-agent-refresh">

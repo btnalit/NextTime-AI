@@ -203,7 +203,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('members')}
+        breadcrumb={breadcrumbFor('members', t)}
         title={t('成员与授权', 'Members')}
         description={t(
           '谁能进入这个工作区、持有什么角色、API key 的生命周期。',

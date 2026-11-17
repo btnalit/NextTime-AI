@@ -49,7 +49,7 @@ export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformSettings')}
+        breadcrumb={breadcrumbFor('platformSettings', t)}
         title={t('平台设置', 'Platform settings')}
         description={t(
           '站点名、公告、默认值，以及这个平台的密码策略。',

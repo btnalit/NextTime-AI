@@ -70,7 +70,7 @@ export function PlatformAdminProposalsPage({
           '平台管理员的管理员智能体在试验工作区里试好改动后提出的管理员提案。平台部分（新建门宿主实例）在这里审阅、应用或拒绝；工作区部分由各工作区的所有者在他们的「能力目录」里决定，这里只看状态。',
           'The admin proposals platform administrators’ admin agents make once they have tried a change out in a trial workspace. The platform part (new gate-host instances) is reviewed, applied or rejected here; each workspace part is decided by that workspace’s owner in their Catalog, and only its status shows here.',
         )}
-        breadcrumb={breadcrumbFor('platformAdminProposals')}
+        breadcrumb={breadcrumbFor('platformAdminProposals', t)}
         actions={
           <Button variant="ghost" onClick={refresh} data-testid="platform-admin-proposals-refresh">
             {t('刷新', 'Refresh')}

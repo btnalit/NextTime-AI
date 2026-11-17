@@ -163,7 +163,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('agent')}
+        breadcrumb={breadcrumbFor('agent', t)}
         title={t('我的智能体', 'My Agent')}
         description={t(
           '每个用户各自的 Agent 配置——模型、Skill、已接入系统、提示词附加。',

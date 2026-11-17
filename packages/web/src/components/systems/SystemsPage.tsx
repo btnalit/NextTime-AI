@@ -574,7 +574,7 @@ export function SystemsPage({
           '每个系统一张卡：谁能用它、用不了差哪一步、哪些 Worker 覆盖它。',
           'One card per system: who can use it, what is missing when they cannot, and which Workers cover it.',
         )}
-        breadcrumb={breadcrumbFor('systems')}
+        breadcrumb={breadcrumbFor('systems', t)}
         primaryAction={
           canRequest ? (
             <Button

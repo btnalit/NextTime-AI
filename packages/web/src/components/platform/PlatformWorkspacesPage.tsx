@@ -273,7 +273,7 @@ export function PlatformWorkspacesPage({
   return (
     <div className="page" data-testid="platform-workspaces-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformWorkspaces')}
+        breadcrumb={breadcrumbFor('platformWorkspaces', t)}
         title={t('工作区', 'Workspaces')}
         description={t(
           '每个工作区是一张共享图：给谁用、agent 可用哪些模型、由谁配置。',

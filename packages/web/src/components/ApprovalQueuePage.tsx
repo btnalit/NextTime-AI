@@ -155,7 +155,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   return (
     <div className="page approvals-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('approvals')}
+        breadcrumb={breadcrumbFor('approvals', t)}
         title={t('待我审批', 'Approvals')}
         description={t(
           'Worker 在你的授权范围内提出的执行类动作；批准后由门执行。',

@@ -87,7 +87,7 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
   return (
     <div className="page" data-testid="platform-status-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformStatus')}
+        breadcrumb={breadcrumbFor('platformStatus', t)}
         title={t('运行状态', 'Status')}
         description={t(
           '哪个服务不健康、队列积压、备份多久了；这个标签页可见时每 30 秒自动刷新一次。',
