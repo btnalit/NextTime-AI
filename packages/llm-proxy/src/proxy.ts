@@ -11,7 +11,7 @@ import {
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { ExhaustedBudgetRow } from './budget-sync.js';
-import type { ProviderApiKind, ProviderConfig } from './config.js';
+import { CLIENT_STALL_TIMEOUT_MS, type ProviderApiKind, type ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import { type LlmProxyMetrics, createLlmProxyMetrics, respondMetrics } from './metrics.js';
@@ -71,14 +71,17 @@ import {
  * (bounded) and forwarded as a scrubbed copy with its JSON structure kept (upstream-error-body.ts,
  * review of #549). Otherwise only the outbound *request* is ever narrowed or mutated, as above.
  *
- * Legacy 161: a successful answer is forwarded at the pace the client takes it — the next upstream
- * chunk is read only once the client has taken the last (backpressure), so a slow client never
- * makes this process buffer the answer. A client that goes away before the whole answer reached
- * it (or takes nothing for `upstreamIdleTimeoutMs`, and is cut off) is not forwarded to any more,
- * but the upstream call is *not* aborted: the answer is read to its end and metered in full, as
- * `client_closed`. Metering stays exact, so a client cannot disconnect its way past the budget;
- * the cost is that the provider finishes an answer nobody reads, bounded as before by the
- * request's own `max_tokens` and the idle timeout.
+ * Legacy 161: the upstream answer is always read to its end at the upstream's own pace — never
+ * slowed down for the client, never aborted for it — and metered in full. Pausing the upstream
+ * read for a slow client would let the provider's own send timeout cut the stream first (review
+ * of #1391), and aborting it would leave the record short (the OpenAI-shaped APIs report usage
+ * only at the very end): either way a client could make itself metered at next to nothing, past
+ * the workspace's daily budget. What the client has not taken yet waits in this request's own
+ * buffer, bounded by `clientBufferLimitBytes`; a client that falls further behind than that, or
+ * leaves a backlog untaken for `clientStallTimeoutMs`, is cut off. A client that goes away or is
+ * cut off is not forwarded to any more; its call is metered as `client_closed`. The cost is that
+ * the provider finishes an answer nobody reads, bounded as before by the request's `max_tokens`
+ * and the upstream idle timeout.
  *
  * Leftover 87: every request gets a correlation id — the caller's `x-correlation-id` when valid
  * (the platform extension sends the Turn id / the Worker's inherited id on every model call), else
@@ -280,10 +283,18 @@ export interface ProxyServerOptions {
   readonly upstreamConnectTimeoutMs: number;
   /** Ceiling for the gap between successive response chunks once streaming has started — kept
    *  generous by default (config.ts), since a thinking model can stall for tens of seconds
-   *  mid-stream. Legacy 161: also how long a client may take nothing of what was already written
-   *  to it (backpressure) before it is cut off and treated as gone; the upstream's own idle clock
-   *  is paused meanwhile. */
+   *  mid-stream. */
   readonly upstreamIdleTimeoutMs: number;
+  /** Legacy 161: how long a client may leave a backlog of the answer untaken — from the moment
+   *  its connection stops accepting more (or the answer has ended unflushed) until it has taken
+   *  it — before it is cut off and its call metered as `client_closed`. The upstream read is
+   *  never paused meanwhile. Default {@link CLIENT_STALL_TIMEOUT_MS} (config.ts, overridable
+   *  with the `CLIENT_STALL_TIMEOUT_MS` variable). */
+  readonly clientStallTimeoutMs?: number;
+  /** Legacy 161: the most of an answer this process holds for one client that has not taken it
+   *  yet; a client further behind is cut off (as above). Default
+   *  {@link CLIENT_BUFFER_LIMIT_BYTES}. */
+  readonly clientBufferLimitBytes?: number;
   /** Resolves `api_key_env` to the real provider key. Defaults to `process.env[name]` — injected
    *  in tests. */
   readonly resolveApiKey?: (envVarName: string) => string | undefined;
@@ -331,6 +342,15 @@ export const BUDGET_EXHAUSTED_STATUS = 402;
  * the refusal (the kernel's earlier behaviour: the run's result is taken as it is).
  */
 export const REFUSAL_DELIVERY_TIMEOUT_MS = 5000;
+
+/**
+ * Legacy 161: default for {@link ProxyServerOptions.clientBufferLimitBytes} — per request, on top
+ * of the kernel's own socket buffers. It bounds the backlog, not the answer: a client that reads
+ * keeps up with the model's generation (tens of KiB a second), so its backlog stays near zero
+ * however long the answer runs. Only a client that stops reading while the upstream sends fast
+ * reaches it; one that stops while the model is still generating meets the stall timeout first.
+ */
+export const CLIENT_BUFFER_LIMIT_BYTES = 8 * 1024 * 1024;
 
 export function createProxyServer(options: ProxyServerOptions): http.Server {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -689,51 +709,80 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     };
     armTimeout(options.upstreamConnectTimeoutMs);
 
-    // Legacy 161: whether the client went away before the whole answer reached it. The upstream
-    // call is never aborted for that: the answer is still read to its end (unforwarded) so the
-    // usage record carries the provider's full count. Aborting would leave the record short — the
-    // OpenAI-shaped APIs report usage only at the very end — and a client could then disconnect on
-    // purpose to be metered at next to nothing, past the workspace's daily budget.
+    // Legacy 161: whether the client went away (or was cut off) before the whole answer reached
+    // it. The upstream call is never aborted or slowed down for that — see the module doc.
     let clientClosed = false;
     res.once('close', () => {
       if (!res.writableFinished) clientClosed = true;
     });
     const clientGone = (): boolean => clientClosed || (res.destroyed && !res.writableFinished);
-    // Backpressure: the client has not yet taken what was written to it. The next upstream chunk
-    // is not read until it has, so nothing piles up in this process. A client that takes nothing
-    // for `upstreamIdleTimeoutMs` is cut off (and so gone, as above); the upstream idle clock is
-    // paused meanwhile, since the upstream is not what is stalled.
-    const awaitClient = (): Promise<void> => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+    const clientStallTimeoutMs = options.clientStallTimeoutMs ?? CLIENT_STALL_TIMEOUT_MS;
+    const clientBufferLimitBytes = options.clientBufferLimitBytes ?? CLIENT_BUFFER_LIMIT_BYTES;
+    let stallTimer: NodeJS.Timeout | undefined;
+    const stopStallTimer = (): void => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = undefined;
+    };
+    /** Stops forwarding to a client that cannot keep up; the upstream read goes on regardless. */
+    const cutOffClient = (reason: 'stalled' | 'buffer_full'): void => {
+      stopStallTimer();
+      if (clientGone()) return;
+      clientClosed = true;
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg:
+            reason === 'stalled'
+              ? 'llm-proxy: client left the answer untaken for the stall timeout; cutting it off, the upstream answer is still read to its end'
+              : 'llm-proxy: client fell further behind than the buffer limit; cutting it off, the upstream answer is still read to its end',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+          ...(reason === 'stalled'
+            ? { clientStallTimeoutMs }
+            : { clientBufferLimitBytes, bufferedBytes: res.writableLength }),
+        }),
+      );
+      res.destroy();
+    };
+    /** The client has a backlog: it has `clientStallTimeoutMs` to take it, counted from the first
+     *  moment it fell behind (a running clock is not restarted). */
+    const watchClient = (): void => {
+      if (stallTimer || clientGone()) return;
+      stallTimer = setTimeout(() => cutOffClient('stalled'), clientStallTimeoutMs);
+      stallTimer.unref?.();
+    };
+    /** While the answer streams, a client that has caught up has no backlog to time. */
+    const clientCaughtUp = (): void => stopStallTimer();
+    res.on('drain', clientCaughtUp);
+    /** Hands `chunk` to a client still there without ever waiting for it. */
+    const forward = (chunk: Uint8Array): void => {
+      if (clientGone()) return;
+      if (res.writableLength + chunk.byteLength > clientBufferLimitBytes) {
+        cutOffClient('buffer_full');
+        return;
+      }
+      if (!res.write(chunk)) watchClient();
+    };
+    /** After the answer ended: resolves once the client has taken all of it, or is gone (a backlog
+     *  left untaken is cut off by the stall timer, so this always settles). */
+    const clientTookAll = (): Promise<void> => {
+      res.off('drain', clientCaughtUp);
+      if (res.writableFinished || clientGone()) {
+        stopStallTimer();
+        return Promise.resolve();
+      }
+      watchClient();
       return new Promise<void>((resolve) => {
-        const stalled = setTimeout(() => {
-          log(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'llm-proxy: client took nothing of the answer for the idle timeout; cutting it off, the upstream answer is still read to its end',
-              correlationId,
-              provider: providerName,
-              model: modelId,
-            }),
-          );
-          res.destroy();
-        }, options.upstreamIdleTimeoutMs);
-        stalled.unref?.();
         const settle = (): void => {
-          clearTimeout(stalled);
-          res.off('drain', settle);
+          stopStallTimer();
+          res.off('finish', settle);
           res.off('close', settle);
           resolve();
         };
-        res.on('drain', settle);
+        res.on('finish', settle);
         res.on('close', settle);
       });
-    };
-    /** Writes `chunk` to a client still there, waiting out its backpressure. */
-    const forward = async (chunk: Uint8Array): Promise<void> => {
-      if (clientGone()) return;
-      if (res.write(chunk) || clientGone()) return;
-      await awaitClient();
     };
 
     const upstreamStartedMs = Date.now();
@@ -840,7 +889,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          await forward(value);
+          forward(value);
           armTimeout(options.upstreamIdleTimeoutMs);
           if (isSse) {
             usageAccumulator?.push(decoder.decode(value, { stream: true }));
@@ -857,7 +906,15 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       }
     }
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    if (upstreamRes.ok) res.end();
+    if (upstreamRes.ok) {
+      res.end();
+      // Legacy 161: whether the whole answer reached the client decides `completed` against
+      // `client_closed`, so the record waits until it has (at most `clientStallTimeoutMs`).
+      await clientTookAll();
+    } else {
+      res.off('drain', clientCaughtUp);
+      stopStallTimer();
+    }
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
     if (nonSseTooLarge) {

@@ -436,11 +436,12 @@ export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
  *     reported before that;
  *   - `refused` (legacy 589): the proxy answered 402 `budget_exhausted` without forwarding the
  *     call — no tokens, no cost, and `refusal_scope` names the budget;
- *   - `client_closed` (legacy 161): the client went away (or took nothing for the idle timeout and
- *     was cut off) before the whole answer reached it. The proxy still read the upstream answer to
- *     its end, discarding it, so the tokens and cost are the provider's full count — never an
- *     estimate and never a partial one: a client cannot shrink what a call is metered at by
- *     disconnecting.
+ *   - `client_closed` (legacy 161): the client went away before the whole answer reached it, or
+ *     fell too far or too long behind and was cut off (llm-proxy's per-request buffer limit and
+ *     `CLIENT_STALL_TIMEOUT_MS`). The proxy still read the upstream answer to its end at the
+ *     upstream's own pace, discarding the rest, so the tokens and cost are the provider's full
+ *     count — never an estimate and never a partial one: a client cannot shrink what a call is
+ *     metered at by disconnecting or by not reading.
  * Every token and cost sum (budgets, Task quotas, evaluation cost, the platform rollup) counts every
  * row whatever its status; a `refused` row carries zeros. The platform rollup's call count leaves
  * `refused` out (it never reached a provider).
