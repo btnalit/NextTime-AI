@@ -181,13 +181,12 @@ describe('ToastProvider over a modal sheet', () => {
   });
 
   // Legacy 820: Radix keeps the focus inside the modal; the toasts are reached by their hotkey.
-  function Form({ pushes }: { readonly pushes: number }) {
+  function Form({ pushes }: { readonly pushes: 0 | 1 | 2 }) {
     const [open, setOpen] = useState(true);
     return (
       <ToastProvider>
-        {Array.from({ length: pushes }, (_, index) => (
-          <PushFailure key={index} />
-        ))}
+        {pushes > 0 ? <PushFailure /> : null}
+        {pushes > 1 ? <PushFailure /> : null}
         <span data-testid="state">{open ? 'open' : 'closed'}</span>
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetContent data-testid="sheet">
