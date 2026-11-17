@@ -1815,6 +1815,7 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     cleanup.push(() => closeServer(redirecting));
 
     const { privateKey, publicKey } = await ephemeralKeyPair();
+    const logLines: string[] = [];
     const proxy = createProxyServer({
       providers: { p: anthropicProvider(redirectPort) },
       publicKey,
@@ -1824,7 +1825,7 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
       upstreamConnectTimeoutMs: 2000,
       upstreamIdleTimeoutMs: 2000,
       resolveApiKey,
-      log: () => {},
+      log: (line) => logLines.push(line),
     });
     const proxyPort = await listen(proxy);
     cleanup.push(() => closeServer(proxy));
@@ -1841,6 +1842,20 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     });
     expect(res.status).toBe(502);
     expect(elsewhere).toEqual([]);
+    // Legacy 221: the 3xx is not forwarded (the client would follow it itself); the 502 and the
+    // log line say what answered and where it pointed.
+    const message = `upstream responded 307, a redirect to "http://127.0.0.1:${targetPort}/v1/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`;
+    expect(JSON.parse(res.body.toString('utf8'))).toEqual({
+      error: { code: 'bad_gateway', message },
+    });
+    expect(res.headers.location).toBeUndefined();
+    const warn = logLines.map((line) => JSON.parse(line)).find((line) => line.status === 307);
+    expect(warn).toMatchObject({
+      level: 'warn',
+      msg: 'llm-proxy: upstream answered with a redirect, not followed',
+      provider: 'p',
+      error: message,
+    });
   });
 });
 

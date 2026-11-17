@@ -1,3 +1,4 @@
+import { type RedirectAdvice, describeRedirect, isRedirectStatus } from '@nexttime/shared';
 import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { readUpstreamJson } from './http-util.js';
 import { checkProviderKey } from './provider-keys.js';
@@ -228,6 +229,31 @@ export function scrubUpstreamText(text: string, realKey: string): string {
   return scrubTokenLikeRuns(text, realKey).slice(0, ERROR_TEXT_MAX_LENGTH);
 }
 
+/** Legacy 221: who refuses a provider's redirect, and what to fix (R-23: the key would go along). */
+const UPSTREAM_REDIRECT_ADVICE: RedirectAdvice = {
+  follower: 'llm-proxy does not follow redirects (the provider key would go along)',
+  fix: "set the provider's Base URL to the final address",
+};
+
+/** Legacy 221: an upstream's redirect as a failure that names the status and where it pointed —
+ *  the same wording as a gate's (`@nexttime/shared` `describeRedirect`: a path, or another
+ *  origin and its path, never the query), key-scrubbed like every other upstream text. Each
+ *  upstream call asks for `redirect: 'manual'` and calls this before reading the body; until
+ *  then `redirect: 'error'` failed as a bare "fetch failed". */
+export function describeUpstreamRedirect(
+  label: string,
+  response: { readonly status: number; readonly headers: Pick<Headers, 'get'> },
+  requestUrl: string,
+  realKey: string,
+): string {
+  // Not cut at ERROR_TEXT_MAX_LENGTH: the text is this proxy's own, and the one part the upstream
+  // chose (where it pointed) is already bounded by `redirectTargetForDisplay`.
+  return scrubTokenLikeRuns(
+    describeRedirect(label, response, requestUrl, UPSTREAM_REDIRECT_ADVICE),
+    realKey,
+  );
+}
+
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */
 export function describeFailure(status: number, body: unknown, realKey: string): string {
   let detail = '';
@@ -247,7 +273,14 @@ function tooLargeFailure(status: number): string {
 async function callUpstream(
   options: ProviderTestOptions,
   call: UpstreamCall,
-): Promise<{ ok: boolean; status: number; body: unknown; tooLarge: boolean }> {
+): Promise<{
+  ok: boolean;
+  status: number;
+  body: unknown;
+  tooLarge: boolean;
+  /** Set when the upstream answered with a redirect: the failure to report (legacy 221). */
+  redirect?: string;
+}> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const { provider } = options;
   const headers = new Headers({
@@ -266,16 +299,28 @@ async function callUpstream(
   );
   timeout.unref?.();
   try {
-    const res = await fetchImpl(`${provider.upstream_base_url}${call.path}`, {
+    const url = `${provider.upstream_base_url}${call.path}`;
+    const res = await fetchImpl(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(call.body),
       signal: controller.signal,
       // R-23 (L6-19): 'follow' resends every header but `Authorization` to whatever host a 3xx
       // names — `x-api-key` included. A redirect is a failed test, never a second destination
-      // for the key (gatekeeper-base kinds/http.ts applies the same rule to gate credentials).
-      redirect: 'error',
+      // for the key (gatekeeper-base kinds/http.ts applies the same rule to gate credentials);
+      // 'manual' hands it back so the failure can say where it pointed (legacy 221).
+      redirect: 'manual',
     });
+    if (isRedirectStatus(res.status)) {
+      await res.body?.cancel().catch(() => {});
+      return {
+        ok: false,
+        status: res.status,
+        body: undefined,
+        tooLarge: false,
+        redirect: describeUpstreamRedirect(`POST ${call.path}`, res, url, options.realKey),
+      };
+    }
     const { body, tooLarge } = await readUpstreamJson(res, PROVIDER_TEST_MAX_RESPONSE_BYTES);
     return { ok: res.ok, status: res.status, body, tooLarge };
   } finally {
@@ -311,11 +356,13 @@ export async function runProviderTest(input: ProviderTestOptions): Promise<Store
     if (first.ok && completionSucceeded(api, first.body)) {
       completion = 'ok';
     } else {
-      error = first.tooLarge
-        ? tooLargeFailure(first.status)
-        : first.ok
-          ? 'completion response did not have the expected shape'
-          : describeFailure(first.status, first.body, options.realKey);
+      error = first.redirect
+        ? first.redirect
+        : first.tooLarge
+          ? tooLargeFailure(first.status)
+          : first.ok
+            ? 'completion response did not have the expected shape'
+            : describeFailure(first.status, first.body, options.realKey);
     }
   } catch (err) {
     error = `completion request failed: ${scrubUpstreamText(String(err), options.realKey)}`;
@@ -337,11 +384,13 @@ export async function runProviderTest(input: ProviderTestOptions): Promise<Store
         tool = 'ok';
       } else {
         tool = 'error';
-        const failure = second.tooLarge
-          ? tooLargeFailure(second.status)
-          : second.ok
-            ? `tool-call response carried no call of "${TOOL_NAME}"`
-            : describeFailure(second.status, second.body, options.realKey);
+        const failure = second.redirect
+          ? second.redirect
+          : second.tooLarge
+            ? tooLargeFailure(second.status)
+            : second.ok
+              ? `tool-call response carried no call of "${TOOL_NAME}"`
+              : describeFailure(second.status, second.body, options.realKey);
         error = forcedRejected
           ? `${failure} (retried with tool_choice auto after the forced tool_choice was rejected: ${forcedRejected})`
           : failure;

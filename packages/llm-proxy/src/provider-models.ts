@@ -1,8 +1,13 @@
-import type { LlmProviderDiscoveredModelWire } from '@nexttime/shared';
+import { type LlmProviderDiscoveredModelWire, isRedirectStatus } from '@nexttime/shared';
 import type { ProviderApiKind } from './config.js';
 import { readUpstreamJson } from './http-util.js';
 import { checkProviderKey } from './provider-keys.js';
-import { UNUSABLE_KEY_MESSAGE, describeFailure, scrubUpstreamText } from './provider-test.js';
+import {
+  UNUSABLE_KEY_MESSAGE,
+  describeFailure,
+  describeUpstreamRedirect,
+  scrubUpstreamText,
+} from './provider-test.js';
 
 /**
  * provider-models: `POST /admin/model-discovery` (admin-api.ts) — "从供应商获取模型". One
@@ -37,7 +42,8 @@ export type ListUpstreamModelsResult =
   | {
       readonly ok: false;
       /** `upstream_status`: the upstream answered non-2xx; `unreachable`: no answer (DNS, TLS,
-       *  timeout, redirect); `invalid_response`: 2xx without a model list. */
+       *  timeout) or a redirect, which is never followed (`status` is then the 3xx, legacy 221);
+       *  `invalid_response`: 2xx without a model list. */
       readonly reason: 'upstream_status' | 'unreachable' | 'invalid_response';
       readonly status: number | null;
       /** Sanitized, key-scrubbed, bounded. */
@@ -93,9 +99,18 @@ export async function listUpstreamModels(
       method: 'GET',
       headers,
       signal: controller.signal,
-      redirect: 'error',
+      redirect: 'manual',
     });
     status = res.status;
+    if (isRedirectStatus(status)) {
+      await res.body?.cancel().catch(() => {});
+      return {
+        ok: false,
+        reason: 'unreachable',
+        status,
+        message: describeUpstreamRedirect(`GET ${new URL(url).pathname}`, res, url, keyCheck.key),
+      };
+    }
     const read = await readUpstreamJson(res, MAX_MODEL_LIST_BYTES);
     if (read.tooLarge) {
       return {
