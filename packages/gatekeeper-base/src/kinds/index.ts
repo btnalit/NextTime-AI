@@ -23,7 +23,7 @@ export type {
   OpenApiDocumentLike,
 } from './http.js';
 
-export { McpTransport, importMcpTools } from './mcp.js';
+export { MAX_MCP_TOOLS_LIST_BYTES, McpTransport, importMcpTools } from './mcp.js';
 export type { McpTransportOptions, McpToolLike, McpToolsListResult } from './mcp.js';
 
 export {

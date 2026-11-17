@@ -1244,5 +1244,44 @@ describe('createGateHost (P-B2a)', () => {
       expect(pulls).toBeLessThan(20);
       expect(state.announcements).toEqual([]);
     });
+
+    it('an MCP target whose tools/list answer passes the same limit is not built either (#501 review of #1374)', async () => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      let pulls = 0;
+      let cancelled = false;
+      state.items = [DEMO_MCP_ITEM];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  pulls += 1;
+                  controller.enqueue(chunk);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+              { headers: { 'content-type': 'application/json' } },
+            ),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([
+        {
+          gateId: 'demo-mcp',
+          ready: false,
+          operationCount: 0,
+          buildError:
+            'mcp transport: tools/list: the target answered (status 200) but its answer is larger than 16 MiB — it had the request and may have run it',
+        },
+      ]);
+      expect(cancelled).toBe(true);
+      expect(pulls).toBeLessThan(20);
+      expect(state.announcements).toEqual([]);
+    });
   });
 });

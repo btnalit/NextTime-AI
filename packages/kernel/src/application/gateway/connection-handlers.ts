@@ -555,6 +555,7 @@ async function resolveManifestOperations(
     let toolsList: McpToolsListResult;
     try {
       const transport = new McpTransport({ endpoint: manifestSource, fetchImpl: ownerFetch });
+      // Legacy 797: reads at most `MAX_MCP_TOOLS_LIST_BYTES` of the answer, as the OpenAPI fetch.
       toolsList = await transport.listTools(credentials);
     } catch (err) {
       throw new ConnectionManifestFetchError(manifestSource, { cause: err });

@@ -149,7 +149,8 @@ await_decision: true` — an owner must review and publish before it takes effec
 An OpenAPI document fetched from a `manifestSource` — by the kernel (`create_connection`) or the
 gate host — is read up to 16 MiB (`MAX_OPENAPI_DOCUMENT_BYTES`, `readOpenApiDocument`): a larger one
 fails the fetch (502 `manifest_fetch_failed`) or the instance's build, saying so, and is not read
-any further.
+any further. An MCP `tools/list` answer is read up to the same 16 MiB (`MAX_MCP_TOOLS_LIST_BYTES`),
+by both and from the MCP target alike; a `tools/call` answer is not bounded here.
 `importOpenApi` reads a path item's own `parameters` (an Operation's own one of the same name and
 `in` replaces it) and follows every `$ref` into the same document (`#/components/…`), writing it
 out in place: the gate's validator has no document to resolve one against. A schema that contains

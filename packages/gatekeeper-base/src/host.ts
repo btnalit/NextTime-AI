@@ -405,6 +405,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         definition.credentialMode === 'shared'
           ? await instance.store.get(GATE_SHARED_CREDENTIAL_SLOT)
           : undefined;
+      // Legacy 797: `listTools` reads at most `MAX_MCP_TOOLS_LIST_BYTES` of the answer.
       operations = importMcpTools(await (transport as McpTransport).listTools(shared));
     } else if (definition.manifestSource) {
       // Legacy 199 (#532 review P): never followed, as the kernel's own fetch of the same URL

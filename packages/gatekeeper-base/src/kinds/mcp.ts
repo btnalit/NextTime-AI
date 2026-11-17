@@ -1,4 +1,5 @@
 import type { Operation } from '@nexttime/shared';
+import { ResponseBodyTooLargeError, readBodyWithin } from '../bounded-body.js';
 import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
 import { failedAfterAnswer, failedBeforeAnswer } from './call-failure.js';
 import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
@@ -24,6 +25,13 @@ export interface McpTransportOptions {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** Legacy 797 (#501 review of #1374): how much of a `tools/list` answer is read — the same 16 MiB
+ *  as an OpenAPI `manifestSource` document (`MAX_OPENAPI_DOCUMENT_BYTES`), for the same reason: the
+ *  kernel (`create_connection`, inside its open transaction) and the gate host (`buildInstance`)
+ *  read it from an owner-supplied address, and `response.json()` would buffer whatever came back
+ *  until the timeout. A larger answer fails the call. `tools/call` answers are not bounded here. */
+export const MAX_MCP_TOOLS_LIST_BYTES = 16 * 1024 * 1024;
+
 interface JsonRpcResponse<T> {
   readonly result?: T;
   readonly error?: { readonly code: number; readonly message: string };
@@ -38,7 +46,14 @@ export class McpTransport implements Transport {
     this.options = options;
   }
 
-  private async call<T>(method: string, params: unknown, credential: unknown): Promise<T> {
+  /** `maxAnswerBytes`: read at most that much of the answer (`readBodyWithin`); unset, the whole
+   *  answer is read. */
+  private async call<T>(
+    method: string,
+    params: unknown,
+    credential: unknown,
+    maxAnswerBytes?: number,
+  ): Promise<T> {
     const what = `mcp transport: ${method}`;
     // Built before the call (review of #586, #501 P2-2): a failure here sent nothing.
     const headers = { 'content-type': 'application/json', ...credentialHeaders(credential) };
@@ -75,8 +90,15 @@ export class McpTransport implements Transport {
       }
       let body: JsonRpcResponse<T> | null;
       try {
-        body = (await response.json()) as JsonRpcResponse<T> | null;
+        body = (
+          maxAnswerBytes === undefined
+            ? await response.json()
+            : JSON.parse(await readBodyWithin(response, maxAnswerBytes, 'its answer'))
+        ) as JsonRpcResponse<T> | null;
       } catch (err) {
+        if (err instanceof ResponseBodyTooLargeError) {
+          throw failedAfterAnswer(what, response.status, err.message, err);
+        }
         throw failedAfterAnswer(what, response.status, 'its answer is not JSON', err);
       }
       if (body === null || typeof body !== 'object') {
@@ -137,9 +159,10 @@ export class McpTransport implements Transport {
   }
 
   /** `tools/list` — used both by `describe_operations`-adjacent tooling and by
-   *  `importMcpTools` callers that want to fetch live instead of passing a cached response. */
+   *  `importMcpTools` callers that want to fetch live instead of passing a cached response. Reads
+   *  at most `MAX_MCP_TOOLS_LIST_BYTES` of the answer (legacy 797). */
   async listTools(credential?: unknown): Promise<McpToolsListResult> {
-    return this.call('tools/list', {}, credential);
+    return this.call('tools/list', {}, credential, MAX_MCP_TOOLS_LIST_BYTES);
   }
 }
 

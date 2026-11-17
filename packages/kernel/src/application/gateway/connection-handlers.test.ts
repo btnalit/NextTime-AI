@@ -265,6 +265,42 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     expect(pulls).toBeLessThan(20);
   });
 
+  it('an MCP manifestSource whose tools/list answer passes 16 MiB fails the fetch, saying so (#501 review of #1374)', async () => {
+    const { fetchImpl } = wire();
+    let pulls = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+    fetchImpl.mockImplementation(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pulls += 1;
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const thrown = await call({
+      kind: 'mcp',
+      target: 'x',
+      endpoint: 'https://gate.owner.example',
+      credentialKind: 'shared',
+      connectionSecret: secrets.mint(WORKSPACE).secret,
+      manifestSource: 'https://api.owner.example/mcp',
+    }).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(ConnectionManifestFetchError);
+    expect((thrown as Error).message).toBe(
+      'create_connection: failed to fetch manifestSource "https://api.owner.example/mcp": mcp transport: tools/list: the target answered (status 200) but its answer is larger than 16 MiB — it had the request and may have run it',
+    );
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThan(20);
+  });
+
   it.each([
     ['http', 'https://api.owner.example/openapi.json'],
     ['mcp', 'https://api.owner.example/mcp'],

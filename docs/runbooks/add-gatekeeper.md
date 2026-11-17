@@ -373,6 +373,7 @@ curl -s https://<host>:8443/api/cap/create_connection \
 #    -d "{...,\"manifestSource\":\"http://<system>:8080/openapi.json\"}"
 #        OpenAPI 文档最多读 16 MiB（内核和门宿主都是），更大的会 502 manifest_fetch_failed，
 #        原因里写明超过上限；换一份只含这个门要用的路径的文档，或手写门的清单。
+#        mcp 的 tools/list 回答也最多读 16 MiB，超过同样 502（门宿主上实例不构建）。
 
 # 4. publish_manifest —— 逐条 Operation 分类审核之前，先把导入的草稿整体或逐条看一遍（web 控制台
 #    "系统接入"页的接入向导第④步——mode/blast_radius/auto_approvable 预览，见 §8）；确认无误后发布。
