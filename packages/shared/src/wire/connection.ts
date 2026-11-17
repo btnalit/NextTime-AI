@@ -12,6 +12,7 @@ import {
 } from './gate-address-change.js';
 import {
   AbsentAnswerDraftWireSchema,
+  CredentialDraftWireSchema,
   GateOwnedParamDraftWireSchema,
   GateOwnedParamWireSchema,
   OperationAbsentAnswersReviewWireSchema,
@@ -318,6 +319,9 @@ export const PublishManifestResultWireSchema = z
     /** S11 「门确认不存在」 B-a: the gate's own drafts left unpublished because they declare answers
      *  that mean "does not exist" — each needs a person's confirmation on `publish_operation`. */
     absentAnswerDrafts: z.array(AbsentAnswerDraftWireSchema),
+    /** Legacy 198: the gate's own drafts left unpublished because their definitions carry
+     *  suspected credential values — each needs `publish_operation` with `credentialsReviewed`. */
+    credentialDrafts: z.array(CredentialDraftWireSchema),
   })
   .strict();
 export type PublishManifestResultWire = z.infer<typeof PublishManifestResultWireSchema>;

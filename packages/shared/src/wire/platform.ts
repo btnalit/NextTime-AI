@@ -550,6 +550,19 @@ export const AbsentAnswerDraftWireSchema = z
   .strict();
 export type AbsentAnswerDraftWire = z.infer<typeof AbsentAnswerDraftWireSchema>;
 
+/** Legacy 198: a gate's imported draft a bulk publish left unpublished because its definition
+ *  carries suspected credential values — a person publishes it with `publish_operation` and
+ *  `credentialsReviewed: true`, as for any draft that carries them. `suspectedSecretPaths`: where
+ *  in the definition, as field paths (at most 20), never a fragment of a value. */
+export const CredentialDraftWireSchema = z
+  .object({
+    name: z.string(),
+    suspectedSecretValues: z.number().int().positive(),
+    suspectedSecretPaths: z.array(z.string()).max(20),
+  })
+  .strict();
+export type CredentialDraftWire = z.infer<typeof CredentialDraftWireSchema>;
+
 /** One announced Operation, as the gate described it (a subset of `OperationSchema`). */
 export const GateOperationSummaryWireSchema = z
   .object({
@@ -872,6 +885,9 @@ export const EnableGateInstanceResultWireSchema = z
     /** S11 「门确认不存在」 B-a: imported drafts left unpublished because they declare answers that
      *  mean "does not exist" (`publish_operation` with the confirmation publishes each). */
     absentAnswerDrafts: z.array(AbsentAnswerDraftWireSchema),
+    /** Legacy 198: imported drafts left unpublished because their definitions carry suspected
+     *  credential values (`publish_operation` with `credentialsReviewed` publishes each). */
+    credentialDrafts: z.array(CredentialDraftWireSchema),
     /** S8 W2-K2: `true` only when this call linked a pre-existing Gatekeeper (found by endpoint,
      *  §"association key") instead of registering a new one — including the idempotent-relink
      *  case. `false` for a fresh registration, and for the pre-existing-`workspace_gate_links`-row
@@ -908,6 +924,10 @@ export const GateInstanceEnablePreviewOperationWireSchema = z
      *  exist". Present only when it declares some: enabling leaves this Operation an unpublished
      *  draft, listed in `absentAnswerDrafts`, for a person to publish confirming them. */
     absentAnswers: OperationAbsentAnswersWireSchema.optional(),
+    /** Legacy 198: how many suspected credential values the announced definition carries. Present
+     *  only when it carries some: enabling (or a bulk publish) leaves this Operation an unpublished
+     *  draft, listed in `credentialDrafts`, for a person to publish confirming them. */
+    suspectedSecretValues: z.number().int().positive().optional(),
     /** Present when this workspace already holds an unpublished draft of this Operation for the
      *  linked Gatekeeper — e.g. one a bulk publish held back for a gate-owned param. `rewritable`
      *  is `true` when `refresh_operation_governance` would rewrite it to the announced entry: it is
