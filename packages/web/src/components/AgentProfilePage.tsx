@@ -143,6 +143,10 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   function handleSaved(saved: AgentProfile): void {
     invalidateCapability(http, 'get_agent_profile');
     profile.mutate((previous) => keepGateHealth(saved, previous));
+    // #1394 review P3-1: a read still in flight (a remount shows the cached profile while it
+    // reloads, and this read waits on the gates' probes) started before the save and would land
+    // the profile from before it. Read again, so the newest read is one made after the save.
+    if (profile.state.status === 'ready' && profile.state.refreshing) void profile.reload();
     toast.push({ tone: 'ok', title: t('已保存', 'Saved') });
   }
 

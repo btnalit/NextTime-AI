@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
@@ -464,6 +464,46 @@ describe('AgentProfilePage', () => {
     expect(screen.getByTestId('agent-profile-effective-health-gk-self').textContent).toBe('不可达');
   });
 
+  it('#1394 review P3-1: a save made while a reload is still in flight is not undone when that read lands', async () => {
+    const before = profile();
+    const after = profile({
+      effective: { ...profile().effective, promptAddendum: 'saved addendum' },
+    });
+    let saved = false;
+    let releaseStale: () => void = () => {};
+    let reads = 0;
+    const http = scriptedHttp({
+      get_agent_profile: () => {
+        reads += 1;
+        // The read the remount starts is slow (it waits on the gates' probes) and began before
+        // the save, so it answers with the profile from before it.
+        if (reads === 2) {
+          return new Promise((resolve) => {
+            releaseStale = () => resolve(before);
+          });
+        }
+        return saved ? after : before;
+      },
+      set_agent_profile: () => {
+        saved = true;
+        return after;
+      },
+    });
+    const first = renderPage(http);
+    await screen.findByTestId('agent-profile-form');
+    first.unmount();
+
+    renderPage(http);
+    const form = await screen.findByTestId('agent-profile-form');
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await within(screen.getByTestId('agent-profile-effective')).findByText(/saved addendum/);
+
+    await act(async () => releaseStale());
+    await waitFor(() => expect(reads).toBe(3));
+    await within(screen.getByTestId('agent-profile-effective')).findByText(/saved addendum/);
+  });
+
   it('with no system granted, the systems field says who has to grant one instead of an empty checklist', async () => {
     const http = scriptedHttp({ get_agent_profile: () => profile() });
     renderPage(http);
@@ -608,5 +648,13 @@ describe('AgentProfilePage', () => {
         ),
       ).toBe(true),
     );
+    // #1394 review P3-2: another member's agent is read with its gates' health too.
+    expect(
+      http.calls.find(
+        (c) =>
+          c.name === 'get_agent_profile' &&
+          (c.params as { principalId?: string })?.principalId === 'p-2',
+      )?.params,
+    ).toEqual({ principalId: 'p-2', includeGateHealth: true });
   });
 });
