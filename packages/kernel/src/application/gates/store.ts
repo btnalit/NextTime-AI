@@ -1201,6 +1201,24 @@ export async function readGatekeeperPlatformPolicies(
   return byGatekeeperId;
 }
 
+/** Legacy 200 (kernel half): the stored health of the platform-catalog instance behind each
+ *  Gatekeeper of the workspace that was enabled from the catalog (`workspace_gate_links`), keyed by
+ *  `gatekeeper_object_id` — what the gate's own announcements keep (`list_available_gate_instances`
+ *  shows the same value). A Gatekeeper the workspace connected itself has no row. */
+export async function readCatalogGateHealths(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, GateHealth>> {
+  const result = await client.query<{ gatekeeper_object_id: string; health: GateHealth }>(
+    `select l.gatekeeper_object_id, g.health
+       from workspace_gate_links l
+       join gate_instances g on g.gate_id = l.gate_id
+      where l.workspace_id = $1`,
+    [workspaceId],
+  );
+  return new Map(result.rows.map((row) => [row.gatekeeper_object_id, row.health]));
+}
+
 /** The trust the approval decision reads (MCP `vetted` auto-approval): only a catalog instance's —
  *  a gate the workspace connected itself is always `byo`. */
 export function platformTrustOf(policy: GatekeeperPlatformPolicy | null | undefined): GateTrust {

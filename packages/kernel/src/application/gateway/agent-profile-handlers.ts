@@ -21,16 +21,19 @@ import {
   revokeEntrySessionHandles,
   revokeWorkspaceEntrySessionHandles,
 } from '../../governance/capability/index.js';
-import { listGatekeepers } from '../../governance/gatekeepers/index.js';
-import type { ObserveExclusions } from '../gates/index.js';
+import { getGatekeeper, listGatekeepers } from '../../governance/gatekeepers/index.js';
+import type { GateHealth, ObserveExclusions } from '../gates/index.js';
 import {
   observableGatekeeperIds,
   observeExclusionsOf,
   observeGateExclusion,
+  readCatalogGateHealths,
 } from '../gates/index.js';
 import { listPublishedSkillIds, listWorkerDefinitions } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { type ResolvedGateTarget, resolveGateTarget } from './gate-target.js';
+import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
 import { PrincipalNotFoundError } from './members-handlers.js';
 import { readModelCatalog } from './models-catalog-handler.js';
 
@@ -175,6 +178,74 @@ interface AvailableGatekeeper {
   readonly gatekeeperId: string;
   readonly granted: boolean;
   readonly inUse: boolean;
+  /** Legacy 200: on `get_agent_profile` with `includeGateHealth` only (`planOfferedGateHealths`). */
+  readonly health?: GateHealth;
+}
+
+/** Legacy 200: the gates `planOfferedGateHealths` found to probe, each with the target and
+ *  credential every call to it uses — probed by `probeOfferedGateHealths` once the read's
+ *  transaction has ended. */
+type GateHealthProbes = readonly {
+  readonly gatekeeperId: string;
+  readonly target: ResolvedGateTarget;
+}[];
+
+/**
+ * Legacy 200 (kernel half): how each gate My Agent offers stands, for `get_agent_profile` with
+ * `includeGateHealth` — the system list showed a self-connected gate with no status at all. Two
+ * sources (`AvailableGatekeeperWire.health`):
+ *   - a gate the workspace enabled from the platform catalog: its instance's stored health
+ *     (`readCatalogGateHealths`, kept by the gate's own announcements) — `stored`, no call to
+ *     the gate;
+ *   - any other: the gate's own `/gate/health`, probed as `get_gatekeeper` probes it, through the
+ *     credential every call to that gate uses (`resolveGateTarget`) — `probes`, run by
+ *     `probeOfferedGateHealths` after the transaction (review of #1389: a probe can wait 3 s, and
+ *     must not hold a pooled connection and an open transaction meanwhile).
+ * Only reads the database; the gates are not called here.
+ */
+async function planOfferedGateHealths(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperIds: readonly string[],
+): Promise<{
+  readonly stored: ReadonlyMap<string, GateHealth>;
+  readonly probes: GateHealthProbes;
+}> {
+  const stored = await readCatalogGateHealths(client, workspaceId);
+  const probes: { readonly gatekeeperId: string; readonly target: ResolvedGateTarget }[] = [];
+  for (const gatekeeperId of gatekeeperIds) {
+    if (stored.has(gatekeeperId)) continue;
+    const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
+    if (!gatekeeper) continue;
+    probes.push({ gatekeeperId, target: await resolveGateTarget(client, workspaceId, gatekeeper) });
+  }
+  return { stored, probes };
+}
+
+/** Legacy 200: `planOfferedGateHealths`' probes, all at once (`probeGatekeeperHealth`: 3 s
+ *  timeout, never throws), so a read waits at most as long as its slowest gate. A probe asks
+ *  whether the gate is up and never runs an Operation. */
+async function probeOfferedGateHealths(
+  probes: GateHealthProbes,
+): Promise<ReadonlyMap<string, GateHealth>> {
+  const probed = await Promise.all(
+    probes.map(
+      async ({ gatekeeperId, target }) =>
+        [gatekeeperId, await probeGatekeeperHealth(target)] as const,
+    ),
+  );
+  return new Map<string, GateHealth>(probed);
+}
+
+/** `rows` with each listed gate's `health` set; a gate `healths` does not name is left as is. */
+function withGateHealths(
+  rows: readonly AvailableGatekeeper[],
+  healths: ReadonlyMap<string, GateHealth>,
+): AvailableGatekeeper[] {
+  return rows.map((row) => {
+    const health = healths.get(row.gatekeeperId);
+    return health !== undefined ? { ...row, health } : row;
+  });
 }
 
 /**
@@ -190,6 +261,7 @@ interface AvailableGatekeeper {
  * `resources.gatekeeper` is minted from (`ensureEntryHandle`) — is still granted ∩ not excluded;
  * an ungranted gate listed here never becomes execute authority. Listed in `listGatekeepers`
  * order (registration time); a Grant naming a gate no longer registered is not offered.
+ * No row carries `health` (legacy 200): `get_agent_profile` adds it when asked.
  */
 async function resolveAvailableGatekeepers(
   client: PoolClient,
@@ -204,13 +276,14 @@ async function resolveAvailableGatekeepers(
     gates.map((gate) => gate.gatekeeperId),
   );
   const granted = new Set(available.grantedGatekeeperIds);
-  return gates
-    .filter((gate) => granted.has(gate.gatekeeperId) || observable.has(gate.gatekeeperId))
-    .map((gate) => ({
-      gatekeeperId: gate.gatekeeperId,
-      granted: granted.has(gate.gatekeeperId),
-      inUse: observeGateExclusion(exclusions, gate.gatekeeperId) === undefined,
-    }));
+  const offered = gates.filter(
+    (gate) => granted.has(gate.gatekeeperId) || observable.has(gate.gatekeeperId),
+  );
+  return offered.map((gate) => ({
+    gatekeeperId: gate.gatekeeperId,
+    granted: granted.has(gate.gatekeeperId),
+    inUse: observeGateExclusion(exclusions, gate.gatekeeperId) === undefined,
+  }));
 }
 
 function toWireAgentProfile(
@@ -260,7 +333,8 @@ function toWireAgentPolicy(policy: AgentPolicyRow) {
 // Capability handlers
 // -------------------------------------------------------------------------------------------
 
-const GetAgentProfileParams = (params: unknown) => params as { principalId?: string };
+const GetAgentProfileParams = (params: unknown) =>
+  params as { principalId?: string; includeGateHealth?: boolean };
 
 export const getAgentProfileHandler: CapabilityHandler = async (
   client,
@@ -273,7 +347,7 @@ export const getAgentProfileHandler: CapabilityHandler = async (
       'get_agent_profile: no resolved human principal in context (this capability is channel:"human"-only)',
     );
   }
-  const { principalId } = GetAgentProfileParams(rawParams);
+  const { principalId, includeGateHealth } = GetAgentProfileParams(rawParams);
   const target = principalId ?? ctx.principal.id;
 
   if (target !== ctx.principal.id && ctx.principal.role !== 'owner') {
@@ -293,11 +367,37 @@ export const getAgentProfileHandler: CapabilityHandler = async (
     available,
     observeExclusionsOf(profile, policy),
   );
+  const done = { resourceType: 'agent_profile', resourceId: target } as const;
+  if (includeGateHealth !== true) {
+    return {
+      ...done,
+      result: toWireAgentProfile(target, profile, effective, availableGatekeepers),
+    };
+  }
 
+  // Legacy 200: stored healths now; live probes only after this transaction has committed.
+  const { stored, probes } = await planOfferedGateHealths(
+    client,
+    workspaceId,
+    availableGatekeepers.map((gate) => gate.gatekeeperId),
+  );
+  const result = toWireAgentProfile(
+    target,
+    profile,
+    effective,
+    withGateHealths(availableGatekeepers, stored),
+  );
+  if (probes.length === 0) return { ...done, result };
   return {
-    result: toWireAgentProfile(target, profile, effective, availableGatekeepers),
-    resourceType: 'agent_profile',
-    resourceId: target,
+    ...done,
+    result,
+    afterCommit: async () => ({
+      ...result,
+      availableGatekeepers: withGateHealths(
+        result.availableGatekeepers,
+        await probeOfferedGateHealths(probes),
+      ),
+    }),
   };
 };
 

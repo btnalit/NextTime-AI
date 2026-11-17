@@ -43,6 +43,7 @@ export {
   operationsOf,
   pendingManifestOf,
   platformTrustOf,
+  readCatalogGateHealths,
   readConnectorMode,
   readDisabledOperations,
   readGatekeeperPlatformPolicies,
