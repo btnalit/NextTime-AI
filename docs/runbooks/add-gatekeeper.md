@@ -335,9 +335,11 @@ Operation，后面的 Operation 就可能落到上限，定义随之变化（已
 `additionalProperties: false` 时，放进 `allOf` 后这一处只收 `{}`；写在请求体顶层则读不出请求体。处置是
 把它写进被引用的 schema，或者手写这个 Operation 的 `params_schema`。OpenAPI 3.0 的 `nullable: true`
 写在 `$ref` 旁边时，目标有 `type` 就让这一处可以为 null，没有 `type` 就忽略（ajv 不接受没有 `type` 的
-`nullable`）。门按 JSON Schema draft-07 校验参数：`unevaluated*`、`dependentRequired`、
-`dependentSchemas`、`prefixItems`、`minContains`/`maxContains`、`discriminator` 会留在 schema 里，
-但门不校验它们。请求体顶层是组合
+`nullable`）。门按 schema 自己的 JSON Schema 版本校验参数（遗留 803）：`$schema` 写的是 2020-12 或
+2019-09，或者没写 `$schema` 但用了只有这两版才有含义的关键字（`unevaluated*`、`dependentRequired`、
+`dependentSchemas`、`prefixItems`、`minContains`/`maxContains`），就按那一版校验，这些关键字生效；
+否则照旧按 draft-07（数组形式的 `items` 照常可用）。`discriminator` 会留在 schema 里，但门不校验它。
+请求体顶层是组合
 （`allOf`、`anyOf`、`oneOf`、`not`，包括上面兄弟关键字产生的 `allOf`）或者只是引用自己时读不出来：
 这个 Operation 只收参数。不是 JSON 对象的请求体也一样读不出来：调用时把剩下的参数作为一个 JSON 对象、
 用 `content-type: application/json` 发出去，所以其他媒体类型（`multipart/…`、`application/merge-patch+json`
