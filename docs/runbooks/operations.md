@@ -482,7 +482,7 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
   的用量：0 token、0 费用，`refusal_scope` 是 `workspace_daily_tokens` 或 `workspace_daily_cost`，带
   `requestId` 和请求的模型（migrations/llm-usage/0003）。它立刻把记录送给内核，等内核收下（最多 5 s）
   才回 402。模型不在白名单的 403 照旧不计量。
-- **判定「只被拒」**：至少一条 `refused`，且没有一条 `completed`；`error` 两边都不算。Worker 按它自己的会话
+- **判定「只被拒」**：至少一条 `refused`，且没有一条 `completed`；`error` 和 `client_closed`（遗留 161，见下）两边都不算。Worker 按它自己的会话
   判；入口 Turn 只看这个 Turn 自己的调用，而且只看入口会话的（Worker 替同一个人干活，它的调用也挂在这个
   Turn 上，不算）。命中后：
   - Worker Task：`report_task_result` 时 Task 失败 `model_refused`（平台失败），WorkerRun 终止、Handle 撤销，
@@ -505,6 +505,19 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
   UTC 0 点，而且客户端自己重试了）。回答的那条用量按批量送达，通常晚不到 2 s，内核暂时收不下时按退避最多晚 60 s；如果 Worker 恰好在这段时间里上报，
   内核会看到「只有被拒」，把它判成 `model_refused`，丢掉真实结果。这个窗口有意不补；真要补，就让被拒过的
   会话之后的回答也像拒绝一样先送达再回。
+
+**遗留 161（慢客户端与中途断开）**：llm-proxy 按客户端取走的速度转发回答，客户端没取走上一块之前不读上游的下一块，
+所以客户端读得慢时回答不会堆在 llm-proxy 进程里。
+- **中途断开**：客户端在回答没收完时断开（包括 Worker 被终止），llm-proxy 不再往它写，但**不中止上游**：照样把
+  上游的回答读完（丢弃），按供应商给的完整用量记一条 `llm_usage.status = 'client_closed'`，打一行 info
+  `client went away before the whole answer reached it`。不中止是有意的：OpenAI 那两种接口的用量只在最后一个事件
+  里给，中止后这次调用会记成 0；客户端也可以故意在快读完时断开，让日预算拦不住。代价是供应商会把没人读的回答
+  生成完，上限和以前一样，是请求自己的 `max_tokens` 和空闲超时。
+- **长时间不读**：客户端连着但 `UPSTREAM_IDLE_TIMEOUT_MS`（缺省 300 s）内一点都没取走，llm-proxy 断开它，按上面
+  的中途断开处理，打一行 warn `client took nothing of the answer for the idle timeout; cutting it off`。等客户端的
+  这段时间不算上游空闲。
+- **统计**：`client_closed` 行和 `completed` 一样计入预算、Task 的 token 数、试跑费用、平台「运行状态」的调用次数和
+  `scripts/report-usage.sh` 的 `calls`；只是不算「模型回答过」。上游自己出错时记 `error`，不管客户端还在不在。
 
 | 现象 | 原因 | 处理 |
 |---|---|---|

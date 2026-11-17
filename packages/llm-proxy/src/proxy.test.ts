@@ -2019,3 +2019,241 @@ describe('createProxyServer — upstream error bodies (review of #549, B5)', () 
     expect(JSON.parse(text).error.type).toBe('upstream_error');
   });
 });
+
+// -------------------------------------------------------------------------------------------
+// Legacy 161: a slow client gets backpressure, a departed one is not forwarded to — and the
+// upstream answer is still read to its end and metered in full (`client_closed`), never aborted.
+// -------------------------------------------------------------------------------------------
+
+describe('createProxyServer — slow and departed clients (legacy 161)', () => {
+  const USAGE_FRAME =
+    'data: {"id":"c1","choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":900}}\n\n';
+  /** One OpenAI streaming chunk carrying `size` characters of content. */
+  const contentFrame = (size: number): string =>
+    `data: ${JSON.stringify({ id: 'c1', choices: [{ delta: { content: 'x'.repeat(size) } }] })}\n\n`;
+  /** 64 KiB of content — one string, shared by every frame that repeats it. */
+  const BIG_FRAME = contentFrame(64 * 1024);
+
+  interface StreamingUpstream {
+    readonly port: number;
+    /** Bytes of the answer the upstream has handed to its socket so far. */
+    bytesSent(): number;
+    /** The upstream wrote its whole answer and ended it. */
+    finished(): boolean;
+    /** The connection closed before the upstream ended its answer (the proxy aborted it). */
+    cutShort(): boolean;
+  }
+
+  /** An OpenAI-shaped upstream streaming `frames` with its own backpressure honoured — after
+   *  `holdAfter` frames it waits for `release` before sending the rest. */
+  async function startStreamingUpstream(
+    frames: readonly string[],
+    hold: { readonly after: number; readonly release: Promise<void> } | undefined = undefined,
+  ): Promise<StreamingUpstream> {
+    let sent = 0;
+    let ended = false;
+    let closedEarly = false;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      res.on('finish', () => {
+        ended = true;
+      });
+      res.on('close', () => {
+        if (!res.writableFinished) closedEarly = true;
+      });
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      void (async () => {
+        for (const [index, frame] of frames.entries()) {
+          if (hold && index === hold.after) await hold.release;
+          if (res.destroyed) return;
+          sent += Buffer.byteLength(frame);
+          if (!res.write(frame)) {
+            await new Promise<void>((resolve) => {
+              res.once('drain', resolve);
+              res.once('close', resolve);
+            });
+          }
+        }
+        res.end();
+      })();
+    });
+    const port = await listen(server);
+    cleanup.push(() => closeServer(server));
+    return { port, bytesSent: () => sent, finished: () => ended, cutShort: () => closedEarly };
+  }
+
+  async function startProxy(
+    upstreamPort: number,
+    idleTimeoutMs: number,
+  ): Promise<{
+    port: number;
+    records: LlmUsageRecord[];
+    logs: string[];
+    privateKey: CryptoKey;
+    /** The proxy's server-side end of each client connection, closed or not. */
+    clientSockets: { closed: boolean }[];
+  }> {
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const records: LlmUsageRecord[] = [];
+    const logs: string[] = [];
+    const proxy = createProxyServer({
+      providers: {
+        openai: {
+          ...openAiProvider(upstreamPort),
+          models: [
+            { id: 'gpt-example', cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 } },
+          ],
+        },
+      },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: (r) => records.push(r) },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: idleTimeoutMs,
+      resolveApiKey,
+      log: (line) => logs.push(line),
+    });
+    const clientSockets: { closed: boolean }[] = [];
+    proxy.on('connection', (socket) => {
+      const entry = { closed: false };
+      clientSockets.push(entry);
+      socket.on('close', () => {
+        entry.closed = true;
+      });
+    });
+    const port = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    return { port, records, logs, privateKey, clientSockets };
+  }
+
+  /** Starts a streaming call and resolves once the response headers are in — its body is left
+   *  unread (paused) for the test to take, or not. */
+  async function openStream(
+    port: number,
+    privateKey: CryptoKey,
+  ): Promise<{ req: http.ClientRequest; res: http.IncomingMessage }> {
+    const token = await signHandle(privateKey);
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: '/openai/v1/chat/completions',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        },
+        (res) => {
+          res.pause();
+          resolve({ req, res });
+        },
+      );
+      req.on('error', reject);
+      req.end(JSON.stringify({ model: 'gpt-example', stream: true }));
+    });
+  }
+
+  const FULL_USAGE = {
+    status: 'client_closed',
+    inputTokens: 1200,
+    outputTokens: 900,
+    // 1200 × $2/M + 900 × $8/M — the provider's whole answer, not the part the client saw.
+    costUsd: (1200 * 2 + 900 * 8) / 1_000_000,
+  };
+
+  it('a slow client is waited for: the upstream is read only as fast as the client takes the answer, and the whole answer still arrives', async () => {
+    // 64 MiB of answer: several times every socket buffer between the upstream and the client
+    // (loopback buffers grow to a few MiB each).
+    const frames = [...Array.from({ length: 1024 }, () => BIG_FRAME), USAGE_FRAME];
+    const total = frames.reduce((sum, frame) => sum + Buffer.byteLength(frame), 0);
+    const upstream = await startStreamingUpstream(frames);
+    const proxy = await startProxy(upstream.port, 5000);
+
+    const { res } = await openStream(proxy.port, proxy.privateKey);
+    // The client takes nothing for a while; the proxy must stop pulling from the upstream.
+    let settled = -1;
+    await waitUntil(
+      () => {
+        const now = upstream.bytesSent();
+        const steady = now === settled;
+        settled = now;
+        return steady && now > 0;
+      },
+      5000,
+      200,
+    );
+    expect(upstream.bytesSent()).toBeLessThan(total / 2);
+    expect(upstream.finished()).toBe(false);
+
+    const body = await new Promise<Buffer>((resolve) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.resume();
+    });
+    expect(body.byteLength).toBe(total);
+    expect(body.toString('utf8').endsWith(USAGE_FRAME)).toBe(true);
+    await waitUntil(() => proxy.records.length === 1);
+    expect(proxy.records[0]).toMatchObject({ ...FULL_USAGE, status: 'completed' });
+    expect(upstream.cutShort()).toBe(false);
+  }, 30_000);
+
+  it('OpenAI streaming: a client that disconnects mid-answer is not forwarded to, the upstream is read to its end, and input and output are metered in full as client_closed', async () => {
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const frames = [
+      contentFrame(16),
+      contentFrame(16),
+      contentFrame(16),
+      USAGE_FRAME,
+      'data: [DONE]\n\n',
+    ];
+    const upstream = await startStreamingUpstream(frames, { after: 1, release: released });
+    const proxy = await startProxy(upstream.port, 5000);
+
+    const { req, res } = await openStream(proxy.port, proxy.privateKey);
+    const first = await new Promise<Buffer>((resolve) => {
+      res.once('data', resolve);
+      res.resume();
+    });
+    expect(first.toString('utf8')).toBe(frames[0]);
+    req.destroy();
+    // The proxy has seen the client go before the upstream sends the rest, usage included.
+    await waitUntil(
+      () => proxy.clientSockets.length === 1 && proxy.clientSockets[0]?.closed === true,
+    );
+    release();
+
+    await waitUntil(() => proxy.records.length === 1);
+    expect(proxy.records[0]).toMatchObject(FULL_USAGE);
+    expect(upstream.finished()).toBe(true);
+    expect(upstream.cutShort()).toBe(false);
+    expect(
+      proxy.logs.some(
+        (line) => line.includes('"level":"info"') && line.includes('read to its end'),
+      ),
+    ).toBe(true);
+  });
+
+  it('a client that takes nothing for the idle timeout is cut off; the upstream answer is still read to its end and metered in full', async () => {
+    const frames = [...Array.from({ length: 256 }, () => BIG_FRAME), USAGE_FRAME];
+    const upstream = await startStreamingUpstream(frames);
+    // Short idle timeout: the upstream's own idle clock would fire too if it were not paused while
+    // the proxy waits for the client.
+    const proxy = await startProxy(upstream.port, 300);
+
+    const { res } = await openStream(proxy.port, proxy.privateKey);
+    res.on('error', () => {});
+
+    // The proxy closes its end of the client connection…
+    await waitUntil(() => proxy.clientSockets[0]?.closed === true, 10_000);
+    // …and still meters the whole answer.
+    await waitUntil(() => proxy.records.length === 1, 10_000);
+    expect(proxy.records[0]).toMatchObject(FULL_USAGE);
+    expect(upstream.finished()).toBe(true);
+    expect(upstream.cutShort()).toBe(false);
+    expect(proxy.logs.some((line) => line.includes('cutting it off'))).toBe(true);
+  }, 30_000);
+});

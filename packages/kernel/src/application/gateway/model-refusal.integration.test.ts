@@ -379,6 +379,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await readState(taskId, workerRunId, claims.jti)).task?.status).toBe('completed');
     });
 
+    it('a call whose client left before the whole answer (client_closed, legacy 161) is metered but is no answer: with a refusal the Task still fails model_refused', async () => {
+      const { taskId, workerRunId, claims } = await spawnWorkerRun();
+      await ingest([
+        usage(claims, {
+          status: 'client_closed',
+          refusalScope: undefined,
+          inputTokens: 100,
+          outputTokens: 20,
+        }),
+        usage(claims, {}),
+      ]);
+      expect((await reportSynthesized(claims)).status).toBe('failed');
+      const state = await readState(taskId, workerRunId, claims.jti);
+      expect(state.task).toMatchObject({ status: 'failed', failure_reason: 'model_refused' });
+      // The provider answered it in full: its tokens count toward the Task like any answered call.
+      expect(Number(state.task?.tokens_used)).toBe(120);
+    });
+
     it('a refusal record that arrives after the report (llm-proxy delivery timeout) leaves the ended Task as it is', async () => {
       const { taskId, workerRunId, claims } = await spawnWorkerRun();
       // The report beats the record: judged as before the fix — the Task completes.
