@@ -1,6 +1,6 @@
 import type { OutputSchema } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
-import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
+import { byData, firstProblem, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { useFormDraft } from '../../hooks/useFormDraft.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -265,11 +265,9 @@ export function ProcedureEditor({
     if (!validated.ok || entryStep !== -1 || blocked) {
       setErrors({ ...(validated.ok ? {} : validated.errors), ...fieldProblems });
       setView('form');
-      if (entryStep !== -1) {
-        focusAfterRender(() =>
-          formRef.current?.querySelector<HTMLElement>(`[id="steps.${entryStep}-definition"]`),
-        );
-      }
+      // Legacy 776: focus (and so the view) moves to the first problem said, not left on 保存
+      // with the field it is about out of sight. Legacy 485's entry step is one of them.
+      focusAfterRender(() => firstProblem(formRef.current));
       return;
     }
     setErrors({});
