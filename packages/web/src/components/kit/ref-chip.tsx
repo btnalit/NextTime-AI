@@ -31,7 +31,9 @@ import { unnamedDefinitionLabel } from '../../lib/tasks.js';
 const KIND_LABEL: Readonly<Record<ResolvedRefKind, { readonly zh: string; readonly en: string }>> =
   {
     object: { zh: '对象', en: 'Object' },
-    principal: { zh: '成员', en: 'Member' },
+    // Legacy 615: 「成员」 read as a role (an owner showed 「成员 Administrator」); a Principal of
+    // unknown kind is an account — a person, an agent or a service.
+    principal: { zh: '账号', en: 'Account' },
     gatekeeper: { zh: '门', en: 'Gatekeeper' },
     operation: { zh: '操作', en: 'Operation' },
     workerDefinition: { zh: 'Worker', en: 'Worker definition' },
@@ -46,7 +48,9 @@ const KIND_LABEL: Readonly<Record<ResolvedRefKind, { readonly zh: string; readon
  *  same way. An unknown or missing kind keeps the generic label. */
 const PRINCIPAL_KIND_LABEL: Readonly<Record<string, { readonly zh: string; readonly en: string }>> =
   {
-    human: { zh: '成员', en: 'Member' },
+    // Legacy 615: a person reads 「账号」 like a Principal of unknown kind, so one person reads
+    // the same on every page (most pages hold a name, not a kind).
+    human: { zh: '账号', en: 'Account' },
     agent: { zh: '智能体', en: 'Agent' },
     service: { zh: '服务', en: 'Service' },
   };
@@ -189,7 +193,9 @@ function CopyIdButton({ id, label }: { readonly id: string; readonly label: stri
         void copy();
       }}
       // Legacy 427: read out in the interface language.
-      aria-label={copied ? t('已复制', 'Copied') : t(`复制${label} id`, `Copy ${label} id`)}
+      aria-label={
+        copied ? t('已复制', 'Copied') : t(`复制${label} id`, `Copy ${label.toLowerCase()} id`)
+      }
       title={id}
     >
       {copied ? (
