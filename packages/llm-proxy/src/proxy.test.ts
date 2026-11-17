@@ -7,7 +7,12 @@ import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderConfig } from './config.js';
 import { createLlmProxyMetrics } from './metrics.js';
-import { bodyDecodedByFetch, createProxyServer } from './proxy.js';
+import {
+  bodyDecodedByFetch,
+  createProxyServer,
+  fetchDecodedCodings,
+  fetchDecodesZstd,
+} from './proxy.js';
 import { LlmUsageReporter } from './report.js';
 import type { LlmUsageRecord } from './report.js';
 
@@ -2156,14 +2161,70 @@ describe('createProxyServer — a compressed answer the upstream sent anyway (le
   });
 
   it('bodyDecodedByFetch follows fetch: every coding known, or none decoded', () => {
-    for (const decoded of ['gzip', 'x-gzip', 'deflate', 'br', ' GZIP ', 'gzip, br', 'gzip,gzip']) {
-      expect(bodyDecodedByFetch(decoded), decoded).toBe(true);
-    }
-    // `zstd` is decoded by some runtimes' fetch and not others, so it is never assumed decoded.
-    for (const asSent of [null, '', 'identity', 'gzip, identity', 'gzip,', 'zstd', 'x-custom']) {
-      expect(bodyDecodedByFetch(asSent), String(asSent)).toBe(false);
+    for (const zstd of [false, true]) {
+      const codings = fetchDecodedCodings(zstd);
+      for (const decoded of [
+        'gzip',
+        'x-gzip',
+        'deflate',
+        'br',
+        ' GZIP ',
+        'gzip, br',
+        'gzip,gzip',
+      ]) {
+        expect(bodyDecodedByFetch(decoded, codings), decoded).toBe(true);
+      }
+      for (const asSent of [null, '', 'identity', 'gzip, identity', 'gzip,', 'x-custom']) {
+        expect(bodyDecodedByFetch(asSent, codings), String(asSent)).toBe(false);
+      }
+      expect(bodyDecodedByFetch('zstd', codings)).toBe(zstd);
+      expect(bodyDecodedByFetch('gzip, ZSTD', codings)).toBe(zstd);
     }
   });
+
+  it('fetchDecodesZstd is undici’s own condition: 7.11.0 or later, with a zlib zstd decoder', () => {
+    const cases: Array<[string | undefined, boolean, boolean]> = [
+      ['6.29.1', true, false],
+      ['7.10.0', true, false],
+      ['7.11.0', true, true],
+      ['7.30.2', true, true],
+      ['8.0.0', true, true],
+      ['7.11.0', false, false],
+      ['8.0.0', false, false],
+      [undefined, true, false],
+      ['', true, false],
+      ['seven', true, false],
+      ['7', true, false],
+    ];
+    for (const [version, zlibHasZstd, decodes] of cases) {
+      expect(fetchDecodesZstd(version, zlibHasZstd), `${version} ${zlibHasZstd}`).toBe(decodes);
+    }
+  });
+
+  it.each([
+    ['zstd', (b: Buffer) => zlib.zstdCompressSync(b)],
+    ['gzip, zstd', (b: Buffer) => zlib.zstdCompressSync(zlib.gzipSync(b))],
+  ])(
+    'a %s answer reaches the client labelled as it is, whatever this runtime’s fetch decodes',
+    async (coding, encode) => {
+      const { port } = await proxyToCompressing(JSON_ANSWER, 'application/json', coding, encode);
+      const res = await callCompressing(port, false);
+      expect(res.status).toBe(200);
+      // A client that decodes by the label it gets reads the original answer…
+      let body = res.body;
+      const label = res.headers['content-encoding'];
+      for (const applied of (label ?? '').split(',').reverse()) {
+        const name = applied.trim().toLowerCase();
+        if (name === 'zstd') body = zlib.zstdDecompressSync(body);
+        else if (name === 'gzip') body = zlib.gunzipSync(body);
+      }
+      expect(body.toString('utf8')).toBe(JSON_ANSWER);
+      // …and a length, when there is one, counts the bytes it got.
+      const length = res.headers['content-length'];
+      if (length !== undefined) expect(Number(length)).toBe(res.body.byteLength);
+      expect(label === undefined).toBe(bodyDecodedByFetch(coding));
+    },
+  );
 
   it('an uncompressed answer keeps its content-length', async () => {
     const { port } = await proxyToCompressing(
