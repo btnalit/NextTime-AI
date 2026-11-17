@@ -191,7 +191,8 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   operation: { zh: 'Operation', en: 'Operation' },
   plan_revision: { zh: '目标计划版本', en: 'Goal plan revision' },
   policy: { zh: '审批策略', en: 'Approval policy' },
-  principal: { zh: '成员', en: 'Member' },
+  // Legacy 615: a Principal is an account (person, agent or service); 「成员」 reads as the role.
+  principal: { zh: '账号', en: 'Account' },
   procedure: { zh: '流程', en: 'Procedure' },
   quota: { zh: '配额', en: 'Quota' },
   session: { zh: '会话', en: 'Session' },

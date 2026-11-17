@@ -29,7 +29,7 @@ describe('kit/RefChip', () => {
     const http = scriptedCaller(() => []);
     render(<RefChip kind="principal" id="p-1" name="Ada" http={http} testId="chip" />);
     expect(screen.getByText('Ada')).toBeTruthy();
-    expect(screen.getByText('成员')).toBeTruthy();
+    expect(screen.getByText('账号')).toBeTruthy();
     expect(http.call).not.toHaveBeenCalled();
   });
 
@@ -137,9 +137,24 @@ describe('kit/RefChip', () => {
     );
     expect(screen.getByTestId('agent').textContent).toMatch(/^智能体entry/);
     expect(screen.getByTestId('agent').textContent).not.toContain('(agent)');
-    expect(screen.getByTestId('human').textContent).toMatch(/^成员Ada/);
-    expect(screen.getByTestId('unknown').textContent).toMatch(/^成员New/);
+    expect(screen.getByTestId('human').textContent).toMatch(/^用户Ada/);
+    expect(screen.getByTestId('unknown').textContent).toMatch(/^账号New/);
     expect(screen.getByRole('button', { name: /^复制智能体 id$/ })).toBeTruthy();
+  });
+
+  // Legacy 615: 「成员」 read as a role (「成员 Administrator」 on an owner); a person reads as a user,
+  // a Principal of unknown kind as an account.
+  it('never labels a Principal with the member role word', () => {
+    render(
+      <>
+        <RefChip kind="principal" id="p-owner" name="Administrator" typeName="human" testId="h" />
+        <RefChip kind="principal" id="p-any" name="Administrator" testId="any" />
+      </>,
+    );
+    expect(screen.getByTestId('h').textContent).toMatch(/^用户Administrator/);
+    expect(screen.getByTestId('any').textContent).toMatch(/^账号Administrator/);
+    expect(screen.getByTestId('h').textContent).not.toContain('成员');
+    expect(screen.getByTestId('any').textContent).not.toContain('成员');
   });
 
   it('an internal service Principal reads by what it is, given or self-resolved, never by its __…__ name (#822 UX P2-1)', async () => {

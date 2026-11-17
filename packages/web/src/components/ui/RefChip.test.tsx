@@ -23,10 +23,10 @@ describe('RefChip', () => {
     expect(screen.getByRole('link', { name: 'Ada Lovelace' }).getAttribute('href')).toBe(
       '#/govern/members',
     );
-    expect(container.querySelector('.ref-chip-kind')?.textContent).toBe('成员');
+    expect(container.querySelector('.ref-chip-kind')?.textContent).toBe('账号');
     // CopyId: the 8-character short form and a copy button naming the kind.
     expect(container.querySelector('.copy-id-text')?.textContent).toBe('0f2c6e1a');
-    expect(screen.getByRole('button', { name: /^复制成员 id$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^复制账号 id$/ })).toBeTruthy();
   });
 
   it('names an internal service Principal by what it is, never by its __…__ name (#822 UX P2-1)', () => {
