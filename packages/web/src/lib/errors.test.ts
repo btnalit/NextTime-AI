@@ -4,6 +4,7 @@ import {
   CODE_TITLES,
   CODE_TITLES_ZH,
   callRefusalReasonText,
+  carriesGateReason,
   describeError,
   errorMessage,
   isForbiddenError,
@@ -162,5 +163,65 @@ describe('callRefusalReasonText', () => {
     ).toBe(CALL_REFUSAL_REASONS.length);
     expect(callRefusalReasonText('somebody', zh)).toBeNull();
     expect(callRefusalReasonText('toString', zh)).toBeNull();
+  });
+});
+
+describe('carriesGateReason (legacy 224 ③, 779)', () => {
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+
+  it('is a reason or code the result reports as its own outcome', () => {
+    expect(
+      carriesGateReason(json({ status: 'failed', reason: 'gate_unreachable: not sent' })),
+    ).toBe(true);
+    expect(carriesGateReason(json({ error: { code: 'unknown_operation', message: 'x' } }))).toBe(
+      true,
+    );
+    expect(carriesGateReason(json({ code: 'unstorable_text' }))).toBe(true);
+    // A reason that is no gate reason is not one.
+    expect(carriesGateReason(json({ status: 'failed', reason: 'budget_exhausted' }))).toBe(false);
+  });
+
+  it('legacy 779: is not a reason one refused entry of a successful read reports', () => {
+    const task = {
+      id: 't1',
+      status: 'completed',
+      result: {
+        factsRejected: [{ index: 0, linkType: 'runs_on', reason: 'unstorable_text' }],
+        proposedOperationsRejected: [
+          { index: 1, gatekeeperId: 'g1', reason: 'invalid_operation_name', problem: 'dot' },
+        ],
+      },
+    };
+    expect(carriesGateReason(json(task))).toBe(false);
+    // `report_task_result`'s answer lists them at its top, still one entry each.
+    expect(
+      carriesGateReason(
+        json({ id: 't1', status: 'completed', ...task.result, factIds: [], evidenceDropped: [] }),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads pi’s result: its details, and the JSON in its text', () => {
+    const failed = { status: 'failed', reason: 'outcome_unknown: apply for a1' };
+    expect(
+      carriesGateReason(json({ content: [{ type: 'text', text: JSON.stringify(failed) }] })),
+    ).toBe(true);
+    expect(carriesGateReason(json({ content: [], details: failed }))).toBe(true);
+    const read = { id: 't1', result: { factsRejected: [{ index: 0, reason: 'unstorable_text' }] } };
+    expect(
+      carriesGateReason(
+        json({ content: [{ type: 'text', text: JSON.stringify(read) }], details: read }),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads a preview cut short, and is not a code merely mentioned', () => {
+    const text = json({ status: 'failed', reason: 'operation_refused: the gate said no, because' });
+    expect(carriesGateReason(text.slice(0, text.length - 12))).toBe(true);
+    expect(carriesGateReason(json({ ok: true, lines: ['gate_unreachable seen, recovered'] }))).toBe(
+      false,
+    );
+    expect(carriesGateReason(json({ note: 'reason: gate_unreachable' }))).toBe(false);
+    expect(carriesGateReason('not json at all: "reason": "gate_unreachable"')).toBe(false);
   });
 });
