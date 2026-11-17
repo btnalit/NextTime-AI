@@ -1,5 +1,6 @@
 import type { CredentialDraftWire } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
+import { namedReviewPath } from '../../lib/credential-review.js';
 import { actionKindTagText } from '../../lib/format.js';
 import { operationKey } from '../../lib/governance.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
@@ -27,7 +28,14 @@ export type CredentialDraftsFix = 'align' | 'resync' | 'either';
 
 /** 「description、paramsSchema.properties.password.example」, at most what the kernel listed. */
 function placesText(draft: CredentialDraftWire, t: Translate): string {
-  const places = draft.suspectedSecretPaths.map(visibleText).join(t('、', ', '));
+  // UX acceptance of #1370 (P3): the stored definition's top-level fields read as words.
+  const names = {
+    description: t('描述', 'description'),
+    params_schema: t('参数定义', 'params'),
+  };
+  const places = draft.suspectedSecretPaths
+    .map((path) => visibleText(namedReviewPath(path, names)))
+    .join(t('、', ', '));
   if (places === '') {
     return t(
       `${draft.suspectedSecretValues} 处疑似凭据`,
@@ -98,8 +106,8 @@ export function CredentialDraftsNotice({
         </ul>
         <span className="text-3">
           {t(
-            '逐个打开，看这些位置的值。多半是文档里的示例，比如描述里写的 Authorization: Bearer <token>、password 字段的 example：是示例或本来就该带的，点「发布」，勾选「已核对凭据」后发布。',
-            'Open each one and look at the values in those places. Most are examples from the document, such as Authorization: Bearer <token> in a description or a password field’s example: if so, or if the definition is meant to carry it, use Publish, tick “Credentials reviewed” and publish.',
+            '控制台不显示这些值：到门的文档（OpenAPI 文档或清单）里看这些位置。常见的是文档里的示例，比如描述里写的 Authorization: Bearer <token>、password 字段的 example：是示例或本来就该带的，打开草稿点「发布」，勾选「已核对凭据」后发布。',
+            'The console does not show these values: look at those places in the gate’s document (the OpenAPI document or manifest). Common ones are examples, such as Authorization: Bearer <token> in a description or a password field’s example: if so, or if the definition is meant to carry it, open the draft, use Publish, tick “Credentials reviewed” and publish.',
           )}
           {sentenceGap(t)}
           {rewriteStep(fix, t)}

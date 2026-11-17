@@ -100,7 +100,7 @@ describe('ManifestPublishResultNotice — legacy 800', () => {
             {
               name: 'stock.login',
               suspectedSecretValues: 2,
-              suspectedSecretPaths: ['description', 'paramsSchema.properties.password.example'],
+              suspectedSecretPaths: ['description', 'params_schema.properties.password.example'],
             },
             { name: 'stock.audit', suspectedSecretValues: 1, suspectedSecretPaths: [] },
           ],
@@ -114,7 +114,10 @@ describe('ManifestPublishResultNotice — legacy 800', () => {
     expect(held.textContent).toContain('2 个 Operation 没有发布，还是草稿');
     const login = screen.getAllByTestId('result-credentials-item')[0];
     expect(login?.textContent).toContain('stock.login：2 处疑似凭据，在');
-    expect(login?.textContent).toContain('description、paramsSchema.properties.password.example');
+    // UX acceptance of #1370: the definition's top-level fields read as words.
+    expect(login?.textContent).toContain('描述、参数定义.properties.password.example');
+    // The console never shows the values: the next step points at the gate's document.
+    expect(held.textContent).toContain('控制台不显示这些值');
     // A kernel that named no place still says how many.
     expect(held.textContent).toContain('stock.audit：1 处疑似凭据');
     expect(held.textContent).not.toContain('stock.audit：1 处疑似凭据，在');
