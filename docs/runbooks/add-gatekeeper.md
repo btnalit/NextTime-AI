@@ -339,7 +339,11 @@ Operation，后面的 Operation 就可能落到上限，定义随之变化（已
 `dependentSchemas`、`prefixItems`、`minContains`/`maxContains`、`discriminator` 会留在 schema 里，
 但门不校验它们。请求体顶层是组合
 （`allOf`、`anyOf`、`oneOf`、`not`，包括上面兄弟关键字产生的 `allOf`）或者只是引用自己时读不出来：
-这个 Operation 只收参数。数组、其他媒体类型的请求体仍然不进 `params_schema`，导入后要人工补。
+这个 Operation 只收参数。不是 JSON 对象的请求体也一样读不出来：调用时把剩下的参数作为一个 JSON 对象、
+用 `content-type: application/json` 发出去，所以其他媒体类型（`multipart/…`、`application/merge-patch+json`
+这类 `+json`）、数组、字符串请求体都不进 `params_schema`，这个 Operation 只收参数
+（`application/json; charset=…` 仍算 JSON）。要带这类请求体调用，就手写门的清单。没有列出任何属性的
+对象请求体、没有 schema 的 `application/json` 请求体仍然接受任意参数，和以前一样。
 
 ## 7. 注册、导入清单、发布——capability 路径
 

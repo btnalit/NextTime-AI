@@ -561,8 +561,9 @@ interface OpenApiReference {
 }
 
 interface OpenApiRequestBody {
+  /** By media type — only JSON is read (legacy 798, `jsonMediaOf`). */
   readonly content?: {
-    readonly 'application/json'?: { readonly schema?: Record<string, unknown> };
+    readonly [mediaType: string]: { readonly schema?: Record<string, unknown> } | undefined;
   };
 }
 
@@ -987,6 +988,22 @@ function paramsSchemaFor(
   }
 }
 
+/** The request body's `application/json` media type object — also written with parameters
+ *  (`application/json; charset=utf-8`), the only JSON the call sends (`content-type:
+ *  application/json`); a `+json` type such as `application/merge-patch+json` is not it. */
+function jsonMediaOf(content: Record<string, unknown>): unknown {
+  const key = Object.keys(content).find(
+    (name) => name.split(';')[0]?.trim().toLowerCase() === 'application/json',
+  );
+  return key === undefined ? undefined : content[key];
+}
+
+/** Whether a schema's `type` lets an object through: none declared, `object`, or a list with it. */
+function takesObjects(type: unknown): boolean {
+  if (type === undefined) return true;
+  return Array.isArray(type) ? type.includes('object') : type === 'object';
+}
+
 function writeParamsSchema(
   state: InlineState,
   pathItem: OpenApiPathItem,
@@ -1019,17 +1036,22 @@ function writeParamsSchema(
   if (op.requestBody !== undefined) {
     const { node: requestBody, viaRef } = dereference(state, op.requestBody);
     const content = isObjectNode(requestBody) ? requestBody.content : undefined;
-    const media = isObjectNode(content) ? content['application/json'] : undefined;
-    const rawSchema = isObjectNode(media) ? media.schema : undefined;
+    const media = isObjectNode(content) ? jsonMediaOf(content) : undefined;
+    // JSON with no schema may be anything, an object among them: as one that names no properties.
+    const rawSchema = isObjectNode(media) ? (media.schema ?? {}) : undefined;
     const bodySchema = isObjectNode(rawSchema)
       ? inlineSchema(state, rawSchema, [], viaRef, 0)
       : undefined;
+    // Legacy 798: the call sends what is left of its params as one JSON object
+    // (`HttpTransport.request`), so a body that cannot be one — another media type, an array, a
+    // string — is not read either.
     if (
-      requestBody === undefined ||
+      bodySchema === undefined ||
       isRecursionPlaceholder(bodySchema) ||
       (isObjectNode(bodySchema) &&
         ('$ref' in bodySchema ||
-          SCHEMA_COMBINING_KEYWORDS.some((keyword) => keyword in bodySchema)))
+          SCHEMA_COMBINING_KEYWORDS.some((keyword) => keyword in bodySchema) ||
+          !takesObjects(bodySchema.type)))
     ) {
       unread = true;
     } else if (isObjectNode(bodySchema)) {
