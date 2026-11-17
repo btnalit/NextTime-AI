@@ -23,9 +23,11 @@
  * `jsonb` refuses U+0000 and an unpaired surrogate, and the kernel lost such a row with a 500.
  * The write paths refuse both in the names they take (#1409), but text that never passed them
  * still can carry one — an error cut at 200 UTF-16 units through a surrogate pair, a base URL or
- * model id stored before that rule, a model id in an operator's `llm-providers.yaml`.
+ * model id stored before that rule, a model id in an operator's `llm-providers.yaml`
+ * (`storable-text.ts`).
  */
 import { LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS } from '@nexttime/shared';
+import { storableText } from './storable-text.js';
 
 /** `details` with every U+0000 and unpaired surrogate in its text, keys included and at any depth,
  *  replaced by U+FFFD, and `detailsReplaced` naming the fields where that happened. The same
@@ -58,30 +60,6 @@ function storableValue(value: unknown): unknown {
       : value;
   }
   return value;
-}
-
-/** `text` with U+0000 and every unpaired surrogate replaced by U+FFFD; the same string when it has
- *  none. A char-code loop: biome refuses a control character in a regex. */
-function storableText(text: string): string {
-  let stored = '';
-  let changed = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = text.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        stored += text.slice(i, i + 2);
-        i += 1;
-        continue;
-      }
-    } else if (code !== 0 && (code < 0xdc00 || code > 0xdfff)) {
-      stored += text[i];
-      continue;
-    }
-    stored += '\ufffd';
-    changed = true;
-  }
-  return changed ? stored : text;
 }
 
 /** `details` as sent to the kernel for a row that lists model ids: whole when it fits; otherwise
