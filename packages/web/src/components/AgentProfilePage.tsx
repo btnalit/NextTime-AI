@@ -1,4 +1,5 @@
-import { Fragment, useState } from 'react';
+import type { AvailableGateInstanceWire, GateHealthWire } from '@nexttime/shared';
+import { Fragment, useMemo, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
@@ -11,7 +12,7 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { type WorkerDefinitionSummary, distinctDefinitionName } from '../lib/tasks.js';
-import { AgentProfileForm } from './AgentProfileForm.js';
+import { AgentProfileForm, unhealthy } from './AgentProfileForm.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
@@ -25,6 +26,7 @@ import { RefChip } from './kit/ref-chip.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
 import { SkeletonRows } from './kit/skeleton.js';
+import { StatusChip } from './kit/status-chip.js';
 // `useToast` stays on `components/ui/Toast` — `App.tsx` mounts that provider (not
 // `kit/toast`'s own, separate context), so switching this one import would silently make
 // `toast.push(...)` below a no-op. Not this lane's scope (App shell wiring).
@@ -88,6 +90,25 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     {},
     { autoLoadAll: true, enabled: can('list_principals') === true && role.role === 'owner' },
   );
+  // Legacy 200: a gate that is offline must not look usable. The systems linked to a platform gate
+  // instance carry its health (`list_available_gate_instances`, the read 「系统与授权」 marks its
+  // cards with); one the workspace connected itself has no health signal on any read a member
+  // makes, so it carries no mark.
+  const gateInstances = useCapabilityList<AvailableGateInstanceWire>(
+    http,
+    'list_available_gate_instances',
+    {},
+    { enabled: can('list_available_gate_instances') === true },
+  );
+  const gateHealth = useMemo(() => {
+    const map = new Map<string, GateHealthWire>();
+    if (gateInstances.state.status === 'ready') {
+      for (const row of gateInstances.state.data.items) {
+        if (row.gatekeeperId) map.set(row.gatekeeperId, row.health);
+      }
+    }
+    return map;
+  }, [gateInstances.state]);
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const profile = useCapability<AgentProfile>(
     http,
@@ -229,6 +250,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 models={models.state.status === 'ready' ? models.state.data.items : []}
                 skills={skills.state.status === 'ready' ? skills.state.data.items : []}
                 gatekeepers={gatekeepers.rows ?? []}
+                gateHealth={gateHealth}
                 workerDefinitions={
                   workerDefinitions.state.status === 'ready'
                     ? workerDefinitions.state.data.items
@@ -244,6 +266,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 profile={profile.state.data}
                 skillNames={skillNames}
                 gatekeeperNames={gatekeeperNames}
+                gateHealth={gateHealth}
                 workerDefinitionNames={workerDefinitionNames}
                 models={models.state.status === 'ready' ? models.state.data.items : []}
               />
@@ -281,6 +304,7 @@ function EffectiveRefs({
   names,
   href,
   readOnlyIds,
+  health,
 }: {
   readonly ids: readonly string[];
   readonly kind: 'object' | 'gatekeeper' | 'workerDefinition';
@@ -288,6 +312,8 @@ function EffectiveRefs({
   readonly href: (id: string) => string;
   /** Systems the agent reads without a Grant (leftover 98) — each chip gets a 只读 tag. */
   readonly readOnlyIds?: ReadonlySet<string>;
+  /** Legacy 200: a system whose gate is not healthy gets its health beside it. */
+  readonly health?: ReadonlyMap<string, GateHealthWire>;
 }) {
   const t = useT();
   if (ids.length === 0) {
@@ -303,6 +329,10 @@ function EffectiveRefs({
         <Fragment key={id}>
           <RefChip kind={kind} id={id} name={names.get(id) ?? null} href={href(id)} size="s" />
           {readOnlyIds?.has(id) ? <span className="tag">{t('只读', 'Read only')}</span> : null}
+          <GateHealthMark
+            health={health?.get(id)}
+            testId={`agent-profile-effective-health-${id}`}
+          />
         </Fragment>
       ))}
     </span>
@@ -328,12 +358,14 @@ function EffectivePanel({
   profile,
   skillNames,
   gatekeeperNames,
+  gateHealth,
   workerDefinitionNames,
   models,
 }: {
   readonly profile: AgentProfile;
   readonly skillNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly gateHealth: ReadonlyMap<string, GateHealthWire>;
   readonly workerDefinitionNames: ReadonlyMap<string, string>;
   /** `list_models`, for the effective model's provider health (audit P0-2). */
   readonly models: readonly ModelRow[];
@@ -388,6 +420,7 @@ function EffectivePanel({
                 readOnlyIds={
                   new Set(systemsInUse.filter((g) => !g.granted).map((g) => g.gatekeeperId))
                 }
+                health={gateHealth}
               />
             ),
           },
@@ -421,5 +454,19 @@ function EffectivePanel({
         ]}
       />
     </DashboardCard>
+  );
+}
+
+/** Legacy 200: a system's health beside it, only when its gate is not healthy. */
+function GateHealthMark({
+  health,
+  testId,
+}: {
+  readonly health: GateHealthWire | undefined;
+  readonly testId: string;
+}) {
+  const mark = unhealthy(health).health;
+  return mark === undefined ? null : (
+    <StatusChip machine="gateHealth" status={mark} size="s" testId={testId} />
   );
 }

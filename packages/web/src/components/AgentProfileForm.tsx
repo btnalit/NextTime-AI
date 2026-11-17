@@ -1,3 +1,4 @@
+import type { GateHealthWire } from '@nexttime/shared';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import {
   type AgentPolicy,
@@ -23,6 +24,7 @@ import { ModelHealthNote, ModelOption, withModelHealthNote } from './kit/model-h
 import { Notice } from './kit/notice.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
+import { StatusChip } from './kit/status-chip.js';
 import { Textarea } from './kit/textarea.js';
 import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 
@@ -41,6 +43,10 @@ export interface AgentProfileFormProps {
   readonly models: readonly ModelRow[];
   readonly skills: readonly SkillRow[];
   readonly gatekeepers: readonly GatekeeperListRow[];
+  /** Legacy 200: each system's health as 「系统与授权」 shows it — known for a system linked to a
+   *  platform gate instance (`list_available_gate_instances`), absent for one the workspace
+   *  connected itself, which carries no health signal. */
+  readonly gateHealth?: ReadonlyMap<string, GateHealthWire>;
   readonly workerDefinitions: readonly WorkerDefinitionSummary[];
   /** `true` for a member editing their own profile when policy says they may not
    *  (`memberCanEditProfile === false`) — disables every control instead of offering a Save that
@@ -100,6 +106,7 @@ export function AgentProfileForm({
   models,
   skills,
   gatekeepers,
+  gateHealth,
   workerDefinitions,
   editForbidden,
   forbiddenBy = 'policy',
@@ -319,6 +326,7 @@ export function AgentProfileForm({
             note: g.granted
               ? t('读写（已授权）', 'Read & write (granted)')
               : t('只读（未授权）', 'Read only (not granted)'),
+            ...unhealthy(gateHealth?.get(g.gatekeeperId)),
           }))}
           excluded={state.excludedGatekeepers}
           onToggle={(id) =>
@@ -475,6 +483,8 @@ function ChecklistField({
     readonly id: string;
     readonly label: string;
     readonly note?: string;
+    /** Legacy 200: a system whose gate is not healthy — its calls fail until it is. */
+    readonly health?: GateHealthWire;
     /** Tells an option apart from a same-named one (a Worker definition's short id). */
     readonly detail?: string;
   }[];
@@ -494,7 +504,7 @@ function ChecklistField({
         <EmptyState variant="inline" title={emptyTitle} body={empty} testId={`${testId}-empty`} />
       ) : (
         <fieldset
-          className="stack-s"
+          className="stack-s checklist-options"
           aria-label={title}
           style={{ border: 0, padding: 0, margin: 0 }}
         >
@@ -506,13 +516,23 @@ function ChecklistField({
                 onChange={() => onToggle(option.id)}
                 disabled={disabled}
               />
-              <span>{option.label}</span>
-              {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
-              {option.detail !== undefined ? (
-                <span className="mono text-3" title={option.id} data-volatile="">
-                  {option.detail}
-                </span>
-              ) : null}
+              <span className="checklist-option-body">
+                <span>{option.label}</span>
+                {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
+                {option.health !== undefined ? (
+                  <StatusChip
+                    machine="gateHealth"
+                    status={option.health}
+                    size="s"
+                    testId={`${testId}-health-${option.id}`}
+                  />
+                ) : null}
+                {option.detail !== undefined ? (
+                  <span className="mono text-3" title={option.id} data-volatile="">
+                    {option.detail}
+                  </span>
+                ) : null}
+              </span>
             </label>
           ))}
         </fieldset>
@@ -524,4 +544,10 @@ function ChecklistField({
       ) : null}
     </div>
   );
+}
+
+/** Legacy 200: only a system whose gate is not healthy carries a mark — a healthy one, or one with
+ *  no health signal (connected by the workspace itself), reads as before. */
+export function unhealthy(health: GateHealthWire | undefined): { health?: GateHealthWire } {
+  return health === undefined || health === 'ok' ? {} : { health };
 }
