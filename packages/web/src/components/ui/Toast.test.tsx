@@ -116,6 +116,46 @@ describe('ToastProvider', () => {
 /** #1398 UX P2: a modal drawer sets pointer-events: none on <body> and closes on any outside
  *  press; the toasts above it are not outside (`lib/toast-region`). Real timers: Radix attaches
  *  its outside listeners on the next tick. */
+describe('ToastProvider from the keyboard', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it('#1407 UX P3: while the keyboard is in the toasts none leaves; their time runs again after', () => {
+    render(
+      <ToastProvider>
+        <PushOnMount />
+        <PushOnMount />
+        <button type="button">page</button>
+      </ToastProvider>,
+    );
+    const page = screen.getByRole('button', { name: 'page' });
+    act(() => page.focus());
+    act(() => {
+      fireEvent.keyDown(page, { key: 'F8' });
+    });
+    expect(document.activeElement?.closest('.toast-region')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(8000);
+    });
+    expect(screen.getAllByTestId('toast')).toHaveLength(2);
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(document.activeElement).toBe(page);
+    expect(screen.getAllByTestId('toast')).toHaveLength(2);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryAllByTestId('toast')).toHaveLength(0);
+  });
+});
+
 describe('ToastProvider over a modal sheet', () => {
   afterEach(cleanup);
 
@@ -221,9 +261,12 @@ describe('ToastProvider over a modal sheet', () => {
     // Not hidden from assistive tech while the modal is open.
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
     expect(screen.getByLabelText('Notifications').getAttribute('aria-keyshortcuts')).toBe('F8');
+    // #1407 UX P3: the key is shown too, and the way back once there.
+    expect(screen.getByTestId('toast-hint').textContent).toBe('F8 聚焦到提示');
     act(() => key('F8'));
     await settle();
     expect(inToasts()).toBe(true);
+    expect(screen.getByTestId('toast-hint').textContent).toBe('Esc 返回');
     act(() => key('Escape'));
     await settle();
     expect(document.activeElement).toBe(name);

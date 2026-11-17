@@ -10,10 +10,12 @@ import {
   useState,
 } from 'react';
 import type { ErrorToastDetails } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { TOAST_REGION_CLASS, markToastPointerDown } from '../../lib/toast-region.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { Button } from './Button.js';
 import { Icon, type IconName } from './Icon.js';
+import { Kbd } from './Kbd.js';
 
 export type ToastTone = 'info' | 'ok' | 'warn' | 'danger';
 
@@ -68,6 +70,7 @@ export const TOAST_HOTKEY = 'F8';
  *  a modal drawer or dialog (`styles/ui.css` `.toast-region`, `lib/toast-region`) and reachable
  *  from the keyboard with `TOAST_HOTKEY`. */
 export function ToastProvider({ children }: { readonly children: ReactNode }) {
+  const t = useT();
   const [toasts, setToasts] = useState<readonly ToastRecord[]>([]);
   const nextId = useRef(1);
   // A toast's dismiss countdown: the timer while it runs, what is left of it while paused.
@@ -200,6 +203,22 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [entered, leave]);
 
+  // #1407 UX P3: while the keyboard is in the toasts, none of them leaves on its own; on the way
+  // out each one's time runs again, unless it is still pointed at or was held for its details.
+  useEffect(() => {
+    if (entered) for (const toast of toasts) pause(toast.id);
+  }, [entered, toasts, pause]);
+  const wasEntered = useRef(false);
+  useEffect(() => {
+    const left = wasEntered.current && !entered;
+    wasEntered.current = entered;
+    if (!left) return;
+    for (const toast of toasts) {
+      const element = region.current?.querySelector<HTMLElement>(`[data-toast-id="${toast.id}"]`);
+      if (element) resume(toast.id, element);
+    }
+  }, [entered, toasts, resume]);
+
   // A dismissed toast takes the focus with it: the next one gets it, or, the last one gone, the
   // focus goes back to where it was.
   useEffect(() => {
@@ -251,6 +270,7 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
             className={`toast toast-${tone}`}
             key={toast.id}
             data-testid="toast"
+            data-toast-id={toast.id}
             onPointerEnter={() => pause(toast.id)}
             onPointerLeave={(event) => resume(toast.id, event.currentTarget)}
             onFocus={() => pause(toast.id)}
@@ -288,6 +308,21 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
                     {toast.action.label}
                   </Button>
                 </div>
+              ) : null}
+              {toast.details || toast.action ? (
+                // #1407 UX P3: the hotkey, seen — a keyboard-only reader has no other way to learn
+                // it (assistive tech reads `aria-keyshortcuts` on the region instead).
+                <p className="toast-hint" aria-hidden="true" data-testid="toast-hint">
+                  {entered ? (
+                    <>
+                      <Kbd>Esc</Kbd> {t('返回', 'Back')}
+                    </>
+                  ) : (
+                    <>
+                      <Kbd>{TOAST_HOTKEY}</Kbd> {t('聚焦到提示', 'Focus notifications')}
+                    </>
+                  )}
+                </p>
               ) : null}
             </div>
             <Button
