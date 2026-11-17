@@ -672,8 +672,11 @@ const SCHEMA_MAP_KEYWORDS = new Set([
   'dependentSchemas',
 ]);
 
-/** Keywords that say nothing about which values pass: a `$ref`'s sibling may restate them. */
+/** Keywords that say nothing about which values pass: a `$ref`'s sibling may restate them.
+ *  OpenAPI's `discriminator` only tells a reader which `oneOf` branch to look at, and the gate's
+ *  validator (`params-validation.ts`) does not read it (review #493 on #1365). */
 const SCHEMA_ANNOTATION_KEYWORDS = new Set([
+  'discriminator',
   'title',
   'description',
   'example',
@@ -834,28 +837,27 @@ function familyOf(key: string): readonly string[] | undefined {
   return SCHEMA_KEYWORD_FAMILIES.find((family) => family.includes(key));
 }
 
-/** Whether the sibling `key: value` can be written into `resolved` and mean what `allOf` would. An
- *  annotation (or an `x-` extension, which no validator reads) only says something else. A keyword
- *  the target has must say the same. One that holds on its own adds a constraint; one of a family
- *  only beside a target with none of that family — `properties` beside a target's
- *  `additionalProperties: false` would let through what the target refuses. Beside
- *  `unevaluated*` (either side's) nothing else is; neither is a keyword not named above. */
-function siblingMerges(
-  resolved: Record<string, unknown>,
-  siblings: Record<string, unknown>,
-  key: string,
-  value: unknown,
-): boolean {
+/** Whether the sibling `key: value` can be written into `resolved` and mean what the two mean
+ *  together. An annotation (or an `x-` extension, which no validator reads) only says something
+ *  else. A keyword the target has must say the same. One that holds on its own adds a constraint;
+ *  one of a family only beside a target with none of that family — `properties` beside a target's
+ *  `additionalProperties: false` would let through what the target refuses. Beside a target's own
+ *  `unevaluated*` nothing else is, since it would then see more evaluated; a sibling's
+ *  `unevaluated*` sees the target's keywords through the `$ref` as it does written in beside them
+ *  (`{ $ref, unevaluatedProperties: false }` is OpenAPI 3.1's way to close what it points at;
+ *  review #501 on #1365). A keyword not named here is never written in. */
+function siblingMerges(resolved: Record<string, unknown>, key: string, value: unknown): boolean {
   if (SCHEMA_ANNOTATION_KEYWORDS.has(key) || key.startsWith('x-')) return true;
   if (Object.hasOwn(resolved, key)) return Object.is(resolved[key], value);
-  if (
-    SCHEMA_UNEVALUATED_KEYWORDS.some(
-      (keyword) => Object.hasOwn(resolved, keyword) || Object.hasOwn(siblings, keyword),
-    )
-  ) {
+  if (SCHEMA_UNEVALUATED_KEYWORDS.some((keyword) => Object.hasOwn(resolved, keyword))) {
     return false;
   }
-  if (SCHEMA_INDEPENDENT_KEYWORDS.has(key)) return true;
+  if (
+    SCHEMA_INDEPENDENT_KEYWORDS.has(key) ||
+    (SCHEMA_UNEVALUATED_KEYWORDS as readonly string[]).includes(key)
+  ) {
+    return true;
+  }
   const family = familyOf(key);
   return family !== undefined && !family.some((member) => Object.hasOwn(resolved, member));
 }
@@ -881,7 +883,7 @@ function withSiblings(resolved: unknown, siblings: unknown): unknown {
   if (Object.keys(rest).length === 0) return target;
   const merges =
     !placeholder &&
-    Object.entries(rest).every(([key, value]) => siblingMerges(resolved, rest, key, value));
+    Object.entries(rest).every(([key, value]) => siblingMerges(resolved, key, value));
   return merges ? { ...target, ...rest } : { allOf: [target, rest] };
 }
 

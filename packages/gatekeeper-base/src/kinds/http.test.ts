@@ -767,6 +767,70 @@ describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
     });
   });
 
+  it('each keyword family, a keyword not named, and a reference that recurs keep their siblings under `allOf`; a sibling `unevaluatedProperties` is written in', () => {
+    const families: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      [
+        'props',
+        { type: 'object', properties: { a: { type: 'string' } } },
+        { additionalProperties: false },
+      ],
+      ['tuple', { type: 'array', prefixItems: [{ type: 'string' }] }, { items: false }],
+      ['contains', { type: 'array', contains: { type: 'string' } }, { minContains: 2 }],
+      ['cond', { type: 'string', if: { minLength: 3 } }, { then: { pattern: '^a' } }],
+      ['named', { type: 'object' }, { $id: 'https://example.invalid/other' }],
+    ];
+    const schemas: Record<string, unknown> = {
+      Self: { $ref: '#/components/schemas/Self' },
+      Pet: { type: 'object', properties: { name: { type: 'string' } } },
+    };
+    const properties: Record<string, unknown> = {};
+    for (const [name, target, sibling] of families) {
+      schemas[name] = target;
+      properties[name] = { $ref: `#/components/schemas/${name}`, ...sibling };
+    }
+    const body = (schema: Record<string, unknown>) => ({
+      content: { 'application/json': { schema } },
+    });
+    const operations = importOpenApi({
+      components: { schemas },
+      paths: {
+        '/f': {
+          post: { operationId: 'families', requestBody: body({ type: 'object', properties }) },
+          put: {
+            operationId: 'closed_pet',
+            requestBody: body({ $ref: '#/components/schemas/Pet', unevaluatedProperties: false }),
+          },
+          patch: {
+            operationId: 'tagged_pet',
+            requestBody: body({
+              $ref: '#/components/schemas/Pet',
+              discriminator: { propertyName: 'name' },
+            }),
+          },
+          delete: {
+            operationId: 'self_body',
+            requestBody: body({ $ref: '#/components/schemas/Self', maxProperties: 2 }),
+          },
+        },
+      },
+    });
+    const read = schemaOf(operations, 'families').properties ?? {};
+    for (const [name, target, sibling] of families) {
+      expect([name, read[name]]).toEqual([name, { allOf: [target, sibling] }]);
+    }
+    // OpenAPI 3.1's way to close what a `$ref` points at: the body is read, closed as before.
+    expect(schemaOf(operations, 'closed_pet')).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+    });
+    expect(schemaOf(operations, 'tagged_pet')).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+    });
+    // A reference that comes back to itself stays a body that is not read.
+    expect(schemaOf(operations, 'self_body')).toEqual({ type: 'object', properties: {} });
+  });
+
   it("OpenAPI 3.0's `nullable` beside a `$ref` stays with the target — beside a sibling kept under `allOf` too — and is left out where the target has no `type`", () => {
     const operations = importOpenApi({
       components: {
