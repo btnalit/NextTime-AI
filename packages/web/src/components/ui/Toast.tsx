@@ -1,3 +1,4 @@
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
   type ReactNode,
   createContext,
@@ -9,10 +10,12 @@ import {
   useState,
 } from 'react';
 import type { ErrorToastDetails } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { TOAST_REGION_CLASS, markToastPointerDown } from '../../lib/toast-region.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { Button } from './Button.js';
 import { Icon, type IconName } from './Icon.js';
+import { Kbd } from './Kbd.js';
 
 export type ToastTone = 'info' | 'ok' | 'warn' | 'danger';
 
@@ -58,10 +61,16 @@ const TONE_ICON: Readonly<Record<ToastTone, IconName>> = {
   danger: 'alert',
 };
 
+/** Legacy 820: the key that takes the keyboard to the toasts from anywhere, a modal drawer or
+ *  dialog included; pressed again, or Escape, it goes back to where it was. */
+export const TOAST_HOTKEY = 'F8';
+
 /** components/ui/Toast: transient notices (WS pushes, action results). 5s, stacked bottom-right;
  *  the countdown pauses while the toast is pointed at or focused. The region stays clickable over
- *  a modal drawer or dialog (`styles/ui.css` `.toast-region`, `lib/toast-region`). */
+ *  a modal drawer or dialog (`styles/ui.css` `.toast-region`, `lib/toast-region`) and reachable
+ *  from the keyboard with `TOAST_HOTKEY`. */
 export function ToastProvider({ children }: { readonly children: ReactNode }) {
+  const t = useT();
   const [toasts, setToasts] = useState<readonly ToastRecord[]>([]);
   const nextId = useRef(1);
   // A toast's dismiss countdown: the timer while it runs, what is left of it while paused.
@@ -144,75 +153,208 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
 
   const api = useMemo<ToastApi>(() => ({ push, dismiss }), [push, dismiss]);
 
+  // Legacy 820: a modal drawer or dialog keeps the focus inside it (Radix's focus scope), so the
+  // keyboard reaches the toasts only by `TOAST_HOTKEY`. While there, the region is a focus scope
+  // of its own: the newest scope pauses the modal's, and leaving gives the focus back to where it
+  // was — unless the reader moved it on themselves.
+  const region = useRef<HTMLElement | null>(null);
+  const [entered, setEntered] = useState(false);
+  const restoreOnLeave = useRef(true);
+  const toastCount = useRef(0);
+  toastCount.current = toasts.length;
+
+  const leave = useCallback((restore: boolean) => {
+    restoreOnLeave.current = restore;
+    // The region is rebuilt without the scope; blurred first, the focused toast resumes its
+    // countdown (`onBlur` below) rather than stay paused on a control that is gone.
+    const active = document.activeElement;
+    if (restore && active instanceof HTMLElement && region.current?.contains(active)) active.blur();
+    setEntered(false);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      if (event.key === TOAST_HOTKEY && plain) {
+        if (!entered && toastCount.current === 0) return;
+        event.preventDefault();
+        if (entered) leave(true);
+        else {
+          restoreOnLeave.current = true;
+          setEntered(true);
+        }
+        return;
+      }
+      const target = event.target;
+      if (
+        event.key === 'Escape' &&
+        entered &&
+        target instanceof Node &&
+        region.current?.contains(target)
+      ) {
+        // Ahead of Radix's own Escape (a capture listener on the document), which would close the
+        // drawer or dialog under the toasts.
+        event.preventDefault();
+        event.stopPropagation();
+        leave(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [entered, leave]);
+
+  // #1407 UX P3: while the keyboard is in the toasts, none of them leaves on its own; on the way
+  // out each one's time runs again, unless it is still pointed at or was held for its details.
+  useEffect(() => {
+    if (entered) for (const toast of toasts) pause(toast.id);
+  }, [entered, toasts, pause]);
+  const wasEntered = useRef(false);
+  useEffect(() => {
+    const left = wasEntered.current && !entered;
+    wasEntered.current = entered;
+    if (!left) return;
+    for (const toast of toasts) {
+      const element = region.current?.querySelector<HTMLElement>(`[data-toast-id="${toast.id}"]`);
+      if (element) resume(toast.id, element);
+    }
+  }, [entered, toasts, resume]);
+
+  // A dismissed toast takes the focus with it: the next one gets it, or, the last one gone, the
+  // focus goes back to where it was.
+  useEffect(() => {
+    if (!entered) return;
+    if (toasts.length === 0) {
+      leave(true);
+      return;
+    }
+    // Only a focus that fell to the page: on the way in, the focus scope moves it once it is
+    // the newest scope; moved before that, the modal's own scope would take it back.
+    const active = document.activeElement;
+    if (active === null || active === document.body) {
+      region.current?.querySelector<HTMLElement>('summary, button')?.focus();
+    }
+  }, [entered, toasts, leave]);
+
+  const stack = (
+    <section
+      ref={region}
+      className={TOAST_REGION_CLASS}
+      aria-label="Notifications"
+      aria-keyshortcuts={TOAST_HOTKEY}
+      // Legacy 820: a modal hides everything outside it from assistive tech but `[aria-live]`
+      // (Radix via `aria-hidden`); `off` is the default, so nothing more is announced.
+      aria-live="off"
+      // #1398 UX P2: known as inside the toasts even after a close removed its target.
+      onPointerDownCapture={(event) => markToastPointerDown(event.nativeEvent)}
+      onBlur={(event) => {
+        if (!entered) return;
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        // The reader moved on (a click on a field): the focus stays where they put it.
+        if (next !== null) {
+          leave(false);
+          return;
+        }
+        // Nowhere: a click on nothing focusable goes back to where it was; a dismissed toast's
+        // control is gone instead, and the effect above moves to the next toast.
+        const left = event.target;
+        queueMicrotask(() => {
+          if (left.isConnected) leave(true);
+        });
+      }}
+    >
+      {toasts.map((toast) => {
+        const tone = toast.tone ?? 'info';
+        return (
+          <output
+            className={`toast toast-${tone}`}
+            key={toast.id}
+            data-testid="toast"
+            data-toast-id={toast.id}
+            onPointerEnter={() => pause(toast.id)}
+            onPointerLeave={(event) => resume(toast.id, event.currentTarget)}
+            onFocus={() => pause(toast.id)}
+            onBlur={(event) => {
+              const element = event.currentTarget;
+              // Focus moving to another control of the same toast keeps it paused.
+              if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget))
+                return;
+              // `activeElement` still names the control losing focus during `blur`.
+              queueMicrotask(() => resume(toast.id, element));
+            }}
+          >
+            <Icon name={TONE_ICON[tone]} />
+            <div className="toast-body">
+              <p className="toast-title">{toast.title}</p>
+              {toast.description ? <p className="toast-description">{toast.description}</p> : null}
+              {toast.details ? (
+                <ErrorDetails
+                  code={toast.details.code}
+                  raw={toast.details.raw}
+                  testId="toast"
+                  onOpen={() => hold(toast.id)}
+                />
+              ) : null}
+              {toast.action ? (
+                <div className="toast-actions">
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => {
+                      toast.action?.onClick();
+                      dismiss(toast.id);
+                    }}
+                  >
+                    {toast.action.label}
+                  </Button>
+                </div>
+              ) : null}
+              {toast.details || toast.action ? (
+                // #1407 UX P3: the hotkey, seen — a keyboard-only reader has no other way to learn
+                // it (assistive tech reads `aria-keyshortcuts` on the region instead).
+                <p className="toast-hint" aria-hidden="true" data-testid="toast-hint">
+                  {entered ? (
+                    <>
+                      <Kbd>Esc</Kbd> {t('返回', 'Back')}
+                    </>
+                  ) : (
+                    <>
+                      <Kbd>{TOAST_HOTKEY}</Kbd> {t('聚焦到提示', 'Focus notifications')}
+                    </>
+                  )}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              size="s"
+              icon="close"
+              iconOnly
+              aria-label="Dismiss"
+              onClick={() => dismiss(toast.id)}
+            />
+          </output>
+        );
+      })}
+    </section>
+  );
+
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <section
-        className={TOAST_REGION_CLASS}
-        aria-label="Notifications"
-        // #1398 UX P2: known as inside the toasts even after a close removed its target.
-        onPointerDownCapture={(event) => markToastPointerDown(event.nativeEvent)}
-      >
-        {toasts.map((toast) => {
-          const tone = toast.tone ?? 'info';
-          return (
-            <output
-              className={`toast toast-${tone}`}
-              key={toast.id}
-              data-testid="toast"
-              onPointerEnter={() => pause(toast.id)}
-              onPointerLeave={(event) => resume(toast.id, event.currentTarget)}
-              onFocus={() => pause(toast.id)}
-              onBlur={(event) => {
-                const element = event.currentTarget;
-                // Focus moving to another control of the same toast keeps it paused.
-                if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget))
-                  return;
-                // `activeElement` still names the control losing focus during `blur`.
-                queueMicrotask(() => resume(toast.id, element));
-              }}
-            >
-              <Icon name={TONE_ICON[tone]} />
-              <div className="toast-body">
-                <p className="toast-title">{toast.title}</p>
-                {toast.description ? (
-                  <p className="toast-description">{toast.description}</p>
-                ) : null}
-                {toast.details ? (
-                  <ErrorDetails
-                    code={toast.details.code}
-                    raw={toast.details.raw}
-                    testId="toast"
-                    onOpen={() => hold(toast.id)}
-                  />
-                ) : null}
-                {toast.action ? (
-                  <div className="toast-actions">
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      onClick={() => {
-                        toast.action?.onClick();
-                        dismiss(toast.id);
-                      }}
-                    >
-                      {toast.action.label}
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-              <Button
-                variant="ghost"
-                size="s"
-                icon="close"
-                iconOnly
-                aria-label="Dismiss"
-                onClick={() => dismiss(toast.id)}
-              />
-            </output>
-          );
-        })}
-      </section>
+      {entered ? (
+        <FocusScope
+          asChild
+          loop
+          onUnmountAutoFocus={(event) => {
+            if (!restoreOnLeave.current) event.preventDefault();
+          }}
+        >
+          {stack}
+        </FocusScope>
+      ) : (
+        stack
+      )}
     </ToastContext.Provider>
   );
 }
