@@ -76,6 +76,10 @@ would read another user's agent session across workspaces.
   `@nexttime/gatekeeper-base`), and otherwise acts on the resolved full id.
 - A refused `apply` releases its idempotency reservation: a retry with the same
   `actionRequestId` is refused again, not 409.
+- An `id` is refused the same way, before any call to the daemon, unless it reads as a container
+  id, id prefix or name: a letter or digit, then letters, digits, `_`, `.` or `-` (a name without
+  its leading `/`). dockerode puts `id` into the request path as it is, and over tcp that path is
+  resolved as a URL, so `x/../../info` would otherwise reach `GET /info/json` (legacy 196).
 
 The platform's service containers (kernel, postgres, caddy, …) stay visible and operable;
 `container.inspect` returns only the summary above (no env).
