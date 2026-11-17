@@ -85,6 +85,11 @@ function scriptedHttp(
   };
 }
 
+/** Legacy 816: the page's second `get_agent_profile` read, the one that asks for the gates' health. */
+function isHealthRead(params: unknown): boolean {
+  return (params as { includeGateHealth?: boolean } | undefined)?.includeGateHealth === true;
+}
+
 function renderPage(http: CapabilityCaller) {
   return render(
     <PermissionsProvider>
@@ -422,11 +427,52 @@ describe('AgentProfilePage', () => {
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-up')).toBeNull();
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-none')).toBeNull();
 
-    // This page asks for the health; no other read is made for it.
+    // Legacy 816: the form's read asks for no health; one more read asks for it, and nothing else
+    // is read for it.
     const reads = http.calls.filter((c) => c.name === 'get_agent_profile');
-    expect(reads.length).toBeGreaterThan(0);
-    for (const read of reads) expect(read.params).toMatchObject({ includeGateHealth: true });
+    expect(reads.some((read) => read.params === undefined)).toBe(true);
+    expect(reads.some((read) => isHealthRead(read.params))).toBe(true);
     expect(http.calls.some((c) => c.name === 'list_available_gate_instances')).toBe(false);
+  });
+
+  it('legacy 816: the form shows before the gates are probed, and the health tags follow', async () => {
+    let releaseHealth: () => void = () => {};
+    const gates = (withHealth: boolean) => [
+      {
+        gatekeeperId: 'gk-self',
+        granted: true,
+        inUse: true,
+        ...(withHealth ? { health: 'unreachable' as const } : {}),
+      },
+    ];
+    const http = scriptedHttp({
+      get_agent_profile: (params) =>
+        isHealthRead(params)
+          ? // A self-connected gate's probe is slow; the form must not wait for it.
+            new Promise((resolve) => {
+              releaseHealth = () => resolve(profile({ availableGatekeepers: gates(true) }));
+            })
+          : profile({ availableGatekeepers: gates(false) }),
+      list_gatekeepers: () => ({
+        items: [{ id: 'gk-self', name: 'local', kind: 'http', status: 'active' }],
+      }),
+    });
+    renderPage(http);
+    const gatesField = await screen.findByTestId('agent-profile-gatekeepers');
+    expect(screen.queryByTestId('agent-profile-loading')).toBeNull();
+    await within(gatesField).findByText('local');
+    expect(gatesField.textContent).toContain('正在检查各系统的连接状态');
+    expect(within(gatesField).queryByTestId('agent-profile-gatekeepers-health-gk-self')).toBeNull();
+
+    await act(async () => releaseHealth());
+    const tag = await within(gatesField).findByTestId('agent-profile-gatekeepers-health-gk-self');
+    expect(tag.textContent).toBe('不可达');
+    expect(gatesField.textContent).not.toContain('正在检查各系统的连接状态');
+    expect(
+      within(screen.getByTestId('agent-profile-effective')).getByTestId(
+        'agent-profile-effective-health-gk-self',
+      ).textContent,
+    ).toBe('不可达');
   });
 
   it("legacy 812: saving keeps each gate's health — set_agent_profile probes no gate and returns none", async () => {
@@ -439,7 +485,7 @@ describe('AgentProfilePage', () => {
       },
     ];
     const http = scriptedHttp({
-      get_agent_profile: () => profile({ availableGatekeepers: gates(true) }),
+      get_agent_profile: (params) => profile({ availableGatekeepers: gates(isHealthRead(params)) }),
       // The saved profile reads differently (its addendum), so the test can see the save land.
       set_agent_profile: () =>
         profile({
@@ -473,7 +519,9 @@ describe('AgentProfilePage', () => {
     let releaseStale: () => void = () => {};
     let reads = 0;
     const http = scriptedHttp({
-      get_agent_profile: () => {
+      get_agent_profile: (params) => {
+        // Only the form's read (the health read never feeds the form).
+        if (isHealthRead(params)) return saved ? after : before;
         reads += 1;
         // The read the remount starts is slow (it waits on the gates' probes) and began before
         // the save, so it answers with the profile from before it.
@@ -648,13 +696,16 @@ describe('AgentProfilePage', () => {
         ),
       ).toBe(true),
     );
-    // #1394 review P3-2: another member's agent is read with its gates' health too.
-    expect(
-      http.calls.find(
+    // #1394 review P3-2: another member's agent is read with its gates' health too (legacy 816:
+    // beside the form's own read).
+    const p2Reads = http.calls
+      .filter(
         (c) =>
           c.name === 'get_agent_profile' &&
           (c.params as { principalId?: string })?.principalId === 'p-2',
-      )?.params,
-    ).toEqual({ principalId: 'p-2', includeGateHealth: true });
+      )
+      .map((c) => c.params);
+    expect(p2Reads).toContainEqual({ principalId: 'p-2' });
+    expect(p2Reads).toContainEqual({ principalId: 'p-2', includeGateHealth: true });
   });
 });

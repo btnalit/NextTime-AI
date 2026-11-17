@@ -43,10 +43,12 @@ export interface AgentProfileFormProps {
   readonly models: readonly ModelRow[];
   readonly skills: readonly SkillRow[];
   readonly gatekeepers: readonly GatekeeperListRow[];
-  /** Legacy 200: each system's health as 「系统与授权」 shows it — known for a system linked to a
-   *  platform gate instance (`list_available_gate_instances`), absent for one the workspace
-   *  connected itself, which carries no health signal. */
+  /** Legacy 200 / 812: each system's health — a platform gate's stored health, a self-connected
+   *  gate's probed live; absent for a gate with no health signal. */
   readonly gateHealth?: ReadonlyMap<string, GateHealthWire>;
+  /** Legacy 816: the health read is still out (a self-connected gate's probe can take seconds), so
+   *  no system's lack of a mark means it is healthy yet. */
+  readonly gateHealthPending?: boolean;
   readonly workerDefinitions: readonly WorkerDefinitionSummary[];
   /** `true` for a member editing their own profile when policy says they may not
    *  (`memberCanEditProfile === false`) — disables every control instead of offering a Save that
@@ -107,6 +109,7 @@ export function AgentProfileForm({
   skills,
   gatekeepers,
   gateHealth,
+  gateHealthPending = false,
   workerDefinitions,
   editForbidden,
   forbiddenBy = 'policy',
@@ -315,10 +318,17 @@ export function AgentProfileForm({
 
         <ChecklistField
           title={t('系统接入', 'Connected systems')}
-          subtitle={t(
-            '本工作区可读的系统，以及授权给你的系统',
-            'Systems readable in this workspace, and those granted to you',
-          )}
+          subtitle={
+            gateHealthPending && allowedGatekeepers.length > 0
+              ? t(
+                  '本工作区可读的系统，以及授权给你的系统。正在检查各系统的连接状态…',
+                  'Systems readable in this workspace, and those granted to you. Checking each system’s connection…',
+                )
+              : t(
+                  '本工作区可读的系统，以及授权给你的系统',
+                  'Systems readable in this workspace, and those granted to you',
+                )
+          }
           options={allowedGatekeepers.map((g) => ({
             id: g.gatekeeperId,
             label: g.name,

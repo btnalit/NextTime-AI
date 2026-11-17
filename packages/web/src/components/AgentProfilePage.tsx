@@ -3,7 +3,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
-import { type AgentPolicy, type AgentProfile, keepGateHealth } from '../lib/agent-profile.js';
+import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
@@ -91,26 +91,28 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     { autoLoadAll: true, enabled: can('list_principals') === true && role.role === 'owner' },
   );
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
-  // Legacy 200 / 812: a gate that is offline must not look usable. This page alone asks for each
-  // offered gate's health (`includeGateHealth`: a platform gate's stored health, a self-connected
-  // gate probed live); the chat header's model switcher reads the same profile without it, so
-  // opening a chat probes no gate.
-  const profile = useCapability<AgentProfile>(
-    http,
-    'get_agent_profile',
-    selectedPrincipalId
-      ? { principalId: selectedPrincipalId, includeGateHealth: true }
-      : { includeGateHealth: true },
-  );
+  // The form reads the profile without the gates' health, so it renders at once (the chat
+  // header's model switcher reads the same key, so opening a chat probes no gate).
+  const profileParams = selectedPrincipalId ? { principalId: selectedPrincipalId } : undefined;
+  const profile = useCapability<AgentProfile>(http, 'get_agent_profile', profileParams);
+  // Legacy 200 / 812 / 816: a gate that is offline must not look usable. This page alone also asks
+  // for each offered gate's health (`includeGateHealth`: a platform gate's stored health, a
+  // self-connected gate probed live, up to ~3s) — as a second read beside the first, so a slow
+  // probe only delays the health tags, never the form (legacy 816).
+  const healthRead = useCapability<AgentProfile>(http, 'get_agent_profile', {
+    ...profileParams,
+    includeGateHealth: true,
+  });
   const gateHealth = useMemo(() => {
     const map = new Map<string, GateHealthWire>();
-    if (profile.state.status === 'ready') {
-      for (const gate of profile.state.data.availableGatekeepers) {
+    if (healthRead.state.status === 'ready') {
+      for (const gate of healthRead.state.data.availableGatekeepers) {
         if (gate.health !== undefined) map.set(gate.gatekeeperId, gate.health);
       }
     }
     return map;
-  }, [profile.state]);
+  }, [healthRead.state]);
+  const gateHealthPending = healthRead.state.status === 'loading';
 
   // B3 (§5.8 "id → 名称"): the effective panel's ids resolve against the lists this page already
   // loads for the form — the same rows, no extra read (a `kit/ref-chip` self-resolve would add a
@@ -142,7 +144,8 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
 
   function handleSaved(saved: AgentProfile): void {
     invalidateCapability(http, 'get_agent_profile');
-    profile.mutate((previous) => keepGateHealth(saved, previous));
+    // A save changes what the agent uses, not how the gates stand: the health read stays as it is.
+    profile.mutate(() => saved);
     // #1394 review P3-1: a read still in flight (a remount shows the cached profile while it
     // reloads, and this read waits on the gates' probes) started before the save and would land
     // the profile from before it. Read again, so the newest read is one made after the save.
@@ -251,6 +254,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 skills={skills.state.status === 'ready' ? skills.state.data.items : []}
                 gatekeepers={gatekeepers.rows ?? []}
                 gateHealth={gateHealth}
+                gateHealthPending={gateHealthPending}
                 workerDefinitions={
                   workerDefinitions.state.status === 'ready'
                     ? workerDefinitions.state.data.items
