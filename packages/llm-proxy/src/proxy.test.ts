@@ -1859,15 +1859,16 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
   });
 
   it('scrubs the real key from a redirect target before bounding it, so a key across the bound never shows its leading part (#1344 review by #501)', async () => {
-    // Dotted, no `sk`/`key`/`tok` prefix, every run under 24 characters: only the verbatim
-    // replacement hides it — none of the token-shape patterns would.
-    const KEY = 'Qm7Xv9Lp2R.4tZ8nW1yH6c.B3hJ5uD0fG';
+    // The provider's (synthetic) key, echoed by the upstream. Dotted, no `sk`/`key`/`tok` prefix,
+    // every run under 24 characters: only the verbatim replacement hides it — none of the
+    // token-shape patterns would.
+    const ECHOED = 'Qm7Xv9Lp2R.4tZ8nW1yH6c.B3hJ5uD0fG';
     // 280 characters of ordinary short segments, so the key starts at the 281st character of the
     // shown path and the 300-character bound would cut it after 20.
     const before = `/${'chat/'.repeat(55)}v12/`;
     expect(before).toHaveLength(280);
     const redirecting = http.createServer((_req, res) => {
-      res.writeHead(307, { location: `${before}${KEY}/messages` });
+      res.writeHead(307, { location: `${before}${ECHOED}/messages` });
       res.end();
     });
     const redirectPort = await listen(redirecting);
@@ -1883,7 +1884,7 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
       maxRequestBodyBytes: 1_000_000,
       upstreamConnectTimeoutMs: 2000,
       upstreamIdleTimeoutMs: 2000,
-      resolveApiKey: (name) => (name === 'FAKE_ANTHROPIC_API_KEY' ? KEY : undefined),
+      resolveApiKey: (name) => (name === 'FAKE_ANTHROPIC_API_KEY' ? ECHOED : undefined),
       log: (line) => logLines.push(line),
     });
     const proxyPort = await listen(proxy);
@@ -1903,9 +1904,9 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     const body = res.body.toString('utf8');
     const message = `upstream responded 307, a redirect to "${before}***/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`;
     expect(JSON.parse(body)).toEqual({ error: { code: 'bad_gateway', message } });
-    const keyPieces = Array.from({ length: KEY.length - 7 }, (_, i) => KEY.slice(i, i + 8));
+    const pieces = Array.from({ length: ECHOED.length - 7 }, (_, i) => ECHOED.slice(i, i + 8));
     for (const text of [body, ...logLines]) {
-      for (const piece of keyPieces) expect(text).not.toContain(piece);
+      for (const piece of pieces) expect(text).not.toContain(piece);
     }
     expect(
       logLines.map((line) => JSON.parse(line)).find((line) => line.status === 307),

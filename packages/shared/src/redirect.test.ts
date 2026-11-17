@@ -43,16 +43,16 @@ describe('redirectTargetForDisplay', () => {
     expect(long).toBe(JSON.stringify(`/${'a'.repeat(299)}…`));
   });
 
-  it("runs a caller's scrub before the bound, so a secret across it is hidden whole (#1344 review by #501)", () => {
-    const secret = 'SECRET-0123456789-abcdef';
-    const location = `/${'b'.repeat(289)}/${secret}/x`;
-    const hide = (shown: string): string => shown.split(secret).join('***');
+  it("runs a caller's scrub before the bound, so a value across it is hidden whole (#1344 review by #501)", () => {
+    const hidden = 'HIDDEN-0123456789-abcdef';
+    const location = `/${'b'.repeat(289)}/${hidden}/x`;
+    const hide = (shown: string): string => shown.split(hidden).join('***');
     expect(redirectTargetForDisplay(location, REQUEST, hide)).toBe(
       JSON.stringify(`/${'b'.repeat(289)}/***/x`),
     );
-    // Without it the bound cuts the secret first: its leading part is what shows.
+    // Without it the bound cuts the value first: its leading part is what shows.
     expect(redirectTargetForDisplay(location, REQUEST)).toBe(
-      JSON.stringify(`/${'b'.repeat(289)}/SECRET-01…`),
+      JSON.stringify(`/${'b'.repeat(289)}/HIDDEN-01…`),
     );
     // The scrub sees the origin too when the target is another origin, never the query.
     const seen: string[] = [];
