@@ -45,7 +45,8 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  *
  * **Only what is kept is read.** A gate's result is as large as the gate sent it (legacy 808) and
  * the redactor runs on the kernel's event loop, so `keptGatePayload` redacts only the start of it
- * (`redactSuspectedSecretsUpTo`, `GATE_OBSERVATION_READ_CHARS` of string content) and cuts that to
+ * (`redactSuspectedSecretsUpTo`: `GATE_OBSERVATION_READ_CHARS` characters of keys and values, the
+ * rest left out unread however many keys or items it has) and cuts that to
  * `GATE_OBSERVATION_PAYLOAD_MAX_CHARS` once serialized — the read reaches past the cut by a margin
  * longer than any secret replaced whole, so a secret the cut crosses was read whole and replaced
  * (as application/chat/tool-call-record.ts reads a tool call's result). Replacements shorten the
@@ -57,7 +58,7 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
 
 const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
 const GATE_OBSERVATION_PAYLOAD_MAX_CHARS = 8_000;
-/** Characters of a result's string content read: what is kept plus a margin longer than any secret
+/** Characters of a result read (keys and values): what is kept plus a margin longer than any secret
  *  replaced whole (a PEM RSA-4096 private key is ~3.3k characters) — the margin
  *  application/chat/tool-call-record.ts's `SECRET_MARGIN_CHARS` reads a tool call's result by. */
 const GATE_OBSERVATION_READ_CHARS = GATE_OBSERVATION_PAYLOAD_MAX_CHARS + 4_096;

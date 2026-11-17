@@ -265,6 +265,108 @@ describe('redactSecrets — structured values', () => {
   });
 });
 
+describe('redactSecrets — a bounded walk reads no further than its bound (legacy 237)', () => {
+  /** An object whose every property read is counted — what the walk read, not what it kept. */
+  function countingObject(keys: number): { readonly value: object; reads(): number } {
+    let reads = 0;
+    const value = {};
+    for (let i = 0; i < keys; i += 1) {
+      Object.defineProperty(value, `k${i}`, {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return i;
+        },
+      });
+    }
+    return { value, reads: () => reads };
+  }
+
+  it('charges keys to maxChars and, once it is spent, leaves the rest of the object out as one entry', () => {
+    const object = countingObject(10_000);
+    const redacted = redactSecrets(object.value, { maxChars: 30 });
+    // `k0`…`k9` and their values (2 + 1 characters each) spend the budget; the rest is one `[…]`
+    // entry, unread.
+    expect(redacted.value).toEqual({
+      ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, i])),
+      [OMITTED]: OMITTED,
+    });
+    expect(redacted.omitted).toBe(true);
+    expect(object.reads()).toBe(10);
+  });
+
+  it('cuts a key past the budget like a string, and keeps a real `[…]` key apart from the marker', () => {
+    expect(
+      redactSecrets({ [OMITTED]: 'kept', later: 1 }, { maxChars: OMITTED.length + 3 }),
+    ).toEqual({
+      value: { [OMITTED]: 'kep…', [`${OMITTED} (2)`]: OMITTED },
+      redactedValues: 0,
+      omitted: true,
+    });
+    // `ab` and `1` leave 2 characters for the next key.
+    expect(redactSecrets({ ab: 1, longkey: 2 }, { maxChars: 5 })).toEqual({
+      value: { ab: 1, 'lo…': 2 },
+      redactedValues: 0,
+      omitted: true,
+    });
+  });
+
+  it('once the budget is spent, leaves the rest of an array out as one item, unread', () => {
+    let reads = 0;
+    const items = new Proxy(['abcd', 'efgh', ...Array.from({ length: 10_000 }, (_, i) => i)], {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^\d+$/.test(property)) reads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(redactSecrets(items, { maxChars: 6 })).toEqual({
+      value: ['abcd', 'ef…', OMITTED],
+      redactedValues: 0,
+      omitted: true,
+    });
+    expect(reads).toBe(2);
+  });
+
+  it('charges a number’s characters too: an array of numbers is read only up to the bound', () => {
+    let reads = 0;
+    const numbers = new Proxy(
+      Array.from({ length: 10_000 }, (_, i) => i),
+      {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property)) reads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    expect(redactSecrets(numbers, { maxChars: 5 }).value).toEqual([0, 1, 2, 3, 4, OMITTED]);
+    expect(reads).toBe(5);
+  });
+
+  it('a bounded walk that runs out of nodes reads no further either', () => {
+    const value = Array.from({ length: 10 }, () => ({}));
+    expect(redactSecrets(value, { maxChars: 1000, maxNodes: 3 })).toEqual({
+      value: [{}, {}, OMITTED, OMITTED],
+      redactedValues: 0,
+      omitted: true,
+    });
+  });
+
+  it('without maxChars, the walk is as before: keys uncut, every item and entry visited', () => {
+    const object = countingObject(1_000);
+    const redacted = redactSecrets(
+      { list: Array.from({ length: 5 }, () => ({})), object: object.value },
+      { maxNodes: 3 },
+    );
+    expect(redacted.value).toEqual({
+      list: [{}, OMITTED, OMITTED, OMITTED, OMITTED],
+      object: OMITTED,
+    });
+    const unbounded = redactSecrets(object.value, { maxNodes: Number.POSITIVE_INFINITY });
+    expect(Object.keys(unbounded.value as object)).toHaveLength(1_000);
+    expect(unbounded.omitted).toBe(false);
+  });
+});
+
 describe('redactSecrets — object keys (legacy 444)', () => {
   it('scrubs a key the way it scrubs a value, counts it, and keeps the value under it', () => {
     const paths: string[] = [];

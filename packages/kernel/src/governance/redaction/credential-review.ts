@@ -124,12 +124,13 @@ export function redactSuspectedSecrets(
 }
 
 /** `redactSuspectedSecrets` (the same rule, the same options) for a value nothing has bounded — a
- *  gate's result, as large as the gate sent it (legacy 808): only the first `maxChars` characters
- *  of its string content are read, and objects and arrays up to `MAX_WALK_NODES`; past either
- *  bound the rest is cut (`…`) or left out (`[…]`), and `omitted` says so. The redactor runs on the
- *  kernel's event loop, so a caller that keeps only a preview of the copy reads just past what it
- *  keeps, by a margin longer than any secret replaced whole (application/task/gate-observation.ts,
- *  as application/chat/tool-call-record.ts's `SECRET_MARGIN_CHARS`). */
+ *  gate's result, as large as the gate sent it (legacy 808): only its first `maxChars` characters
+ *  (keys and values, `redactSecrets`'s `maxChars`) are read, and objects and arrays up to
+ *  `MAX_WALK_NODES`; past either bound the rest is cut (`…`) or left out unread (`[…]`), and
+ *  `omitted` says so. The redactor runs on the kernel's event loop, so a caller that keeps only a
+ *  preview of the copy reads just past what it keeps, by a margin longer than any secret replaced
+ *  whole (application/task/gate-observation.ts, as application/chat/tool-call-record.ts's
+ *  `SECRET_MARGIN_CHARS`). */
 export function redactSuspectedSecretsUpTo(
   value: unknown,
   maxChars: number,

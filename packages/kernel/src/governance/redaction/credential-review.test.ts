@@ -341,16 +341,16 @@ describe('redactSuspectedSecretsUpTo — the same copy, read only up to a bound 
   });
 
   it('past the bound, cuts the string reading stopped in, leaves out the rest, and says so', () => {
-    // `ops` and the note are read whole; a secret-named field's value is replaced unread and
-    // counts nothing against the bound.
-    const read = 3 + `Authorization: Bearer ${FAKE}`.length;
+    // Every key and `ops` and the note are read whole; a secret-named field's value is replaced
+    // unread and counts nothing against the bound.
+    const read = ['user', 'ops', 'password', 'note', value.note, 'rows'].join('').length;
     const bounded = redactSuspectedSecretsUpTo(value, read + 10, { secretFields: true });
     expect(bounded).toEqual({
       value: {
         user: 'ops',
         password: '[redacted]',
         note: 'Authorization: [redacted]',
-        rows: [`${'a'.repeat(10)}…`, '[…]', '[…]'],
+        rows: [`${'a'.repeat(10)}…`, '[…]'],
       },
       omitted: true,
     });

@@ -328,6 +328,10 @@ interface WalkState {
   nodes: number;
   chars: number;
   omitted: boolean;
+  /** A finite `maxChars` was passed: keys and other scalars are charged too, a key is cut like a
+   *  string, and once either budget is spent the rest of a container is left out unread
+   *  (`RedactSecretsOptions.maxChars`). */
+  readonly bounded: boolean;
   /** Hidden as literals in every string, before the patterns run (`RedactSecretsOptions`). */
   readonly literals: readonly string[];
   /** Where values were replaced — only for a caller that asked (`onRedacted`). */
@@ -362,6 +366,7 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     nodes: options.maxNodes ?? MAX_WALK_NODES,
     chars: options.maxChars ?? Number.POSITIVE_INFINITY,
     omitted: false,
+    bounded: options.maxChars !== undefined && Number.isFinite(options.maxChars),
     onRedacted: options.onRedacted,
     patterns: options.patterns ?? SECRET_VALUE_PATTERNS,
     literals: options.literals ?? [],
@@ -667,8 +672,13 @@ export interface RedactSecretsOptions {
    *  writes the result back as structured data passes `Infinity` for a value already validated and
    *  bounded upstream (capability params, at most 1 MiB). */
   readonly maxNodes?: number;
-  /** Characters of string content read in all; a string past the budget is cut (ending in `…`)
-   *  or left out. Defaults to no bound — for display, pass one. */
+  /** Characters read in all: string content, object keys, and the characters of a number, a
+   *  boolean or null; a string or key past the budget is cut (ending in `…`), a value under a
+   *  secret-named field is replaced unread and charged nothing. Once the budget is spent — or
+   *  `maxNodes` is — the rest of every container is left out unread, as one `[…]` (an array's
+   *  last item, an object's last entry): a value is read only up to the bound, however many keys
+   *  or items it has (legacy 237). Defaults to no bound — for display, or for a value nothing has
+   *  bounded upstream, pass one. */
   readonly maxChars?: number;
   /** Told each place values were replaced: its path (`a.b[2].c`) and how many. */
   readonly onRedacted?: (path: string, count: number) => void;
@@ -718,8 +728,9 @@ function childPath(
  * value's (so a count, a refusal and a masked read all see it). A key that changes is reported at
  * its shown spelling; the original is never reported. Two keys that come out the same (two
  * different tokens behind one `Bearer [redacted]`) stay two fields: the later one gets ` (2)`,
- * ` (3)`, … — a key is never merged into another, so no value is lost from the copy. Keys are not
- * charged to `maxChars`: what bounds a key is what bounds the value it sits in.
+ * ` (3)`, … — a key is never merged into another, so no value is lost from the copy. A key is
+ * charged to `maxChars` like a string, and cut like one past it (legacy 237: a value with a
+ * million keys is read only up to the bound).
  */
 function shownKey(
   key: string,
@@ -729,7 +740,14 @@ function shownKey(
   options: RedactSecretsOptions,
 ): string {
   const before = state.count;
-  const scrubbed = scrubInto(key, state);
+  let read = key;
+  if (key.length <= state.chars) state.chars -= key.length;
+  else {
+    state.omitted = true;
+    read = `${key.slice(0, Math.max(state.chars, 0))}…`;
+    state.chars = 0;
+  }
+  const scrubbed = scrubInto(read, state);
   let shown = scrubbed;
   for (let n = 2; Object.hasOwn(taken, shown); n += 1) shown = `${scrubbed} (${n})`;
   noted(state, childPath(path, shown, options), before);
@@ -765,7 +783,12 @@ function redactInto(
     noted(state, path, before);
     return out;
   }
-  if (value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') {
+    // A number, a boolean or null is read too: its characters are charged like a string's, so
+    // an array of millions of them is read only up to a bound as well.
+    if (state.bounded) state.chars -= String(value).length;
+    return value;
+  }
   state.nodes -= 1;
   if (state.nodes < 0) {
     state.omitted = true;
@@ -774,18 +797,34 @@ function redactInto(
   if (Array.isArray(value)) {
     // An array item is a value, not a property declaration: only `field` carries into it.
     const itemWithin: Within = within === 'field' ? 'field' : 'plain';
-    return value.map((item, index) =>
-      redactInto(
-        item,
-        options,
-        state,
-        itemWithin,
-        path === undefined ? undefined : `${path}[${index}]`,
-      ),
-    );
+    const items: unknown[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (spent(state)) {
+        items.push(OMITTED);
+        break;
+      }
+      items.push(
+        redactInto(
+          value[index],
+          options,
+          state,
+          itemWithin,
+          path === undefined ? undefined : `${path}[${index}]`,
+        ),
+      );
+    }
+    return items;
   }
   const out: Record<string, unknown> = {};
-  for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (spent(state)) {
+      let marker = OMITTED;
+      for (let n = 2; Object.hasOwn(out, marker); n += 1) marker = `${OMITTED} (${n})`;
+      defineEntry(out, marker, OMITTED);
+      break;
+    }
+    const inner = record[key];
     let innerWithin: Within;
     if (within === 'field' || options.isSecretKey?.(key) === true) innerWithin = 'field';
     else if (within === 'property' && SCHEMA_VALUE_KEYWORDS.has(key)) innerWithin = 'field';
@@ -793,16 +832,27 @@ function redactInto(
       innerWithin =
         options.schemaLiterals === true && namesASecretField(key) ? 'property' : 'plain';
     const written = shownKey(key, out, state, path, options);
-    // Defined as an own property: assigning `out[key]` with a `"__proto__"` key would swap the
-    // prototype instead of keeping a field.
-    Object.defineProperty(out, written, {
-      value: redactInto(inner, options, state, innerWithin, childPath(path, written, options)),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    defineEntry(
+      out,
+      written,
+      redactInto(inner, options, state, innerWithin, childPath(path, written, options)),
+    );
   }
   return out;
+}
+
+/** Defined as an own property: assigning `out[key]` with a `"__proto__"` key would swap the
+ *  prototype instead of keeping a field. */
+function defineEntry(out: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** A bounded walk (`maxChars`) whose characters or nodes are spent reads no further: the rest of
+ *  the container it is in is left out. */
+function spent(state: WalkState): boolean {
+  if (!state.bounded || (state.chars > 0 && state.nodes >= 0)) return false;
+  state.omitted = true;
+  return true;
 }
 
 /** A structured value with every string in it scrubbed — object keys included (legacy 444,

@@ -55,18 +55,37 @@ describe('keptGatePayload (legacy 237)', () => {
     expect(kept.value as string).not.toContain(jwt.slice(0, 10));
   });
 
+  it('the margin covers a secret as long as any replaced whole: a 3 KB token the cut crosses leaves nothing', () => {
+    // A JWT whose claims run to ~3 KB (a Handle is well under 2k, a PEM RSA-4096 key ~3.3k): cut
+    // short of its end, it would no longer be a JWT to the value patterns.
+    const claims = Buffer.from(JSON.stringify({ sub: randomUUID(), pad: 'p'.repeat(2_400) }));
+    const jwt = [
+      Buffer.from('{"alg":"HS256"}').toString('base64url'),
+      claims.toString('base64url'),
+      Buffer.from(randomUUID()).toString('base64url'),
+    ].join('.');
+    expect(jwt.length).toBeGreaterThan(3_000);
+    const filler = 'x'.repeat(KEPT_CHARS - 10 - '{"filler":"'.length - '","note":"token '.length);
+    const payload = { filler, note: `token ${jwt}` };
+    expect(JSON.stringify(payload).indexOf(jwt)).toBe(KEPT_CHARS - 10);
+
+    const kept = keptGatePayload(payload);
+    expect(kept.truncated).toBe(true);
+    expect(kept.value as string).not.toContain(jwt.slice(0, 10));
+  });
+
   it('only the start of a result is read: a start that redaction shortened below the cut is kept as it is, marked truncated', () => {
     const tokens = Array.from({ length: 400 }, () => syntheticJwt());
     const payload = { notes: tokens.map((token) => `Authorization: Bearer ${token}`) };
     const kept = keptGatePayload(payload);
 
     // Read whole, its copy would be longer than the cut; read to the bound, it is shorter, and the
-    // strings past the bound are left out.
+    // strings past the bound are left out as one `[…]`.
     expect(JSON.stringify(fullCopy(payload)).length).toBeGreaterThan(KEPT_CHARS);
     expect(JSON.stringify(kept.value).length).toBeLessThan(KEPT_CHARS);
     expect(kept.truncated).toBe(true);
     const notes = (kept.value as { notes: string[] }).notes;
-    expect(notes).toHaveLength(tokens.length);
+    expect(notes.length).toBeLessThan(tokens.length);
     expect(notes.slice(0, 10)).toEqual(
       (fullCopy(payload) as { notes: string[] }).notes.slice(0, 10),
     );
