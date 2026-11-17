@@ -463,7 +463,9 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
             level: 'warn',
             msg: instance.gate
               ? 'gate host: re-handshake failed, the instance keeps its previous build'
-              : 'gate host: instance not ready (target or manifest unreachable), will retry',
+              : // Legacy 794: any build failure lands here (a redirect, a manifest that does not
+                // parse, a target that refuses) — `error` says which, so the message names none.
+                'gate host: instance not ready (could not build it from its target or manifest), will retry',
             gateId: instance.gateId,
             error: instance.buildError,
           }),
@@ -645,7 +647,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     if (!items) return false;
     await reconcile(items);
     for (const instance of table.values()) {
-      // Rebuild while not ready (target was unreachable) or while it still has no Operations (an
+      // Rebuild while not ready (the last build failed) or while it still has no Operations (an
       // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every
       // tick — or when a preset's Operations changed (S11 P1-F; a failed rebuild keeps the gate
       // already built and retries next tick).

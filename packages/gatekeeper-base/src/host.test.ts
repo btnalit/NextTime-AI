@@ -1118,15 +1118,31 @@ describe('createGateHost (P-B2a)', () => {
 
     it('a redirect leaves the instance unbuilt and unannounced, says where it pointed, and is never followed', async () => {
       state.items = [openApiItem(`${base}/moved.json`)];
-      host = await createGateHost({ env, fetchImpl: hostFetch(), listen: false });
+      const lines: string[] = [];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(),
+        listen: false,
+        log: (line) => lines.push(line),
+      });
       await host.tick();
       const [instance] = host.instances();
       expect(instance).toMatchObject({ gateId: 'demo-http', ready: false, operationCount: 0 });
-      expect(instance?.buildError).toBe(
-        'OpenAPI document responded 302, a redirect to "/elsewhere/openapi.json". The gate host does not follow redirects for an owner-supplied URL: set manifestSource to the final address.',
-      );
+      const why =
+        'OpenAPI document responded 302, a redirect to "/elsewhere/openapi.json". The gate host does not follow redirects for an owner-supplied URL: set manifestSource to the final address.';
+      expect(instance?.buildError).toBe(why);
       expect(seen).toEqual(['/moved.json']);
       expect(state.announcements).toEqual([]);
+      // Legacy 794: the warn line does not call a redirect "unreachable"; `error` says what it was.
+      const warn = lines
+        .map((line) => JSON.parse(line))
+        .find((line) => line.gateId === 'demo-http' && line.level === 'warn');
+      expect(warn).toEqual({
+        level: 'warn',
+        msg: 'gate host: instance not ready (could not build it from its target or manifest), will retry',
+        gateId: 'demo-http',
+        error: why,
+      });
     });
 
     it('a redirect to another origin names that origin, and is never followed', async () => {
