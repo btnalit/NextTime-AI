@@ -10,6 +10,7 @@ import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { newConnectionSecretSalt } from '../../adapters/gatekeeper-client/connection-secret.js';
 import {
   type GateTarget,
   type GatekeeperClient,
@@ -169,6 +170,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ws: string,
       byPrincipalId: string,
       name: string,
+      connectionSecretSalt?: string,
     ): Promise<string> {
       return withWorkspace(
         pool,
@@ -185,6 +187,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             endpoint: `https://gate.agent-profile-test.invalid/${name}`,
             activityId: activity.id,
             registeredBy: { id: byPrincipalId, kind: 'human' },
+            ...(connectionSecretSalt !== undefined ? { connectionSecretSalt } : {}),
           });
           return gatekeeperId;
         },
@@ -390,24 +393,34 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
-    // Legacy 200 (kernel half): every gate My Agent offers says how it stands. A gate the workspace
-    // connected itself is probed live on `get_agent_profile` (as `get_gatekeeper` probes it); the
-    // catalog-gate half (stored instance health, no probe) is in platform-gates.integration.test.ts.
+    // Legacy 200 (kernel half): every gate My Agent offers says how it stands, when the read asks
+    // (`includeGateHealth`). A gate the workspace connected itself is probed live (as
+    // `get_gatekeeper` probes it), after the read's transaction; the catalog-gate half (stored
+    // instance health, no probe) is in platform-gates.integration.test.ts.
     describe('get_agent_profile — gate health (legacy 200)', () => {
       type Answer = 'ok' | 'degraded' | 'unauthorized' | 'refused';
       let probed: string[] = [];
+      let credentials = new Map<string, GateTarget['credential']>();
+      let checkedOutDuringProbes: number[] = [];
       let inFlight = 0;
       let mostInFlight = 0;
 
+      /** A gate client that answers each endpoint as `answers` says — and, like the real client,
+       *  refuses a gate with no connection secret before any request (`connection_secret_missing`,
+       *  401). Records the credential each probe went out with, and how many pooled connections
+       *  were checked out meanwhile. */
       function fakeHealthClient(answers: ReadonlyMap<string, Answer>): GatekeeperClient {
         return {
           health: async (target: GateTarget) => {
             probed.push(target.endpoint);
+            credentials.set(target.endpoint, target.credential);
+            checkedOutDuringProbes.push(pool.totalCount - pool.idleCount);
             inFlight += 1;
             mostInFlight = Math.max(mostInFlight, inFlight);
             try {
               await new Promise((resolve) => setTimeout(resolve, 20));
-              const answer = answers.get(target.endpoint);
+              const answer =
+                target.credential.kind === 'none' ? 'unauthorized' : answers.get(target.endpoint);
               if (answer === 'ok') return { status: 'ok' };
               if (answer === 'degraded') return { status: 'degraded' };
               if (answer === 'unauthorized') {
@@ -427,20 +440,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       afterEach(() => {
         setGatekeeperReadHandlerDeps({});
         probed = [];
+        credentials = new Map();
+        checkedOutDuringProbes = [];
         inFlight = 0;
         mostInFlight = 0;
       });
 
+      /** Four self-connected gates, each with its own connection-secret salt (`create_connection`),
+       *  plus one connected before connection secrets existed (no salt), all granted to a member. */
       async function selfConnectedGates() {
         const ws = await adminInsertWorkspace('agent-profile-flow-gate-health-workspace');
         const owner = await adminInsertPrincipal(ws, 'owner', 'HealthOwner');
         const memberId = await adminInsertPrincipal(ws, 'member', 'HealthMember');
-        const gate = async (role: Answer) => {
+        const gate = async (role: Answer | 'legacy') => {
           const name = `health-${role}-${randomUUID()}`;
-          const gatekeeperId = await registerTestGatekeeper(ws, owner, name);
+          const salt = role === 'legacy' ? undefined : newConnectionSecretSalt();
+          const gatekeeperId = await registerTestGatekeeper(ws, owner, name, salt);
           await grantGatekeeper(ws, owner, memberId, gatekeeperId);
           return {
             gatekeeperId,
+            salt,
             endpoint: `https://gate.agent-profile-test.invalid/${name}`,
           };
         };
@@ -449,6 +468,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           degraded: await gate('degraded'),
           locked: await gate('unauthorized'),
           down: await gate('refused'),
+          legacy: await gate('legacy'),
         };
         setGatekeeperReadHandlerDeps({
           gatekeeperClient: fakeHealthClient(
@@ -457,20 +477,21 @@ describe.runIf(DATABASE_URL !== undefined)(
               [gates.degraded.endpoint, 'degraded'],
               [gates.locked.endpoint, 'unauthorized'],
               [gates.down.endpoint, 'refused'],
+              [gates.legacy.endpoint, 'ok'],
             ]),
           ),
         });
         return { ws, memberId, gates };
       }
 
-      it('a self-connected gate carries its live /gate/health — ok, unreachable (degraded or no answer) or unauthorized — every gate probed once, all at once', async () => {
+      it('includeGateHealth: a self-connected gate carries its live /gate/health — ok, unreachable (degraded or no answer) or unauthorized — every gate probed once, all at once, after the transaction', async () => {
         const { ws, memberId, gates } = await selfConnectedGates();
 
         const profile = (await dispatchCapability(
           { pool },
           humanCaller(ws, memberId, 'member'),
           'get_agent_profile',
-          {},
+          { includeGateHealth: true },
         )) as AgentProfileWire;
 
         expect(
@@ -481,31 +502,67 @@ describe.runIf(DATABASE_URL !== undefined)(
             [gates.degraded.gatekeeperId, 'unreachable'],
             [gates.locked.gatekeeperId, 'unauthorized'],
             [gates.down.gatekeeperId, 'unreachable'],
+            [gates.legacy.gatekeeperId, 'unauthorized'],
           ]),
         );
-        expect([...probed].sort()).toEqual(
-          [gates.up, gates.degraded, gates.locked, gates.down].map((g) => g.endpoint).sort(),
-        );
-        expect(mostInFlight).toBe(4);
+        const all = [gates.up, gates.degraded, gates.locked, gates.down, gates.legacy];
+        expect([...probed].sort()).toEqual(all.map((g) => g.endpoint).sort());
+        expect(mostInFlight).toBe(5);
+        // Review of #1389: no probe holds a pooled connection (and so the read's transaction).
+        expect(checkedOutDuringProbes).toEqual([0, 0, 0, 0, 0]);
       });
 
-      it('set_agent_profile probes nothing and its rows carry no health; the next get_agent_profile does', async () => {
+      it('includeGateHealth: each self-connected gate is probed with its own connection secret — never the platform gate token', async () => {
+        const { ws, memberId, gates } = await selfConnectedGates();
+
+        await dispatchCapability(
+          { pool },
+          humanCaller(ws, memberId, 'member'),
+          'get_agent_profile',
+          { includeGateHealth: true },
+        );
+
+        // Review of #1389 (D-01 / R-01): the platform gate token goes to catalog gates only.
+        for (const gate of [gates.up, gates.degraded, gates.locked, gates.down]) {
+          expect(credentials.get(gate.endpoint)).toEqual({
+            kind: 'connection',
+            workspaceId: ws,
+            salt: gate.salt,
+          });
+        }
+        expect(credentials.get(gates.legacy.endpoint)).toEqual({ kind: 'none' });
+        expect([...credentials.values()].map((c) => c.kind)).not.toContain('platform');
+      });
+
+      it('without includeGateHealth (the chat header’s model switcher) no gate is probed and no row carries health', async () => {
+        const { ws, memberId } = await selfConnectedGates();
+
+        const profile = (await dispatchCapability(
+          { pool },
+          humanCaller(ws, memberId, 'member'),
+          'get_agent_profile',
+          {},
+        )) as AgentProfileWire;
+
+        expect(profile.availableGatekeepers).toHaveLength(5);
+        for (const row of profile.availableGatekeepers) expect(row).not.toHaveProperty('health');
+        expect(probed).toEqual([]);
+      });
+
+      it('set_agent_profile probes nothing and its rows carry no health; the next get_agent_profile with includeGateHealth does', async () => {
         const { ws, memberId, gates } = await selfConnectedGates();
         const member = humanCaller(ws, memberId, 'member');
 
         const written = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
           excludedGatekeepers: [gates.down.gatekeeperId],
         })) as AgentProfileWire;
-        expect(written.availableGatekeepers).toHaveLength(4);
+        expect(written.availableGatekeepers).toHaveLength(5);
         for (const row of written.availableGatekeepers) expect(row).not.toHaveProperty('health');
         expect(probed).toEqual([]);
 
-        const read = (await dispatchCapability(
-          { pool },
-          member,
-          'get_agent_profile',
-          {},
-        )) as AgentProfileWire;
+        const read = (await dispatchCapability({ pool }, member, 'get_agent_profile', {
+          includeGateHealth: true,
+        })) as AgentProfileWire;
         expect(
           read.availableGatekeepers.find((g) => g.gatekeeperId === gates.down.gatekeeperId),
         ).toEqual({
@@ -514,7 +571,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           inUse: false,
           health: 'unreachable',
         });
-        expect(probed).toHaveLength(4);
+        expect(probed).toHaveLength(5);
       });
     });
 

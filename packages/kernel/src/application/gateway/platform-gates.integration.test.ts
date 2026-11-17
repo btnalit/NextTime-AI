@@ -2250,7 +2250,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           )) as AgentProfileWire;
           expect(
             profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
-          ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: true, health: 'ok' });
+          ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: true });
           expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
         });
         // With the Grant back in place the same gate is offered as granted, and is in the
@@ -2265,7 +2265,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId: cGatekeeperId,
           granted: true,
           inUse: true,
-          health: 'ok',
         });
         expect(granted.effective.enabledGatekeepers).toContain(cGatekeeperId);
       });
@@ -2273,7 +2272,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Legacy 200 (kernel half): a gate the workspace enabled from the catalog shows its
       // instance's stored health (kept by the gate's announcements, the value
       // `list_available_gate_instances` shows) — My Agent never probes it.
-      it('legacy 200: a catalog gate on My Agent carries its instance’s stored health, never a probe', async () => {
+      it('legacy 200: with includeGateHealth a catalog gate on My Agent carries its instance’s stored health, never a probe', async () => {
         let probes = 0;
         setGatekeeperReadHandlerDeps({
           gatekeeperClient: {
@@ -2291,7 +2290,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             { pool },
             humanCallerFor(cWorkspaceId, cMemberId, 'member'),
             'get_agent_profile',
-            {},
+            { includeGateHealth: true },
           )) as AgentProfileWire;
           expect(
             profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId)?.health,
@@ -2304,7 +2303,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             { pool },
             humanCallerFor(cWorkspaceId, cMemberId, 'member'),
             'get_agent_profile',
-            {},
+            { includeGateHealth: true },
           )) as AgentProfileWire;
           expect(
             unseen.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId)?.health,
@@ -2330,7 +2329,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(profile.excludedGatekeepers).toEqual([cGatekeeperId]);
             expect(
               profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
-            ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: false, health: 'ok' });
+            ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: false });
             expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
 
             const reach = await reachForMember();
