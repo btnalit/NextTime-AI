@@ -263,7 +263,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `reversibility` | 是否实现了 `/gate/revert`（门自己的 transport 是否提供 `revert`） |
 | `reads`/`writes` | 该 Operation 观察/影响哪些图 ObjectType——若这些类型还不存在，先走 `docs/runbooks/add-domain-pack.md` |
 | `target`（可选，只对 `execute`） | 一次调用作用于哪一个实例：`{"object_type": "Container", "params": ["id"]}`。声明了，同门的请求只和同一实例、整门的请求排队；不声明就和这个门上的所有请求排队。规则见 §6.1 |
-| `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
+| `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`（`command_pattern` 必须匹配**整条**命令，门按 `^(?:…)$` 处理；写成前缀的 `^show\b` 只放行恰好是 `show` 的命令，要放行参数就把整行写出来，参数只放远端 shell 当普通文本的字符，如 `show( [A-Za-z0-9_./:@%+=,-]+)*`。`.*`、`\S+` 或任何容得下 `;`、`&`、`\|`、`$`、反引号、引号的字符类都会让第二条命令搭车（`show x; reboot`），策略表拦不住；避免 `(\w+\s?)+` 这类嵌套量词，锚定后差一点匹配上的命令会让匹配指数级回溯）。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
 | `binding.absent_statuses` / `binding.absent_exit_codes`（可选，只对 `observe`） | 目标的哪些回答表示「要查的东西不存在」：`http` 只能写 `404`、`410`；`cli` / `ssh` 写退出码 1–125（最多 8 个；0、126、127、信号、ssh 自己的 255 都不行）；`mcp` 不能写。目标回答其中之一时，这次观察记为「不存在」（`absent`），不算调用失败；目标的响应体从不参与判断，没声明的回答照旧算失败。声明是 `binding` 的一部分，改了会改摘要，要重新审核发布。`execute` 的 Operation 不能写（清单会被拒绝）。控制台目录里的 Operation 详情会写出这些回答。**只能声明「在门用的凭据下，只有东西不存在时才会给」的回答**，见表后的说明 |
 
 **声明「不存在」的回答之前**：目标对「没权限看」「地址不对」「别的错误」也给同一个回答时，不能声明。否则这些情况会被记成「不存在」，依赖它的检查（比如「已经删掉了」的目标验收）就成了假证明。常见的不合格例子：
@@ -318,6 +318,18 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →
 `observe`，其余 → `execute`，且新导入的 `execute` 一律 `auto_approvable:false, await_decision:
 true`，等 owner 逐条审核后再发布，I17）——不需要手写每一行，见 §7 的导入路径。
+`importOpenApi` 会读 path 级的 `parameters`（Operation 自己声明的同名同位置参数覆盖它），并把
+指向同一文档的 `$ref`（`#/components/…`）原地展开；自我引用的 schema 在重复处写成 `{}`。跟不了的
+`$ref`（指向别的文档、指针不存在）不猜：这个 Operation 的 `params_schema` 只收读得到的参数，不再是
+接受一切的 `{}`。展开引用复制出来的内容有上限：每个 Operation 10000 个单位，整份文档 100000 个
+单位（跟一次引用算一个单位，从引用里复制出的每个 schema 值也算一个，文字每 64 个字符再算一个；
+Operation 自己原地写的不算），嵌套最多 512 层。整份文档的预算按 path 的顺序花，文档前部有个很大的
+Operation，后面的 Operation 就可能落到上限，定义随之变化（已发布的会回到 409，等对齐）。超过的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，ajv 编译
+不了，调用一律 400 `invalid_operation_schema`：换一份小一些的文档导入，或者手写门的清单。`$ref`
+旁边的兄弟关键字如果会盖掉目标自己的约束（目标 `maxLength: 3`，旁边写 `maxLength: 100`），两者
+放进 `allOf` 同时生效，不会放宽；`description`、`example` 这类注解照常覆盖。请求体顶层是组合
+（`allOf`、`anyOf`、`oneOf`、`not`，包括上面兄弟关键字产生的 `allOf`）或者只是引用自己时读不出来：
+这个 Operation 只收参数。数组、其他媒体类型的请求体仍然不进 `params_schema`，导入后要人工补。
 
 ## 7. 注册、导入清单、发布——capability 路径
 

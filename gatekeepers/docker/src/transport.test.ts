@@ -529,6 +529,10 @@ describe('docker gate refuses an id that is not a container reference (legacy 19
     'web/../db',
     'web#frag',
     'web?all=1',
+    // Legacy 793: `?` and a backslash on their own, so a pattern that let either through fails
+    // here — over tcp `x\..\..\info` is read as a URL and asks `GET /info/json`.
+    'web?x',
+    'x\\..\\..\\info',
     'a%2F..%2F..%2Finfo',
     '/web',
     '.web',
@@ -607,6 +611,9 @@ describe('docker gate refuses an id that is not a container reference (legacy 19
       await expect(gate.observe('container.inspect', { id: 'web#frag' })).rejects.toMatchObject({
         name: 'OperationRefusedError',
       });
+      await expect(
+        gate.observe('container.inspect', { id: 'x\\..\\..\\info' }),
+      ).rejects.toMatchObject({ name: 'OperationRefusedError' });
       expect(seen).toEqual([]);
       const inspected = await gate.observe('container.inspect', { id: 'web' });
       expect(inspected.observedFacts.map((f) => f.identity)).toEqual([{ id: WEB.id }]);
