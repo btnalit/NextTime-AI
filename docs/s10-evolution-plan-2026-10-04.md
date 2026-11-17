@@ -281,10 +281,10 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 | 通道 | 跨什么保留 | 谁能写 | 由什么机制保证 | 现状 |
 |---|---|---|---|---|
 | Worker 的工作目录 | 不跨 Task，保留期到期删除 | Worker | Task 模式每次新目录；supervisor 按 `TASK_WORKDIR_RETENTION_HOURS` 清理 | 已有 |
-| 目标内步骤产物（GO14） | 跨步骤，限本 GoalRun 保留期 | 上游 Worker | 推进器绑定、只读挂载，挂在下游 cwd 的上级链与 agentDir 之外 | 设计，未实现 |
+| 目标内步骤产物（GO14） | 跨步骤，限本 GoalRun 保留期 | 上游 Worker | 推进器绑定、只读挂载，挂在下游 cwd 的上级链与 agentDir 之外 | 已有（GO14，#884） |
 | Skill / Procedure / WorkerDefinition / 本体 / Operation | 永久 | 只能经人发布 | I16、发布绑定版本（#592） | 已有 |
 | 先例召回（GO17） | 跨目标 | 平台 | 只引用完整记录与证据，正例只取 `verified_by_check` 且未被覆盖的；只取请求人自己发起的目标（GO17a 收窄：owner 也一样，比 GO5a / 遗留 421 的可见性谓词更窄） | GO17a 读出（`find_goal_precedents`、入口上下文、规划器输入），读时算、不存；「引用了哪个」的记录在 GO17b |
-| 入口 agent 的持久工作目录 | 永久（按用户） | 入口 agent（bash / write） | **白名单启动**：pi 的全部资源发现关闭（上下文文件、扩展、skills、提示模板、MCP），`settings.json` 由平台整份写入，平台扩展、已发布 Skill、入口提示显式传入；U2 建成前守卫先放 e2e / CI 测试，U2 建成后并入 | **未完成**（遗留 422，AA5 之前关闭）；今天 pi 每次启动仍会加载其中的 `AGENTS.md`、扩展与 `mcp.json` |
+| 入口 agent 的持久工作目录 | 永久（按用户） | 入口 agent（bash / write） | **白名单启动**：pi 的全部资源发现关闭（上下文文件、扩展、skills、提示模板、MCP），`settings.json` 由平台整份写入，平台扩展、已发布 Skill、入口提示显式传入；U2 建成前守卫先放 e2e / CI 测试，U2 建成后并入 | 已有（遗留 422 由 #698 关闭）；2026-10-23 写本表时 pi 每次启动仍会加载其中的 `AGENTS.md`、扩展与 `mcp.json` |
 | 入口 agent 的个人记忆（E4） | 跨会话（按用户） | 受审扩展 | 平台显式加载的固定版本扩展，不进图谱 | 推迟 |
 
 原则（victor 2026-10-23）：平台只用 pi 的核心 runtime，外层一律由平台自己包装；平台扩展充分利用 pi 的扩展机制，但一律显式传入。
@@ -376,8 +376,11 @@ WorkerDefinition 的 `capabilities` 本身就是授权，所以由人发布、�
   Source、被通用读读到）。发布审阅页显示判定、各用例得分与成本差，发布请求绑定 `(kind, id, version)` + 摘要（I-E3）。
   **评测只给证据，不替人发布**。判定为 `regressed` 或 `worse` 时，发布人要逐条确认失败项并写理由，记审计（victor 2026-10-23 定分叉 2 = b，
   做法同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认，避免确认疲劳。
-- **防噪**（E3 范围，**均未实现**）：每个工作区每天提议进入评测的配额；同一目标被重复提议且多次 `worse` 时熔断（ouroboros），被证伪的假设记入历史，
+- **防噪**（E3 范围）：每个工作区每天提议进入评测的配额；同一目标被重复提议且多次 `worse` 时熔断（ouroboros），被证伪的假设记入历史，
   提议者再次提议时看得到（rrsi）。
+  **现状（2026-11-17 核对）**：被证伪历史已实现——提议者经 `get_skill_draft_verdicts` 看得到自己草稿的 dev 结论（E3-3b，#845），发布审阅列出同族最近 10 次
+  `refuted` / `regressed` / `worse`；配额与熔断未实现，也暂无对象可限：草稿评测只能由人发起（`start_draft_evaluation` 是 human 通道）、同一草稿同时只跑一次、
+  另有月度评测预算。等出现不经人发起的提议或评测（见 `global-roadmap-2026-10-16.md` §6 的 RS6）再一起设计。
 - **验收**：回归棘轮 + 机制筛 + 样本不足判 `inconclusive`；一个 Skill 草稿经评测在发布页显示判定；评测期间任何真实门零调用（审计可证；集成测试断言评测容器观察真实门得
   `excluded_by_policy`）；改模型后同一对比判 `unmeasured`；提议者的 agent 经 `search` / `explain` 读不到任何用例内容。
 
