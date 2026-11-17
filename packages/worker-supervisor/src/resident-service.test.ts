@@ -266,6 +266,29 @@ describe('resident-service spawn', () => {
     expect(egressMap.read()[first.ip as string]).toBeUndefined();
   });
 
+  it('a rotation leaves the old address to a container registered there since (legacy 169)', async () => {
+    const { service, docker, egressMap } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-old'),
+    });
+    const stop = docker.stop.bind(docker);
+    docker.stop = async (name, timeout) => {
+      await stop(name, timeout);
+      // Docker hands the released address to a Worker before the rotation unregisters.
+      egressMap.register(first.ip as string, { sourceId: 'worker:ws-1:run-9' });
+    };
+
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-new'),
+    });
+
+    expect(egressMap.read()[first.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-9' });
+  });
+
   it('does not force a recreation when the Handle is not a decodable JWT (plain string, e.g. "h")', async () => {
     const { service, docker } = setup();
     const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
@@ -943,6 +966,31 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
     expect(existsSync(workspaceDir)).toBe(false);
     expect(existsSync(platformDir('alice'))).toBe(false);
     expect(await service.status('alice')).toBeUndefined();
+  });
+
+  it('a reclaim after a restart leaves the address to a container registered there since (legacy 169)', async () => {
+    const { config, docker, egressMap, service } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    // A restarted supervisor that has not reconciled yet knows the container's workspace only
+    // from its label.
+    const restarted = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
+    const remove = docker.remove.bind(docker);
+    docker.remove = async (name) => {
+      await remove(name);
+      if (name === 'nexttime-entry-alice') {
+        // Docker hands the released address to a Worker before the reclaim unregisters.
+        egressMap.register(outcome.ip as string, { sourceId: 'worker:ws-1:run-9' });
+      }
+    };
+
+    await restarted.reclaim('alice');
+
+    expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-9' });
   });
 
   it('is a no-op when nothing was ever spawned for that principal (no container, no directory)', async () => {
