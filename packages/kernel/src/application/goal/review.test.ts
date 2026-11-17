@@ -5,7 +5,16 @@ import { describe, expect, it } from 'vitest';
 import { resolveOntologyDir } from '../../substrate/ontology/loader.js';
 import { loadReviewerTemplate } from '../task/review-task.js';
 import { planHints, roundAcceptance } from './plan.js';
-import { REVIEW_SEALED, sameModelOf, sealReviews, unsealPlannerPlan } from './review.js';
+import { PLANNER_OUTPUT_PREVIEW_CHARS } from './planner.js';
+import {
+  REVIEW_OUTPUT_PREVIEW_CHARS,
+  REVIEW_SEALED,
+  reviewerInput,
+  sameModelOf,
+  sealReviews,
+  stepOutputPreview,
+  unsealPlannerPlan,
+} from './review.js';
 
 /**
  * Unit tests for S11 GO18's pure rules (`review.ts`, `plan.ts`): how a plan reads with its reviews
@@ -172,5 +181,43 @@ describe('the prompts say the platform’s scoring numbers', () => {
   it('the entry template gives a criterion’s weight as 1 to the weight maximum', async () => {
     const entry = flat(await readFile(join(resolveOntologyDir(), 'entry-agent.yaml'), 'utf8'));
     expect(entry).toContain(`a \`weight\` of 1 to ${REVIEW_WEIGHT_MAX})`);
+  });
+});
+
+describe('stepOutputPreview — the planner’s cut (legacy 834)', () => {
+  const EMOJI = '\u{1F600}';
+  const MAX = PLANNER_OUTPUT_PREVIEW_CHARS;
+
+  it('keeps an output that fits whole, and cuts one that does not before an emoji it would split', () => {
+    const fits = { note: `short ${EMOJI}` };
+    expect(stepOutputPreview(fits, MAX)).toBe(fits);
+    const output = { note: `${'x'.repeat(MAX - '{"note":"'.length - 1)}${EMOJI} and more` };
+    expect(JSON.stringify(output).charCodeAt(MAX - 1)).toBe(0xd83d);
+    expect(stepOutputPreview(output, MAX)).toEqual({
+      cutShort: true,
+      json: `${JSON.stringify(output).slice(0, MAX - 1)}…`,
+    });
+  });
+});
+
+describe('reviewerInput — a step output cut where an emoji falls (legacy 834)', () => {
+  it('ends before the emoji, never in half of it: the input is text `jsonb` stores', () => {
+    const EMOJI = '\u{1F600}';
+    // `"` + filler puts the emoji's first half last before the cut.
+    const output = `${'x'.repeat(REVIEW_OUTPUT_PREVIEW_CHARS - 2)}${EMOJI} and more`;
+    expect(JSON.stringify(output).charCodeAt(REVIEW_OUTPUT_PREVIEW_CHARS - 1)).toBe(0xd83d);
+
+    const input = reviewerInput(
+      { statement: 'write the report' },
+      REVIEW,
+      [{ key: 'draft', status: 'succeeded', attempt: 1, taskId: null, output }],
+      new Set(),
+    );
+    const [subject] = input.subjects as { output: { cutShort: boolean; json: string } }[];
+    expect(subject?.output).toEqual({
+      cutShort: true,
+      json: `"${'x'.repeat(REVIEW_OUTPUT_PREVIEW_CHARS - 2)}…`,
+    });
+    expect(JSON.stringify(input)).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
   });
 });

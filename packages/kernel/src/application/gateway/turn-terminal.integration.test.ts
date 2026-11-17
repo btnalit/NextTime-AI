@@ -621,7 +621,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         summary: `answered ${half}`,
       })) as { status: string };
 
-      // Before: `jsonb` refused the half (22P05) — the answer was lost and the Turn ended `failed`.
+      // Before: `jsonb` refused the half (22P02) — the answer was lost and the Turn ended `failed`.
       expect(reported.status).toBe('completed');
       expect(await assistantTexts(chatId)).toEqual(['cut through an emoji: \ufffd']);
       const row = await turnRow(turnId);

@@ -66,7 +66,7 @@ import {
 } from './planning-rounds.js';
 import { precedentsOfGoal } from './precedents.js';
 import { getGoalRun, getPlanRevision } from './reads.js';
-import { REVIEW_SEALED, sealReviews, unsealPlannerPlan } from './review.js';
+import { REVIEW_SEALED, sealReviews, stepOutputPreview, unsealPlannerPlan } from './review.js';
 import {
   type RevisionCandidate,
   adoptRevision,
@@ -1122,11 +1122,8 @@ async function readStepOutput(
   return output === null ? undefined : output;
 }
 
-function previewOf(value: unknown): unknown {
-  const json = JSON.stringify(value);
-  if (json === undefined || json.length <= PLANNER_OUTPUT_PREVIEW_CHARS) return value;
-  return { cutShort: true, json: `${json.slice(0, PLANNER_OUTPUT_PREVIEW_CHARS)}…` };
-}
+const previewOf = (value: unknown): unknown =>
+  stepOutputPreview(value, PLANNER_OUTPUT_PREVIEW_CHARS);
 
 async function failedStepFacts(
   client: PoolClient,

@@ -6,7 +6,7 @@
  * Legacy 834: so does an unpaired surrogate (half of a pair, as a cut through an emoji leaves) in
  * `jsonb`. A `text` value is sent as UTF-8, whose encoder already stores such a half as U+FFFD; a
  * `jsonb` value is sent as `JSON.stringify` output, which writes it as `\udXXX`, and Postgres
- * refuses that escape (22P05). Every other code point stores as given.
+ * refuses that escape (22P02). Every other code point stores as given.
  *
  * Two answers, chosen by what the string is (the kernel's boundaries pick, see `dispatch.ts`):
  *   - an identity, a reference, a name, a setting — something compared or acted on: the call is
@@ -18,8 +18,13 @@
  *     `\u{0}` — the form `echoed-text.ts` shows the same character in, so a reader sees one spelling
  *     everywhere; an unpaired surrogate as U+FFFD, what the same text stores as in a `text` column.
  *
- * `findUnstorableText` still looks for U+0000 only: an identity with an unpaired surrogate is
- * stored as U+FFFD in a `text` column, as it always was.
+ * `findUnstorableText` still looks for U+0000 only, so an unpaired surrogate in a parameter that is
+ * compared or acted on is not refused. On the dispatch path every call writes its audit row
+ * (`jsonb`, through `storableValue`) in the same transaction: before legacy 834 that row failed
+ * (22P02) and the whole call with it; now a parameter that only goes to a `text` column is stored
+ * as U+FFFD, and one a handler writes to `jsonb` itself still fails. `/api/auth/*` writes only
+ * `text` columns, where it was always U+FFFD. Refusing it, as U+0000 is refused, is a separate
+ * item.
  */
 
 import { boundedEcho, quotedName } from './echoed-text.js';

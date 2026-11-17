@@ -309,7 +309,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ];
       for (const event of events) await sink.handle(event);
 
-      // Before: `JSON.stringify` wrote each half as `\udXXX`, `jsonb` refused it (22P05) — both
+      // Before: `JSON.stringify` wrote each half as `\udXXX`, `jsonb` refused it (22P02) — both
       // records were skipped, both replies lost, and the Turn ended `failed`.
       const messages = await history(chatId);
       const tools = messages

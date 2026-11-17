@@ -11,6 +11,7 @@ import {
   reviewDerivation,
   reviewReportProblems,
   reviewShortfalls,
+  sliceKeepingPairs,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
@@ -390,10 +391,13 @@ async function readSubjects(
   return read;
 }
 
-function previewOf(value: unknown): unknown {
+/** A step's output as a reviewer or the goal planner reads it: whole, or its JSON cut to
+ *  `maxChars` — never through a surrogate pair, since half of one is no text `jsonb` stores and
+ *  the Task's input would be refused at the same cut every round (legacy 834). */
+export function stepOutputPreview(value: unknown, maxChars: number): unknown {
   const json = JSON.stringify(value);
-  if (json === undefined || json.length <= REVIEW_OUTPUT_PREVIEW_CHARS) return value;
-  return { cutShort: true, json: `${json.slice(0, REVIEW_OUTPUT_PREVIEW_CHARS)}…` };
+  if (json === undefined || json.length <= maxChars) return value;
+  return { cutShort: true, json: `${sliceKeepingPairs(json, maxChars)}…` };
 }
 
 /** What a reviewer reads — see the module comment. Everything but the criteria and the mount
@@ -411,7 +415,10 @@ export function reviewerInput(
         key: subject.key,
         status: subject.status,
         ...(subject.attempt !== null ? { attempt: subject.attempt } : {}),
-        output: subject.output === null ? null : previewOf(subject.output),
+        output:
+          subject.output === null
+            ? null
+            : stepOutputPreview(subject.output, REVIEW_OUTPUT_PREVIEW_CHARS),
         files: mounted.has(subject.key) ? `/upstream/${subject.key}` : null,
       })),
     },
