@@ -52,6 +52,34 @@ describe('listUpstreamModels', () => {
     expect(calls[0]?.init.redirect).toBe('manual');
   });
 
+  it('offers only ids a write would take (legacy 151): 1–200 characters, no control character or unpaired surrogate', async () => {
+    const longest = 'm'.repeat(200);
+    const { fetchImpl } = fakeFetch(() =>
+      json(200, {
+        data: [
+          { id: 'ok-a' },
+          { id: '   ' },
+          { id: `${longest}m` },
+          { id: longest },
+          { id: 'nul\u0000id' },
+          { id: 'lone\ud800id' },
+          { id: 'tab\tid' },
+          { id: '模型-😀' },
+        ],
+      }),
+    );
+    const result = await listUpstreamModels({
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.example.invalid',
+      authHeader: 'authorization',
+      realKey: 'sk-real',
+      timeoutMs: 1000,
+      fetchImpl,
+    });
+    expect(result).toMatchObject({ ok: true, truncated: false });
+    expect(result.ok && result.models.map((m) => m.id)).toEqual(['ok-a', longest, '模型-😀']);
+  });
+
   it('Anthropic: x-api-key + anthropic-version, display_name kept', async () => {
     const { fetchImpl, calls } = fakeFetch(() =>
       json(200, { data: [{ id: 'claude-x', display_name: 'Claude X' }], has_more: false }),

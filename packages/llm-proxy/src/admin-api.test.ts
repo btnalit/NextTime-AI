@@ -1569,6 +1569,24 @@ describe('admin API — every kernel audit row fits the kernel’s limit (legacy
     expect(line.models).toHaveLength(200);
   });
 
+  it('a row that fits is sent whole — 100 ids of about 30 characters are all named (#501)', async () => {
+    const h = await harness();
+    const models = Array.from({ length: 100 }, (_, i) => ({
+      id: `vendor/model-${String(i).padStart(3, '0')}-instruct-v2`,
+      displayName: null,
+      cost: null,
+    }));
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: { ...NEW_PROVIDER, models },
+    });
+    expect(created.status).toBe(201);
+    const event = h.kernelEvents.find((e) => e.action === 'provider_created');
+    expect(detailsChars(event)).toBeGreaterThan(3000);
+    expect(event?.details.models).toEqual(models.map((m) => m.id));
+    expect(event?.details).not.toHaveProperty('modelsOmitted');
+  });
+
   it('an ordinary provider’s row names all its models and has no modelsOmitted', async () => {
     const h = await harness();
     await request(h.port, 'POST', '/admin/providers', {
@@ -1629,6 +1647,77 @@ describe('admin API — every kernel audit row fits the kernel’s limit (legacy
       to: NEW_PROVIDER.upstreamBaseUrl,
     });
   });
+});
+
+describe('admin API — names the kernel’s audit cannot store are refused (legacy 151)', () => {
+  // Postgres `jsonb` refuses U+0000 and an unpaired surrogate: a row naming one was lost (500).
+  const NAMES: Array<[string, string]> = [
+    ['NUL', 'acme\u0000large'],
+    ['an unpaired surrogate', 'acme\ud800large'],
+  ];
+
+  it.each(NAMES)(
+    'a create or an update with %s in a model id is 400 and writes nothing',
+    async (_, id) => {
+      const h = await harness();
+      const admin = await h.adminHeaders();
+      const bad = { ...NEW_PROVIDER, models: [{ id, displayName: null, cost: null }] };
+      const created = await request(h.port, 'POST', '/admin/providers', {
+        headers: admin,
+        body: bad,
+      });
+      expect(created.status).toBe(400);
+      expect(h.store.entries()).toEqual([]);
+      await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+      const before = h.store.entries();
+      const updated = await request(h.port, 'PUT', '/admin/providers/acme', {
+        headers: admin,
+        body: bad,
+      });
+      expect(updated.status).toBe(400);
+      expect(h.store.entries()).toEqual(before);
+      expect(h.kernelEvents.map((e) => e.action)).toEqual(['provider_created']);
+    },
+  );
+
+  it.each(NAMES)('a base URL with %s is 400 and writes nothing', async (_, text) => {
+    const h = await harness();
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: `https://acme.example.invalid/${text}` },
+    });
+    expect(created.status).toBe(400);
+    expect(h.store.entries()).toEqual([]);
+    expect(h.kernelEvents).toEqual([]);
+  });
+
+  it.each(NAMES)(
+    'a probe or a test of a model id with %s is 400 and calls no upstream',
+    async (_, id) => {
+      const h = await harness({ env: { FILE_KEY: 'sk-file-secret' } });
+      const admin = await h.adminHeaders();
+      const probed = await request(h.port, 'POST', '/admin/model-probe', {
+        headers: admin,
+        body: {
+          id: 'acme',
+          api: 'openai-completions',
+          upstreamBaseUrl: 'https://acme.example.invalid',
+          authHeader: 'authorization',
+          key: 'sk-typed',
+          models: ['acme-large', id],
+        },
+      });
+      expect(probed.status).toBe(400);
+      const tested = await request(h.port, 'POST', '/admin/providers/openai/test', {
+        headers: admin,
+        body: { model: id },
+      });
+      expect(tested.status).toBe(400);
+      expect((tested.body as { error: { code: string } }).error.code).toBe('invalid_body');
+      expect(h.testRuns).toEqual([]);
+      expect(h.kernelEvents).toEqual([]);
+    },
+  );
 });
 
 describe('admin API — POST /model-probe', () => {

@@ -28,7 +28,7 @@ import {
   type UpstreamCallLimiter,
   createUpstreamCallLimiter,
 } from './admin-limits.js';
-import { auditedModelIds, fitAuditDetails } from './audit-details.js';
+import { fitAuditDetails, fitModelIds } from './audit-details.js';
 import type { ProviderCatalog, ResolvedProvider } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
@@ -844,12 +844,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           modelsJsonError,
           ...(secretCleared ? { secretCleared } : {}),
         };
-        const models = auditedModelIds(details.models);
-        audit(claims, 'provider_created', input.id, details, {
-          ...details,
-          models: models.ids,
-          ...(models.omitted > 0 ? { modelsOmitted: models.omitted } : {}),
-        });
+        audit(claims, 'provider_created', input.id, details, fitModelIds(details));
         // A key cleared after the catalog rewrite changes the health that rewrite wrote.
         if (secretCleared) await refreshProviderHealth();
         if (secretCleared) {
