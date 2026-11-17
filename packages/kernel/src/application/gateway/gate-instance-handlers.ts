@@ -336,6 +336,7 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
         skippedOperationNames: [],
         gateOwnedParamDrafts: [],
         absentAnswerDrafts: [],
+        credentialDrafts: [],
         // This call made no link/create decision at all — it just returned the prior outcome.
         linkedExisting: false,
       },
@@ -385,6 +386,7 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
       skippedOperationNames: landed.skippedOperationNames,
       gateOwnedParamDrafts: landed.gateOwnedParamDrafts,
       absentAnswerDrafts: landed.absentAnswerDrafts,
+      credentialDrafts: landed.credentialDrafts,
       linkedExisting: landed.linkedExisting,
       ...(drift !== undefined ? { drift } : {}),
     },

@@ -373,6 +373,11 @@ curl -s https://<host>:8443/api/cap/publish_manifest \
 curl -s https://<host>:8443/api/cap/publish_operation \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
   -d "{\"gatekeeperId\":\"<gk-uuid>\",\"name\":\"<op-name>\",\"draftDigest\":\"<draftDigest>\",\"absentAnswersReviewed\":true}"
+#    返回的 credentialDrafts 是定义里带疑似凭据的 Operation（遗留 198，如描述或 example 里写了一个
+#    真 token）：整批发布不替人确认，留作草稿；suspectedSecretPaths 写着在定义的哪个字段，不含值。
+#    最好让门的清单去掉它；确认它不是凭据时逐个发布，带 credentialsReviewed（启用平台门的结果同样
+#    带这个列表）：
+#    -d "{...,\"credentialsReviewed\":true}"
 
 # 5. connect_gatekeeper —— 授予某个用户的入口 agent 使用权（写一条 CapabilityGrant）
 curl -s https://<host>:8443/api/cap/connect_gatekeeper \
