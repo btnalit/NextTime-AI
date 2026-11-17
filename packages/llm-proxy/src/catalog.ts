@@ -146,9 +146,11 @@ export class ProviderCatalog {
 
   /** Records a test outcome where it can live — on the store entry when there is one, else in
    *  memory for a file-only provider — and then which key it ran with (`key`, the one the test
-   *  sent). The result is written first: a crash between the two writes leaves a result whose
-   *  `tested_at` has no entry of its own, which is not shown (tested-keys.ts). A provider not yet
-   *  tracked is tracked before the result is written, for the same reason. */
+   *  sent). A crash between the two writes is safe either way round: the result and the entry
+   *  name different `tested_at`s, so the result is not shown (tested-keys.ts). What makes that hold
+   *  for a provider's first result is tracking it before the result is written. The result goes
+   *  first so that a result write that fails leaves the previous result and its entry still
+   *  paired, shown as before, rather than hiding a result that is still true. */
   async recordTest(id: string, result: StoreTestResult, key: string): Promise<void> {
     await this.testWrites.runExclusive(async () => {
       const testedKeys = this.testedKeys?.store;
