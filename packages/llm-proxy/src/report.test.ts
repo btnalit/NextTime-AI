@@ -54,6 +54,45 @@ describe('LlmUsageReporter', () => {
     reporter.close();
   });
 
+  // A NUL model id (from llm-providers.yaml, or stored before #1409) once failed the whole
+  // workspace group with a 500 `retry`, resent forever with that workspace's later usage.
+  it('sends text the kernel can store, and logs and keeps the record as it was', async () => {
+    const lines: string[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 } as Response)
+      .mockResolvedValue({ ok: true } as Response);
+    const reporter = new LlmUsageReporter({
+      log: (line) => lines.push(line),
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    const nul = record({ provider: 'acme\ud800', model: 'old\u0000model', requestId: 'nul' });
+    const clean = record({ model: 'model-😀', requestId: 'clean' });
+    reporter.record(nul);
+    reporter.record(clean);
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({
+      provider: 'acme\ud800',
+      model: 'old\u0000model',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchImpl.mock.calls as Array<[string, RequestInit]>) {
+      const body = String(init.body);
+      // No escape Postgres refuses: U+0000, or a surrogate JSON could not pair.
+      expect(body).not.toMatch(/\\u0000|\\ud[89a-f][0-9a-f]{2}/i);
+      expect(JSON.parse(body)).toEqual([
+        { ...nul, provider: 'acme\ufffd', model: 'old\ufffdmodel' },
+        clean,
+      ]);
+    }
+    expect(reporter.pending).toBe(0);
+    reporter.close();
+  });
+
   it('does not queue or fetch when kernelUrl is unset', async () => {
     const fetchImpl = vi.fn();
     const reporter = new LlmUsageReporter({ log: () => {}, fetchImpl });
@@ -309,6 +348,22 @@ describe('LlmUsageReporter', () => {
       expect(body.map((r) => r.requestId)).toEqual(['earlier', 'refused-1']);
       expect(body[1]).toMatchObject({ status: 'refused', refusalScope: 'workspace_daily_tokens' });
       expect(reporter.pending).toBe(0);
+      reporter.close();
+    });
+
+    it('resolves true for a record whose text the kernel stores replaced', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl,
+        flushIntervalMs: 2000,
+      });
+      const delivered = reporter.deliver(refused({ model: 'old\u0000model' }), {}, 5000);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(delivered).resolves.toBe(true);
+      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toMatchObject([{ model: 'old\ufffdmodel' }]);
       reporter.close();
     });
 
