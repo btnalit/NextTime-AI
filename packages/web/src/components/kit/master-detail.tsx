@@ -1,6 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
+import { useT } from '../../lib/i18n.js';
+import { Button } from './button.js';
 import { GuardedCloseProvider, useDiscardGuard } from './discard-guard.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
 
@@ -130,6 +132,7 @@ export function MasterDetail({
   // The sheet's discard guard, held here: the detail is portaled into the sheet, outside its React
   // tree, so the sheet could not hand the guard to a form's 取消 itself.
   const discard = useDiscardGuard();
+  const t = useT();
 
   return (
     <>
@@ -174,8 +177,19 @@ export function MasterDetail({
               target.focus();
             }}
           >
-            <SheetHeader>
+            <SheetHeader className="flex-row items-center justify-between gap-2">
               <SheetTitle>{sheetTitle}</SheetTitle>
+              {/* Legacy 613: below 448px the sheet covers the whole screen, so a phone has no
+               *  overlay to tap and no Esc — this is the only way back to the list. It asks first
+               *  when a form in the detail was edited, as Esc and an outside click do. */}
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => discard.guard(onClose)}
+                data-testid={`${detailTestId}-close`}
+              >
+                {t('关闭', 'Close')}
+              </Button>
             </SheetHeader>
             <div className="contents" ref={attachHost} />
           </SheetContent>
