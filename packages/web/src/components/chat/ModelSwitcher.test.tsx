@@ -223,6 +223,23 @@ describe('ModelSwitcher', () => {
     expect(getByTestId('chat-model-health-notice').textContent).toContain('状态为可用的模型');
   });
 
+  it('legacy 812: reads the profile without gate health, so opening a chat probes no gate', async () => {
+    const client = http({
+      get_agent_profile: () => PROFILE,
+      get_agent_policy: () => policy([]),
+      list_models: () => MODELS,
+    });
+    renderSwitcher(client);
+    await screen.findByTestId('chat-model-select');
+    const reads = client.calls.filter((c) => c.name === 'get_agent_profile');
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) {
+      expect((read.params as { includeGateHealth?: boolean } | undefined)?.includeGateHealth).toBe(
+        undefined,
+      );
+    }
+  });
+
   it('falls back to the policy allow-list ids when the catalog read fails', async () => {
     renderSwitcher(
       http({
