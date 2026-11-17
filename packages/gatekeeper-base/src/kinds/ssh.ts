@@ -52,7 +52,9 @@ export interface SshTarget {
 }
 
 export interface SshPolicyRule {
-  /** Regex source, matched against the whole command string. */
+  /** Regex source, searched for in the whole command string: unlike an Operation's
+   *  `command_pattern` (which must match all of it, legacy 195) a rule is not anchored — write `^`
+   *  yourself; `^rm -rf\b` is meant to classify `rm -rf /data` too. */
   readonly pattern: string;
   readonly mode: OperationMode;
   readonly blastRadius: BlastRadius;
@@ -273,9 +275,9 @@ export interface SshTransportOptions {
 
 /** Resolves the literal command to run: a `command_template` is rendered like the `cli` transport
  *  (`{name}` substitution, one shell token per param — see `cli.ts`); a `command_pattern` binding
- *  takes the literal command from `params.command`, and requires it to actually match that
+ *  takes the literal command from `params.command`, and requires the whole of it to match that
  *  Operation's own declared pattern (defense in depth: a caller cannot invoke a loosely-classified
- *  Operation with an unrelated command string). */
+ *  Operation with an unrelated command string, nor append one — legacy 195). */
 const SHELL_SAFE_WORD = /^[A-Za-z0-9_./:@%+=,-]+$/;
 
 /** One shell word: a value made only of shell-inert characters is passed through unchanged (so
@@ -339,17 +341,23 @@ export function assertClassificationAllowed(
   }
 }
 
-/** An Operation's `command_pattern` as a RegExp — a pattern that does not compile is the gate's own
- *  misconfiguration, found before the target is touched (legacy 310: a plain failure). */
+/** An Operation's `command_pattern` as a RegExp that must match the **whole** command (legacy 195):
+ *  the command goes to the remote shell as one line, so a pattern found anywhere in it — `^show\b`
+ *  in `show x; reboot` — would let a second command ride along. The declared source is compiled on
+ *  its own first: one that does not compile is the gate's own misconfiguration, found before the
+ *  target is touched (legacy 310: a plain failure). Only then is it wrapped as `^(?:…)$` — compiling
+ *  it alone is what makes the wrap safe, since `a)|(b` does not compile but its wrapped form would,
+ *  with neither alternative held at both ends. */
 function commandPatternOf(operationName: string, pattern: string): RegExp {
   try {
-    return new RegExp(pattern);
+    new RegExp(pattern);
   } catch (err) {
     throw new TransportInvokeError(
       `ssh transport: operation "${operationName}"'s command_pattern is not a valid regular expression`,
       { cause: err },
     );
   }
+  return new RegExp(`^(?:${pattern})$`);
 }
 
 function resolveCommand(operation: Operation, params: unknown): string {
@@ -357,7 +365,14 @@ function resolveCommand(operation: Operation, params: unknown): string {
     throw new BindingKindMismatchError(operation.name, 'ssh', operation.binding.kind);
   }
   const bag = (params ?? {}) as Record<string, unknown>;
-  if (operation.binding.command_template) {
+  // `!== undefined`, not truthiness (legacy 195): an empty `command_template` used to fall through
+  // to the `params.command` path below, where a binding with no `command_pattern` checked nothing.
+  if (operation.binding.command_template !== undefined) {
+    if (operation.binding.command_template.trim() === '') {
+      throw new TransportInvokeError(
+        `ssh transport: operation "${operation.name}"'s command_template is empty`,
+      );
+    }
     return operation.binding.command_template.replace(/\{([^}]+)\}/g, (_m, name: string) => {
       const value = bag[name];
       if (value === undefined) {
@@ -378,10 +393,18 @@ function resolveCommand(operation: Operation, params: unknown): string {
       `ssh transport: operation "${operation.name}" requires a string "command" param`,
     );
   }
+  // Legacy 195: no pattern means nothing would check the command — the binding schema already
+  // requires a template or a pattern, so this is the gate's own misconfiguration (a plain failure,
+  // like a pattern that does not compile); an empty pattern is a pattern, matching no command.
   const pattern = operation.binding.command_pattern;
-  if (pattern && !commandPatternOf(operation.name, pattern).test(command)) {
+  if (pattern === undefined) {
+    throw new TransportInvokeError(
+      `ssh transport: operation "${operation.name}" has neither a command_template nor a command_pattern`,
+    );
+  }
+  if (!commandPatternOf(operation.name, pattern).test(command)) {
     throw new SshCommandRejectedError(
-      `command does not match operation "${operation.name}"'s own command_pattern`,
+      `command does not match operation "${operation.name}"'s own command_pattern (the whole command must match it)`,
     );
   }
   return command;

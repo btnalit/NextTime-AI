@@ -80,7 +80,17 @@ kind:
 - `cli`: `{kind:'cli', command_template, absent_exit_codes?}` — `{name}` tokens substituted, one
   argv element each.
 - `ssh`: `{kind:'ssh', command_template?, command_pattern?, absent_exit_codes?}` — a fixed template,
-  or a regex class matched against a literal `params.command` (see "Command policy table" below).
+  or a regex class the **whole** of a literal `params.command` must match (see "Command policy
+  table" below). The gate holds the pattern at both ends as `^(?:…)$` (legacy 195): the line goes to
+  the remote shell as is, so a pattern that only had to occur somewhere would let `show x; reboot`
+  through `^show\b`. Write the whole line, and let the arguments hold only characters the remote
+  shell reads as plain text: `show( [A-Za-z0-9_./:@%+=,-]+)*` (the set `shellQuote` passes through
+  unquoted). `.*`, `\S+`, `[^ ]+` or any class that admits `;`, `&`, `|`, `$`, a backtick, `<`, `>`
+  or a quote lets a second command ride along — `show x; reboot`, `show $(reboot)`, `show x | sh` —
+  and the policy table below does not stop it: its rules are searched for, so `^show\b` classifies
+  `show x; reboot` as observe. Avoid nested quantifiers such as `(\w+\s?)+`: held at both ends, a
+  command that almost matches makes the match backtrack exponentially. A pattern that does not
+  compile on its own is a plain failure (legacy 310); an empty one matches no command.
 
 ### Answers that mean "not there" (`absent_statuses` / `absent_exit_codes`)
 
@@ -141,8 +151,11 @@ await_decision: true` — an owner must review and publish before it takes effec
 
 `classifyCommand(command, policyTable)` (`src/kinds/ssh.ts`) matches an ordered list of
 `{pattern, mode, blastRadius, autoApprovable}` rules against a literal command string; the first
-match wins. No match → the unclassified default (`mode: 'execute', blastRadius: 'medium',
-autoApprovable: false, unclassified: true`) — I17's "unclassified操作一律 require_approval".
+match wins. A rule is searched for anywhere in the line, not held at both ends like an Operation's
+`command_pattern`: write `^` yourself, and keep a deny-style rule such as `^rm -rf\b` a prefix so
+it classifies `rm -rf /data` too. No match → the unclassified default (`mode: 'execute',
+blastRadius: 'medium', autoApprovable: false, unclassified: true`) — I17's "unclassified操作一律
+require_approval".
 
 ## Credential resolution
 
