@@ -364,6 +364,22 @@ export function manifestPublishPlan(
   return { publishable, proposals, gateOwned, absentAnswers };
 }
 
+/** How many of a bulk publish's drafts it left for a person, which the 「已发布 N 个」 toast counts
+ *  as not published (`enable_gate_instance`'s result): held for a param only the gate sets, for
+ *  suspected credentials (legacy 800, kernel legacy 198) or for answers that mean "does not exist".
+ *  The kernel lists each draft in one of them only. A field an older kernel leaves out counts 0. */
+export function draftsLeftForAPerson(result: {
+  readonly gateOwnedParamDrafts?: readonly unknown[] | undefined;
+  readonly credentialDrafts?: readonly unknown[] | undefined;
+  readonly absentAnswerDrafts?: readonly unknown[] | undefined;
+}): number {
+  return (
+    (result.gateOwnedParamDrafts?.length ?? 0) +
+    (result.credentialDrafts?.length ?? 0) +
+    (result.absentAnswerDrafts?.length ?? 0)
+  );
+}
+
 /** Legacy 247 ① / 412: a gate address as a person reads it. The kernel masks an address that
  *  could carry a credential (`redactConnectionAddress`), whole or in place inside a path (review
  *  #501 on #661: `https://host/hook/[redacted]/x`), on every view that shows one — a connection

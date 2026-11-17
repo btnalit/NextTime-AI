@@ -15,6 +15,7 @@ import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { AbsentAnswersHeldPreview } from './AbsentAnswerDrafts.js';
+import { CredentialHeldPreview } from './CredentialDrafts.js';
 import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
 import { gateOwnedParamsNextStep, gateOwnedParamsText } from './GateOwnedParams.js';
 
@@ -202,16 +203,30 @@ function EnablePreviewBody({
   const heldBack = preview.operationsToImport.filter(
     (operation) => (operation.gateOwnedParams?.length ?? 0) > 0,
   );
+  // Legacy 800 (kernel legacy 198): so does one whose definition carries suspected credential
+  // values — a person publishes it in the catalog, confirming them. The kernel's order: gate-owned
+  // params, then credentials, then answers that mean "does not exist", so each entry is said once.
+  const gateOwnedFree = (operation: (typeof preview.operationsToImport)[number]) =>
+    (operation.gateOwnedParams?.length ?? 0) === 0;
+  const credentialHeld = preview.operationsToImport.flatMap((operation) =>
+    gateOwnedFree(operation) && operation.suspectedSecretValues !== undefined
+      ? [{ name: operation.name, suspectedSecretValues: operation.suspectedSecretValues }]
+      : [],
+  );
   // S11 「门确认不存在」 B-a: so does one declaring answers that mean "does not exist" — a person
   // publishes it in the catalog, confirming them.
   const absentHeld = preview.operationsToImport.flatMap((operation) =>
-    (operation.gateOwnedParams?.length ?? 0) === 0 && operation.absentAnswers !== undefined
+    gateOwnedFree(operation) &&
+    operation.suspectedSecretValues === undefined &&
+    operation.absentAnswers !== undefined
       ? [{ name: operation.name, absentAnswers: operation.absentAnswers }]
       : [],
   );
   const toPublish = preview.operationsToImport.filter(
     (operation) =>
-      (operation.gateOwnedParams?.length ?? 0) === 0 && operation.absentAnswers === undefined,
+      gateOwnedFree(operation) &&
+      operation.suspectedSecretValues === undefined &&
+      operation.absentAnswers === undefined,
   );
   const toImportCount = toPublish.length;
   const presentCount = preview.operationsAlreadyPresent.length;
@@ -290,6 +305,7 @@ function EnablePreviewBody({
           </span>
         </Notice>
       ) : null}
+      <CredentialHeldPreview operations={credentialHeld} testId="enable-preview-credentials" />
       <AbsentAnswersHeldPreview operations={absentHeld} testId="enable-preview-absent" />
       {preview.operationsAlreadyPresent.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-present">
