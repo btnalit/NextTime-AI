@@ -3598,104 +3598,103 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).toEqual([expect.objectContaining({ by: 'person', pauseReason: 'awaiting_reconcile' })]);
         });
 
-        it('a finding — effect_seen, or effect_absent with a re-execute — never changes how a run is paused, whoever paused it; the requester resumes it (review #493 on #642)', async () => {
-          type PauseSource =
-            | 'advancer'
-            | 'requester'
-            | 'requester over the advancer'
-            | 'owner hold'
-            | 'lifted hold';
-          const pauseOf = (goal: GoalRunRow) => ({
-            status: goal.status,
-            pauseReason: goal.pauseReason,
-            pausedBy: goal.pausedBy,
-            pausedByAuthority: goal.pausedByAuthority,
-          });
-          const findings = [
-            { verdict: 'effect_seen' },
-            { verdict: 'effect_absent', reexecute: true },
-          ] as const;
-          const sources: readonly PauseSource[] = [
+        // Legacy 796: one case per (who paused it, finding). The ten runs in one test took ~2 s on
+        // CI and once 5.03 s on a slow runner, past Vitest's 5 s default — a ceiling that still
+        // catches a hang when each case is a tenth of that.
+        const pauseOf = (goal: GoalRunRow) => ({
+          status: goal.status,
+          pauseReason: goal.pauseReason,
+          pausedBy: goal.pausedBy,
+          pausedByAuthority: goal.pausedByAuthority,
+        });
+        const findingCases = (
+          [
             'advancer',
             'requester',
             'requester over the advancer',
             'owner hold',
             'lifted hold',
-          ];
-          for (const source of sources) {
-            for (const finding of findings) {
-              const requester = await newPrincipal();
-              const goalRunId = await startGoal(requester, [
-                { key: 'a' },
-                { key: 'b', dependsOn: ['a'] },
-              ]);
-              await advance(goalRunId, requester);
-              const pauseAsRequester = () =>
-                asRequester(requester, (client) =>
-                  pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
-                );
-              // The requester's own pause comes first: the advancer only notes the check on it.
-              if (source === 'requester') {
-                expect(await pauseAsRequester()).toMatchObject({ changed: true });
-              }
-              const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
-              const action = await requestOn(
-                await newGatekeeper(),
-                stepA.id,
-                requester,
-                'executing',
-                'test.go3c.intent',
+          ] as const
+        ).flatMap((source) =>
+          (
+            [{ verdict: 'effect_seen' }, { verdict: 'effect_absent', reexecute: true }] as const
+          ).map((finding) => ({ source, finding })),
+        );
+
+        it.each(findingCases)(
+          'a finding — effect_seen, or effect_absent with a re-execute — never changes how a run is paused, whoever paused it; the requester resumes it (review #493 on #642): $source, $finding.verdict',
+          async ({ source, finding }) => {
+            const requester = await newPrincipal();
+            const goalRunId = await startGoal(requester, [
+              { key: 'a' },
+              { key: 'b', dependsOn: ['a'] },
+            ]);
+            await advance(goalRunId, requester);
+            const pauseAsRequester = () =>
+              asRequester(requester, (client) =>
+                pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
               );
-              await lose(action);
-              await completeStep(stepA.id, requester);
-              await advance(goalRunId, requester);
-              expect((await stepsOf(goalRunId)).a?.waitingReason).toBe('reconcile');
-              if (source === 'requester over the advancer') {
-                // Nothing on the row says the requester wants it held: the call changes nothing.
-                expect(await pauseAsRequester()).toMatchObject({ changed: false });
-              }
-              if (source === 'owner hold' || source === 'lifted hold') {
-                await asOwner((client) =>
-                  pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
-                );
-              }
-              if (source === 'lifted hold') {
-                await asOwner((client) =>
-                  releaseGoalRunHold(client, workspaceId, { goalRunId, actor: byOwner() }),
-                );
-              }
-              const before = pauseOf(await goalOf(goalRunId));
-              expect(before.status).toBe('paused');
-
-              await reconcileAs(goalRunId, action, requester, finding);
-              await advance(goalRunId, requester);
-              await advance(goalRunId, requester);
-              expect(
-                { source, finding, pause: pauseOf(await goalOf(goalRunId)) },
-                'a finding leaves the pause as it was',
-              ).toEqual({ source, finding, pause: before });
-              expect((await stepsOf(goalRunId)).b?.status).not.toBe('running');
-              expect(await attemptTasks(stepA.id)).toHaveLength(1);
-              expect(
-                (await goalAudit(goalRunId)).some((row) => row.action === 'goal_run.resume'),
-              ).toBe(false);
-
-              // The requester resumes — once no owner holds it — and the run goes on.
-              if (source === 'owner hold') {
-                await expect(resumeAs(goalRunId, requester)).rejects.toThrow(/holds it/);
-                continue;
-              }
-              await resumeAs(goalRunId, requester);
-              await advance(goalRunId, requester);
-              const steps = await stepsOf(goalRunId);
-              if (finding.verdict === 'effect_seen') {
-                expect(steps.b?.status).toBe('running');
-              } else {
-                expect(steps.a).toMatchObject({ status: 'running', attemptCount: 2 });
-              }
+            // The requester's own pause comes first: the advancer only notes the check on it.
+            if (source === 'requester') {
+              expect(await pauseAsRequester()).toMatchObject({ changed: true });
             }
-          }
-        });
+            const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
+            const action = await requestOn(
+              await newGatekeeper(),
+              stepA.id,
+              requester,
+              'executing',
+              'test.go3c.intent',
+            );
+            await lose(action);
+            await completeStep(stepA.id, requester);
+            await advance(goalRunId, requester);
+            expect((await stepsOf(goalRunId)).a?.waitingReason).toBe('reconcile');
+            if (source === 'requester over the advancer') {
+              // Nothing on the row says the requester wants it held: the call changes nothing.
+              expect(await pauseAsRequester()).toMatchObject({ changed: false });
+            }
+            if (source === 'owner hold' || source === 'lifted hold') {
+              await asOwner((client) =>
+                pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+              );
+            }
+            if (source === 'lifted hold') {
+              await asOwner((client) =>
+                releaseGoalRunHold(client, workspaceId, { goalRunId, actor: byOwner() }),
+              );
+            }
+            const before = pauseOf(await goalOf(goalRunId));
+            expect(before.status).toBe('paused');
+
+            await reconcileAs(goalRunId, action, requester, finding);
+            await advance(goalRunId, requester);
+            await advance(goalRunId, requester);
+            expect(
+              { source, finding, pause: pauseOf(await goalOf(goalRunId)) },
+              'a finding leaves the pause as it was',
+            ).toEqual({ source, finding, pause: before });
+            expect((await stepsOf(goalRunId)).b?.status).not.toBe('running');
+            expect(await attemptTasks(stepA.id)).toHaveLength(1);
+            expect(
+              (await goalAudit(goalRunId)).some((row) => row.action === 'goal_run.resume'),
+            ).toBe(false);
+
+            // The requester resumes — once no owner holds it — and the run goes on.
+            if (source === 'owner hold') {
+              await expect(resumeAs(goalRunId, requester)).rejects.toThrow(/holds it/);
+              return;
+            }
+            await resumeAs(goalRunId, requester);
+            await advance(goalRunId, requester);
+            const steps = await stepsOf(goalRunId);
+            if (finding.verdict === 'effect_seen') {
+              expect(steps.b?.status).toBe('running');
+            } else {
+              expect(steps.a).toMatchObject({ status: 'running', attemptCount: 2 });
+            }
+          },
+        );
 
         it('effect_absent: the step fails for a person and is never run again on its own; once the requester decided to, a retry makes the request anew, for a new approval', async () => {
           const requester = await newPrincipal();
@@ -4600,42 +4599,53 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(await evidenceOf(mixed.action)).toHaveLength(1);
           });
 
-          it('nothing a retry could change is retried: deterministic gate failures, and a predicate the lint or the credential review now refuses, settle unavailable at the first attempt', async () => {
-            const requester = await newPrincipal();
-            const deterministic: Array<[string, number]> = [
-              ['response_too_large', 200],
-              ['invalid_response', 200],
-              ['redirect_refused', 302],
-              ['target_refused', 0],
-              ['connection_secret_missing', 401],
-              ['unauthorized', 401],
-              ['invalid_params', 400],
-              ['credential_unavailable', 424],
-            ];
-            for (const [code, status] of deterministic) {
+          // Legacy 796: one case each — ten checks in one test took ~1.5 s on CI, near Vitest's 5 s
+          // default on a slow runner.
+          it.each([
+            ['response_too_large', 200],
+            ['invalid_response', 200],
+            ['redirect_refused', 302],
+            ['target_refused', 0],
+            ['connection_secret_missing', 401],
+            ['unauthorized', 401],
+            ['invalid_params', 400],
+            ['credential_unavailable', 424],
+          ] as const)(
+            'nothing a retry could change is retried: a deterministic gate failure (%s) settles unavailable at the first attempt',
+            async (code, status) => {
+              const requester = await newPrincipal();
               const { action } = await lostAction(requester);
               gateClient.answer = async () => {
                 throw new GatekeeperClientError(`the gate said ${code}`, { code, status });
               };
-              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action)), code).toBe(
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe(
                 'unavailable',
               );
-              expect(await checkOf(action), code).toMatchObject({
+              expect(await checkOf(action)).toMatchObject({
                 status: 'unavailable',
                 attempts: 1,
                 lastError: code,
               });
-            }
+            },
+          );
 
-            // A stored check whose predicate the reviews refuse (they may learn more after a plan
-            // was confirmed): refused before the gate is called.
-            const jwt =
-              'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
-            const stored: Array<[unknown, string]> = [
-              [{ path: 'length(keys(@))', op: 'gt', value: 1 }, 'predicate_refused'],
-              [{ path: 'token', op: 'eq', value: jwt }, 'credentials_in_predicate'],
-            ];
-            for (const [expect_, code] of stored) {
+          // A stored check whose predicate the reviews refuse (they may learn more after a plan was
+          // confirmed): refused before the gate is called.
+          it.each([
+            ['predicate_refused', { path: 'length(keys(@))', op: 'gt', value: 1 }],
+            [
+              'credentials_in_predicate',
+              {
+                path: 'token',
+                op: 'eq',
+                value:
+                  'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU',
+              },
+            ],
+          ] as const)(
+            'nothing a retry could change is retried: a stored predicate the lint or the credential review now refuses (%s) settles unavailable before the gate is called',
+            async (code, expect_) => {
+              const requester = await newPrincipal();
               const { action } = await lostAction(
                 requester,
                 { name: 'web' },
@@ -4655,8 +4665,8 @@ describe.runIf(DATABASE_URL !== undefined)(
               );
               expect(gateClient.calls).toHaveLength(before);
               expect((await checkOf(action))?.lastError).toBe(code);
-            }
-          });
+            },
+          );
 
           it('a pause or an owner’s hold that lands while an attempt is under way: the attempt still records effect_seen and the step settles, but the run keeps the person’s pause or hold and nothing starts until it is resumed', async () => {
             const requester = await newPrincipal();
