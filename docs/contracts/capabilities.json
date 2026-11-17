@@ -19490,6 +19490,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "includeGateHealth": {
+          "type": "boolean"
+        },
         "principalId": {
           "minLength": 1,
           "type": "string"
@@ -19516,6 +19519,15 @@
               },
               "granted": {
                 "type": "boolean"
+              },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
               },
               "inUse": {
                 "type": "boolean"
@@ -76842,6 +76854,15 @@
               },
               "granted": {
                 "type": "boolean"
+              },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
               },
               "inUse": {
                 "type": "boolean"

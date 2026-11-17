@@ -3438,6 +3438,18 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.202 门按参数 schema 自己的 JSON Schema 版本校验参数（#1387，遗留 803，0.69.2 之后的下一版）
+
+无迁移，不需要主机操作。门宿主按 `params_schema` 的 `$schema`（没写时按所用关键字）选 draft-07、2019-09 或 2020-12 校验参数。Operation 定义与摘要不变，不需要审阅采用。
+
+- **含义变化**：
+  - **会变严**：`$schema` 写 2019-09 / 2020-12，或者用了 `unevaluatedProperties`、`prefixItems`、`dependentRequired` 等新版关键字的，这些约束开始生效，以前能过的调用可能返回 400 `invalid_params`。
+  - **会变宽**：`$schema` 写 2019-09 / 2020-12（或用 `https` 写 draft-07）的 Operation，以前每次调用都是 400 `invalid_operation_schema`，现在能正常调用。
+  - **会失败**：没写 `$schema`、把 `prefixItems` 等 2020-12 独有关键字和数组形式的 `items` 混用的 Operation，改为每次调用 400 `invalid_operation_schema`（schema 本身前后矛盾）。处置是改正门清单或文档里的 `params_schema`。
+- **升级后**：调用开始出现 `invalid_params` 或 `invalid_operation_schema` 的，看对应 Operation 的 `params_schema` 是否属于上面几类。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
