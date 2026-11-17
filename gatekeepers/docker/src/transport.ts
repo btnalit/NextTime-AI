@@ -74,6 +74,30 @@ function requireString(
   return value;
 }
 
+/**
+ * Legacy 196 (#532 review M): what a per-container Operation's `id` may look like. dockerode puts
+ * it into the request path as it is (`/containers/<id>/json`), and over tcp — how this gate reaches
+ * its socket proxy — docker-modem resolves that path as a URL: `x/../../info` asks
+ * `GET /info/json`, and `abc#…` asks `GET /containers/abc`. That is another endpoint of the same
+ * daemon, within whatever the proxy allows. Docker's ids are hex and its names are
+ * `[a-zA-Z0-9][a-zA-Z0-9_.-]+` (moby `RestrictedNamePattern`; listed here without their leading
+ * `/`), so this refuses nothing that names a container, and nothing it lets through can leave the
+ * container's path segment: no `/`, `?`, `#` or `%`, and no leading `.`.
+ */
+const CONTAINER_REF = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+/** The `id` param, refused before any call to the daemon unless it can only name a container. A
+ *  refusal like R-04's: 403 `operation_refused`, and an `apply` frees its idempotency key. */
+function requireContainerRef(params: Record<string, unknown>, operationName: string): string {
+  const id = requireString(params, 'id', operationName);
+  if (!CONTAINER_REF.test(id)) {
+    throw new OperationRefusedError(
+      `docker gate: operation "${operationName}" refused — "id" is not a container id, id prefix or name (a letter or digit, then letters, digits, "_", "." or "-"; a name without its leading "/"); nothing was sent to the Docker daemon`,
+    );
+  }
+  return id;
+}
+
 function optionalNumber(params: Record<string, unknown>, key: string, fallback: number): number {
   const value = params[key];
   return typeof value === 'number' ? value : fallback;
@@ -229,7 +253,7 @@ async function invokeOperation(
       return { data: items };
     }
     case 'container.inspect': {
-      const id = requireString(params, 'id', operation.name);
+      const id = requireContainerRef(params, operation.name);
       const item = await resolveServedContainer(client, operation.name, id);
       return { data: item };
     }
@@ -252,14 +276,14 @@ async function invokeOperation(
       return { data: { projects } };
     }
     case 'container.logs_tail': {
-      const id = requireString(params, 'id', operation.name);
+      const id = requireContainerRef(params, operation.name);
       const tail = optionalNumber(params, 'tail', 200);
       const target = await resolveServedContainer(client, operation.name, id);
       const text = await client.logsTail(target.id, tail);
       return { data: { id, tail, text } };
     }
     case 'container.restart': {
-      const id = requireString(params, 'id', operation.name);
+      const id = requireContainerRef(params, operation.name);
       const timeoutSeconds = optionalNumber(params, 'timeoutSeconds', 10);
       const target = await resolveServedContainer(client, operation.name, id);
       await effect(effects, 'restart', () => client.restart(target.id, timeoutSeconds));
@@ -293,7 +317,7 @@ async function simulateOperation(
   switch (operation.name) {
     case 'container.inspect':
     case 'container.logs_tail': {
-      const id = requireString(params, 'id', operation.name);
+      const id = requireContainerRef(params, operation.name);
       await resolveServedContainer(client, operation.name, id);
       return {
         description: `would ${operation.mode} "${operation.name}" via docker`,
@@ -301,7 +325,7 @@ async function simulateOperation(
       };
     }
     case 'container.restart': {
-      const id = requireString(params, 'id', operation.name);
+      const id = requireContainerRef(params, operation.name);
       const item = await resolveServedContainer(client, operation.name, id);
       return {
         description: `would restart container "${item.name}" (${item.id})`,
