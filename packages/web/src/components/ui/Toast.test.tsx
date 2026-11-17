@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
+import { Drawer } from './Drawer.js';
 import { ToastProvider, useToast } from './Toast.js';
 
 function PushFailure() {
@@ -159,8 +160,7 @@ describe('ToastProvider over a modal sheet', () => {
     await opened();
     press(screen.getByText('技术细节'));
     expect(screen.getByTestId('state').textContent).toBe('open');
-    // The modal hides everything else from assistive tech, the toast included.
-    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    press(screen.getByRole('button', { name: 'Dismiss' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId('toast')).toBeNull();
     expect(screen.getByTestId('state').textContent).toBe('open');
@@ -178,5 +178,141 @@ describe('ToastProvider over a modal sheet', () => {
     // Control: anywhere else outside still asks before dropping the edit.
     press(screen.getByTestId('elsewhere'));
     expect(await screen.findByTestId('discard-confirm')).toBeTruthy();
+  });
+
+  // Legacy 820: Radix keeps the focus inside the modal; the toasts are reached by their hotkey.
+  function Form({ pushes }: { readonly pushes: number }) {
+    const [open, setOpen] = useState(true);
+    return (
+      <ToastProvider>
+        {Array.from({ length: pushes }, (_, index) => (
+          <PushFailure key={index} />
+        ))}
+        <span data-testid="state">{open ? 'open' : 'closed'}</span>
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetContent data-testid="sheet">
+            <SheetTitle>Edit</SheetTitle>
+            <input aria-label="name" />
+            <input aria-label="note" />
+          </SheetContent>
+        </Sheet>
+      </ToastProvider>
+    );
+  }
+
+  async function settle(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  function key(name: string): void {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: name });
+  }
+
+  function inToasts(): boolean {
+    return document.activeElement?.closest('.toast-region') != null;
+  }
+
+  it('legacy 820: F8 takes the keyboard to the toasts over the sheet; Escape brings it back', async () => {
+    render(<Form pushes={1} />);
+    await opened();
+    const name = screen.getByLabelText('name');
+    act(() => name.focus());
+    // Not hidden from assistive tech while the modal is open.
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+    expect(screen.getByLabelText('Notifications').getAttribute('aria-keyshortcuts')).toBe('F8');
+    act(() => key('F8'));
+    await settle();
+    expect(inToasts()).toBe(true);
+    act(() => key('Escape'));
+    await settle();
+    expect(document.activeElement).toBe(name);
+    // Escape in the toasts left the sheet open.
+    expect(screen.getByTestId('state').textContent).toBe('open');
+    // F8 again goes there and back the same way.
+    act(() => key('F8'));
+    await settle();
+    expect(inToasts()).toBe(true);
+    act(() => key('F8'));
+    await settle();
+    expect(document.activeElement).toBe(name);
+  });
+
+  it('legacy 820: dismissing the last toast from the keyboard gives the focus back to the sheet', async () => {
+    render(<Form pushes={1} />);
+    await opened();
+    const name = screen.getByLabelText('name');
+    act(() => name.focus());
+    act(() => key('F8'));
+    await settle();
+    expect(inToasts()).toBe(true);
+    act(() => screen.getByRole('button', { name: 'Dismiss' }).click());
+    await settle();
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(document.activeElement).toBe(name);
+    expect(screen.getByTestId('state').textContent).toBe('open');
+  });
+
+  it('legacy 820: dismissing one of two toasts moves the focus to the other', async () => {
+    render(<Form pushes={2} />);
+    await opened();
+    act(() => screen.getByLabelText('name').focus());
+    act(() => key('F8'));
+    await settle();
+    const [first, second] = screen.getAllByTestId('toast');
+    expect(first?.contains(document.activeElement)).toBe(true);
+    act(() =>
+      within(first as HTMLElement)
+        .getByRole('button', { name: 'Dismiss' })
+        .click(),
+    );
+    await settle();
+    expect(screen.getAllByTestId('toast')).toHaveLength(1);
+    expect(second?.contains(document.activeElement)).toBe(true);
+  });
+
+  it('legacy 820: focus moved on from the toasts stays where the reader put it', async () => {
+    render(<Form pushes={1} />);
+    await opened();
+    act(() => screen.getByLabelText('name').focus());
+    act(() => key('F8'));
+    await settle();
+    expect(inToasts()).toBe(true);
+    const note = screen.getByLabelText('note');
+    act(() => note.focus());
+    await settle();
+    expect(document.activeElement).toBe(note);
+  });
+
+  it('legacy 820: with no toast, F8 leaves the focus where it is', async () => {
+    render(<Form pushes={0} />);
+    await opened();
+    const name = screen.getByLabelText('name');
+    act(() => name.focus());
+    act(() => key('F8'));
+    await settle();
+    expect(document.activeElement).toBe(name);
+  });
+
+  it('legacy 820: Escape in the toasts never reaches a legacy drawer around the page', async () => {
+    const onClose = vi.fn();
+    render(
+      <ToastProvider>
+        <PushFailure />
+        <Drawer open title="Edit" onClose={onClose}>
+          <input aria-label="field" />
+        </Drawer>
+      </ToastProvider>,
+    );
+    const field = screen.getByLabelText('field');
+    act(() => field.focus());
+    act(() => key('F8'));
+    await settle();
+    expect(inToasts()).toBe(true);
+    act(() => key('Escape'));
+    await settle();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field);
   });
 });
