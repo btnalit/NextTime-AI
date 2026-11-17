@@ -142,6 +142,8 @@ async function harness(
     testedAt?: string;
     /** Put models.json under a directory that does not exist (the rewrite must fail). */
     modelsJsonUnwritable?: boolean;
+    /** The models.json rewrite throws this (an error without a `code`). */
+    modelsJsonFailure?: Error;
     listResult?: ListUpstreamModelsResult;
     limits?: UpstreamCallLimits;
     /** Every test run waits for this before it answers (a test still running). */
@@ -184,10 +186,12 @@ async function harness(
     publicKey,
     resolveApiKey,
     writeModelsJson: () =>
-      writeModelsJsonAtomic(
-        modelsJsonFile,
-        buildModelsJsonFromCatalog(catalog, { llmProxyPort: 8082 }),
-      ),
+      options.modelsJsonFailure
+        ? Promise.reject(options.modelsJsonFailure)
+        : writeModelsJsonAtomic(
+            modelsJsonFile,
+            buildModelsJsonFromCatalog(catalog, { llmProxyPort: 8082 }),
+          ),
     writeProviderHealth: () =>
       refreshProviderHealthFile(healthFile, () =>
         buildProviderHealthFile(catalog, (provider) =>
@@ -1718,6 +1722,99 @@ describe('admin API — names the kernel’s audit cannot store are refused (leg
       expect(h.kernelEvents).toEqual([]);
     },
   );
+});
+
+describe('admin API — every kernel audit row is storable (legacy 825)', () => {
+  /** A provider written straight to the store, as an admin API before #1409 could. */
+  const storedBefore = (h: Harness, base: string, model: string) =>
+    h.store.upsert('legacy', {
+      api: 'openai-completions',
+      upstream_base_url: base,
+      api_key_env: 'LEGACY_KEY',
+      auth: { header: 'authorization', scheme: 'Bearer' },
+      models: [{ id: model }],
+      enabled: true,
+    });
+  const ownLine = (h: Harness, action: string) =>
+    JSON.parse(h.logLines.find((l) => l.includes(`"action":"${action}"`)) as string);
+
+  it('a model id stored before the rule is tested and audited with U+FFFD; the proxy’s own line keeps it', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file', LEGACY_KEY: 'sk-legacy' } });
+    await storedBefore(h, 'https://legacy.example.invalid', 'old\u0000model');
+    const tested = await request(h.port, 'POST', '/admin/providers/legacy/test', {
+      headers: await h.adminHeaders(),
+      body: {},
+    });
+    expect(tested.status).toBe(200);
+    expect(h.testRuns.map((r) => r.model)).toEqual(['old\u0000model']);
+    const event = h.kernelEvents.find((e) => e.action === 'provider_tested');
+    expect(event?.details).toMatchObject({ model: 'old\ufffdmodel', detailsReplaced: ['model'] });
+    expect(ownLine(h, 'provider_tested').model).toBe('old\u0000model');
+    expect(ownLine(h, 'provider_tested')).not.toHaveProperty('detailsReplaced');
+  });
+
+  it('a move away from a base stored before the rule is audited with U+FFFD', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file', LEGACY_KEY: 'sk-legacy' } });
+    const oldBase = 'https://legacy.example.invalid/\ud800';
+    await storedBefore(h, oldBase, 'm');
+    const moved = await request(h.port, 'PUT', '/admin/providers/legacy', {
+      headers: await h.adminHeaders(),
+      body: { ...NEW_PROVIDER, id: 'legacy', apiKeyEnv: undefined },
+    });
+    expect(moved.status).toBe(200);
+    const event = h.kernelEvents.find((e) => e.action === 'provider_updated');
+    expect(event?.details).toMatchObject({
+      upstreamBaseUrl: {
+        from: 'https://legacy.example.invalid/\ufffd',
+        to: NEW_PROVIDER.upstreamBaseUrl,
+      },
+      detailsReplaced: ['upstreamBaseUrl'],
+    });
+    expect(ownLine(h, 'provider_updated').upstreamBaseUrl.from).toBe(oldBase);
+  });
+
+  it('text is made storable before the model list is sized, so the marker never costs the list', async () => {
+    // `String(err).slice(0, 200)` ends on the first half of 😀. The row needs its list cut, and
+    // each id costs 18 characters: less room than the marker takes, had it come after the cut.
+    const h = await harness({ modelsJsonFailure: new Error(`${'x'.repeat(192)}😀`) });
+    const models = Array.from({ length: 200 }, (_, i) => ({
+      id: `model-${String(i).padStart(9, '0')}`,
+      displayName: null,
+      cost: null,
+    }));
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: {
+        ...NEW_PROVIDER,
+        upstreamBaseUrl: `https://acme.example.invalid/${'p'.repeat(995)}`,
+        models,
+      },
+    });
+    expect(created.status).toBe(201);
+    const event = h.kernelEvents.find((e) => e.action === 'provider_created');
+    const details = event?.details as {
+      models: string[];
+      modelsOmitted: number;
+      modelsJsonError: string;
+      detailsReplaced: string[];
+    };
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS);
+    expect(details.modelsJsonError).toBe(`Error: ${'x'.repeat(192)}\ufffd`);
+    expect(details.detailsReplaced).toEqual(['modelsJsonError']);
+    expect(details.models.length).toBeGreaterThan(0);
+    expect(details.models.length + details.modelsOmitted).toBe(200);
+    expect(details).not.toHaveProperty('detailsOmitted');
+  });
+
+  it('a row with nothing to replace has no detailsReplaced', async () => {
+    const h = await harness();
+    await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: NEW_PROVIDER,
+    });
+    const event = h.kernelEvents.find((e) => e.action === 'provider_created');
+    expect(event?.details).not.toHaveProperty('detailsReplaced');
+  });
 });
 
 describe('admin API — POST /model-probe', () => {
