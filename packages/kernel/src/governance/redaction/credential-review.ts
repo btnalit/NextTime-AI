@@ -123,6 +123,23 @@ export function redactSuspectedSecrets(
   return detect(value, suspectedSecretsRule(options));
 }
 
+/** `redactSuspectedSecrets` (the same rule, the same options) for a value nothing has bounded — a
+ *  gate's result, as large as the gate sent it (legacy 808): only its first `maxChars` characters
+ *  (keys and values, `redactSecrets`'s `maxChars`) are read, and objects and arrays up to
+ *  `MAX_WALK_NODES`; past either bound the rest is cut (`…`) or left out unread (`[…]`), and
+ *  `omitted` says so. The redactor runs on the kernel's event loop, so a caller that keeps only a
+ *  preview of the copy reads just past what it keeps, by a margin longer than any secret replaced
+ *  whole (application/task/gate-observation.ts, as application/chat/tool-call-record.ts's
+ *  `SECRET_MARGIN_CHARS`). */
+export function redactSuspectedSecretsUpTo(
+  value: unknown,
+  maxChars: number,
+  options: SuspectedSecretsOptions = {},
+): { readonly value: unknown; readonly omitted: boolean } {
+  const redacted = redactSecrets(value, { ...suspectedSecretsRule(options), maxChars });
+  return { value: redacted.value, omitted: redacted.omitted };
+}
+
 /** The audit copy of caller-supplied fields an audit row carries outside its `params` — a
  *  person's approve / reject reason, a chat's old and new title, a connection request's target —
  *  under the same rule as the `params` copy (`redactSuspectedSecrets`, call-argument rule). Pass

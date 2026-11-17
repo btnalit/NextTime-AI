@@ -38,6 +38,7 @@ import {
   MAX_GATE_OBSERVATIONS_PER_WORKER_RUN,
   invokeWorker,
   readWorkerRunRow,
+  setQuotaValue,
 } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -72,6 +73,9 @@ class RecordingTransport implements Transport {
     if (operation.name === 'observe.inventory') {
       return { data: { hosts: ['h1', 'h2'] } };
     }
+    if (operation.name === 'observe.config') {
+      return { data: OBSERVE_CONFIG_DATA };
+    }
     if (operation.name === 'observe.inventory.mapped') {
       return { data: { hosts: [{ name: 'h1' }, { name: 'h2' }] } };
     }
@@ -95,6 +99,25 @@ const OBSERVE_OP: Operation = {
   await_decision: false,
   reads: [],
   writes: [],
+};
+
+/** Legacy 237: an observe result carrying what a target can hand back — a value under a field named
+ *  after a secret, and a bearer token in free text. Both built at run time (no literal in the repo). */
+const OBSERVE_CONFIG_OP: Operation = {
+  ...OBSERVE_OP,
+  name: 'observe.config',
+  binding: { kind: 'http', method: 'GET', path: '/config' },
+};
+const SYNTHETIC_FIELD_SECRET = `synthetic-${randomUUID()}`;
+const SYNTHETIC_TOKEN = [
+  Buffer.from('{"alg":"HS256"}').toString('base64url'),
+  Buffer.from(`{"sub":"${randomUUID()}"}`).toString('base64url'),
+  Buffer.from(randomUUID()).toString('base64url'),
+].join('.');
+const OBSERVE_CONFIG_DATA = {
+  hosts: ['h1'],
+  database: { user: 'app', password: SYNTHETIC_FIELD_SECRET },
+  note: `deploy with Authorization: Bearer ${SYNTHETIC_TOKEN}`,
 };
 
 /** Same shape as `OBSERVE_OP` but *with* a `result_mapping` — `writeObservedFacts`
@@ -318,9 +341,17 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       workspaceId = await adminInsertWorkspace('gate-observation-integration-test');
       ownerId = await adminInsertPrincipal('owner', 'owner');
+      // Every test starts a Worker and none finishes it.
+      await inTx(ownerId, (client) =>
+        setQuotaValue(client, workspaceId, {
+          key: 'task.max_concurrent_worker_runs_per_user',
+          value: 100,
+          updatedBy: ownerId,
+        }),
+      );
 
       const gate = new GatekeeperBase({
-        manifest: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, AUTO_OP],
+        manifest: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, OBSERVE_CONFIG_OP, AUTO_OP],
         transport: new RecordingTransport(),
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
@@ -351,12 +382,13 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         await importManifest(client, workspaceId, {
           gatekeeperId,
-          operations: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, AUTO_OP],
+          operations: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, OBSERVE_CONFIG_OP, AUTO_OP],
           proposedBy: { id: ownerId, kind: 'human' },
           activityId: activity.id,
         });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_OP.name });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_MAPPED_OP.name });
+        await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_CONFIG_OP.name });
         // S11 「门确认不存在」 B-a: a person publishes it, confirming its declared 404.
         await publishOperation(client, workspaceId, {
           gatekeeperId,
@@ -470,6 +502,40 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (!observeActivity) throw new Error('expected a gatekeeper_observe Activity');
       const observeActivityObservations = await observationForActivity(observeActivity.id);
       expect(observeActivityObservations).toHaveLength(0);
+    });
+
+    it('legacy 237: the Observation keeps the observe result redacted — a secret-named field and a bearer token never reach observations.content', async () => {
+      const { workerRunId, claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: OBSERVE_CONFIG_OP.name,
+        params: {},
+      })) as { status: string; data: unknown };
+      expect(result.status).toBe('ok');
+      // Only the record is redacted: the Worker gets the result as the gate sent it.
+      expect(result.data).toEqual(OBSERVE_CONFIG_DATA);
+
+      const gateCalls = await gateCallActivities(workerRunId);
+      expect(gateCalls).toHaveLength(1);
+      const observations = await observationForActivity(gateCalls[0]?.id ?? '');
+      expect(observations).toHaveLength(1);
+      const content = observations[0]?.content;
+      expect(content).toMatchObject({
+        operation: OBSERVE_CONFIG_OP.name,
+        mode: 'observe',
+        status: 'ok',
+        truncated: false,
+        payload: {
+          hosts: ['h1'],
+          database: { user: 'app', password: '[redacted]' },
+        },
+      });
+      const stored = JSON.stringify(content);
+      expect(stored).not.toContain(SYNTHETIC_FIELD_SECRET);
+      expect(stored).not.toContain(SYNTHETIC_TOKEN);
+      expect((content?.payload as { note?: string } | undefined)?.note).toContain('[redacted]');
     });
 
     // Leftover 98: worker mode now calls observe-class gate tools through `observe_operation`. The

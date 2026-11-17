@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { redactSuspectedSecretsUpTo } from '../../governance/redaction/index.js';
 import {
   endActivity,
   recordSourceObservation,
@@ -33,10 +34,34 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  * `MAX_GATE_OBSERVATIONS_PER_WORKER_RUN` bounds how many of these rows one WorkerRun can ever write
  * (a Worker looping the same gate call must not grow the graph without bound) — past the cap, this
  * silently stops recording rather than throwing or blocking the Worker's own tool result.
+ *
+ * **Never the raw result (legacy 237).** `payload` is kept as the call-argument rule's copy
+ * (`redactSuspectedSecrets` with `secretFields`: every value under a field named after a secret, at
+ * any depth, and every secret-looking value, shape kept) — the rule the platform's own goal
+ * observations keep their evidence by (`application/goal/platform-observation.ts`). An execute
+ * branch's result arrives here already in that form (read back from its audit row,
+ * `readTerminalOutcome`) and the rule replaces nothing twice; an observe branch's result arrives as
+ * the gate sent it and would otherwise be written as is, and go into every dump of the table.
+ *
+ * **Only what is kept is read.** A gate's result is as large as the gate sent it (legacy 808) and
+ * the redactor runs on the kernel's event loop, so `keptGatePayload` redacts only the start of it
+ * (`redactSuspectedSecretsUpTo`: `GATE_OBSERVATION_READ_CHARS` characters of keys and values, the
+ * rest left out unread however many keys or items it has) and cuts that to
+ * `GATE_OBSERVATION_PAYLOAD_MAX_CHARS` once serialized — the read reaches past the cut by a margin
+ * longer than any secret replaced whole, so a secret the cut crosses was read whole and replaced
+ * (as application/chat/tool-call-record.ts reads a tool call's result). Replacements shorten the
+ * copy, so after more than a margin's worth of them the cut can fall where reading stopped: the
+ * copy then ends inside the one string or key reading stopped in, whose start the value patterns
+ * still ran over (a PEM key is replaced to its end), and `truncated` is set though the copy is
+ * shorter than the cut.
  */
 
 const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
 const GATE_OBSERVATION_PAYLOAD_MAX_CHARS = 8_000;
+/** Characters of a result read (keys and values): what is kept plus a margin longer than any secret
+ *  replaced whole (a PEM RSA-4096 private key is ~3.3k characters) — the margin
+ *  application/chat/tool-call-record.ts's `SECRET_MARGIN_CHARS` reads a tool call's result by. */
+const GATE_OBSERVATION_READ_CHARS = GATE_OBSERVATION_PAYLOAD_MAX_CHARS + 4_096;
 export const MAX_GATE_OBSERVATIONS_PER_WORKER_RUN = 200;
 
 export interface RecordWorkerGateObservationInput {
@@ -56,6 +81,7 @@ export interface RecordWorkerGateObservationInput {
    *  lifecycle vocabulary, just enough for a reader of this Observation's `content` to tell what
    *  kind of result `payload` holds. */
   readonly status: string;
+  /** The gate's result as the caller got it; kept redacted (module doc). */
   readonly payload: unknown;
 }
 
@@ -77,6 +103,20 @@ function truncatePayload(payload: unknown): {
     value: `${serialized.slice(0, GATE_OBSERVATION_PAYLOAD_MAX_CHARS)}… [${omitted} more characters omitted]`,
     truncated: true,
   };
+}
+
+/** What an Observation keeps of a gate's result: the call-argument rule's copy of its start, cut
+ *  to `GATE_OBSERVATION_PAYLOAD_MAX_CHARS` once serialized (module doc). `truncated`: anything was
+ *  cut or left out. */
+export function keptGatePayload(payload: unknown): {
+  readonly value: unknown;
+  readonly truncated: boolean;
+} {
+  const redacted = redactSuspectedSecretsUpTo(payload ?? null, GATE_OBSERVATION_READ_CHARS, {
+    secretFields: true,
+  });
+  const kept = truncatePayload(redacted.value);
+  return { value: kept.value, truncated: kept.truncated || redacted.omitted };
 }
 
 async function countExistingGateObservations(
@@ -106,7 +146,7 @@ export async function recordWorkerGateObservation(
     ownerPrincipalId: input.ownerPrincipalId,
   });
 
-  const { value: payload, truncated } = truncatePayload(input.payload);
+  const { value: payload, truncated } = keptGatePayload(input.payload);
   const activity = await startActivity(client, workspaceId, {
     kind: GATE_OBSERVATION_ACTIVITY_KIND,
     principalId: input.agentPrincipalId,
