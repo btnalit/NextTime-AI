@@ -1223,7 +1223,65 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'operations', 'gk-1::stock.get@draft');
     const diff = await screen.findByTestId('operation-revision-diff');
-    expect(diff.textContent).toContain('和已发布版本没有差异');
+    // Legacy 614: it says what it compared — with no published row listed, not the description.
+    expect(diff.textContent).toContain('治理字段和执行定义都和已发布版本相同');
+    expect(diff.textContent).not.toContain('没有差异');
+  });
+
+  it('legacy 614: a revision draft that only rewrites its description says so; one that keeps it says all three match', async () => {
+    const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+    const rowsWith = (draftDescription: string) => [
+      {
+        gatekeeperId: 'gk-1',
+        name: 'stock.get',
+        status: 'published',
+        mode: 'observe',
+        blastRadius: 'low',
+        autoApprovable: true,
+        version: 1,
+        description: 'Reads the stock level.',
+      },
+      {
+        gatekeeperId: 'gk-1',
+        name: 'stock.get',
+        status: 'draft',
+        mode: 'observe',
+        blastRadius: 'low',
+        autoApprovable: true,
+        version: 2,
+        description: draftDescription,
+        governanceChange: { before: fields, after: fields, direction: 'neutral' },
+        definitionChange: {
+          changedFields: [],
+          paramsAdded: [],
+          paramsRemoved: [],
+          paramsChanged: [],
+        },
+      },
+    ];
+    const httpWith = (draftDescription: string) =>
+      scriptedHttp({
+        list_operations: () => ({ items: rowsWith(draftDescription) }),
+        get_operation_stats: () => ({ items: [] }),
+      });
+    const first = renderPage(
+      httpWith('Reads the stock level of one SKU.'),
+      'operations',
+      'gk-1::stock.get@draft',
+    );
+    const diff = await screen.findByTestId('operation-revision-diff');
+    expect(
+      within(diff)
+        .getAllByTestId('operation-revision-diff-line')
+        .map((line) => line.textContent),
+    ).toEqual(['说明变了']);
+    expect(diff.textContent).not.toContain('相同');
+    first.unmount();
+
+    renderPage(httpWith('Reads the stock level.'), 'operations', 'gk-1::stock.get@draft');
+    const same = await screen.findByTestId('operation-revision-diff');
+    expect(same.textContent).toContain('治理字段、执行定义和说明都和已发布版本相同');
+    expect(within(same).queryByTestId('operation-revision-diff-line')).toBeNull();
   });
 
   it('legacy K (UX acceptance of #538): publishing a revision draft follows it to the version now in effect and says which version', async () => {

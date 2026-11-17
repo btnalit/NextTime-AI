@@ -850,7 +850,15 @@ function paramLine(
  * (`definitionChange`: changed fields, params added / removed / changed). Publishing approves a new
  * definition, so it is shown before the button, never only after.
  */
-function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
+function RevisionDiff({
+  row,
+  published,
+}: {
+  readonly row: OperationCatalogRow;
+  /** Legacy 614: the same Operation's published version from the list, when it is there — the
+   *  kernel's diff leaves the description out, so it is compared here. */
+  readonly published: OperationCatalogRow | undefined;
+}) {
   const t = useT();
   const lines: string[] = [];
   if (row.governanceChange) {
@@ -894,6 +902,10 @@ function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
       );
     }
   }
+  // Legacy 614: a draft that only rewrites its description read 「没有差异」.
+  const descriptionChanged =
+    published !== undefined && (row.description ?? '') !== (published.description ?? '');
+  if (descriptionChanged) lines.push(t('说明变了', 'Description changed'));
   return (
     <div className="stack-s" data-testid="operation-revision-diff">
       <span className="field-label">
@@ -902,7 +914,16 @@ function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
       {lines.length === 0 ? (
         <span className="text-3">
           {change
-            ? t('和已发布版本没有差异。', 'No difference from the published version.')
+            ? // Legacy 614: say what was compared, not that nothing differs at all.
+              published !== undefined
+              ? t(
+                  '治理字段、执行定义和说明都和已发布版本相同。',
+                  'Governance fields, the definition the gate runs and the description all match the published version.',
+                )
+              : t(
+                  '治理字段和执行定义都和已发布版本相同。',
+                  'Governance fields and the definition the gate runs match the published version.',
+                )
             : t(
                 '读不出这一版的定义，没法和已发布版本比较。',
                 'This version’s definition could not be read, so it cannot be compared.',
@@ -1196,6 +1217,7 @@ function OperationDetailView({
   onRewritten,
   rewrittenFrom,
   liveVersion,
+  publishedVersion,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OperationCatalogRow;
@@ -1228,6 +1250,8 @@ function OperationDetailView({
    *  published or a draft — the note says it is unaffected; without one, the name takes no new
    *  version. */
   readonly liveVersion?: OperationCatalogRow;
+  /** Legacy 614: on a draft, the same Operation's published version, for its revision diff. */
+  readonly publishedVersion?: OperationCatalogRow;
 }) {
   const t = useT();
   const key = catalogOperationKey(row);
@@ -1411,7 +1435,9 @@ function OperationDetailView({
           )}
         </Notice>
       ) : null}
-      {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
+      {row.status === 'draft' && row.governanceChange ? (
+        <RevisionDiff row={row} published={publishedVersion} />
+      ) : null}
       {rewrittenFrom !== null && gateOwned.length === 0 ? (
         <Notice testId="operation-rewritten">
           {t(
@@ -1870,6 +1896,13 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         ) ??
         rows.find((row) => row.status === 'draft' && operationKey(row) === operationKey(selected)))
       : undefined;
+  // Legacy 614: a draft's published version, for what its revision diff compares by itself.
+  const selectedPublished =
+    selected?.status === 'draft'
+      ? rows.find(
+          (row) => row.status === 'published' && operationKey(row) === operationKey(selected),
+        )
+      : undefined;
   const proposerOnly = selected
     ? proposerOnlyFor(
         selected,
@@ -1920,6 +1953,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           : null
       }
       liveVersion={selectedStillLive}
+      publishedVersion={selectedPublished}
     />
   ) : (
     <SelectionPlaceholder
