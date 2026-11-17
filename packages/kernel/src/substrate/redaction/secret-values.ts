@@ -57,6 +57,31 @@ export const OMITTED = '[…]';
 /** Nodes of a structured value visited before the rest is left out. */
 export const MAX_WALK_NODES = 5_000;
 
+/** How far past a cut a string is read and scrubbed before it is cut (`scrubbedCut`): longer than
+ *  any secret a value pattern replaces whole (a PEM RSA-4096 private key is ~3.3k characters, a
+ *  Handle well under 2k). */
+export const CUT_LOOKAHEAD_CHARS = 4_096;
+
+/**
+ * Legacy 819: `text`, which is longer than `length`, cut to at most `length` characters where
+ * reading stops, and scrubbed by `scrub` — never ending in the start of a secret. A value pattern
+ * recognizes only a whole secret: cut inside one, `password: "correct horse`, a Bearer token, a
+ * vendor key or a URL's password cut short is no match, and its start stays as it is. So the
+ * `CUT_LOOKAHEAD_CHARS` characters past the cut are read and scrubbed too, and of that at most
+ * `length` characters are kept — and, unless reading reached the end of `text`, never its last
+ * `CUT_LOOKAHEAD_CHARS`. A secret the cut crosses lies whole in what was read and is replaced; one
+ * that reading stopped in lies in the part never kept, however much the replacements before it
+ * shortened the copy (which is then shorter than `length`, possibly empty). Reads at most
+ * `length + CUT_LOOKAHEAD_CHARS` characters of `text`.
+ */
+export function scrubbedCut(text: string, length: number, scrub: (read: string) => string): string {
+  const read = text.slice(0, Math.max(length, 0) + CUT_LOOKAHEAD_CHARS);
+  const scrubbed = scrub(read);
+  const keep =
+    read.length === text.length ? length : Math.min(length, scrubbed.length - CUT_LOOKAHEAD_CHARS);
+  return scrubbed.slice(0, Math.max(keep, 0));
+}
+
 /** A field name that names a secret (`apiKey0`, `x-api-key`, `PGPASSWORD`, `accessToken` —
  *  `maxTokens` stays): `@nexttime/shared`'s `namesASecretField`, the one rule the kernel's scrubs,
  *  its suspected-credential count and the console's display mask share. */
@@ -334,6 +359,9 @@ interface WalkState {
   readonly bounded: boolean;
   /** Hidden as literals in every string, before the patterns run (`RedactSecretsOptions`). */
   readonly literals: readonly string[];
+  /** The key rule over every string that is JSON text, before the literals
+   *  (`RedactSecretsOptions.jsonTextFields`). */
+  readonly jsonTextKey: ((key: string) => boolean) | undefined;
   /** Where values were replaced — only for a caller that asked (`onRedacted`). */
   readonly onRedacted: ((path: string, count: number) => void) | undefined;
   readonly patterns: readonly ValuePattern[];
@@ -341,6 +369,11 @@ interface WalkState {
 
 function scrubInto(text: string, state: WalkState): string {
   let out = text;
+  if (state.jsonTextKey !== undefined) {
+    const fields = redactSecretFieldsInJsonText(out, state.jsonTextKey);
+    state.count += fields.redactedValues;
+    out = fields.value;
+  }
   if (state.literals.length > 0) {
     const literal = scrubSecretLiterals(out, state.literals);
     state.count += literal.redactedValues;
@@ -370,6 +403,7 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     onRedacted: options.onRedacted,
     patterns: options.patterns ?? SECRET_VALUE_PATTERNS,
     literals: options.literals ?? [],
+    jsonTextKey: options.jsonTextFields === true ? options.isSecretKey : undefined,
   };
 }
 
@@ -674,8 +708,9 @@ export interface RedactSecretsOptions {
   readonly maxNodes?: number;
   /** Characters read in all: string content (an empty string counts one), object keys, and the
    *  characters of a number, a boolean or null; a string or key past the budget is cut (ending in
-   *  `…`), and a value under a secret-named field, replaced unread, is charged what replaces it
-   *  (`[redacted]`). Once the budget is spent — or
+   *  `…`, and never in the start of a secret — `scrubbedCut`, which reads `CUT_LOOKAHEAD_CHARS`
+   *  past the cut), and a value under a secret-named field, replaced unread, is charged what
+   *  replaces it (`[redacted]`). Once the budget is spent — or
    *  `maxNodes` is — the rest of every container is left out unread, as one `[…]` (an array's
    *  last item, an object's last entry): a value is read only up to the bound, however many keys
    *  or items it has (legacy 237). Defaults to no bound — for display, or for a value nothing has
@@ -691,6 +726,11 @@ export interface RedactSecretsOptions {
   /** Known secret values (`secretFieldLiterals` of the content this value quotes — a tool call's
    *  arguments, for its result) hidden as literals in every string, before the patterns. */
   readonly literals?: readonly string[];
+  /** With `isSecretKey`: every string that is JSON text gets the same key rule over its text
+   *  (`redactSecretFieldsInJsonText`), before the literals — a tool's result is its JSON as text,
+   *  and one that echoes the call's arguments must hide a field as they did (legacy 185). In the
+   *  same walk, so it reads what the walk reads and no more (legacy 819). */
+  readonly jsonTextFields?: boolean;
 }
 
 export interface RedactedValue extends Scrubbed<unknown> {
@@ -741,14 +781,16 @@ function shownKey(
   options: RedactSecretsOptions,
 ): string {
   const before = state.count;
-  let read = key;
-  if (key.length <= state.chars) state.chars -= key.length;
-  else {
+  let scrubbed: string;
+  if (key.length <= state.chars) {
+    state.chars -= key.length;
+    scrubbed = scrubInto(key, state);
+  } else {
     state.omitted = true;
-    read = `${key.slice(0, Math.max(state.chars, 0))}…`;
+    const length = Math.max(state.chars, 0);
     state.chars = 0;
+    scrubbed = `${scrubbedCut(key, length, (read) => scrubInto(read, state))}…`;
   }
-  const scrubbed = scrubInto(read, state);
   let shown = scrubbed;
   for (let n = 2; Object.hasOwn(taken, shown); n += 1) shown = `${scrubbed} (${n})`;
   noted(state, childPath(path, shown, options), before);
@@ -780,9 +822,9 @@ function redactInto(
     } else {
       state.omitted = true;
       if (state.chars <= 0) return OMITTED;
-      const head = value.slice(0, state.chars);
+      const length = state.chars;
       state.chars = 0;
-      out = `${scrubInto(head, state)}…`;
+      out = `${scrubbedCut(value, length, (read) => scrubInto(read, state))}…`;
     }
     noted(state, path, before);
     return out;

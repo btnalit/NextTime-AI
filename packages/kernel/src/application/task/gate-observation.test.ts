@@ -94,4 +94,19 @@ describe('keptGatePayload (legacy 237)', () => {
     const stored = JSON.stringify(kept.value);
     for (const token of tokens) expect(stored).not.toContain(token.split('.')[1]);
   });
+
+  it('a copy that ends where reading stopped keeps no start of the secret it stopped in (legacy 819)', () => {
+    // JWTs replaced by `[redacted]` shorten the copy below the cut, so the copy ends where reading
+    // stopped (12 096 characters in) — inside the password.
+    const read = KEPT_CHARS + 4_096;
+    const tokens = Array.from({ length: 80 }, () => syntheticJwt()).join(' ');
+    const password = 'password: "qz7 correct horse battery staple" done';
+    const note = `${tokens}${' '.repeat(read - 15 - tokens.length)}${password}${'z'.repeat(5_000)}`;
+    expect(note.indexOf(password)).toBe(read - 15);
+
+    const kept = keptGatePayload(note);
+    expect(kept.truncated).toBe(true);
+    expect(JSON.stringify(kept.value).length).toBeLessThan(KEPT_CHARS);
+    expect(JSON.stringify(kept.value)).not.toContain('qz7');
+  });
 });

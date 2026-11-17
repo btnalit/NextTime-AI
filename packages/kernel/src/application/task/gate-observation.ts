@@ -50,10 +50,10 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  * `GATE_OBSERVATION_PAYLOAD_MAX_CHARS` once serialized — the read reaches past the cut by a margin
  * longer than any secret replaced whole, so a secret the cut crosses was read whole and replaced
  * (as application/chat/tool-call-record.ts reads a tool call's result). Replacements shorten the
- * copy, so after more than a margin's worth of them the cut can fall where reading stopped: the
- * copy then ends inside the one string or key reading stopped in, whose start the value patterns
- * still ran over (a PEM key is replaced to its end), and `truncated` is set though the copy is
- * shorter than the cut.
+ * copy, so after more than a margin's worth of them the copy can end where reading stopped, inside
+ * the one string or key reading stopped in; that one is cut by `scrubbedCut` (legacy 819), so it
+ * never ends in the start of a secret, and `truncated` is set though the copy is shorter than the
+ * cut.
  */
 
 const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
