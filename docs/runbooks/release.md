@@ -3390,6 +3390,17 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.198 门宿主拉 OpenAPI 文档时不跟随重定向（#1342，遗留 199，0.69.2 之后的下一版）
+
+无迁移。门宿主给 http 实例拉 OpenAPI `manifestSource` 时，以前跟随重定向，现在与内核（R-27）和门的 transport 一致，不跟随。
+
+- **含义变化（收窄）**：OpenAPI 文档地址会重定向的 http 实例，升级后不再构建、不再接管、不再公告。原因写在门宿主的 warn 日志和 `/healthz` 里，原文含 `does not follow redirects`。门宿主每轮 tick 照常重试。
+- **影响范围**：内核在创建连接时本来就拒绝会重定向的 `manifestSource`，所以只影响创建之后地址才开始重定向的实例。mcp 实例、预置连接器实例、没有 `manifestSource` 的 http 实例不受影响。
+- **升级后核对（可选，只读，结果记 `docs/private/`）**：在门宿主日志里查 `does not follow redirects`。正常没有命中。有命中时，把该实例的 OpenAPI 文档地址改成日志里给出的最终地址。
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
