@@ -1,4 +1,4 @@
-import { type LlmRefusalScope, LlmRefusalScopeSchema } from '@nexttime/shared';
+import { type LlmRefusalScope, LlmRefusalScopeSchema, type LlmUsageStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { enqueue } from '../../substrate/outbox/index.js';
@@ -26,9 +26,11 @@ import { enqueue } from '../../substrate/outbox/index.js';
 // -------------------------------------------------------------------------------------------
 
 /** `llm_usage.status` of a call llm-proxy refused for a spent workspace budget (legacy 589). */
-export const REFUSED_USAGE_STATUS = 'refused';
-/** `llm_usage.status` of a call the provider answered. */
-export const COMPLETED_USAGE_STATUS = 'completed';
+export const REFUSED_USAGE_STATUS = 'refused' satisfies LlmUsageStatus;
+/** `llm_usage.status` of a call the provider answered and the client was sent whole — the only
+ *  status that counts as an answer (`sessionRefusedOnly`). `client_closed` (legacy 161) is not one:
+ *  the client never got the whole answer. */
+export const COMPLETED_USAGE_STATUS = 'completed' satisfies LlmUsageStatus;
 
 /**
  * One normalized usage record, as POSTed (as a JSON array, batched) to `/internal/llm-usage` by
@@ -54,10 +56,12 @@ export const LlmUsageRecordSchema = z
     costUsd: z.number().nonnegative().optional(),
     startedAt: z.string().datetime(),
     finishedAt: z.string().datetime().optional(),
-    /** Free-text outcome (no shared enum — see the migration's own header comment for why);
-     *  `packages/llm-proxy` documents the values it actually writes (`completed` / `error` /
-     *  `refused`). `refused` (legacy 589, migrations/llm-usage/0003): llm-proxy answered the call
-     *  402 because the workspace's daily budget was spent — it never reached the provider. */
+    /** Free-text outcome, any non-empty value accepted (see the migration's own header comment
+     *  for why) — so a record from a newer llm-proxy is never dropped, and its tokens still count.
+     *  The values llm-proxy writes are `LLM_USAGE_STATUS_VALUES` (packages/shared enums.ts:
+     *  `completed` / `error` / `refused` / `client_closed`, each explained there). `refused`
+     *  (legacy 589, migrations/llm-usage/0003): llm-proxy answered the call 402 because the
+     *  workspace's daily budget was spent — it never reached the provider. */
     status: z.string().min(1),
     /** Which budget refused the call — set exactly when `status` is `refused` (legacy 589). */
     refusalScope: LlmRefusalScopeSchema.optional(),
@@ -474,7 +478,8 @@ export interface RefusedOnlyUsage {
  * workspace budget (`status = 'refused'`) and none the provider answered (`status = 'completed'`)
  * — `null` otherwise, including a session with no usage at all (a run that never called the model
  * is judged by its result, as before). An upstream error row (`error`) is no answer either, so it
- * neither makes nor breaks the verdict. A Worker's session is its run's own; the entry agent's is
+ * neither makes nor breaks the verdict; nor is a call whose client went away before the whole
+ * answer reached it (`client_closed`, legacy 161). A Worker's session is its run's own; the entry agent's is
  * one per person and reused across Turns, so a Turn is judged by `entryTurnRefusedOnly`.
  *
  * Exact only if every row of the session's calls so far is in the table: llm-proxy hands a refusal

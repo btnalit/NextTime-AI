@@ -232,6 +232,9 @@ export interface LlmProxyConfig {
    *  tens of seconds mid-stream while the model "thinks". */
   readonly upstreamIdleTimeoutMs: number;
   readonly upstreamConnectTimeoutMs: number;
+  /** Legacy 161: `CLIENT_STALL_TIMEOUT_MS` — how long a client may leave a backlog of the answer
+   *  untaken before it is cut off (proxy.ts `ProxyServerOptions.clientStallTimeoutMs`). */
+  readonly clientStallTimeoutMs: number;
   /** S6-B (docs/console-completion-plan.md §5.4): the console-managed provider store —
    *  `providers.json` in this service's own read-write state mount (`${NEXTTIME_DATA}/llm-proxy`
    *  → `/data/state`, docker-compose.yml). The yaml above stays the operator-managed base; store
@@ -270,6 +273,15 @@ export interface LlmProxyConfig {
   readonly handleBindingsFile?: string;
 }
 
+/**
+ * Legacy 161: default for `CLIENT_STALL_TIMEOUT_MS`. Every client (pi in an agent container, the
+ * kernel) sits on the same host network as this proxy, so a healthy one takes a socket's worth of
+ * answer in milliseconds; 15 s is a client that has stopped reading (a frozen Worker), well inside
+ * the send timeouts provider front ends are commonly given (nginx: 60 s), so the proxy never
+ * holds a stalled client long enough for the provider to give up on the proxy.
+ */
+export const CLIENT_STALL_TIMEOUT_MS = 15_000;
+
 function parseIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -290,6 +302,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     maxRequestBodyBytes: parseIntEnv(env.MAX_REQUEST_BODY_BYTES, 10 * 1024 * 1024),
     upstreamIdleTimeoutMs: parseIntEnv(env.UPSTREAM_IDLE_TIMEOUT_MS, 300_000),
     upstreamConnectTimeoutMs: parseIntEnv(env.UPSTREAM_CONNECT_TIMEOUT_MS, 10_000),
+    clientStallTimeoutMs: parseIntEnv(env.CLIENT_STALL_TIMEOUT_MS, CLIENT_STALL_TIMEOUT_MS),
     providerStoreFile: env.LLM_PROVIDER_STORE_FILE ?? '/data/state/providers.json',
     keyStoreFile: env.LLM_KEY_STORE_FILE ?? '/data/state/keys.json',
     modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/models/models.json',

@@ -28,7 +28,7 @@
  * call of this session was refused" check at report time reads a complete set. On a timeout the
  * record stays queued and is resent in the background like any other.
  */
-import type { LlmRefusalScope } from '@nexttime/shared';
+import type { LlmRefusalScope, LlmUsageStatus } from '@nexttime/shared';
 
 export interface LlmUsageRecord {
   readonly workspaceId: string;
@@ -43,10 +43,13 @@ export interface LlmUsageRecord {
   readonly costUsd?: number;
   readonly startedAt: string;
   readonly finishedAt?: string;
-  /** `'completed'`, `'error'` or `'refused'` — see proxy.ts's call sites for exactly when each is
-   *  used. `refused` (legacy 589): this proxy answered the request 402 `budget_exhausted` without
-   *  forwarding it; 0 tokens, cost 0, and `refusalScope` names the budget. */
-  readonly status: string;
+  /** How the call ended — `LLM_USAGE_STATUS_VALUES` (packages/shared enums.ts) says what each
+   *  value means; proxy.ts's call sites say exactly when each is written. `refused` (legacy 589):
+   *  this proxy answered the request 402 `budget_exhausted` without forwarding it; 0 tokens, cost
+   *  0, and `refusalScope` names the budget. `client_closed` (legacy 161): the client went away
+   *  before the whole answer reached it; the upstream answer was still read to its end, so the
+   *  usage is the provider's full count. */
+  readonly status: LlmUsageStatus;
   /** Legacy 589: on a `refused` record only — which workspace budget ran out. */
   readonly refusalScope?: LlmRefusalScope;
   /** R-67: a UUID minted for the one upstream request this record meters (proxy.ts), resent

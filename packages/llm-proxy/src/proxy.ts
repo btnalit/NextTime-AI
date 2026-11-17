@@ -3,6 +3,7 @@ import http from 'node:http';
 import {
   CORRELATION_ID_HEADER,
   type HandleClaims,
+  type LlmUsageStatus,
   SOURCE_BOUND_CAPABILITY_HANDLE,
   handleHolderOf,
   isRedirectStatus,
@@ -10,7 +11,8 @@ import {
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { ExhaustedBudgetRow } from './budget-sync.js';
-import type { ProviderApiKind, ProviderConfig } from './config.js';
+import { deliverToClient } from './client-delivery.js';
+import { CLIENT_STALL_TIMEOUT_MS, type ProviderApiKind, type ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import { type LlmProxyMetrics, createLlmProxyMetrics, respondMetrics } from './metrics.js';
@@ -69,6 +71,18 @@ import {
  * error response (4xx / 5xx), which can quote the request and so the real key: it is read whole
  * (bounded) and forwarded as a scrubbed copy with its JSON structure kept (upstream-error-body.ts,
  * review of #549). Otherwise only the outbound *request* is ever narrowed or mutated, as above.
+ *
+ * Legacy 161: the upstream answer is always read to its end at the upstream's own pace — never
+ * slowed down for the client, never aborted for it — and metered in full. Pausing the upstream
+ * read for a slow client would let the provider's own send timeout cut the stream first (review
+ * of #1391), and aborting it would leave the record short (the OpenAI-shaped APIs report usage
+ * only at the very end): either way a client could make itself metered at next to nothing, past
+ * the workspace's daily budget. What the client has not taken yet waits in this request's own
+ * buffer, bounded by `clientBufferLimitBytes`; a client that falls further behind than that, or
+ * leaves a backlog untaken for `clientStallTimeoutMs`, is cut off. A client that goes away or is
+ * cut off is not forwarded to any more; its call is metered as `client_closed`. The cost is that
+ * the provider finishes an answer nobody reads, bounded as before by the request's `max_tokens`
+ * and the upstream idle timeout.
  *
  * Leftover 87: every request gets a correlation id — the caller's `x-correlation-id` when valid
  * (the platform extension sends the Turn id / the Worker's inherited id on every model call), else
@@ -272,6 +286,16 @@ export interface ProxyServerOptions {
    *  generous by default (config.ts), since a thinking model can stall for tens of seconds
    *  mid-stream. */
   readonly upstreamIdleTimeoutMs: number;
+  /** Legacy 161: how long a client may leave a backlog of the answer untaken — from the moment
+   *  its connection stops accepting more (or the answer has ended unflushed) until it has taken
+   *  it — before it is cut off and its call metered as `client_closed`. The upstream read is
+   *  never paused meanwhile. Default {@link CLIENT_STALL_TIMEOUT_MS} (config.ts, overridable
+   *  with the `CLIENT_STALL_TIMEOUT_MS` variable). */
+  readonly clientStallTimeoutMs?: number;
+  /** Legacy 161: the most of an answer this process holds for one client that has not taken it
+   *  yet; a client further behind is cut off (as above). Default
+   *  {@link CLIENT_BUFFER_LIMIT_BYTES}. */
+  readonly clientBufferLimitBytes?: number;
   /** Resolves `api_key_env` to the real provider key. Defaults to `process.env[name]` — injected
    *  in tests. */
   readonly resolveApiKey?: (envVarName: string) => string | undefined;
@@ -319,6 +343,15 @@ export const BUDGET_EXHAUSTED_STATUS = 402;
  * the refusal (the kernel's earlier behaviour: the run's result is taken as it is).
  */
 export const REFUSAL_DELIVERY_TIMEOUT_MS = 5000;
+
+/**
+ * Legacy 161: default for {@link ProxyServerOptions.clientBufferLimitBytes} — per request, on top
+ * of the kernel's own socket buffers. It bounds the backlog, not the answer: a client that reads
+ * keeps up with the model's generation (tens of KiB a second), so its backlog stays near zero
+ * however long the answer runs. Only a client that stops reading while the upstream sends fast
+ * reaches it; one that stops while the model is still generating meets the stall timeout first.
+ */
+export const CLIENT_BUFFER_LIMIT_BYTES = 8 * 1024 * 1024;
 
 export function createProxyServer(options: ProxyServerOptions): http.Server {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -774,6 +807,33 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     } else {
       res.writeHead(upstreamRes.status, upstreamHeadersToNodeHeaders(upstreamRes.headers));
     }
+    // Legacy 161: a successful answer goes to the client without the upstream read ever waiting
+    // for it (client-delivery.ts); a client too far or too long behind is cut off.
+    const delivery = upstreamRes.ok
+      ? deliverToClient(res, {
+          stallTimeoutMs: options.clientStallTimeoutMs ?? CLIENT_STALL_TIMEOUT_MS,
+          bufferLimitBytes: options.clientBufferLimitBytes ?? CLIENT_BUFFER_LIMIT_BYTES,
+          onCutOff: (cutOff) =>
+            log(
+              JSON.stringify({
+                level: 'warn',
+                msg:
+                  cutOff.reason === 'stalled'
+                    ? 'llm-proxy: client left the answer untaken for the stall timeout; cutting it off, the upstream answer is still read to its end'
+                    : 'llm-proxy: client fell further behind than the buffer limit; cutting it off, the upstream answer is still read to its end',
+                correlationId,
+                provider: providerName,
+                model: modelId,
+                ...(cutOff.reason === 'stalled'
+                  ? { clientStallTimeoutMs: cutOff.stallTimeoutMs }
+                  : {
+                      clientBufferLimitBytes: cutOff.bufferLimitBytes,
+                      bufferedBytes: cutOff.bufferedBytes,
+                    }),
+              }),
+            ),
+        })
+      : undefined;
 
     if (upstreamRes.ok && upstreamRes.body) {
       const reader = upstreamRes.body.getReader();
@@ -781,8 +841,8 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          delivery?.forward(value);
           armTimeout(options.upstreamIdleTimeoutMs);
-          res.write(value);
           if (isSse) {
             usageAccumulator?.push(decoder.decode(value, { stream: true }));
           } else if (!nonSseTooLarge) {
@@ -797,8 +857,13 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         streamError = err;
       }
     }
+    // The upstream call ends here, whatever the client is still doing (review of #1391): its
+    // duration and the record's `finishedAt` never include the wait for the client below.
+    const finishedAt = new Date();
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    if (upstreamRes.ok) res.end();
+    // Legacy 161: whether the whole answer reached the client decides `completed` against
+    // `client_closed`, so the record waits until it has (at most the client stall timeout).
+    await delivery?.end();
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
     if (nonSseTooLarge) {
@@ -820,8 +885,22 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       }
     }
 
-    const finishedAt = new Date();
     const upstreamOutcome = streamError || !upstreamRes.ok ? 'error' : 'completed';
+    // Legacy 161: an upstream failure is `error` whether or not the client stayed; a full answer
+    // the client left before receiving whole is `client_closed`, metered in full like `completed`.
+    const usageStatus: LlmUsageStatus =
+      upstreamOutcome === 'completed' && delivery?.gone() ? 'client_closed' : upstreamOutcome;
+    if (usageStatus === 'client_closed') {
+      log(
+        JSON.stringify({
+          level: 'info',
+          msg: 'llm-proxy: client went away before the whole answer reached it; the upstream answer was read to its end and is metered in full',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+        }),
+      );
+    }
     metrics.observeUpstream(
       providerName,
       modelId,
@@ -855,7 +934,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
           : {}),
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
-        status: upstreamOutcome,
+        status: usageStatus,
         requestId,
       },
       { correlationId },
