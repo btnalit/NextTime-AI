@@ -4234,6 +4234,23 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     announceReadinessChange(http);
   }
 
+  // Legacy 245: the lists hold published versions and the reader's own drafts, so a version just
+  // deprecated leaves them and its detail read 「未找到」 — closed once both lists are read again,
+  // as a Skill's or a Procedure's (legacy 494); the toast already said it was deprecated.
+  const closeIfRetired = useCloseRetiredFamily(
+    itemId,
+    workers.state.status === 'ready' &&
+      !workers.state.refreshing &&
+      myDrafts.state.status === 'ready' &&
+      !myDrafts.state.refreshing,
+    (key) =>
+      [
+        ...(workers.state.status === 'ready' ? workers.state.data.items : []),
+        ...(myDrafts.state.status === 'ready' ? myDrafts.state.data.items : []),
+      ].some((row) => workerKey(row) === key),
+    () => selectRow(null),
+  );
+
   function openEditor(next: WorkerEditorState): void {
     setEditor(next);
     onSelectItem(NEW_ITEM_ID);
@@ -4298,6 +4315,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         tone: 'ok',
         title: t(`${workerLabel(row, t)} 已弃用`, `${workerLabel(row, t)} deprecated`),
       });
+      closeIfRetired(workerKey(row));
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('deprecate_worker_definition');
