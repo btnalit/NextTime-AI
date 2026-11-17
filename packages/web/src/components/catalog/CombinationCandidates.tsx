@@ -451,8 +451,8 @@ export function DerivedFromNote({
         />
         <span>
           {t(
-            `加一份步骤调整沉淀而来，${formatRelative(derivedFrom.derivedAt)}`,
-            `with one goal step's adjustments, ${formatRelative(derivedFrom.derivedAt)}`,
+            `加一份步骤调整沉淀而来，${formatRelative(derivedFrom.derivedAt, t)}`,
+            `with one goal step's adjustments, ${formatRelative(derivedFrom.derivedAt, t)}`,
           )}
         </span>
       </span>

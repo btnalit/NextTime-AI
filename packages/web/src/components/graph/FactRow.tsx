@@ -132,8 +132,8 @@ export function FactRow({
     },
     asOf,
   );
-  const observedRelative = formatRelative(fact.lastObservedAt, asOf);
-  const recordedRelative = formatRelative(fact.recordedAt, asOf);
+  const observedRelative = formatRelative(fact.lastObservedAt, t, asOf);
+  const recordedRelative = formatRelative(fact.recordedAt, t, asOf);
   const clock = fact.lastObservedAt
     ? t(`观测 ${observedRelative}`, `Observed ${observedRelative}`)
     : t(`记录 ${recordedRelative}`, `Recorded ${recordedRelative}`);

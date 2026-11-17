@@ -157,8 +157,8 @@ export function SealHoldsNotice({
                 <span className="meta-sep" />
                 <time className="text-3" title={formatDateTime(hold.openedAt)}>
                   {t(
-                    `${formatRelative(hold.openedAt)}暂停`,
-                    `paused ${formatRelative(hold.openedAt)}`,
+                    `${formatRelative(hold.openedAt, t)}暂停`,
+                    `paused ${formatRelative(hold.openedAt, t)}`,
                   )}
                 </time>
                 <span className="meta-sep" />

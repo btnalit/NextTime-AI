@@ -164,9 +164,10 @@ function outcomeChip(
 }
 
 function When({ at }: { readonly at: string }) {
+  const t = useT();
   return (
     <time dateTime={at} title={formatDateTime(at)}>
-      {formatRelative(at)}
+      {formatRelative(at, t)}
     </time>
   );
 }

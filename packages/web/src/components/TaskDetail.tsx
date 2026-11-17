@@ -203,7 +203,7 @@ export function TaskDetail({
       label: t('创建', 'Created'),
       value: (
         <>
-          <time title={formatDateTime(task.createdAt)}>{formatRelative(task.createdAt)}</time>
+          <time title={formatDateTime(task.createdAt)}>{formatRelative(task.createdAt, t)}</time>
           <span className="text-3"> · {formatDateTime(task.createdAt)}</span>
         </>
       ),
@@ -214,7 +214,7 @@ export function TaskDetail({
       value: (
         <>
           {finished ? `${formatDateTime(finished)} · ` : ''}
-          {formatDuration(task.createdAt, finished)}
+          {formatDuration(task.createdAt, finished, t)}
           {task.durationLimitSec ? (
             <span className="text-3">
               {' '}
@@ -515,11 +515,11 @@ export function TaskDetail({
                     </td>
                     <td data-label={t('开始', 'Started')}>
                       <time title={formatDateTime(run.startedAt)}>
-                        {formatRelative(run.startedAt)}
+                        {formatRelative(run.startedAt, t)}
                       </time>
                     </td>
                     <td className="tabular" data-label={t('用时', 'Duration')}>
-                      {formatDuration(run.startedAt, run.terminatedAt)}
+                      {formatDuration(run.startedAt, run.terminatedAt, t)}
                     </td>
                     <td data-label={t('溯源', 'Provenance')}>
                       <RouteLink
@@ -696,7 +696,7 @@ function OutcomeValue({
       <StatusChip machine="objectiveOutcome" status={outcome.outcome} size="s" />
       <span className="text-3 text-small">
         {source} ·{' '}
-        <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt)}</time>
+        <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt, t)}</time>
         {previous ? ` · ${t('已更正，原为', 'corrected from')} ${previous}` : null}
       </span>
       <ProxyOutcomeNote basis={outcome.basis} />
@@ -732,7 +732,7 @@ function attributionRows(
           <span className="mono">{shortId(turn.id)}</span>
         )}
         <span className="text-3 text-small">
-          <time title={formatDateTime(turn.startedAt)}>{formatRelative(turn.startedAt)}</time>
+          <time title={formatDateTime(turn.startedAt)}>{formatRelative(turn.startedAt, t)}</time>
         </span>
       </span>
     );

@@ -339,7 +339,7 @@ export function ApprovalDetail({
     label: t('请求于', 'Requested'),
     value: (
       <>
-        <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+        <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt, t)}</time>
         <span className="text-3">
           {' · '}
           <time>{formatDateTime(row.requestedAt)}</time>
@@ -415,7 +415,7 @@ export function ApprovalDetail({
             </>
           ) : null}
           <span className="meta-sep" />
-          <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+          <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt, t)}</time>
           {row.parentWorkerRunId ? (
             <>
               <span className="meta-sep" />
@@ -491,7 +491,7 @@ export function ApprovalDetail({
                 />
                 {row.decidedAt ? (
                   <time className="text-3" title={formatDateTime(row.decidedAt)}>
-                    {formatRelative(row.decidedAt)}
+                    {formatRelative(row.decidedAt, t)}
                   </time>
                 ) : null}
               </span>

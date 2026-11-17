@@ -1482,7 +1482,7 @@ function HandshakeStep({
               <dt>{t('检查时间', 'Checked')}</dt>
               <dd>
                 <time title={formatDateTime(result.checkedAt)}>
-                  {formatRelative(result.checkedAt)}
+                  {formatRelative(result.checkedAt, t)}
                 </time>
               </dd>
             </dl>

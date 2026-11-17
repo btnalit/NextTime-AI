@@ -37,8 +37,8 @@ export function ObjectRow({
   const t = useT();
   const { hrefFor } = useGraphObjects();
   const name = objectDisplayName(object, identityKeys);
-  const observedRelative = formatRelative(object.lastObservedAt, asOf);
-  const updatedRelative = formatRelative(object.updatedAt, asOf);
+  const observedRelative = formatRelative(object.lastObservedAt, t, asOf);
+  const updatedRelative = formatRelative(object.updatedAt, t, asOf);
   return (
     <DataRow
       leading={<span className="tag graph-type-tag">{object.objectType}</span>}
@@ -103,7 +103,7 @@ export function ObjectCard({
         <dd>
           {object.lastObservedAt ? (
             <time title={formatDateTime(object.lastObservedAt)}>
-              {formatRelative(object.lastObservedAt, asOf)}
+              {formatRelative(object.lastObservedAt, t, asOf)}
             </time>
           ) : (
             <span className="text-3">{t('无', 'Never')}</span>
@@ -112,7 +112,7 @@ export function ObjectCard({
         <dt>{t('更新', 'Updated')}</dt>
         <dd>
           <time title={formatDateTime(object.updatedAt)}>
-            {formatRelative(object.updatedAt, asOf)}
+            {formatRelative(object.updatedAt, t, asOf)}
           </time>
         </dd>
         {identityEntries.length > 0 ? (

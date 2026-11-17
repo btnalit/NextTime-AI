@@ -478,7 +478,7 @@ function CaseView({
             size="s"
           />
           <time className="text-3" title={formatDateTime(evalCase.addedAt)}>
-            {formatRelative(evalCase.addedAt)}
+            {formatRelative(evalCase.addedAt, t)}
           </time>
         </span>
       ),

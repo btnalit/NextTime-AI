@@ -87,10 +87,10 @@ function ProvenanceBody({
   const t = useT();
   const explain = useCapability<ExplainResultWire>(http, 'explain', { nodeId: fact.id });
   const inConflict = conflicts.length > 0;
-  const lastObservedRelative = formatRelative(fact.lastObservedAt, asOf);
+  const lastObservedRelative = formatRelative(fact.lastObservedAt, t, asOf);
   const lastObservedZh = `最近观测 ${lastObservedRelative}`;
   const lastObservedEn = `Last observed ${lastObservedRelative}`;
-  const recordedRelative = formatRelative(fact.recordedAt, asOf);
+  const recordedRelative = formatRelative(fact.recordedAt, t, asOf);
   const recordedZh = `记录 ${recordedRelative}`;
   const recordedEn = `Recorded ${recordedRelative}`;
   return (

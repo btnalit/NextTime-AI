@@ -363,8 +363,8 @@ function FailureGroups({
               >
                 <span className="wrap-anywhere">
                   {t(
-                    `v${group.definitionVersion} · ${combination} · ${group.tasks} 个 Task · 最近 ${formatRelative(group.lastFailedAt)}`,
-                    `v${group.definitionVersion} · ${combination} · ${group.tasks} Task(s) · last ${formatRelative(group.lastFailedAt)}`,
+                    `v${group.definitionVersion} · ${combination} · ${group.tasks} 个 Task · 最近 ${formatRelative(group.lastFailedAt, t)}`,
+                    `v${group.definitionVersion} · ${combination} · ${group.tasks} Task(s) · last ${formatRelative(group.lastFailedAt, t)}`,
                   )}
                 </span>
                 <span className="text-3 text-small">

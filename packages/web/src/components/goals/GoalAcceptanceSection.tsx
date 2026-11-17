@@ -237,7 +237,7 @@ function Round({
         )}
         <span className="text-3 text-small">
           {' · '}
-          <time title={formatDateTime(round.openedAt)}>{formatRelative(round.openedAt)}</time>
+          <time title={formatDateTime(round.openedAt)}>{formatRelative(round.openedAt, t)}</time>
         </span>
       </span>
       <ul className="stack-s">
@@ -299,14 +299,16 @@ function CheckRow({
           <span>
             {t('下次', 'next')}{' '}
             <time title={formatDateTime(check.nextAttemptAt)}>
-              {formatRelative(check.nextAttemptAt)}
+              {formatRelative(check.nextAttemptAt, t)}
             </time>
           </span>
         ) : null}
         {check.settledAt ? (
           <span>
             {t('有结论于', 'settled')}{' '}
-            <time title={formatDateTime(check.settledAt)}>{formatRelative(check.settledAt)}</time>
+            <time title={formatDateTime(check.settledAt)}>
+              {formatRelative(check.settledAt, t)}
+            </time>
           </span>
         ) : null}
         {check.factId ? (

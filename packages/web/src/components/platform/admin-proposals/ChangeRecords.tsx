@@ -163,7 +163,7 @@ export function ChangeRecordsTab({
                     title={formatDateTime(record.appliedAt)}
                     data-volatile=""
                   >
-                    {formatRelative(record.appliedAt)}
+                    {formatRelative(record.appliedAt, t)}
                   </time>
                 </span>
               </ListRow>

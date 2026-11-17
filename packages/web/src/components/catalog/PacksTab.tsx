@@ -840,7 +840,7 @@ function ComponentView({
               title={formatDateTime(provenance.appliedAt)}
               data-volatile=""
             >
-              {formatRelative(provenance.appliedAt)}
+              {formatRelative(provenance.appliedAt, t)}
             </time>
           </span>
           <RouteLink

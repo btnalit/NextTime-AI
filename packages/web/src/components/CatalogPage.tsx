@@ -1344,7 +1344,7 @@ function OperationDetailView({
         }
       >
         {usage
-          ? `${usage.calls} 调用 · ${usage.approved} 批准 · ${usage.rejected} 拒绝 · ${formatRelative(usage.lastCalledAt)}`
+          ? `${usage.calls} 调用 · ${usage.approved} 批准 · ${usage.rejected} 拒绝 · ${formatRelative(usage.lastCalledAt, t)}`
           : '—'}
       </span>
     ),

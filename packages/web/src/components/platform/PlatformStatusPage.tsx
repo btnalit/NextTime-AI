@@ -271,7 +271,7 @@ function BackupCard({ backup }: { readonly backup: PlatformStatusWire['backup'] 
         <dt>{t('上次成功', 'Last success')}</dt>
         <dd className="tabular" title={backup.lastSuccessAt ?? undefined}>
           {backup.lastSuccessAt
-            ? `${formatDateTime(backup.lastSuccessAt)} · ${formatRelative(backup.lastSuccessAt)}`
+            ? `${formatDateTime(backup.lastSuccessAt)} · ${formatRelative(backup.lastSuccessAt, t)}`
             : '—'}
         </dd>
         <dt>{t('过期阈值', 'Stale after')}</dt>
@@ -359,7 +359,7 @@ function UpdateFeedCard({ updates }: { readonly updates: Resource<PlatformUpdate
         <dt>{t('上次取到', 'Last fetched')}</dt>
         <dd className="tabular" title={feed.fetchedAt ?? undefined}>
           {feed.fetchedAt
-            ? `${formatDateTime(feed.fetchedAt)} · ${formatRelative(feed.fetchedAt)}`
+            ? `${formatDateTime(feed.fetchedAt)} · ${formatRelative(feed.fetchedAt, t)}`
             : '—'}
         </dd>
         <dt>{t('记录生成', 'Record generated')}</dt>

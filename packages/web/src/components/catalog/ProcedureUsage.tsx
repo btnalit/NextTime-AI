@@ -283,8 +283,8 @@ function numbersOf(
       value:
         usage.goals > 0
           ? t(
-              `${usage.goals} 个 · 最近 ${formatRelative(usage.lastUsedAt)}`,
-              `${usage.goals} · last ${formatRelative(usage.lastUsedAt)}`,
+              `${usage.goals} 个 · 最近 ${formatRelative(usage.lastUsedAt, t)}`,
+              `${usage.goals} · last ${formatRelative(usage.lastUsedAt, t)}`,
             )
           : t('没有', 'None'),
     },
@@ -338,8 +338,8 @@ function claimsOf(claims: ProcedureClaimsWire, t: Translate): KeyValueItem[] {
         <span className="row-wrap" data-testid="procedure-usage-claims">
           <span>
             {t(
-              `${claims.turns} 轮对话 · 请求人判达成 ${claims.achieved} · 未达成 ${claims.notAchieved} · 最近 ${formatRelative(claims.lastClaimedAt)}`,
-              `${claims.turns} turn(s) · requester marked ${claims.achieved} achieved, ${claims.notAchieved} not · last ${formatRelative(claims.lastClaimedAt)}`,
+              `${claims.turns} 轮对话 · 请求人判达成 ${claims.achieved} · 未达成 ${claims.notAchieved} · 最近 ${formatRelative(claims.lastClaimedAt, t)}`,
+              `${claims.turns} turn(s) · requester marked ${claims.achieved} achieved, ${claims.notAchieved} not · last ${formatRelative(claims.lastClaimedAt, t)}`,
             )}
           </span>
           <span className="text-3 text-small">
@@ -380,8 +380,8 @@ function FailureGroups({
             >
               <span>
                 {t(
-                  `v${group.procedureVersion} · ${procedureFailurePlaceLabel(group.place, group.stepKey, t)} · ${group.goals} 个目标 · 最近 ${formatRelative(group.lastEndedAt)}`,
-                  `v${group.procedureVersion} · ${procedureFailurePlaceLabel(group.place, group.stepKey, t)} · ${group.goals} goal(s) · last ${formatRelative(group.lastEndedAt)}`,
+                  `v${group.procedureVersion} · ${procedureFailurePlaceLabel(group.place, group.stepKey, t)} · ${group.goals} 个目标 · 最近 ${formatRelative(group.lastEndedAt, t)}`,
+                  `v${group.procedureVersion} · ${procedureFailurePlaceLabel(group.place, group.stepKey, t)} · ${group.goals} goal(s) · last ${formatRelative(group.lastEndedAt, t)}`,
                 )}
               </span>
               {group.category !== null ? (

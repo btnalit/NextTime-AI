@@ -157,7 +157,7 @@ function LinkedApprovalsList({
                   </>
                 ) : null}
                 <time title={formatDateTime(row.requestedAt)}>
-                  {t('请求', 'requested')} {formatRelative(row.requestedAt)}
+                  {t('请求', 'requested')} {formatRelative(row.requestedAt, t)}
                 </time>
                 {decidedBy ? (
                   <>

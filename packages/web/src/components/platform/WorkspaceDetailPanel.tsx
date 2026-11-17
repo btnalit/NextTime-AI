@@ -266,7 +266,7 @@ export function WorkspaceDetailPanel({
             <dt>{t('创建', 'Created')}</dt>
             <dd>
               <time title={formatDateTime(workspace.createdAt)}>
-                {formatRelative(workspace.createdAt)}
+                {formatRelative(workspace.createdAt, t)}
               </time>
             </dd>
             <dt>{t('用途', 'Purpose')}</dt>
@@ -610,11 +610,11 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
       >
         {expired ? (
           <>
-            {t('已到期', 'expired')} {formatRelative(workspace.expiresAt)}
+            {t('已到期', 'expired')} {formatRelative(workspace.expiresAt, t)}
           </>
         ) : (
           <>
-            {formatRelative(workspace.expiresAt)} {t('到期', 'expires')}
+            {formatRelative(workspace.expiresAt, t)} {t('到期', 'expires')}
           </>
         )}
       </time>,
@@ -628,7 +628,7 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
           t('禁用于迁移前', 'disabled before 0030')
         ) : (
           <time title={formatDateTime(workspace.disabledAt)}>
-            {t('禁用于', 'disabled')} {formatRelative(workspace.disabledAt)}
+            {t('禁用于', 'disabled')} {formatRelative(workspace.disabledAt, t)}
           </time>
         )}
         {' · '}

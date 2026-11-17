@@ -436,7 +436,7 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
                   <div className="data-row-meta">
                     {decision.summary ? <span>{decision.summary}</span> : null}
                     <span className="meta-sep" title={formatDateTime(decision.createdAt)}>
-                      {formatRelative(decision.createdAt)}
+                      {formatRelative(decision.createdAt, t)}
                     </span>
                   </div>
                 </div>

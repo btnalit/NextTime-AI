@@ -420,8 +420,8 @@ export function PersistedToolCallRowView({
             {formatTimeSeconds(record.startedAt)}
             {record.endedAt
               ? t(
-                  ` · 用时 ${formatDuration(record.startedAt, record.endedAt)}`,
-                  ` · took ${formatDuration(record.startedAt, record.endedAt)}`,
+                  ` · 用时 ${formatDuration(record.startedAt, record.endedAt, t)}`,
+                  ` · took ${formatDuration(record.startedAt, record.endedAt, t)}`,
                 )
               : ''}
           </span>

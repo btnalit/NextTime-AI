@@ -301,7 +301,7 @@ function RunRow({
           onClick={onOpen}
           data-testid="eval-case-trial-open"
         >
-          <time title={formatDateTime(run.createdAt)}>{formatRelative(run.createdAt)}</time>
+          <time title={formatDateTime(run.createdAt)}>{formatRelative(run.createdAt, t)}</time>
         </Button>
         <StatusChip machine="evalTrial" status={status} size="s" />
         <span className="text-3 text-small tabular">
@@ -403,9 +403,9 @@ export function TrialView({
       <span className="row-wrap">
         <StatusChip machine="evalTrial" status={status} testId="eval-case-trial-status" />
         <span className="text-3 text-small">
-          <time title={formatDateTime(runAt)}>{formatRelative(runAt)}</time>
+          <time title={formatDateTime(runAt)}>{formatRelative(runAt, t)}</time>
           {' · '}
-          {formatDuration(trial.startedAt, trial.finishedAt ?? undefined)}
+          {formatDuration(trial.startedAt, trial.finishedAt, t)}
           {trial.finishedAt !== null && status !== 'voided' ? (
             <>
               {' · '}
