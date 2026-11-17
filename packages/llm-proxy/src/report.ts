@@ -27,8 +27,17 @@
  * sees the 402 and reports. Calls within one session are sequential, so the kernel's "every model
  * call of this session was refused" check at report time reads a complete set. On a timeout the
  * record stays queued and is resent in the background like any other.
+ *
+ * Text the kernel can store: the kernel's `llm_usage` columns are `text`, and Postgres refuses
+ * U+0000 in them. One such record failed its whole workspace group with a 500 `retry` — requeued
+ * forever, holding that workspace's later usage with it until the queue dropped the oldest, so
+ * the workspace's metering and budget stopped. A model id can carry one: the catalog's ids come
+ * from an operator's `llm-providers.yaml` or from before the write-time rule (#1409), and a
+ * request names one of them. So the batch is sent with `storableText` of every string
+ * (`storable-text.ts`); the queue and this proxy's own log line keep the record as it was.
  */
 import type { LlmRefusalScope, LlmUsageStatus } from '@nexttime/shared';
+import { storableText } from './storable-text.js';
 
 export interface LlmUsageRecord {
   readonly workspaceId: string;
@@ -263,7 +272,7 @@ export class LlmUsageReporter {
           'content-type': 'application/json',
           ...(this.authorizationHeader ? { authorization: this.authorizationHeader } : {}),
         },
-        body: JSON.stringify(batch),
+        body: JSON.stringify(batch.map(storableRecord)),
       });
       const groups = await readGroupResults(res);
       if (groups) this.logRejected(groups, batch);
@@ -338,4 +347,16 @@ export class LlmUsageReporter {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
+}
+
+/** `record` as sent to the kernel: every string field `storableText`. The record has no field to
+ *  mark the replacement in (the kernel's schema is strict); U+FFFD itself shows it, and the log
+ *  line has the original. */
+function storableRecord(record: LlmUsageRecord): LlmUsageRecord {
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [
+      key,
+      typeof value === 'string' ? storableText(value) : value,
+    ]),
+  ) as unknown as LlmUsageRecord;
 }
