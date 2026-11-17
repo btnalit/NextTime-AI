@@ -357,6 +357,17 @@ export function distinctDefinitionName(
   return sameNameDefinitionIds(definitions).has(id) ? `${name} · ${shortId(id)}` : name;
 }
 
+/** Whether the exact version a Task names is a deprecated one (legacy 264). */
+export function definitionDeprecated(
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+  id: string,
+  version: number,
+): boolean {
+  return (
+    definitions?.find((row) => row.id === id && row.version === version)?.status === 'deprecated'
+  );
+}
+
 export function definitionName(
   definitions: readonly WorkerDefinitionSummary[] | undefined,
   id: string,

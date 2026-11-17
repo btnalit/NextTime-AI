@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Resource, useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
@@ -9,6 +9,7 @@ import { breadcrumbFor } from '../lib/nav.js';
 import {
   type TaskSummary,
   type WorkerDefinitionSummary,
+  definitionDeprecated,
   distinctDefinitionName,
   isTerminalTaskStatus,
   taskFinishedAt,
@@ -134,7 +135,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     );
   }, [allRows, filter]);
   const activeCount = allRows.filter((task) => !isTerminalTaskStatus(task.status)).length;
-  const definitionRows = definitions.state.status === 'ready' ? definitions.state.data : undefined;
+  const listedDefinitionRows =
+    definitions.state.status === 'ready' ? definitions.state.data : undefined;
+  const definitionRows = useUnlistedDefinitionRows(http, allRows, listedDefinitionRows);
 
   const selected = selectedId ? allRows.find((task) => task.id === selectedId) : undefined;
   useEffect(() => {
@@ -161,6 +164,13 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
         selected.workerDefinitionVersion,
       )
     : undefined;
+  const selectedDefinitionDeprecated = selected
+    ? definitionDeprecated(
+        definitionRows,
+        selected.workerDefinitionId,
+        selected.workerDefinitionVersion,
+      )
+    : false;
 
   const detailContent = (
     <TaskDetailContent
@@ -168,6 +178,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
       selectedId={selectedId}
       selected={selected}
       definitionName={selectedDefinitionName}
+      definitionDeprecated={selectedDefinitionDeprecated}
       http={http}
       pushes={pushes}
       principalNames={principalNames}
@@ -242,6 +253,7 @@ interface TaskDetailContentProps {
   readonly selectedId: string | undefined;
   readonly selected: TaskSummary | undefined;
   readonly definitionName: string | undefined;
+  readonly definitionDeprecated: boolean;
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
   readonly principalNames: ReadonlyMap<string, string>;
@@ -259,6 +271,7 @@ function TaskDetailContent({
   selectedId,
   selected,
   definitionName,
+  definitionDeprecated,
   http,
   pushes,
   principalNames,
@@ -272,6 +285,7 @@ function TaskDetailContent({
         key={selected.id}
         task={selected}
         definitionName={definitionName}
+        definitionDeprecated={definitionDeprecated}
         http={http}
         pushes={pushes}
         principalNames={principalNames}
@@ -382,6 +396,15 @@ function TasksList({
                   {name ?? <span data-volatile="">{shortId(task.workerDefinitionId)}</span>}
                 </span>
                 <span className="text-3 text-small">v{task.workerDefinitionVersion}</span>
+                {definitionDeprecated(
+                  definitionRows,
+                  task.workerDefinitionId,
+                  task.workerDefinitionVersion,
+                ) ? (
+                  <span className="text-warn text-small" data-testid="task-row-deprecated">
+                    {t('已弃用', 'deprecated')}
+                  </span>
+                ) : null}
                 <span className="meta-sep" />
                 <span>{t('代表', 'on behalf of')}</span>
                 <span className="truncate">{principalName}</span>
@@ -434,4 +457,63 @@ function TasksList({
  *  and fixed for the approvals row) — the full chip belongs in the detail, this is the row. */
 function nameOfPrincipal(names: ReadonlyMap<string, string>, principalId: string): string {
   return names.get(principalId) ?? shortId(principalId);
+}
+
+/** Legacy 264: `list_worker_definitions` lists published versions only, so a Task whose version
+ *  was deprecated since showed a bare short id. Each such version a listed Task names is read once
+ *  with `get_worker_definition` (which reads a deprecated version to every person) and joins the
+ *  listed rows, so the row and the detail name it and say it is deprecated. At most
+ *  `UNLISTED_READ_CAP` versions are read; the rest, a version the reader cannot read (another's
+ *  draft) and a read that fails keep the short id, as before. */
+const UNLISTED_READ_CAP = 50;
+
+function useUnlistedDefinitionRows(
+  http: CapabilityCaller,
+  tasks: readonly TaskSummary[],
+  listed: readonly WorkerDefinitionSummary[] | undefined,
+): readonly WorkerDefinitionSummary[] | undefined {
+  const [read, setRead] = useState<ReadonlyMap<string, WorkerDefinitionSummary | null>>(
+    () => new Map(),
+  );
+  const asked = useRef(new Set<string>());
+  useEffect(() => {
+    if (listed === undefined) return;
+    const listedKeys = new Set(listed.map((row) => versionKey(row.id, row.version)));
+    const missing = new Map<string, { definitionId: string; version: number }>();
+    for (const task of tasks) {
+      const key = versionKey(task.workerDefinitionId, task.workerDefinitionVersion);
+      if (listedKeys.has(key) || asked.current.has(key)) continue;
+      if (asked.current.size + missing.size >= UNLISTED_READ_CAP) break;
+      missing.set(key, {
+        definitionId: task.workerDefinitionId,
+        version: task.workerDefinitionVersion,
+      });
+    }
+    if (missing.size === 0) return;
+    for (const key of missing.keys()) asked.current.add(key);
+    // No cancel on a re-run: these keys are marked asked, so a dropped answer would never be read
+    // again; setting state after an unmount is a no-op.
+    void Promise.all(
+      [...missing].map(async ([key, args]) => {
+        try {
+          const row = await http.call<WorkerDefinitionSummary | null>(
+            'get_worker_definition',
+            args,
+          );
+          return [key, row] as const;
+        } catch {
+          return [key, null] as const;
+        }
+      }),
+    ).then((entries) => setRead((current) => new Map([...current, ...entries])));
+  }, [http, tasks, listed]);
+  return useMemo(() => {
+    if (listed === undefined) return undefined;
+    const extra = [...read.values()].filter((row): row is WorkerDefinitionSummary => row !== null);
+    return extra.length === 0 ? listed : [...listed, ...extra];
+  }, [listed, read]);
+}
+
+function versionKey(id: string, version: number): string {
+  return `${id}@${version}`;
 }

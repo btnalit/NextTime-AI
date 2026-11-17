@@ -50,6 +50,8 @@ import { runEnvironmentRows } from './run-environment-rows.js';
 export interface TaskDetailProps {
   readonly task: TaskSummary;
   readonly definitionName: string | undefined;
+  /** Legacy 264: the version this Task runs has been deprecated since. */
+  readonly definitionDeprecated?: boolean;
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
   readonly principalNames?: ReadonlyMap<string, string>;
@@ -93,6 +95,7 @@ export interface TaskDetailProps {
 export function TaskDetail({
   task,
   definitionName,
+  definitionDeprecated = false,
   http,
   pushes,
   principalNames,
@@ -120,14 +123,21 @@ export function TaskDetail({
       key: 'definition',
       label: t('定义', 'Definition'),
       value: (
-        <RefChip
-          kind="workerDefinition"
-          id={task.workerDefinitionId}
-          name={definitionName ? `${definitionName} v${task.workerDefinitionVersion}` : null}
-          href={hrefs.catalog('workers')}
-          size="s"
-          testId="task-definition"
-        />
+        <span className="row-wrap">
+          <RefChip
+            kind="workerDefinition"
+            id={task.workerDefinitionId}
+            name={definitionName ? `${definitionName} v${task.workerDefinitionVersion}` : null}
+            href={hrefs.catalog('workers')}
+            size="s"
+            testId="task-definition"
+          />
+          {definitionDeprecated ? (
+            <span className="text-warn text-small" data-testid="task-definition-deprecated">
+              {t('已弃用', 'deprecated')}
+            </span>
+          ) : null}
+        </span>
       ),
     },
     {

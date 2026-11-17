@@ -433,3 +433,77 @@ describe('TasksPage master-detail (P3-4 part B)', () => {
     expect(onSelect).toHaveBeenCalledWith('task-2');
   });
 });
+
+// Legacy 264: `list_worker_definitions` lists published versions only. A Task on a version
+// deprecated since reads that version once and names it, marked deprecated, in the row and the
+// detail; a version the reader cannot read keeps the short id.
+describe('TasksPage: a Task on a deprecated Worker version (legacy 264)', () => {
+  it('names the deprecated version and says so; an unreadable one keeps its short id', async () => {
+    const reads: unknown[] = [];
+    const http = scriptedHttp({
+      list_tasks: () => ({
+        items: [
+          task({ id: 'task-1', workerDefinitionId: 'wd-1', workerDefinitionVersion: 1 }),
+          task({ id: 'task-2', workerDefinitionId: 'wd-1', workerDefinitionVersion: 2 }),
+          task({ id: 'task-3', workerDefinitionId: 'wd-9abcdef0', workerDefinitionVersion: 1 }),
+          task({ id: 'task-4', workerDefinitionId: 'wd-1', workerDefinitionVersion: 1 }),
+        ],
+      }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 2,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Restarter' },
+          },
+        ],
+      }),
+      get_worker_definition: (params) => {
+        reads.push(params);
+        const { definitionId, version } = params as { definitionId: string; version: number };
+        return definitionId === 'wd-1'
+          ? {
+              id: 'wd-1',
+              version,
+              kind: 'worker',
+              status: 'deprecated',
+              definition: { name: 'Restarter' },
+            }
+          : null;
+      },
+      list_action_requests: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <TasksPage
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            selectedId="task-1"
+            onSelect={vi.fn()}
+            onOpenApproval={vi.fn()}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('task-row-deprecated')).toHaveLength(2));
+    const rows = screen.getAllByTestId('task-row');
+    // task-1 and task-4 run the deprecated v1, task-2 the published v2, task-3 a version the
+    // reader cannot read.
+    expect(within(rows[0] as HTMLElement).getByText('Restarter')).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).queryByTestId('task-row-deprecated')).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).queryByTestId('task-row-deprecated')).toBeNull();
+    expect(within(rows[2] as HTMLElement).queryByText('Restarter')).toBeNull();
+    expect(within(rows[3] as HTMLElement).queryByTestId('task-row-deprecated')).toBeTruthy();
+    // Each unlisted version is read once, however many Tasks name it.
+    expect(reads).toEqual([
+      { definitionId: 'wd-1', version: 1 },
+      { definitionId: 'wd-9abcdef0', version: 1 },
+    ]);
+    const detail = await screen.findByTestId('task-detail');
+    expect(within(detail).getByTestId('task-definition-deprecated').textContent).toBe('已弃用');
+  });
+});
