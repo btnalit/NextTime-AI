@@ -625,6 +625,24 @@ describe('kit/Confirm — a field the caller collects asks before it is lost (di
     outside.remove();
   });
 
+  it('#1398 UX P2: a click in a toast neither closes the medium confirm nor asks to discard', async () => {
+    renderTier('medium', { children: reason });
+    fireEvent.click(screen.getByTestId('trigger'));
+    fireEvent.input(await screen.findByTestId('reason'), { target: { value: 'x' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const region = document.body.appendChild(document.createElement('section'));
+    region.className = 'toast-region';
+    const inToast = region.appendChild(document.createElement('button'));
+    fireEvent.pointerDown(inToast);
+    fireEvent.pointerUp(inToast);
+    fireEvent.click(inToast);
+    fireEvent.focus(inToast);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('discard-confirm')).toBeNull();
+    expect(screen.getByTestId('confirm')).toBeTruthy();
+    region.remove();
+  });
+
   it('irreversible: the typed name and the acknowledgement alone are not unsaved content', async () => {
     renderTier('irreversible');
     fireEvent.click(screen.getByTestId('trigger'));

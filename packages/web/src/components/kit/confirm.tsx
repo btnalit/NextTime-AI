@@ -5,7 +5,7 @@ import { cn } from '../../lib/cn.js';
 import { type ErrorOverrides, type ErrorToastDetails, errorToast } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from './button.js';
-import { useDiscardGuard, useGuardedElement } from './discard-guard.js';
+import { isInToasts, useDiscardGuard, useGuardedElement } from './discard-guard.js';
 import { focusOrigin } from './focus-origin.js';
 import { InlineError } from './inline-error.js';
 
@@ -489,7 +489,8 @@ function MediumTier({
               if (busy) event.preventDefault();
             }}
             onInteractOutside={(event) => {
-              if (busy) event.preventDefault();
+              // #1398 UX P2: a click in a toast is not outside (`kit/discard-guard` `isInToasts`).
+              if (busy || isInToasts(event.target)) event.preventDefault();
               else if (discard.edited()) {
                 event.preventDefault();
                 discard.guard(close);

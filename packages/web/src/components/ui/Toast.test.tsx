@@ -73,4 +73,40 @@ describe('ToastProvider', () => {
     act(() => vi.advanceTimersByTime(5_000));
     expect(view.queryAllByTestId('toast')).toHaveLength(0);
   });
+
+  it('#1398 UX P3: pointed at, a toast pauses; the rest of its time runs once the pointer leaves', () => {
+    const view = render(
+      <ToastProvider>
+        <PushFailure />
+      </ToastProvider>,
+    );
+    act(() => vi.advanceTimersByTime(3_000));
+    const toast = view.getByTestId('toast');
+    fireEvent.pointerEnter(toast);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    fireEvent.pointerLeave(toast);
+    act(() => vi.advanceTimersByTime(1_900));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    act(() => vi.advanceTimersByTime(200));
+    expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
+
+  it('#1398 UX P3: focused, a toast pauses until the focus leaves it', async () => {
+    const view = render(
+      <>
+        <button type="button">elsewhere</button>
+        <ToastProvider>
+          <PushFailure />
+        </ToastProvider>
+      </>,
+    );
+    const close = view.getByRole('button', { name: 'Dismiss' });
+    act(() => close.focus());
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    await act(async () => view.getByRole('button', { name: 'elsewhere' }).focus());
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
 });
