@@ -555,6 +555,17 @@ interface OpenApiParameter {
   readonly schema?: Record<string, unknown>;
 }
 
+/** OpenAPI's Reference Object: a `$ref` in place of a parameter, a request body or a schema. */
+interface OpenApiReference {
+  readonly $ref: string;
+}
+
+interface OpenApiRequestBody {
+  readonly content?: {
+    readonly 'application/json'?: { readonly schema?: Record<string, unknown> };
+  };
+}
+
 interface OpenApiOperationObject {
   readonly operationId?: string;
   /** S8 W2-K1 (leftover 71/72, audit CO1/B3): OpenAPI's own short human summary — preferred over
@@ -565,19 +576,23 @@ interface OpenApiOperationObject {
    *  way. */
   readonly summary?: string;
   readonly description?: string;
-  readonly parameters?: readonly OpenApiParameter[];
-  readonly requestBody?: {
-    readonly content?: {
-      readonly 'application/json'?: { readonly schema?: Record<string, unknown> };
-    };
-  };
-}
-
-export interface OpenApiDocumentLike {
-  readonly paths?: Record<string, Record<string, OpenApiOperationObject>>;
+  readonly parameters?: readonly (OpenApiParameter | OpenApiReference)[];
+  readonly requestBody?: OpenApiRequestBody | OpenApiReference;
 }
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
+
+/** A path item: its Operations by method, and (legacy 197) the parameters every one of them takes
+ *  unless it declares the same one itself. */
+type OpenApiPathItem = {
+  readonly parameters?: readonly (OpenApiParameter | OpenApiReference)[];
+} & { readonly [M in (typeof HTTP_METHODS)[number]]?: OpenApiOperationObject };
+
+export interface OpenApiDocumentLike {
+  readonly paths?: Record<string, OpenApiPathItem>;
+  /** Where the document's own `$ref`s point (`#/components/schemas/Pet`, legacy 197). */
+  readonly components?: Record<string, unknown>;
+}
 
 function defaultBlastRadiusForVerb(method: string): 'low' | 'medium' | 'high' {
   if (method === 'get') return 'low';
@@ -592,10 +607,167 @@ function sanitizeName(path: string, method: string): string {
     .replace(/^_+|_+$/g, '')}`;
 }
 
-function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
+// ---- $ref (legacy 197) ----------------------------------------------------------------------
+//
+// Most OpenAPI documents put their request bodies, shared parameters and schemas under
+// `components` and point at them with `$ref`. None was followed here before, so a `$ref` request
+// body added nothing and an Operation with no other parameter got `params_schema: {}` — which
+// accepts anything. A reference into the same document (`#/…`) is now written out in place; the
+// gate's own validator (`params-validation.ts`) has no document to resolve it against. A reference
+// that cannot be followed — another document's, or a pointer that leads nowhere — is not guessed
+// at: the Operation gets a schema that takes only what it could read (below, `unread`).
+
+/** At most this many schema objects are written out for one Operation's `params_schema`. A
+ *  document whose references fan out (A uses B twice, B uses C twice, …) would otherwise grow
+ *  without bound. Past it a `$ref` stays as it is, so ajv cannot compile the schema and every call
+ *  is refused (400 `invalid_operation_schema`) — never a looser schema. */
+const MAX_INLINED_SCHEMA_NODES = 10_000;
+
+/** How many references deep one schema may be written out; deeper ones stay as they are. */
+const MAX_REF_DEPTH = 64;
+
+/** Keywords whose value is data, not a schema: copied as is, never searched for `$ref`. */
+const SCHEMA_DATA_KEYWORDS = new Set(['example', 'examples', 'default', 'enum', 'const']);
+
+/** Keywords whose value maps names to schemas — a property may be called `default`. */
+const SCHEMA_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'definitions',
+  '$defs',
+  'dependentSchemas',
+]);
+
+function isObjectNode(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** `target[key] = value` as `target`'s own property — also for `__proto__`, a name the document
+ *  may use, which plain assignment would turn into `target`'s prototype instead. */
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+/** What a reference into the same document (`#/components/schemas/a~1b`, RFC 6901 escapes
+ *  percent-decoded first) points at, or `undefined` — another document's reference, a pointer that
+ *  does not decode, a name the document does not have (only its own keys, never `constructor`). */
+function resolveLocalRef(document: unknown, ref: string): unknown {
+  if (!ref.startsWith('#/')) return undefined;
+  let node: unknown = document;
+  for (const raw of ref.slice(2).split('/')) {
+    let key: string;
+    try {
+      key = decodeURIComponent(raw).replace(/~1/g, '/').replace(/~0/g, '~');
+    } catch {
+      return undefined;
+    }
+    if (node === null || typeof node !== 'object' || !Object.hasOwn(node, key)) return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
+}
+
+/** A parameter or request body object, following `$ref`s to it (a component may itself be a
+ *  `$ref`); `undefined` when one of them cannot be followed. */
+function dereference(document: unknown, node: unknown): unknown {
+  let current = node;
+  for (let hop = 0; hop < MAX_REF_DEPTH; hop += 1) {
+    if (!isObjectNode(current) || typeof current.$ref !== 'string') return current;
+    current = resolveLocalRef(document, current.$ref);
+  }
+  return undefined;
+}
+
+interface InlineState {
+  readonly document: unknown;
+  nodesLeft: number;
+}
+
+/** `schema` with every reference into the same document written out in place. Where a reference
+ *  recurs inside itself it becomes `{}` (any value), as `@nexttime/shared`'s `toJsonSchema` does: a
+ *  tree's children are checked one level down, not forever. One that cannot be followed, or past
+ *  the limits above, stays a `$ref`. */
+function inlineSchema(state: InlineState, schema: unknown, open: readonly string[]): unknown {
+  if (Array.isArray(schema)) return schema.map((item) => inlineSchema(state, item, open));
+  if (!isObjectNode(schema)) return schema;
+  state.nodesLeft -= 1;
+  const ref = schema.$ref;
+  if (typeof ref === 'string') {
+    if (open.includes(ref)) return {};
+    const target =
+      state.nodesLeft > 0 && open.length < MAX_REF_DEPTH
+        ? resolveLocalRef(state.document, ref)
+        : undefined;
+    if (isObjectNode(target)) {
+      const { $ref: _ref, ...siblings } = schema;
+      const resolved = inlineSchema(state, target, [...open, ref]) as Record<string, unknown>;
+      if (Object.keys(siblings).length === 0) return resolved;
+      return { ...resolved, ...(inlineSchema(state, siblings, open) as Record<string, unknown>) };
+    }
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (SCHEMA_DATA_KEYWORDS.has(key)) {
+      setOwn(out, key, value);
+    } else if (SCHEMA_MAP_KEYWORDS.has(key) && isObjectNode(value)) {
+      const named: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(value)) {
+        setOwn(named, name, inlineSchema(state, sub, open));
+      }
+      setOwn(out, key, named);
+    } else {
+      setOwn(out, key, inlineSchema(state, value, open));
+    }
+  }
+  return out;
+}
+
+/** The parameters `op` takes: the path item's, then its own. One of its own replaces the path
+ *  item's of the same name and location (OpenAPI 3: "can be overridden at the operation level, but
+ *  cannot be removed there"). `unread` when a `$ref` to one could not be followed. */
+function parametersOf(
+  document: unknown,
+  pathItem: OpenApiPathItem,
+  op: OpenApiOperationObject,
+): { parameters: OpenApiParameter[]; unread: boolean } {
+  let unread = false;
+  const read = (list: unknown): OpenApiParameter[] => {
+    if (!Array.isArray(list)) return [];
+    const out: OpenApiParameter[] = [];
+    for (const entry of list) {
+      const param = dereference(document, entry);
+      if (param === undefined) unread = true;
+      if (!isObjectNode(param) || typeof param.name !== 'string' || typeof param.in !== 'string') {
+        continue;
+      }
+      out.push(param as unknown as OpenApiParameter);
+    }
+    return out;
+  };
+  const own = read(op.parameters);
+  const ownKeys = new Set(own.map((param) => `${param.in}\u0000${param.name}`));
+  const shared = read(pathItem.parameters).filter(
+    (param) => !ownKeys.has(`${param.in}\u0000${param.name}`),
+  );
+  return { parameters: [...shared, ...own], unread };
+}
+
+function paramsSchemaFor(
+  document: OpenApiDocumentLike,
+  pathItem: OpenApiPathItem,
+  op: OpenApiOperationObject,
+): Record<string, unknown> {
+  const state: InlineState = { document, nodesLeft: MAX_INLINED_SCHEMA_NODES };
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
-  for (const param of op.parameters ?? []) {
+  const { parameters, unread: parameterUnread } = parametersOf(document, pathItem, op);
+  let unread = parameterUnread;
+  for (const param of parameters) {
     // Legacy 175 follow-up (review of #532): what the gate owns is never a param — a cookie, a
     // header that says who is calling, on whose account or where the call goes, a credential in
     // the query string. OpenAPI 3 itself says an `Authorization` header parameter SHALL be ignored
@@ -609,19 +781,32 @@ function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
     ) {
       continue;
     }
+    const schema = inlineSchema(state, param.schema ?? {}, []);
     // `x-in` (review lane 5, P2-4) — see `paramLocation`'s own doc comment above for why this
     // survives both ajv (strict:false) and OperationSchema's params_schema passthrough.
-    properties[param.name] = { ...(param.schema ?? {}), 'x-in': param.in };
+    setOwn(properties, param.name, { ...(isObjectNode(schema) ? schema : {}), 'x-in': param.in });
     if (param.required) required.push(param.name);
   }
-  const bodySchema = op.requestBody?.content?.['application/json']?.schema;
-  if (bodySchema && typeof bodySchema === 'object') {
-    const bodyProps = (bodySchema as { properties?: Record<string, unknown> }).properties;
-    if (bodyProps) Object.assign(properties, bodyProps);
-    const bodyRequired = (bodySchema as { required?: string[] }).required;
-    if (bodyRequired) required.push(...bodyRequired);
+  if (op.requestBody !== undefined) {
+    const requestBody = dereference(document, op.requestBody);
+    const content = isObjectNode(requestBody) ? requestBody.content : undefined;
+    const media = isObjectNode(content) ? content['application/json'] : undefined;
+    const rawSchema = isObjectNode(media) ? media.schema : undefined;
+    const bodySchema = isObjectNode(rawSchema) ? inlineSchema(state, rawSchema, []) : undefined;
+    if (requestBody === undefined || (isObjectNode(bodySchema) && '$ref' in bodySchema)) {
+      unread = true;
+    } else if (isObjectNode(bodySchema)) {
+      const bodyProps = bodySchema.properties;
+      if (isObjectNode(bodyProps)) {
+        for (const [name, sub] of Object.entries(bodyProps)) setOwn(properties, name, sub);
+      }
+      const bodyRequired = bodySchema.required;
+      if (Array.isArray(bodyRequired)) required.push(...(bodyRequired as string[]));
+    }
   }
-  if (Object.keys(properties).length === 0) return {};
+  // Legacy 197: a parameter or body the document points at but this could not read is not
+  // offered — and the schema is not left empty either, which would take anything.
+  if (Object.keys(properties).length === 0 && !unread) return {};
   return { type: 'object', properties, ...(required.length > 0 ? { required } : {}) };
 }
 
@@ -643,7 +828,7 @@ export function importOpenApi(document: OpenApiDocumentLike): Operation[] {
         // can use.
         description: op.summary ?? op.description ?? `${method.toUpperCase()} ${path}`,
         binding: { kind: 'http', method: method.toUpperCase(), path },
-        params_schema: paramsSchemaFor(op),
+        params_schema: paramsSchemaFor(document, pathItem, op),
         mode,
         blast_radius: defaultBlastRadiusForVerb(method),
         reversibility: false,

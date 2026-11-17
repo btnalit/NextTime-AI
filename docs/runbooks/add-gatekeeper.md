@@ -318,6 +318,12 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →
 `observe`，其余 → `execute`，且新导入的 `execute` 一律 `auto_approvable:false, await_decision:
 true`，等 owner 逐条审核后再发布，I17）——不需要手写每一行，见 §7 的导入路径。
+`importOpenApi` 会读 path 级的 `parameters`（Operation 自己声明的同名同位置参数覆盖它），并把
+指向同一文档的 `$ref`（`#/components/…`）原地展开；自我引用的 schema 在重复处写成 `{}`。跟不了的
+`$ref`（指向别的文档、指针不存在）不猜：这个 Operation 的 `params_schema` 只收读得到的参数，不再是
+接受一切的 `{}`；一个 Operation 展开超过 10000 个 schema 对象后剩下的保留 `$ref`，调用一律 400
+`invalid_operation_schema`。不是 `application/json` 对象（数组、`oneOf`、`allOf`、其他媒体类型）
+的请求体仍然不进 `params_schema`，导入后要人工补。
 
 ## 7. 注册、导入清单、发布——capability 路径
 

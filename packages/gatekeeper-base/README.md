@@ -146,6 +146,15 @@ keeps its live version's definition and so its confirmation, or none.
 from an OpenAPI 3.x document / an MCP `tools/list` response: `GET`/`readOnlyHint` → `observe`,
 everything else → `execute`; every imported `execute` Operation is `auto_approvable: false,
 await_decision: true` — an owner must review and publish before it takes effect (I17).
+`importOpenApi` reads a path item's own `parameters` (an Operation's own one of the same name and
+`in` replaces it) and follows every `$ref` into the same document (`#/components/…`), writing it
+out in place: the gate's validator has no document to resolve one against. A schema that contains
+itself becomes `{}` where it recurs. A reference it cannot follow — another document's, a pointer
+that leads nowhere — is not guessed at: the Operation's `params_schema` takes only what it could
+read (`{"type":"object","properties":{…}}`, so nothing else passes), never `{}`. Past 10,000
+schema objects for one Operation the rest stay `$ref`, ajv cannot compile them, and calls are
+refused (400 `invalid_operation_schema`). Request bodies other than an `application/json` object
+with `properties` (an array, `oneOf`, `allOf`, another media type) still add nothing.
 
 ## Command policy table (`ssh`/`cli`)
 

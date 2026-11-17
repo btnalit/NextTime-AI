@@ -3,11 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   GateOwnedParamRefusedError,
   OperationRefusedError,
+  ParamsSchemaInvalidError,
+  ParamsValidationError,
   TransportInvokeError,
 } from '../errors.js';
+import { assertParamsValid } from '../params-validation.js';
 import { mapGatekeeperError } from '../server.js';
 import {
   HttpTransport,
+  type OpenApiDocumentLike,
   encodePathSegment,
   gateOwnedParamsOf,
   importOpenApi,
@@ -106,6 +110,377 @@ describe('importOpenApi — what the gate owns is never a param (review of #532)
       '$skipToken',
     ]);
     expect(schema.required).toEqual(['q']);
+  });
+});
+
+/**
+ * Legacy 197 (#532 review N): `importOpenApi` read neither a path item's own `parameters` nor any
+ * `$ref`, so a `$ref` request body added nothing and an Operation with no other parameter got
+ * `params_schema: {}`, which accepts anything.
+ */
+describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
+  type Schema = {
+    type?: string;
+    properties?: Record<string, Record<string, unknown>>;
+    required?: string[];
+  };
+  const schemaOf = (operations: Operation[], name: string): Schema =>
+    operations.find((op) => op.name === name)?.params_schema as Schema;
+
+  const components = {
+    parameters: {
+      Limit: { name: 'limit', in: 'query', schema: { $ref: '#/components/schemas/Limit' } },
+      LimitAgain: { $ref: '#/components/parameters/Limit' },
+    },
+    requestBodies: {
+      NewPet: {
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/NewPet' } } },
+      },
+    },
+    schemas: {
+      Limit: { type: 'integer', minimum: 1, maximum: 100 },
+      Tag: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] },
+      NewPet: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          tags: { type: 'array', items: { $ref: '#/components/schemas/Tag' } },
+          // A property may be called `default`: it is a schema, written out like any other.
+          default: { $ref: '#/components/schemas/Tag' },
+        },
+        required: ['name'],
+        example: { tags: [{ $ref: '#/components/schemas/Tag' }] },
+      },
+      'a/b~c': { type: 'string', maxLength: 3 },
+    },
+  };
+
+  it("takes the path item's parameters on every method; an Operation's own one of the same name and place replaces it", () => {
+    const operations = importOpenApi({
+      paths: {
+        '/pets/{petId}': {
+          parameters: [
+            { name: 'petId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'X-Request-Id', in: 'header', required: true, schema: { type: 'string' } },
+            { name: 'verbose', in: 'query', schema: { type: 'boolean' } },
+          ],
+          get: {
+            operationId: 'pet_get',
+            parameters: [
+              // Replaces the path item's: its own schema, and no longer required.
+              { name: 'X-Request-Id', in: 'header', schema: { format: 'uuid' } },
+              { name: 'fields', in: 'query' },
+            ],
+          },
+          delete: { operationId: 'pet_delete' },
+        },
+      },
+    });
+    expect(schemaOf(operations, 'pet_get')).toEqual({
+      type: 'object',
+      properties: {
+        petId: { type: 'string', 'x-in': 'path' },
+        verbose: { type: 'boolean', 'x-in': 'query' },
+        'X-Request-Id': { format: 'uuid', 'x-in': 'header' },
+        fields: { 'x-in': 'query' },
+      },
+      required: ['petId'],
+    });
+    expect(schemaOf(operations, 'pet_delete')).toEqual({
+      type: 'object',
+      properties: {
+        petId: { type: 'string', 'x-in': 'path' },
+        'X-Request-Id': { type: 'string', 'x-in': 'header' },
+        verbose: { type: 'boolean', 'x-in': 'query' },
+      },
+      required: ['petId', 'X-Request-Id'],
+    });
+  });
+
+  it("leaves a path item's gate-owned parameters out, as an Operation's own", () => {
+    const [operation] = importOpenApi({
+      paths: {
+        '/logs': {
+          parameters: [
+            { name: 'Authorization', in: 'header', required: true },
+            { name: 'api_key', in: 'query', required: true },
+            { name: 'session', in: 'cookie' },
+            { name: 'q', in: 'query' },
+          ],
+          get: { operationId: 'logs_query' },
+        },
+      },
+    });
+    expect(operation?.params_schema).toEqual({
+      type: 'object',
+      properties: { q: { 'x-in': 'query' } },
+    });
+  });
+
+  it('follows $ref to parameters, request bodies and schemas in the same document', () => {
+    const operations = importOpenApi({
+      components,
+      paths: {
+        '/pets': {
+          get: {
+            operationId: 'pets_list',
+            parameters: [{ $ref: '#/components/parameters/LimitAgain' }],
+          },
+          post: {
+            operationId: 'pet_create',
+            requestBody: { $ref: '#/components/requestBodies/NewPet' },
+          },
+        },
+      },
+    });
+    expect(schemaOf(operations, 'pets_list')).toEqual({
+      type: 'object',
+      properties: { limit: { type: 'integer', minimum: 1, maximum: 100, 'x-in': 'query' } },
+    });
+    const tag = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] };
+    expect(schemaOf(operations, 'pet_create')).toEqual({
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        tags: { type: 'array', items: tag },
+        default: tag,
+      },
+      required: ['name'],
+    });
+    // The gate's own validator has no document to resolve a `$ref` against: what it gets compiles
+    // and holds the call to the document's schema.
+    const create = operations.find((op) => op.name === 'pet_create');
+    const schema = create?.params_schema ?? {};
+    expect(() =>
+      assertParamsValid('pet_create', schema, { name: 'rex', tags: [{ label: 'a' }] }),
+    ).not.toThrow();
+    expect(() => assertParamsValid('pet_create', schema, { name: 'rex', tags: [{}] })).toThrow(
+      ParamsValidationError,
+    );
+    expect(() => assertParamsValid('pet_create', schema, { name: 'rex', owner: 'x' })).toThrow(
+      ParamsValidationError,
+    );
+    expect(() =>
+      assertParamsValid('pets_list', schemaOf(operations, 'pets_list'), { limit: 0 }),
+    ).toThrow(ParamsValidationError);
+  });
+
+  it("copies a value that is data as it is: an example's `$ref` is not followed", () => {
+    const [operation] = importOpenApi({
+      components,
+      paths: {
+        '/pets': {
+          post: {
+            operationId: 'pet_create',
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { nick: { $ref: '#/components/schemas/NewPet' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const nick = (operation?.params_schema as Schema).properties?.nick;
+    expect(nick?.example).toEqual({ tags: [{ $ref: '#/components/schemas/Tag' }] });
+  });
+
+  it('reads RFC 6901 escapes in a pointer, and only names the document has', () => {
+    const operations = importOpenApi({
+      components,
+      paths: {
+        '/a': {
+          get: {
+            operationId: 'escaped',
+            parameters: [
+              { name: 'v', in: 'query', schema: { $ref: '#/components/schemas/a~1b~0c' } },
+            ],
+          },
+          post: {
+            operationId: 'inherited',
+            parameters: [{ $ref: '#/components/parameters/constructor' }],
+          },
+        },
+      },
+    });
+    expect(schemaOf(operations, 'escaped').properties?.v).toEqual({
+      type: 'string',
+      maxLength: 3,
+      'x-in': 'query',
+    });
+    // `constructor` is on every object's prototype, not a parameter the document declares.
+    expect(schemaOf(operations, 'inherited')).toEqual({ type: 'object', properties: {} });
+  });
+
+  it('a parameter or property called `__proto__` stays a property, not the prototype', () => {
+    const [operation] = importOpenApi(
+      JSON.parse(`{
+        "paths": { "/odd": { "post": {
+          "operationId": "odd",
+          "parameters": [{ "name": "__proto__", "in": "query", "schema": { "type": "string" } }],
+          "requestBody": { "content": { "application/json": { "schema": {
+            "type": "object",
+            "properties": { "nested": { "type": "object", "properties": {
+              "__proto__": { "type": "integer" } } } }
+          } } } }
+        } } }
+      }`) as OpenApiDocumentLike,
+    );
+    const properties = (operation?.params_schema as Schema).properties ?? {};
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype);
+    expect(Object.keys(properties)).toEqual(['__proto__', 'nested']);
+    const nested = properties.nested?.properties as Record<string, unknown>;
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
+    expect(Object.keys(nested)).toEqual(['__proto__']);
+  });
+
+  it('writes a schema that contains itself out once along each path, `{}` where it recurs', () => {
+    const [operation] = importOpenApi({
+      components: {
+        schemas: {
+          Node: {
+            type: 'object',
+            properties: {
+              label: { type: 'string' },
+              children: { type: 'array', items: { $ref: '#/components/schemas/Node' } },
+            },
+          },
+        },
+      },
+      paths: {
+        '/tree': {
+          put: {
+            operationId: 'tree_put',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Node' } } },
+            },
+          },
+        },
+      },
+    });
+    expect(operation?.params_schema).toEqual({
+      type: 'object',
+      properties: {
+        label: { type: 'string' },
+        children: { type: 'array', items: {} },
+      },
+    });
+  });
+
+  it('a parameter or body it cannot read leaves a schema that takes only what it could read, never `{}`', () => {
+    const operations = importOpenApi({
+      components,
+      paths: {
+        '/elsewhere': {
+          post: {
+            operationId: 'body_in_another_document',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: 'pets.yaml#/Pet' } } },
+            },
+          },
+          put: {
+            operationId: 'request_body_missing',
+            parameters: [{ name: 'dryRun', in: 'query', schema: { type: 'boolean' } }],
+            requestBody: { $ref: '#/components/requestBodies/Gone' },
+          },
+          patch: {
+            operationId: 'only_request_body_missing',
+            requestBody: { $ref: '#/components/requestBodies/Gone' },
+          },
+          get: {
+            operationId: 'parameter_missing',
+            parameters: [{ $ref: '#/components/parameters/Gone' }],
+          },
+        },
+      },
+    });
+    expect(schemaOf(operations, 'body_in_another_document')).toEqual({
+      type: 'object',
+      properties: {},
+    });
+    expect(schemaOf(operations, 'request_body_missing')).toEqual({
+      type: 'object',
+      properties: { dryRun: { type: 'boolean', 'x-in': 'query' } },
+    });
+    expect(schemaOf(operations, 'only_request_body_missing')).toEqual({
+      type: 'object',
+      properties: {},
+    });
+    expect(schemaOf(operations, 'parameter_missing')).toEqual({ type: 'object', properties: {} });
+    for (const op of operations) {
+      expect(() => assertParamsValid(op.name, op.params_schema, { anything: 1 })).toThrow(
+        ParamsValidationError,
+      );
+      expect(() => assertParamsValid(op.name, op.params_schema, {})).not.toThrow();
+    }
+  });
+
+  it('references that fan out stop being written out past a bound: the schema does not compile, so calls are refused', () => {
+    // L0 uses L1 twice, L1 uses L2 twice, … — written out in full this is 2^40 objects.
+    const schemas: Record<string, unknown> = { L40: { type: 'string' } };
+    for (let level = 0; level < 40; level += 1) {
+      const next = { $ref: `#/components/schemas/L${level + 1}` };
+      schemas[`L${level}`] = { type: 'object', properties: { a: next, b: next } };
+    }
+    const started = Date.now();
+    const [operation] = importOpenApi({
+      components: { schemas },
+      paths: {
+        '/fan': {
+          post: {
+            operationId: 'fan_out',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/L0' } } },
+            },
+          },
+        },
+      },
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    const schema = operation?.params_schema ?? {};
+    expect(JSON.stringify(schema)).toContain('"$ref"');
+    expect(() => assertParamsValid('fan_out', schema, { a: {} })).toThrow(ParamsSchemaInvalidError);
+  });
+
+  it('a document with no path item parameters and no $ref imports exactly as before', () => {
+    const [operation] = importOpenApi({
+      paths: {
+        '/stock/{id}': {
+          patch: {
+            operationId: 'stock_patch',
+            parameters: [
+              { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+              { name: 'note', in: 'header' },
+            ],
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { qty: { type: 'integer', default: 0 } },
+                    required: ['qty'],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(operation?.params_schema).toEqual({
+      type: 'object',
+      properties: {
+        id: { type: 'string', 'x-in': 'path' },
+        note: { 'x-in': 'header' },
+        qty: { type: 'integer', default: 0 },
+      },
+      required: ['id', 'qty'],
+    });
   });
 });
 
