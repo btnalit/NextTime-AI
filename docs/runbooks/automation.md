@@ -52,11 +52,11 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 
 **auto-merge.yml 没有给某个 PR 开自动合并。** 先看这个 PR 有没有 `needs-review` 标签——有就是
 故意的（major 或 pi 依赖）。没有标签但也没触发：检查 workflow 运行记录里 `dependabot` job 有没有跑
-（`if: github.actor == ...` 条件没匹配上，通常是因为这个 PR 不是 Dependabot 开的）。
+（`if:` 条件没匹配上：PR 不是 `dependabot[bot]` 开的，或者 PR 头分支不在本仓库里）。
 
-**`needs-review` 标签的 PR 想强制走自动合并流程。** 把标签摘掉，然后随便 push 一次这个 PR 分支
-触发 `synchronize`（或者直接手动 `gh pr merge --auto --merge`，效果一样，只是不经过这个
-workflow 的记录）。
+**`needs-review` 标签的 PR 审查后想合并。** 人工审查后直接 `gh pr merge --auto --merge`（三个必过
+检查绿了自动合），或者手动合并。不要靠摘标签再 push 一次：`dependabot` job 不看标签，只按
+update-type 和依赖名分流，major 或 pi 依赖照样走 `needs-review` 分支，会把标签加回来，不会开自动合并。
 
 **要不要把 `e2e`/`pr-title` 也设成必过检查。** 不是本自动化包决定的——是仓库 Settings → Branches
 → `main` 的分支保护规则里手动加,`e2e.yml` 自己的文件末尾注释里也写了同样的话（等它稳定跑几轮

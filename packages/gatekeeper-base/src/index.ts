@@ -136,6 +136,8 @@ export {
 
 export { resolveGateDataDir } from './data-dir.js';
 
+export { ResponseBodyTooLargeError, readBodyWithin } from './bounded-body.js';
+
 export { parseManifestJson } from './manifest.js';
 
 export { assertParamsValid } from './params-validation.js';
@@ -163,7 +165,10 @@ export {
   importOpenApi,
   isGateOwnedHeader,
   isGateOwnedQueryParam,
+  MAX_OPENAPI_DOCUMENT_BYTES,
+  readOpenApiDocument,
   resolveBindingUrl,
+  MAX_MCP_TOOLS_LIST_BYTES,
   McpTransport,
   importMcpTools,
   CliTransport,

@@ -1,7 +1,7 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { TransportInvokeError } from '../errors.js';
-import { McpTransport, importMcpTools } from './mcp.js';
+import { TransportInvokeError, TransportOutcomeUnknownError } from '../errors.js';
+import { MAX_MCP_TOOLS_LIST_BYTES, McpTransport, importMcpTools } from './mcp.js';
 
 describe('importMcpTools', () => {
   it('maps readOnlyHint tools to observe and the rest to execute', () => {
@@ -38,6 +38,8 @@ describe('importMcpTools', () => {
     expect(upload?.description).toBe('document.upload');
   });
 });
+
+const READ_ONLY_TOOL = { name: 'kb_list', annotations: { readOnlyHint: true } };
 
 describe('McpTransport', () => {
   const operation: Operation = {
@@ -167,6 +169,81 @@ describe('McpTransport', () => {
     }
     expect(message).toContain('untrusted:');
     expect(message.length).toBeLessThan(hugeText.length);
+  });
+
+  describe('legacy 797 (#501 review of #1374): a tools/list answer is read up to 16 MiB', () => {
+    /** An answer that sends `chunk` on every read, for as long as it is read. */
+    function endless(chunk: Uint8Array, headers: Record<string, string> = {}) {
+      const state = { pulls: 0, cancelled: false };
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            state.pulls += 1;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return { response: new Response(body, { status: 200, headers }), state };
+    }
+    const tooLarge =
+      'mcp transport: tools/list: the target answered (status 200) but its answer is larger than 16 MiB — it had the request and may have run it';
+
+    it('an answer that passes the limit is cut off, cancelled and fails as outcome unknown', async () => {
+      expect(MAX_MCP_TOOLS_LIST_BYTES).toBe(16 * 1024 * 1024);
+      const { response, state } = endless(new Uint8Array(1024 * 1024).fill(0x20));
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: vi.fn(async () => response),
+      });
+      const thrown = await transport.listTools().catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportOutcomeUnknownError);
+      expect((thrown as Error).message).toBe(tooLarge);
+      expect(state.cancelled).toBe(true);
+      expect(state.pulls).toBeLessThan(20);
+    });
+
+    it('one that declares a larger length is not read at all', async () => {
+      const { response, state } = endless(new Uint8Array(1024), {
+        'content-length': String(MAX_MCP_TOOLS_LIST_BYTES + 1),
+      });
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: vi.fn(async () => response),
+      });
+      await expect(transport.listTools()).rejects.toThrow(tooLarge);
+      expect(state.cancelled).toBe(true);
+      expect(state.pulls).toBe(0);
+    });
+
+    it('an answer within it reads as before, a leading UTF-8 BOM included', async () => {
+      const json = new TextEncoder().encode(
+        JSON.stringify({ jsonrpc: '2.0', id: 1, result: { tools: [READ_ONLY_TOOL] } }),
+      );
+      const answers = [json, new Uint8Array([0xef, 0xbb, 0xbf, ...json])];
+      for (const answer of answers) {
+        const transport = new McpTransport({
+          endpoint: 'https://example.test/mcp',
+          fetchImpl: vi.fn(async () => new Response(answer, { status: 200 })),
+        });
+        await expect(transport.listTools()).resolves.toEqual({ tools: [READ_ONLY_TOOL] });
+      }
+    });
+
+    it('an answer that is not JSON fails as before', async () => {
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: vi.fn(async () => new Response('<html>', { status: 200 })),
+      });
+      const thrown = await transport.listTools().catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportOutcomeUnknownError);
+      expect((thrown as Error).message).toContain(
+        'mcp transport: tools/list: the target answered (status 200) but its answer is not JSON',
+      );
+    });
   });
 
   it('does not treat a normal (isError absent) result as an error', async () => {
