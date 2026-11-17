@@ -60,6 +60,7 @@ import {
   absentAnswersReviewOf,
   absentAnswersReviewProperties,
 } from './absent-answers-review.js';
+import { type CredentialDraft, credentialDraftOf } from './credential-drafts.js';
 import {
   operationContentDigest,
   operationDefinitionDiffers,
@@ -1466,6 +1467,9 @@ export interface PublishManifestResult {
    *  that mean "does not exist" — a person publishes each, confirming them
    *  (`absent-answers-review.ts`). */
   readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
+  /** Legacy 198: the gate's own drafts left unpublished because their definition carries suspected
+   *  credential values — a person publishes each, confirming them (`credential-drafts.ts`). */
+  readonly credentialDrafts: readonly CredentialDraft[];
 }
 
 /**
@@ -1491,6 +1495,7 @@ export async function publishManifest(
   const skippedDraftOperationNames: string[] = [];
   const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
   const absentAnswerDrafts: AbsentAnswerDraft[] = [];
+  const credentialDrafts: CredentialDraft[] = [];
   for (const draft of drafts) {
     if (draft.origin !== 'import') {
       skippedDraftOperationNames.push(draft.name);
@@ -1499,6 +1504,13 @@ export async function publishManifest(
     const params = gateOwnedParamsOfDefinition(draft.operation);
     if (params.length > 0) {
       gateOwnedParamDrafts.push({ name: draft.name, params });
+      continue;
+    }
+    // Legacy 198: nobody here confirms the suspected credentials a definition carries — a person
+    // publishes it (`publishOperation`'s order: gate-owned params, credentials, absent answers).
+    const credentials = credentialDraftOf(draft.name, draft.operation);
+    if (credentials !== undefined) {
+      credentialDrafts.push(credentials);
       continue;
     }
     // S11 「门确认不存在」 B-a: nobody here confirms the declared answers — a person publishes it.
@@ -1530,6 +1542,7 @@ export async function publishManifest(
     skippedDraftOperationNames,
     gateOwnedParamDrafts,
     absentAnswerDrafts,
+    credentialDrafts,
   };
 }
 
@@ -1537,8 +1550,9 @@ export async function publishManifest(
  * Publishes the `'import'`-origin drafts a gate's manifest was just imported as (`importManifest`'s
  * `imported`) — the landing's catalog origin (`enable_gate_instance`, application/gates/landing.ts). A draft
  * declaring a param the gate sets itself stays a draft and is reported (legacy J), like
- * `publishManifest`; so does one declaring answers that mean "does not exist" (S11 「门确认不存在」
- * B-a), which a person publishes confirming them.
+ * `publishManifest`; so does one carrying suspected credential values (legacy 198) and one declaring
+ * answers that mean "does not exist" (S11 「门确认不存在」 B-a), which a person publishes confirming
+ * them.
  */
 export async function publishImportedDrafts(
   client: PoolClient,
@@ -1549,14 +1563,21 @@ export async function publishImportedDrafts(
   readonly publishedOperationNames: readonly string[];
   readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
   readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
+  readonly credentialDrafts: readonly CredentialDraft[];
 }> {
   const publishedOperationNames: string[] = [];
   const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
   const absentAnswerDrafts: AbsentAnswerDraft[] = [];
+  const credentialDrafts: CredentialDraft[] = [];
   for (const record of imported) {
     const params = gateOwnedParamsOfDefinition(record.operation);
     if (params.length > 0) {
       gateOwnedParamDrafts.push({ name: record.name, params });
+      continue;
+    }
+    const credentials = credentialDraftOf(record.name, record.operation);
+    if (credentials !== undefined) {
+      credentialDrafts.push(credentials);
       continue;
     }
     const absentAnswers = absentAnswersOfDefinition(record.operation);
@@ -1567,7 +1588,7 @@ export async function publishImportedDrafts(
     await publishOperation(client, workspaceId, { gatekeeperId, name: record.name });
     publishedOperationNames.push(record.name);
   }
-  return { publishedOperationNames, gateOwnedParamDrafts, absentAnswerDrafts };
+  return { publishedOperationNames, gateOwnedParamDrafts, absentAnswerDrafts, credentialDrafts };
 }
 
 export interface DeprecateOperationInput {

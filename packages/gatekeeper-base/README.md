@@ -80,7 +80,17 @@ kind:
 - `cli`: `{kind:'cli', command_template, absent_exit_codes?}` — `{name}` tokens substituted, one
   argv element each.
 - `ssh`: `{kind:'ssh', command_template?, command_pattern?, absent_exit_codes?}` — a fixed template,
-  or a regex class matched against a literal `params.command` (see "Command policy table" below).
+  or a regex class the **whole** of a literal `params.command` must match (see "Command policy
+  table" below). The gate holds the pattern at both ends as `^(?:…)$` (legacy 195): the line goes to
+  the remote shell as is, so a pattern that only had to occur somewhere would let `show x; reboot`
+  through `^show\b`. Write the whole line, and let the arguments hold only characters the remote
+  shell reads as plain text: `show( [A-Za-z0-9_./:@%+=,-]+)*` (the set `shellQuote` passes through
+  unquoted). `.*`, `\S+`, `[^ ]+` or any class that admits `;`, `&`, `|`, `$`, a backtick, `<`, `>`
+  or a quote lets a second command ride along — `show x; reboot`, `show $(reboot)`, `show x | sh` —
+  and the policy table below does not stop it: its rules are searched for, so `^show\b` classifies
+  `show x; reboot` as observe. Avoid nested quantifiers such as `(\w+\s?)+`: held at both ends, a
+  command that almost matches makes the match backtrack exponentially. A pattern that does not
+  compile on its own is a plain failure (legacy 310); an empty one matches no command.
 
 ### Answers that mean "not there" (`absent_statuses` / `absent_exit_codes`)
 
@@ -136,13 +146,56 @@ keeps its live version's definition and so its confirmation, or none.
 from an OpenAPI 3.x document / an MCP `tools/list` response: `GET`/`readOnlyHint` → `observe`,
 everything else → `execute`; every imported `execute` Operation is `auto_approvable: false,
 await_decision: true` — an owner must review and publish before it takes effect (I17).
+An OpenAPI document fetched from a `manifestSource` — by the kernel (`create_connection`) or the
+gate host — is read up to 16 MiB (`MAX_OPENAPI_DOCUMENT_BYTES`, `readOpenApiDocument`): a larger one
+fails the fetch (502 `manifest_fetch_failed`) or the instance's build, saying so, and is not read
+any further. An MCP `tools/list` answer is read up to the same 16 MiB (`MAX_MCP_TOOLS_LIST_BYTES`),
+by both and from the MCP target alike; a `tools/call` answer is not bounded here.
+`importOpenApi` reads a path item's own `parameters` (an Operation's own one of the same name and
+`in` replaces it) and follows every `$ref` into the same document (`#/components/…`), writing it
+out in place: the gate's validator has no document to resolve one against. A schema that contains
+itself becomes `{}` where it recurs. A reference it cannot follow — another document's, a pointer
+that leads nowhere — is not guessed at: the Operation's `params_schema` takes only what it could
+read (`{"type":"object","properties":{…}}`, so nothing else passes), never `{}`. What references
+copy is bounded: 10,000 units for one Operation and 100,000 for the whole document (following a
+reference is one unit, so is each schema value copied out of one, and text one more per 64
+characters; what an Operation writes in place does not count), and a schema at most 512 levels
+deep. The document's budget is spent in path order, so a large Operation early in the document
+leaves less for those after it. An Operation past one of them gets `params_schema:
+{"$ref":"#/x-nexttime-inline-limit"}`: ajv cannot compile it and calls are refused (400
+`invalid_operation_schema`) — import a smaller document, or write the gate's manifest by hand. A
+`$ref`'s sibling that would replace one of the target's own constraints, or change what one of them
+means (`properties` beside a target's `additionalProperties: false`, anything beside the target's
+own `unevaluatedProperties`, a keyword not listed in `http.ts`), is kept beside it under `allOf`,
+never written into it. A sibling that only adds a constraint of its own (`pattern`, `required`, …)
+is written in, and so is `unevaluatedProperties` — OpenAPI 3.1's way to close what a `$ref` points
+at. An annotation (`description`, `example`, `discriminator`, an `x-` extension) replaces. Note that
+`additionalProperties: false` beside a target that has `properties` does not see them, so under
+`allOf` that use takes only `{}`, and a request body written that way is not read: write it into the
+referenced schema, or write the Operation's `params_schema` by hand. OpenAPI 3.0's `nullable: true`
+beside a `$ref` lets that use be null where the target has a `type`, and is left out where it has
+none (ajv refuses it there). The gate checks params against JSON Schema draft-07: `unevaluated*`,
+`dependentRequired`, `dependentSchemas`, `prefixItems`, `minContains`/`maxContains` and
+`discriminator` stay in the schema but are not checked.
+A request body
+that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
+or is nothing but a reference to itself is not read: the Operation takes only its parameters.
+Neither is one that is not a JSON object — the call sends what is left of its params as one JSON
+object with `content-type: application/json`, so a body of another media type (`multipart/…`, a
+`+json` type such as `application/merge-patch+json`), an array or a string is not offered either;
+`application/json; charset=…` counts as JSON. To call such an endpoint with a body, write the
+gate's manifest by hand. An object body that names no properties, and `application/json` with no
+schema, still take any params, as before.
 
 ## Command policy table (`ssh`/`cli`)
 
 `classifyCommand(command, policyTable)` (`src/kinds/ssh.ts`) matches an ordered list of
 `{pattern, mode, blastRadius, autoApprovable}` rules against a literal command string; the first
-match wins. No match → the unclassified default (`mode: 'execute', blastRadius: 'medium',
-autoApprovable: false, unclassified: true`) — I17's "unclassified操作一律 require_approval".
+match wins. A rule is searched for anywhere in the line, not held at both ends like an Operation's
+`command_pattern`: write `^` yourself, and keep a deny-style rule such as `^rm -rf\b` a prefix so
+it classifies `rm -rf /data` too. No match → the unclassified default (`mode: 'execute',
+blastRadius: 'medium', autoApprovable: false, unclassified: true`) — I17's "unclassified操作一律
+require_approval".
 
 ## Credential resolution
 

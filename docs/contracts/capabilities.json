@@ -14220,6 +14220,34 @@
           },
           "type": "array"
         },
+        "credentialDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "suspectedSecretValues",
+              "suspectedSecretPaths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "drift": {
           "additionalProperties": false,
           "properties": {
@@ -14344,6 +14372,7 @@
         "skippedOperationNames",
         "gateOwnedParamDrafts",
         "absentAnswerDrafts",
+        "credentialDrafts",
         "linkedExisting"
       ],
       "type": "object"
@@ -25609,6 +25638,10 @@
                   "deprecated"
                 ],
                 "type": "string"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               },
               "target": {
                 "additionalProperties": false,
@@ -45519,6 +45552,10 @@
                 ],
                 "type": "string"
               },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
               "target": {
                 "additionalProperties": false,
                 "properties": {
@@ -56019,6 +56056,10 @@
                   "rewritable"
                 ],
                 "type": "object"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -56519,6 +56560,10 @@
                   "rewritable"
                 ],
                 "type": "object"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -64879,6 +64924,34 @@
           },
           "type": "array"
         },
+        "credentialDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "suspectedSecretValues",
+              "suspectedSecretPaths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "gateOwnedParamDrafts": {
           "items": {
             "additionalProperties": false,
@@ -64941,7 +65014,8 @@
         "publishedOperationNames",
         "skippedDraftOperationNames",
         "gateOwnedParamDrafts",
-        "absentAnswerDrafts"
+        "absentAnswerDrafts",
+        "credentialDrafts"
       ],
       "type": "object"
     },

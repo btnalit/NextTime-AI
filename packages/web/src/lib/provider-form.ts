@@ -209,15 +209,9 @@ export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
     value = `https://${value}`;
     schemeAdded = true;
   }
-  value = value.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  let stripped = false;
-  for (;;) {
-    const lower = value.toLowerCase();
-    const suffix = ENDPOINT_SUFFIXES.find((s) => lower.endsWith(s));
-    if (!suffix) break;
-    value = value.slice(0, value.length - suffix.length).replace(/\/+$/, '');
-    stripped = true;
-  }
+  const endpoint = withoutEndpointPath(value.replace(/[?#].*$/, '').replace(/\/+$/, ''));
+  value = endpoint.value;
+  const stripped = endpoint.stripped;
   return {
     value,
     changed:
@@ -229,6 +223,25 @@ export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
             ? 'suffix-stripped'
             : 'none',
   };
+}
+
+/** `value` without a trailing `/v1` or full endpoint path the proxy appends itself (`/v1/models`,
+ *  `/v1/chat/completions`, …) and the slashes before it — a relay's own prefix (`/api/openai`)
+ *  stays. */
+function withoutEndpointPath(value: string): {
+  readonly value: string;
+  readonly stripped: boolean;
+} {
+  let rest = value;
+  let stripped = false;
+  for (;;) {
+    const lower = rest.toLowerCase();
+    const suffix = ENDPOINT_SUFFIXES.find((s) => lower.endsWith(s));
+    if (!suffix) break;
+    rest = rest.slice(0, rest.length - suffix.length).replace(/\/+$/, '');
+    stripped = true;
+  }
+  return { value: rest, stripped };
 }
 
 export function isHttpUrl(value: string): boolean {
@@ -341,6 +354,124 @@ export function upstreamStatus(error: string | null): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/** A redirect llm-proxy did not follow (legacy 221, #1344): `… responded 301, a redirect to
+ *  "https://…/v1/models". llm-proxy does not follow redirects …` — its status, and where it
+ *  pointed as llm-proxy shows it (a path on the same origin, else another origin and its path;
+ *  `null` when the answer named nowhere, or nothing readable). */
+interface UpstreamRedirect {
+  readonly status: number;
+  readonly target: string | null;
+}
+
+/** llm-proxy's own sentence, from the start of the error (review #501 on #1363): its label (`GET
+ *  /v1/models`, `POST /v1/messages`, `upstream`) leads every message it builds, so an upstream's
+ *  own error text (`HTTP 400: … responded 301, a redirect to …`) that merely quotes the words is
+ *  never read as a redirect, and never pushes out the 401 / 429 explanation it deserves. */
+const UPSTREAM_REDIRECT_PATTERN =
+  /^(?:upstream|[A-Z]+ \/\S*) responded (3\d\d), a redirect to ("(?:[^"\\]|\\.)*"|nowhere \(no Location header\)|an unparseable Location header)\. llm-proxy does not follow redirects/;
+
+function upstreamRedirectOf(error: string): UpstreamRedirect | null {
+  const match = UPSTREAM_REDIRECT_PATTERN.exec(error);
+  if (!match) return null;
+  const where = match[2] ?? '';
+  let target: string | null = null;
+  if (where.startsWith('"')) {
+    try {
+      target = JSON.parse(where) as string;
+    } catch {
+      target = null;
+    }
+  }
+  // Only a path or an http(s) address is somewhere a Base URL could point; anything else
+  // (`javascript:`, `data:`, which llm-proxy shows as `null…`) names no usable address.
+  if (target !== null && !target.startsWith('/') && !/^https?:\/\//i.test(target)) target = null;
+  return { status: Number(match[1]), target };
+}
+
+/** A sign-in page, by its path: a relay asking to sign in, or refusing the key, sends there. */
+const SIGN_IN_PATH = /(?:^|[/._-])(?:log-?in|sign-?in|oauth2?|auth|authorize|sso)(?:[/._-]|$)/i;
+
+function looksLikeSignIn(target: string): boolean {
+  try {
+    return SIGN_IN_PATH.test(new URL(target).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Legacy 795: what a redirect means for the provider's Base URL. llm-proxy never follows one —
+ *  the provider key would go along to wherever it points — so the fix is the address itself. */
+function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): string {
+  const { status, target } = redirect;
+  if (target === null) {
+    return t(
+      `上游返回 ${status} 重定向，却没有说转到哪里：检查 Base URL 是否写对。`,
+      `The upstream answered ${status}, a redirect that names no readable address — check the Base URL.`,
+    );
+  }
+  const why = t(
+    'llm-proxy 不会跟着重定向走，否则密钥会被一起发到那个地址。',
+    'llm-proxy does not follow redirects, since the provider key would go along to that address.',
+  );
+  if (target.startsWith('/')) {
+    // UX acceptance of #1363 (P2): the path the Base URL should carry is the target without the
+    // endpoint path llm-proxy appends — said outright, a missing prefix included.
+    const path = withoutEndpointPath(target.replace(/\/+$/, ''));
+    const fix = !path.stripped
+      ? t(
+          '这个路径不像接口地址，可能是上游的说明页或登录页：对照上游的文档核对 Base URL。',
+          'That path does not look like an API endpoint — it may be the upstream’s own page or a sign-in: check the Base URL against the upstream’s documentation.',
+        )
+      : path.value.includes('***')
+        ? t(
+            '去掉末尾 /v1/… 接口路径后的部分就是 Base URL 该带的路径。',
+            'What is left once the trailing /v1/… endpoint path is gone is the path the Base URL should carry.',
+          )
+        : path.value === ''
+          ? t(
+              'Base URL 不该带路径：只留站点地址（协议加主机名）。',
+              'The Base URL should carry no path: keep only the site address (scheme and host).',
+            )
+          : t(
+              `把 Base URL 的路径改成 ${path.value}（站点地址加上 ${path.value}）。`,
+              `Set the Base URL’s path to ${path.value} (the site address followed by ${path.value}).`,
+            );
+    return t(
+      `上游返回 ${status} 重定向，转到同一站点的 ${target}。${why}多半是 Base URL 的路径不对（多了或少了前缀、末尾的 /，或多写了 /v1）。${fix}`,
+      `The upstream answered ${status}, a redirect to ${target} on the same site. ${why} The Base URL’s path is most likely off (a prefix too many or too few, a trailing /, or an extra /v1). ${fix}`,
+    );
+  }
+  // Review #501 on #1363: a sign-in page is never a Base URL — the key would go to its host.
+  if (looksLikeSignIn(target)) {
+    return t(
+      `上游返回 ${status} 重定向，转到 ${target}，看起来是登录页。${why}这说明中转要求先登录，或者不接受这个密钥：不要把这个地址填进 Base URL，去中转那边检查账号和密钥。`,
+      `The upstream answered ${status}, a redirect to ${target}, which looks like a sign-in page. ${why} The relay wants a sign-in first or does not accept this key: do not put that address in the Base URL — check the account and the key with the relay.`,
+    );
+  }
+  // The new address keeps any path prefix a relay serves under (`/api/openai`); only the
+  // endpoint path llm-proxy appends itself (`/v1/models`, …) goes. A path llm-proxy masked
+  // (`***`) is not something to paste, so then the rule alone is said.
+  // Review #501 on #1363: only a target that ended in such an endpoint path names a Base URL —
+  // a host's root, a sign-in path the pattern above misses, or a cut-off target names none.
+  const normalized = normalizeBaseUrl(target);
+  const base = normalized.value;
+  // A target llm-proxy masked or cut off may still have ended in an endpoint path: the rule
+  // stands, with no address to paste.
+  const unreadable = base.includes('***') || target.endsWith('…');
+  // UX acceptance of #1363 (P3): a target that plainly does not end in one is no Base URL at all.
+  if (normalized.changed === 'none' && !unreadable) {
+    return t(
+      `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}这个地址不像接口地址，可能是上游的说明页或换了入口：对照上游的文档核对 Base URL，确认可信后再改。`,
+      `The upstream answered ${status}, a redirect to another address, ${target}. ${why} That address does not look like an API endpoint — it may be the upstream’s own page or a new entry point: check the Base URL against the upstream’s documentation, and change it only once you trust it.`,
+    );
+  }
+  const suggestion = unreadable ? '' : t(`（也就是 ${base}）`, ` (that is, ${base})`);
+  return t(
+    `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}如果这是同一个服务的新地址（http 换成了 https，或换了域名），确认可信后，把 Base URL 改成这个地址去掉末尾 /v1/… 接口路径后的部分${suggestion}。`,
+    `The upstream answered ${status}, a redirect to another address, ${target}. ${why} If this is the same service at a new address (http moved to https, or a new domain), once you trust it set the Base URL to that address without the trailing /v1/… endpoint path${suggestion}.`,
+  );
+}
+
 /** One plain sentence on what an upstream failure most likely means and what to change.
  *  `phase` says which round trip of a provider test failed (`'tool_call'` once the completion
  *  passed): a 400 there means the endpoint refused a request carrying tools. */
@@ -358,6 +489,8 @@ export function explainUpstreamError(
       'The model answered but did not call the tool — this model or relay may not support tool calling, so Workers and gate tools will not work.',
     );
   }
+  const redirect = upstreamRedirectOf(error);
+  if (redirect !== null) return explainUpstreamRedirect(redirect, t);
   const status = upstreamStatus(error);
   if (status === 401 || status === 403) {
     return t(

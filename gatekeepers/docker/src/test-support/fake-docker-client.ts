@@ -15,6 +15,7 @@ export interface FakeContainerSeed {
 }
 
 export interface FakeDockerClient extends DockerClient {
+  readonly inspectCalls: string[];
   readonly logsTailCalls: string[];
   readonly restartCalls: Array<{ id: string; timeoutSeconds: number }>;
   readonly startCalls: string[];
@@ -55,6 +56,7 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
     });
   }
 
+  const inspectCalls: string[] = [];
   const logsTailCalls: string[] = [];
   const restartCalls: Array<{ id: string; timeoutSeconds: number }> = [];
   const startCalls: string[] = [];
@@ -73,6 +75,7 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
   }
 
   return {
+    inspectCalls,
     logsTailCalls,
     restartCalls,
     startCalls,
@@ -93,6 +96,7 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
     },
 
     async inspectContainer(id: string): Promise<ContainerSummary> {
+      inspectCalls.push(id);
       const found = findByIdOrName(id);
       if (!found) {
         const err = new Error(`no such container: ${id}`) as Error & { statusCode: number };

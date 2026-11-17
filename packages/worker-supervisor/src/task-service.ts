@@ -251,7 +251,10 @@ export interface TaskService {
   /** S11 GO14: the kernel's lease on goal step Tasks' directories (`POST /task-dirs/keep`) — for
    *  each, its handoff directory's state for a reader of that workspace and goal run
    *  (`upstreamFilesState`); a `kept` one has both of its directories marked used now, so
-   *  `sweepRetention` leaves them for another retention period. Touches nothing else. */
+   *  `sweepRetention` leaves them for another retention period. Touches nothing else. Running is
+   *  the registry's word alone, unlike a spawn's upstream check, which asks Docker too: the
+   *  registry holds every running Task once startup `reconcile()` has run, before any request,
+   *  and every spawn under way (legacy 578). */
   keepTaskDirs(tasks: readonly TaskDirsKeepEntry[]): Promise<readonly TaskDirsKeepResult[]>;
   /** feat/egress-docker-events: called by `index.ts`'s docker-events subscriber for every
    *  container-lifecycle event (`die`/`destroy`/`kill`/`stop`) matching the platform's own label
@@ -328,7 +331,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     const { ip } = entry;
     if (!ip) return;
     try {
-      egressMap.unregister(ip);
+      // Only this Worker's own entry: the address may already be the next container's (legacy
+      // 169), as `unbindHandle` below leaves the next container's Handle binding.
+      egressMap.unregister(ip, taskSourceId(entry.workspaceId, workerRunId));
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -427,11 +432,34 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     await reconcileOne(workerRunId, entry);
   }
 
-  /** The Tasks with a container this service counts as running — never swept, never mounted. */
+  /** Legacy 791: the Tasks a `spawn` call is working on, from its first check until it returns or
+   *  throws — counted per call, so one of two calls for the same Task ending leaves the other's
+   *  Task counted. A spawn awaits Docker before its container is in `registry`, and a sweep in
+   *  between would otherwise take the Task's directories: an earlier run's files on a re-spawn,
+   *  or the ones this spawn could not mark used (`utimesSync` below) before its container starts.
+   *  A spawn its Task's owner marker refuses (`TaskAlreadySpawnedError`, a goal step spawned
+   *  again) counts too, until it is refused: a reader asking about that step's directories in
+   *  that moment is told `running`, and asks again. */
+  const spawningTasks = new Map<string, number>();
+
+  function spawnStarted(taskId: string): void {
+    spawningTasks.set(taskId, (spawningTasks.get(taskId) ?? 0) + 1);
+  }
+
+  function spawnEnded(taskId: string): void {
+    const left = (spawningTasks.get(taskId) ?? 0) - 1;
+    if (left > 0) spawningTasks.set(taskId, left);
+    else spawningTasks.delete(taskId);
+  }
+
+  /** The Tasks with a container this service counts as running, or a spawn under way (legacy
+   *  791) — never swept, never mounted. */
   function runningTaskIds(): Set<string> {
-    return new Set(
-      [...registry.values()].filter((e) => e.state === 'running').map((e) => e.taskId),
-    );
+    const ids = new Set(spawningTasks.keys());
+    for (const entry of registry.values()) {
+      if (entry.state === 'running') ids.add(entry.taskId);
+    }
+    return ids;
   }
 
   /** Removes every per-Task directory under `root` older than the retention cutoff whose Task
@@ -493,251 +521,266 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
   return {
     async spawn(input): Promise<TaskSpawnOutcome> {
-      const {
-        taskId,
-        workerRunId,
-        workspaceId,
-        capabilityHandle,
-        image,
-        model,
-        systemPrompt,
-        skillsInline,
-        timeoutSec,
-        egressDeny,
-        egressDenyAll,
-        builtinTools,
-        correlationId,
-        goalRunId,
-        upstream,
-      } = input;
-      const paths = taskWorkspacePaths(config, taskId);
+      // Legacy 791: counted from here until the spawn returns or throws (`spawningTasks`).
+      spawnStarted(input.taskId);
+      try {
+        const {
+          taskId,
+          workerRunId,
+          workspaceId,
+          capabilityHandle,
+          image,
+          model,
+          systemPrompt,
+          skillsInline,
+          timeoutSec,
+          egressDeny,
+          egressDenyAll,
+          builtinTools,
+          correlationId,
+          goalRunId,
+          upstream,
+        } = input;
+        const paths = taskWorkspacePaths(config, taskId);
 
-      // Refused before anything is written (runtime-contract.ts).
-      await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
+        // Refused before anything is written (runtime-contract.ts).
+        await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
 
-      // S11 GO14 (review #493 on #884): a goal step's Task is spawned once — the one whose platform
-      // directory already holds an owner marker is refused, so a handoff directory checked for a
-      // later step is never written by a Worker again (`upstream-files.ts`). A Task outside a goal
-      // has no marker, and its crash requeue is unaffected.
-      if (hasTaskOwnerMarker(paths)) throw new TaskAlreadySpawnedError(taskId);
+        // S11 GO14 (review #493 on #884): a goal step's Task is spawned once — the one whose platform
+        // directory already holds an owner marker is refused, so a handoff directory checked for a
+        // later step is never written by a Worker again (`upstream-files.ts`). A Task outside a goal
+        // has no marker, and its crash requeue is unaffected.
+        if (hasTaskOwnerMarker(paths)) throw new TaskAlreadySpawnedError(taskId);
 
-      // S11 GO14: every earlier step's handoff directory is checked before anything is written
-      // (`upstream-files.ts` has why these checks). Running is asked of Docker as well as of the
-      // registry, which a restart empties until `reconcile()` has run.
-      if (upstream && upstream.length > 0) {
-        if (goalRunId === undefined) {
-          throw new Error('task spawn: upstream files need the goal run they belong to');
-        }
-        const running = runningTaskIds();
-        for (const entry of upstream) {
-          const containers = await docker.listByLabel(TASK_ID_LABEL, entry.taskId);
-          if (containers.some((container) => container.running)) running.add(entry.taskId);
-          const state = upstreamFilesState(
-            config,
-            entry.taskId,
-            { workspaceId, goalRunId },
-            running,
-          );
-          if (state !== 'kept') {
-            throw new UpstreamFilesUnavailableError(entry.stepKey, entry.taskId, state);
+        // S11 GO14: every earlier step's handoff directory is checked before anything is written
+        // (`upstream-files.ts` has why these checks). Running is asked of Docker as well as of the
+        // registry, as a second look: a restart empties the registry, but startup `reconcile()`
+        // refills it before this service takes a request (`index.ts`), and a spawn under way is
+        // counted from its start (legacy 578; `keepTaskDirs` asks the registry alone).
+        if (upstream && upstream.length > 0) {
+          if (goalRunId === undefined) {
+            throw new Error('task spawn: upstream files need the goal run they belong to');
+          }
+          const running = runningTaskIds();
+          for (const entry of upstream) {
+            const containers = await docker.listByLabel(TASK_ID_LABEL, entry.taskId);
+            if (containers.some((container) => container.running)) running.add(entry.taskId);
+            const state = upstreamFilesState(
+              config,
+              entry.taskId,
+              { workspaceId, goalRunId },
+              running,
+            );
+            if (state !== 'kept') {
+              throw new UpstreamFilesUnavailableError(entry.stepKey, entry.taskId, state);
+            }
           }
         }
-      }
 
-      // This process also runs as uid 10001, so a directory it creates here is already correctly
-      // owned; both are bind sources, which Docker would otherwise create as root.
-      mkdirSync(paths.localWorkspaceDir, { recursive: true });
-      mkdirSync(paths.localPlatformDir, { recursive: true });
-      // S11 GO14: a goal step's handoff directory and owner marker (`upstream-files.ts`).
-      if (goalRunId !== undefined) prepareGoalTaskDirs(paths, { workspaceId, goalRunId });
+        // This process also runs as uid 10001, so a directory it creates here is already correctly
+        // owned; both are bind sources, which Docker would otherwise create as root.
+        mkdirSync(paths.localWorkspaceDir, { recursive: true });
+        mkdirSync(paths.localPlatformDir, { recursive: true });
+        // S11 GO14: a goal step's handoff directory and owner marker (`upstream-files.ts`).
+        if (goalRunId !== undefined) prepareGoalTaskDirs(paths, { workspaceId, goalRunId });
 
-      // P-A2: the Task-mode counterpart of resident mode's `writeSystemPromptIfChanged` — put the
-      // caller's prompt in this Task's platform directory (host-paths.ts `taskSystemPromptPath`)
-      // *before* `docker.createAndStart` below, so `entrypoint.sh` reads it instead of its own
-      // static default. Written unconditionally, with no "did it change" comparison: unlike
-      // resident mode there is no reuse-a-running-container branch here to skip the write for —
-      // every spawn creates a container, and the prompt this call carries is the one it must
-      // start with. For the same reason an earlier WorkerRun's prompt or Skills never carry over
-      // to this one: the file is removed when this call carries none, and `skills/` is cleared.
-      const promptPath = taskSystemPromptPath(paths);
-      if (systemPrompt !== undefined) {
-        writeFileSync(promptPath, systemPrompt, 'utf8');
-      } else {
-        rmSync(promptPath, { force: true });
-      }
-
-      // S2.14: write every `skillsInline[]` entry's files under `skills/<name>/` in the same
-      // directory, *before* `docker.createAndStart` below.
-      const skillsDir = localSkillsDir(paths.localPlatformDir);
-      rmSync(skillsDir, { recursive: true, force: true });
-      for (const skill of skillsInline ?? []) {
-        const skillDir = posixPath.join(skillsDir, skill.name);
-        for (const [fileName, content] of Object.entries(skill.files)) {
-          const filePath = posixPath.join(skillDir, fileName);
-          mkdirSync(posixPath.dirname(filePath), { recursive: true });
-          writeFileSync(filePath, content, 'utf8');
+        // P-A2: the Task-mode counterpart of resident mode's `writeSystemPromptIfChanged` — put the
+        // caller's prompt in this Task's platform directory (host-paths.ts `taskSystemPromptPath`)
+        // *before* `docker.createAndStart` below, so `entrypoint.sh` reads it instead of its own
+        // static default. Written unconditionally, with no "did it change" comparison: unlike
+        // resident mode there is no reuse-a-running-container branch here to skip the write for —
+        // every spawn creates a container, and the prompt this call carries is the one it must
+        // start with. For the same reason an earlier WorkerRun's prompt or Skills never carry over
+        // to this one: the file is removed when this call carries none, and `skills/` is cleared.
+        const promptPath = taskSystemPromptPath(paths);
+        if (systemPrompt !== undefined) {
+          writeFileSync(promptPath, systemPrompt, 'utf8');
+        } else {
+          rmSync(promptPath, { force: true });
         }
-      }
-      // Retention (`sweepRetention`) goes by each directory's own mtime, which rewriting a file
-      // already there doesn't move: mark both as used by this spawn. A failure only leaves the
-      // directories looking as old as they are — the sweep never takes a running Task's, and keeps
-      // anything inside the retention window — so it is logged, as `keepTaskDirs` logs the same
-      // two calls failing, and the spawn goes on rather than failing for it (legacy 435).
-      const usedAt = new Date(now());
-      try {
-        utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
-        utimesSync(paths.localPlatformDir, usedAt, usedAt);
-      } catch (err) {
-        console.error(
-          JSON.stringify({
-            level: 'warn',
-            msg: 'task dirs touch failed at spawn',
-            taskId,
-            workerRunId,
-            error: String(err),
-          }),
-        );
-      }
 
-      const networkName = await resolveNetworkName();
-      // S11 W1a: read right before the create, which binds the same file into the container.
-      const modelsConfigDigest = readModelsConfigDigest(config);
-      const spec = buildTaskSpawnSpec({
-        config,
-        taskId,
-        workerRunId,
-        workspaceId,
-        image,
-        model,
-        networkName,
-        egressDeny,
-        egressDenyAll,
-        builtinTools,
-        correlationId,
-        upstream,
-      });
-      // Only what the spec builder accepted (a valid id) is remembered and registered.
-      const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
-      const denyAll = egressDenyAll === true;
-      let created: ContainerState;
-      try {
-        created = await docker.createAndStart(spec);
-      } catch (err) {
-        // L6-18 (docs/code-review-2026-10-02.md, R-09): the create can succeed and the start (or
-        // the inspect after it) fail. That leaves a container that is never registered below, so nothing here would ever stop or remove it — Task
-        // container names are per-WorkerRun and never reused. Force-remove it (best-effort; a
-        // container that was never created is a no-op) before the spawn error propagates.
-        try {
-          await docker.remove(spec.name);
-        } catch (removeErr) {
-          console.error(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'task container removal failed after a failed spawn',
-              workerRunId,
-              error: String(removeErr),
-            }),
-          );
+        // S2.14: write every `skillsInline[]` entry's files under `skills/<name>/` in the same
+        // directory, *before* `docker.createAndStart` below.
+        const skillsDir = localSkillsDir(paths.localPlatformDir);
+        rmSync(skillsDir, { recursive: true, force: true });
+        for (const skill of skillsInline ?? []) {
+          const skillDir = posixPath.join(skillsDir, skill.name);
+          for (const [fileName, content] of Object.entries(skill.files)) {
+            const filePath = posixPath.join(skillDir, fileName);
+            mkdirSync(posixPath.dirname(filePath), { recursive: true });
+            writeFileSync(filePath, content, 'utf8');
+          }
         }
-        throw err;
-      }
-      // The Worker's Handle is bound to its address before this call returns (handle-bindings.ts)
-      // — never put in its environment. No binding means a Worker that cannot call anything, and
-      // an address another running container still holds is refused (`bindExclusive`), so a
-      // failure here removes the container and fails the spawn, like a failed start above.
-      try {
-        if (!created.ip) throw new Error('the container has no address on the workers network');
-        await bindExclusive(
-          handleBindings,
-          created.ip,
-          {
-            handle: capabilityHandle,
-            sourceId: taskSourceId(workspaceId, workerRunId),
-            containerId: created.id,
-          },
-          isAt,
-        );
-      } catch (err) {
-        try {
-          await docker.remove(spec.name);
-        } catch (removeErr) {
-          console.error(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'task container removal failed after a failed handle binding',
-              workerRunId,
-              error: String(removeErr),
-            }),
-          );
+        // Retention (`sweepRetention`) goes by each directory's own mtime, which rewriting a file
+        // already there doesn't move: mark both as used by this spawn. A failure only leaves that
+        // directory looking as old as it is — the sweep never takes the directories of a Task that
+        // is running or being spawned, and keeps anything inside the retention window — so it is
+        // logged, as `keepTaskDirs` logs the same calls failing, and the spawn goes on rather than
+        // failing for it (legacy 435). Each directory is marked on its own, so one failing still
+        // marks the other (legacy 791).
+        const usedAt = new Date(now());
+        for (const [dir, path] of [
+          ['workspace', paths.localWorkspaceDir],
+          ['platform', paths.localPlatformDir],
+        ] as const) {
+          try {
+            utimesSync(path, usedAt, usedAt);
+          } catch (err) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'task dir touch failed at spawn',
+                taskId,
+                workerRunId,
+                dir,
+                error: String(err),
+              }),
+            );
+          }
         }
-        throw new Error(`binding the Worker's Handle failed: ${String(err)}`);
-      }
 
-      // S10 E3-2-0: an evaluation run's deny-all entry is written right after its Handle binding
-      // (which has just proved the address is this container's, so no other container's entry
-      // is overwritten). A run whose entry can't be written doesn't start: its Handle is unbound
-      // and the container removed, as for a failed binding.
-      if (
-        denyAll &&
-        !registerEgress(
-          workspaceId,
+        const networkName = await resolveNetworkName();
+        // S11 W1a: read right before the create, which binds the same file into the container.
+        const modelsConfigDigest = readModelsConfigDigest(config);
+        const spec = buildTaskSpawnSpec({
+          config,
+          taskId,
           workerRunId,
-          created.ip,
+          workspaceId,
+          image,
+          model,
+          networkName,
           egressDeny,
-          acceptedCorrelationId,
-          true,
-        )
-      ) {
+          egressDenyAll,
+          builtinTools,
+          correlationId,
+          upstream,
+        });
+        // Only what the spec builder accepted (a valid id) is remembered and registered.
+        const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
+        const denyAll = egressDenyAll === true;
+        let created: ContainerState;
         try {
-          handleBindings.unbind(created.ip as string, created.id);
-        } catch (unbindErr) {
-          console.error(
-            JSON.stringify({
-              level: 'error',
-              msg: 'task handle unbinding failed after a failed deny-all egress registration',
-              workerRunId,
-              error: String(unbindErr),
-            }),
-          );
+          created = await docker.createAndStart(spec);
+        } catch (err) {
+          // L6-18 (docs/code-review-2026-10-02.md, R-09): the create can succeed and the start (or
+          // the inspect after it) fail. That leaves a container that is never registered below, so nothing here would ever stop or remove it — Task
+          // container names are per-WorkerRun and never reused. Force-remove it (best-effort; a
+          // container that was never created is a no-op) before the spawn error propagates.
+          try {
+            await docker.remove(spec.name);
+          } catch (removeErr) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'task container removal failed after a failed spawn',
+                workerRunId,
+                error: String(removeErr),
+              }),
+            );
+          }
+          throw err;
         }
+        // The Worker's Handle is bound to its address before this call returns (handle-bindings.ts)
+        // — never put in its environment. No binding means a Worker that cannot call anything, and
+        // an address another running container still holds is refused (`bindExclusive`), so a
+        // failure here removes the container and fails the spawn, like a failed start above.
         try {
-          await docker.remove(spec.name);
-        } catch (removeErr) {
-          console.error(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'task container removal failed after a failed deny-all egress registration',
-              workerRunId,
-              error: String(removeErr),
-            }),
+          if (!created.ip) throw new Error('the container has no address on the workers network');
+          await bindExclusive(
+            handleBindings,
+            created.ip,
+            {
+              handle: capabilityHandle,
+              sourceId: taskSourceId(workspaceId, workerRunId),
+              containerId: created.id,
+            },
+            isAt,
           );
+        } catch (err) {
+          try {
+            await docker.remove(spec.name);
+          } catch (removeErr) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'task container removal failed after a failed handle binding',
+                workerRunId,
+                error: String(removeErr),
+              }),
+            );
+          }
+          throw new Error(`binding the Worker's Handle failed: ${String(err)}`);
         }
-        throw new Error("writing the evaluation run's deny-all egress entry failed");
-      }
 
-      registry.set(workerRunId, {
-        taskId,
-        workspaceId,
-        containerId: created.id,
-        ip: created.ip,
-        startedAt: created.startedAt,
-        timeoutAt: now() + (timeoutSec ?? config.taskMaxRuntimeSec) * 1000,
-        state: 'running',
-        exitCode: undefined,
-        finishedAt: undefined,
-        reason: undefined,
-        terminating: false,
-        correlationId: acceptedCorrelationId,
-      });
-      if (!denyAll) {
-        registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
-      }
+        // S10 E3-2-0: an evaluation run's deny-all entry is written right after its Handle binding
+        // (which has just proved the address is this container's, so no other container's entry
+        // is overwritten). A run whose entry can't be written doesn't start: its Handle is unbound
+        // and the container removed, as for a failed binding.
+        if (
+          denyAll &&
+          !registerEgress(
+            workspaceId,
+            workerRunId,
+            created.ip,
+            egressDeny,
+            acceptedCorrelationId,
+            true,
+          )
+        ) {
+          try {
+            handleBindings.unbind(created.ip as string, created.id);
+          } catch (unbindErr) {
+            console.error(
+              JSON.stringify({
+                level: 'error',
+                msg: 'task handle unbinding failed after a failed deny-all egress registration',
+                workerRunId,
+                error: String(unbindErr),
+              }),
+            );
+          }
+          try {
+            await docker.remove(spec.name);
+          } catch (removeErr) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'task container removal failed after a failed deny-all egress registration',
+                workerRunId,
+                error: String(removeErr),
+              }),
+            );
+          }
+          throw new Error("writing the evaluation run's deny-all egress entry failed");
+        }
 
-      return {
-        containerId: created.id,
-        ip: created.ip,
-        runtime: taskRuntimeReport(image, created, modelsConfigDigest),
-      };
+        registry.set(workerRunId, {
+          taskId,
+          workspaceId,
+          containerId: created.id,
+          ip: created.ip,
+          startedAt: created.startedAt,
+          timeoutAt: now() + (timeoutSec ?? config.taskMaxRuntimeSec) * 1000,
+          state: 'running',
+          exitCode: undefined,
+          finishedAt: undefined,
+          reason: undefined,
+          terminating: false,
+          correlationId: acceptedCorrelationId,
+        });
+        if (!denyAll) {
+          registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
+        }
+
+        return {
+          containerId: created.id,
+          ip: created.ip,
+          runtime: taskRuntimeReport(image, created, modelsConfigDigest),
+        };
+      } finally {
+        spawnEnded(input.taskId);
+      }
     },
 
     async terminate(workerRunId: string): Promise<boolean> {

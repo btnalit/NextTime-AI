@@ -389,8 +389,9 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
  *  one Gatekeeper instance (`governance/gatekeepers`'s `publishManifest`), each only as the caller
  *  read it (`drafts`; 409 `draft_changed` otherwise); agent/human proposals stay
  *  drafts and are listed in `skippedDraftOperationNames`; the gate's own drafts declaring a
- *  gate-owned param or answers that mean "does not exist" stay drafts too (`gateOwnedParamDrafts`,
- *  `absentAnswerDrafts`). Empty `publishedOperationNames` (no
+ *  gate-owned param, carrying suspected credential values or declaring answers that mean "does not
+ *  exist" stay drafts too (`gateOwnedParamDrafts`, `credentialDrafts`, `absentAnswerDrafts`).
+ *  Empty `publishedOperationNames` (no
  *  import drafts to publish) is a successful, not an error, result — the same "nothing to do"
  *  tolerance `deprecateOperation`'s own transition table would otherwise reject one-at-a-time; a
  *  bulk call over zero rows is trivially a no-op. */
@@ -407,6 +408,7 @@ export const publishManifestHandler: CapabilityHandler = async (client, workspac
       skippedDraftOperationNames: published.skippedDraftOperationNames,
       gateOwnedParamDrafts: published.gateOwnedParamDrafts,
       absentAnswerDrafts: published.absentAnswerDrafts,
+      credentialDrafts: published.credentialDrafts,
     },
     resourceType: 'gatekeeper',
     resourceId: gatekeeperId,

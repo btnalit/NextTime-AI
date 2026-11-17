@@ -12,6 +12,7 @@ import {
 } from './gate-address-change.js';
 import {
   AbsentAnswerDraftWireSchema,
+  CredentialDraftWireSchema,
   GateOwnedParamDraftWireSchema,
   GateOwnedParamWireSchema,
   OperationAbsentAnswersReviewWireSchema,
@@ -165,6 +166,12 @@ export const OperationSummaryWireSchema = z
      *  `publish_operation` (legacy 300) require this back, and either refuses 409 `draft_changed`
      *  when the draft is no longer the one shown. Opaque to the console. */
     draftDigest: z.string().optional(),
+    /** Legacy 801: on a `draft` whose definition carries suspected credential values, how many —
+     *  the count `publish_operation` checks (it then needs `credentialsReviewed: true`), and why a
+     *  bulk publish (`publish_manifest`, `enable_gate_instance`) leaves an import-origin draft
+     *  unpublished and lists it in `credentialDrafts`. Never where or what. Absent when there are
+     *  none, and on a published or deprecated version. */
+    suspectedSecretValues: z.number().int().positive().optional(),
     /** S11 「门确认不存在」 A: on an observe-class Operation whose binding declares them, the
      *  target's answers that mean "does not exist" — the gate answers such a call `absent` instead
      *  of failing it. Absent when none is declared. */
@@ -318,6 +325,9 @@ export const PublishManifestResultWireSchema = z
     /** S11 「门确认不存在」 B-a: the gate's own drafts left unpublished because they declare answers
      *  that mean "does not exist" — each needs a person's confirmation on `publish_operation`. */
     absentAnswerDrafts: z.array(AbsentAnswerDraftWireSchema),
+    /** Legacy 198: the gate's own drafts left unpublished because their definitions carry
+     *  suspected credential values — each needs `publish_operation` with `credentialsReviewed`. */
+    credentialDrafts: z.array(CredentialDraftWireSchema),
   })
   .strict();
 export type PublishManifestResultWire = z.infer<typeof PublishManifestResultWireSchema>;

@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -11,6 +13,7 @@ import {
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
+import { createDockerClient } from './docker-client.js';
 import {
   type FakeContainerSeed,
   createFakeDockerClient,
@@ -507,6 +510,137 @@ describe('docker gate never lists or touches the platform agent containers (R-04
       });
       expect(apply.statusCode).toBe(403);
       expect(apply.json()).toMatchObject({ ok: false, error: { code: 'operation_refused' } });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * Legacy 196 (#532 review M): dockerode puts the caller's `id` into the request path as it is, and
+ * over tcp docker-modem resolves that path as a URL — `x/../../info` would ask `GET /info/json`.
+ * An `id` that could leave the container's path segment is refused before any call to the daemon.
+ */
+describe('docker gate refuses an id that is not a container reference (legacy 196)', () => {
+  const WEB: FakeContainerSeed = { id: 'c1c1c1c1c1c1', name: 'web', image: 'nginx', running: true };
+  const NOT_REFS = [
+    'x/../../info',
+    '../../images/json',
+    'web/../db',
+    'web#frag',
+    'web?all=1',
+    // Legacy 793: `?` and a backslash on their own, so a pattern that let either through fails
+    // here — over tcp `x\..\..\info` is read as a URL and asks `GET /info/json`.
+    'web?x',
+    'x\\..\\..\\info',
+    'a%2F..%2F..%2Finfo',
+    '/web',
+    '.web',
+    '-web',
+    ' web',
+    'web\n',
+    'wéb',
+  ];
+
+  for (const id of NOT_REFS) {
+    it(`refuses ${JSON.stringify(id)} on every per-container Operation, with no call to the daemon`, async () => {
+      const { gate, client } = buildGate([WEB]);
+      const refused = {
+        name: 'OperationRefusedError',
+        message: expect.stringMatching(/nothing was sent to the Docker daemon/),
+      };
+      await expect(gate.observe('container.inspect', { id })).rejects.toMatchObject(refused);
+      await expect(gate.observe('container.logs_tail', { id })).rejects.toMatchObject(refused);
+      for (const op of ['container.inspect', 'container.logs_tail', 'container.restart']) {
+        await expect(gate.simulate(op, { id })).rejects.toMatchObject(refused);
+      }
+      await expect(gate.apply('container.restart', { id }, 'req-1')).rejects.toMatchObject(refused);
+      // A refusal ran nothing, so the key is free: the retry is refused again, not 409.
+      await expect(gate.apply('container.restart', { id }, 'req-1')).rejects.toMatchObject(refused);
+      expect(client.inspectCalls).toEqual([]);
+      expect(client.logsTailCalls).toEqual([]);
+      expect(client.restartCalls).toEqual([]);
+    });
+  }
+
+  it('still takes every form Docker names a container by: full id, a one-character prefix, a name with "_", "." and "-"', async () => {
+    const DOTTED: FakeContainerSeed = { id: 'd2d2d2d2d2d2', name: 'app_1.web-a', image: 'x' };
+    const { gate, client } = buildGate([WEB, DOTTED]);
+    for (const id of [WEB.id, 'c', DOTTED.name, 'a..b']) {
+      await gate.simulate('container.inspect', { id }).catch(() => undefined);
+    }
+    expect(client.inspectCalls).toEqual([WEB.id, 'c', DOTTED.name, 'a..b']);
+    await gate.apply('container.restart', { id: DOTTED.name }, 'req-1');
+    expect(client.restartCalls).toEqual([{ id: DOTTED.id, timeoutSeconds: 10 }]);
+  });
+
+  it('with the real client over tcp, a refused id reaches no endpoint and a container name reaches its own', async () => {
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      if (req.url === '/containers/web/json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            Id: WEB.id,
+            Name: '/web',
+            State: { Running: true, Status: 'running', StartedAt: '2026-01-01T00:00:00Z' },
+            Config: { Image: 'nginx', Labels: {} },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{"message":"not found"}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const client = createDockerClient({ connection: { kind: 'tcp', host: '127.0.0.1', port } });
+      const gate = new GatekeeperBase({
+        manifest: MANIFEST,
+        transport: createDockerTransport(client),
+        credentialResolver: { resolve: async () => ({}) },
+        idempotencyStore: new InMemoryIdempotencyStore(),
+      });
+      await expect(gate.observe('container.inspect', { id: 'x/../../info' })).rejects.toMatchObject(
+        {
+          name: 'OperationRefusedError',
+        },
+      );
+      await expect(gate.observe('container.inspect', { id: 'web#frag' })).rejects.toMatchObject({
+        name: 'OperationRefusedError',
+      });
+      await expect(
+        gate.observe('container.inspect', { id: 'x\\..\\..\\info' }),
+      ).rejects.toMatchObject({ name: 'OperationRefusedError' });
+      expect(seen).toEqual([]);
+      const inspected = await gate.observe('container.inspect', { id: 'web' });
+      expect(inspected.observedFacts.map((f) => f.identity)).toEqual([{ id: WEB.id }]);
+      expect(seen).toEqual(['GET /containers/web/json']);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('over the wire the refusal is 403 operation_refused', async () => {
+    const { gate } = buildGate([WEB]);
+    const token = 'legacy-196-test-token-'.padEnd(40, 'x');
+    const app = createGatekeeperServer({ gate, token });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          operation: 'container.restart',
+          params: { id: 'x/../../info' },
+          actionRequestId: 'req-1',
+          operationDigest: approvedDigest('container.restart'),
+        },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ ok: false, error: { code: 'operation_refused' } });
     } finally {
       await app.close();
     }

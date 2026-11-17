@@ -15,6 +15,7 @@ import {
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
   operationGovernanceFieldsOf,
+  suspectedCredentialValuesOf,
 } from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 
@@ -41,6 +42,7 @@ export interface AnnouncedOperationToImport {
   description?: string;
   gateOwnedParams?: { param: string; location: string }[];
   absentAnswers?: OperationAbsentAnswers;
+  suspectedSecretValues?: number;
   pendingDraft?: { rewritable: boolean; fromGate: boolean };
 }
 
@@ -77,6 +79,11 @@ function absentAnswersWire(operation: Operation) {
         ? { statuses: [...absentAnswers.statuses] }
         : { exitCodes: [...absentAnswers.exitCodes] },
   };
+}
+
+function credentialValuesWire(operation: Operation) {
+  const count = suspectedCredentialValuesOf(operation);
+  return count > 0 ? { suspectedSecretValues: count } : {};
 }
 
 /** `droppedFromGate`: an Operation the gate itself no longer runs (a platform gate's held
@@ -116,6 +123,9 @@ export async function compareAnnouncedOperations(
         // S11 「门确认不存在」 B-a: the bulk publish leaves such an entry a draft too, for a person
         // to publish confirming the answers it declares mean "does not exist".
         ...absentAnswersWire(operation),
+        // Legacy 198: and an entry whose definition carries suspected credential values, for a
+        // person to publish confirming them (`credentialsReviewed`).
+        ...credentialValuesWire(operation),
         ...(existingRecord !== null
           ? {
               pendingDraft: {

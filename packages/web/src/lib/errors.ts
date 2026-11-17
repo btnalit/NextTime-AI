@@ -1087,19 +1087,91 @@ const GATE_REASON_CODES = [
   'gate_address_changed',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
-/** One of those codes as the value of a `reason` or `code` field — `{"status":"failed","reason":
- *  "gate_unreachable: …"}`, `{"error":{"code":"…"}}` — also inside a JSON string (pi's
- *  `content[0].text`, where the quotes are escaped). */
-const GATE_REASON_FIELD_PATTERN = new RegExp(
-  // `\x22` is `"` — kept out of the literal so text scanners (the i18n-pairs guard) see no quotes.
-  `\\\\?\\x22(?:reason|code)\\\\?\\x22\\s*:\\s*\\\\?\\x22(?:${GATE_REASON_CODES.join('|')})\\b`,
-);
+/** A reason that starts with one of those codes (`"gate_unreachable: …"`, `"unstorable_text"`). */
+const GATE_REASON_AT_START = new RegExp(`^(?:${GATE_REASON_CODES.join('|')})\\b`);
+/** Where a result says its own outcome (legacy 224 ③): a `reason` or `code` at the top
+ *  (`{"status":"failed","reason":"gate_unreachable: …"}`), an `error`'s `code`
+ *  (`{"error":{"code":"…"}}`), and the same under pi's `details`. Legacy 779: a reason deeper
+ *  down is about something else — one refused entry of a successful read (`get_task`'s
+ *  `factsRejected[].reason`, `proposedOperationsRejected[].reason`) — not the call's outcome. */
+const OUTCOME_PATHS: readonly string[] = [
+  'reason',
+  'code',
+  'error.code',
+  'details.reason',
+  'details.code',
+  'details.error.code',
+];
+/** pi's text result (`content[].text`): JSON in a string, read again as a result. */
+const NESTED_RESULT_PATH = 'content.[].text';
+
+/** The string a JSON string literal's body stands for (`raw` without its quotes), also when it
+ *  was cut short mid-escape. */
+function jsonStringValue(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw.replace(/\\(.)/g, '$1');
+  }
+}
+
+/** Whether JSON text — also one cut short (a persisted preview) — says one of the gate reason
+ *  codes at one of `OUTCOME_PATHS`. A small scanner rather than `JSON.parse`: a preview cut short
+ *  still says its outcome, at the top, before where it was cut. */
+function saysGateReasonAsOutcome(text: string, depth = 0): boolean {
+  interface Frame {
+    readonly kind: '{' | '[';
+    /** The path to this container, keys joined by `.` (`[]` for an array's entry). */
+    readonly path: string;
+    key: string | undefined;
+    expectsKey: boolean;
+  }
+  const stack: Frame[] = [];
+  const pathOf = (frame: Frame | undefined, key: string): string =>
+    frame === undefined || frame.path === '' ? key : `${frame.path}.${key}`;
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i];
+    const top = stack.at(-1);
+    if (char === '\x22') {
+      let end = i + 1;
+      while (end < text.length && text[end] !== '\x22') end += text[end] === '\\' ? 2 : 1;
+      const raw = text.slice(i + 1, Math.min(end, text.length));
+      i = end + 1;
+      if (top === undefined) continue;
+      if (top.kind === '{' && top.expectsKey) {
+        top.key = jsonStringValue(raw);
+        top.expectsKey = false;
+        continue;
+      }
+      const where = top.kind === '[' ? pathOf(top, '[]') : pathOf(top, top.key ?? '');
+      const value = jsonStringValue(raw);
+      if (OUTCOME_PATHS.includes(where) && GATE_REASON_AT_START.test(value)) return true;
+      if (where === NESTED_RESULT_PATH && depth < 2 && saysGateReasonAsOutcome(value, depth + 1)) {
+        return true;
+      }
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      const path =
+        top === undefined ? '' : top.kind === '[' ? pathOf(top, '[]') : pathOf(top, top.key ?? '');
+      stack.push({ kind: char, path, key: undefined, expectsKey: char === '{' });
+    } else if (char === '}' || char === ']') {
+      stack.pop();
+    } else if (char === ',' && top?.kind === '{') {
+      top.expectsKey = true;
+    }
+    i += 1;
+  }
+  return false;
+}
 
 /** Legacy 224 ③: whether a tool result carries a gate reason as its outcome — the field a refusal
  *  or a failed action reports it in — rather than merely mentioning a code somewhere in a
- *  successful result (a log line, a document about the codes). */
+ *  successful result (a log line, a document about the codes, legacy 779: one refused entry of a
+ *  read's answer). */
 export function carriesGateReason(text: string): boolean {
-  return GATE_REASON_FIELD_PATTERN.test(text);
+  return saysGateReasonAsOutcome(text);
 }
 
 /** Reasons that say nothing about the system the call went to (UX acceptance of #602, P2-3): U+0000

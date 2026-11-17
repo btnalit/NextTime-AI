@@ -11,6 +11,7 @@ import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
 import { RouteLink } from '../kit/route-link.js';
 import { AbsentAnswerDraftsNotice } from './AbsentAnswerDrafts.js';
+import { type CredentialDraftsFix, CredentialDraftsNotice } from './CredentialDrafts.js';
 
 /**
  * components/connect/GateOwnedParams (console G4, legacy 219): what a reader sees about an
@@ -160,9 +161,17 @@ export function HeldDraftsNotice({
   );
 }
 
+/** The rewrite a held credential draft needs is the same button a gate-owned param's needs. */
+function credentialDraftsFixOf(fix: GateOwnedParamsFix): CredentialDraftsFix {
+  if (fix === 'align' || fix === 'align-here') return 'align';
+  if (fix === 'resync' || fix === 'resync-here') return 'resync';
+  return 'either';
+}
+
 /**
  * `publish_manifest`'s whole result (console G4): what it published, the gate's drafts it held back
- * for a gate-owned param, and the drafts it never sweeps up — an agent's or a member's proposal
+ * for a gate-owned param, for suspected credentials (legacy 800) or for answers that mean "does not
+ * exist", and the drafts it never sweeps up — an agent's or a member's proposal
  * (`skippedDraftOperationNames`), which an owner publishes one by one in the catalog after reading
  * it. Before this the system card showed nothing at all, so a click that published nothing looked
  * like a click that published everything.
@@ -191,6 +200,12 @@ export function ManifestPublishResultNotice({
         gatekeeperId={result.gatekeeperId}
         fix={fix}
         testId={testId ? `${testId}-held` : undefined}
+      />
+      <CredentialDraftsNotice
+        drafts={result.credentialDrafts}
+        gatekeeperId={result.gatekeeperId}
+        fix={credentialDraftsFixOf(fix)}
+        testId={testId ? `${testId}-credentials` : undefined}
       />
       <AbsentAnswerDraftsNotice
         drafts={result.absentAnswerDrafts}

@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { draftsLeftForAPerson } from '../../lib/connections.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { normalizeGateIdInput, suggestedGateId } from '../../lib/gate-input.js';
 import {
@@ -58,6 +59,7 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { AbsentAnswerDraftsNotice } from './AbsentAnswerDrafts.js';
 import { AskOwnerToEnable } from './AskOwnerToEnable.js';
+import { CredentialDraftsNotice } from './CredentialDrafts.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { GateOwnedParamsMark, HeldDraftsNotice } from './GateOwnedParams.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
@@ -353,9 +355,9 @@ export function ConnectSystemLauncher({
   function handleEnabled(result: EnableGateInstanceResultWire): void {
     setEnabled(result);
     const skipped = result.skippedOperationNames.length;
-    // S11 「门确认不存在」 B-a: drafts left for a person to confirm count as not published too.
-    const held =
-      (result.gateOwnedParamDrafts?.length ?? 0) + (result.absentAnswerDrafts?.length ?? 0);
+    // S11 「门确认不存在」 B-a, legacy 800: drafts left for a person to confirm (answers that mean
+    // "does not exist", suspected credentials) count as not published too.
+    const held = draftsLeftForAPerson(result);
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
@@ -1289,6 +1291,12 @@ function WorkspaceEnableSection({
             gatekeeperId={enabled.gatekeeperId}
             fix="align"
             testId="launcher-held-drafts"
+          />
+          <CredentialDraftsNotice
+            drafts={enabled.credentialDrafts}
+            gatekeeperId={enabled.gatekeeperId}
+            fix="align"
+            testId="launcher-credential-drafts"
           />
           <AbsentAnswerDraftsNotice
             drafts={enabled.absentAnswerDrafts}

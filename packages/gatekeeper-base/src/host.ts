@@ -20,11 +20,21 @@ import {
   loadInternalToken,
   postAnnouncement,
 } from './announce.js';
+import { ResponseBodyTooLargeError } from './bounded-body.js';
 import { ConnectedAccountStore, HostedCredentialResolver } from './credentials/index.js';
 import { createGateAuthGuard, loadGateKernelToken } from './gate-auth.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { JsonFileIdempotencyStore } from './idempotency-store.js';
-import { HttpTransport, McpTransport, importMcpTools, importOpenApi } from './kinds/index.js';
+import {
+  HttpTransport,
+  McpTransport,
+  NO_REDIRECTS,
+  importMcpTools,
+  importOpenApi,
+  isRedirectStatus,
+  readOpenApiDocument,
+  redirectRefusalMessage,
+} from './kinds/index.js';
 import type { OpenApiDocumentLike } from './kinds/index.js';
 import type { Transport } from './kinds/types.js';
 import { createGateMetrics } from './metrics.js';
@@ -190,6 +200,8 @@ function connectorOf(item: HostedInstanceListItem): string {
   return item.connector ?? item.definition.transportKind;
 }
 
+/** `readJson`: how the body is read — a body it refuses as too large fails the fetch
+ *  (`ResponseBodyTooLargeError`); one that is not JSON reads as `json: undefined`. */
 async function fetchJsonWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
@@ -197,18 +209,24 @@ async function fetchJsonWithTimeout(
   timeoutMs: number,
   setTimer: typeof setTimeout,
   clearTimer: typeof clearTimeout,
-): Promise<{ status: number; ok: boolean; json: unknown }> {
+  readJson: (response: Response) => Promise<unknown> = (response) => response.json(),
+): Promise<{ status: number; ok: boolean; json: unknown; headers: Headers }> {
   const controller = new AbortController();
   const timeout = setTimer(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal });
     let json: unknown = undefined;
-    try {
-      json = await response.json();
-    } catch {
-      json = undefined;
+    if (isRedirectStatus(response.status)) {
+      await response.body?.cancel().catch(() => {});
+    } else {
+      try {
+        json = await readJson(response);
+      } catch (err) {
+        if (err instanceof ResponseBodyTooLargeError) throw err;
+        json = undefined;
+      }
     }
-    return { status: response.status, ok: response.ok, json };
+    return { status: response.status, ok: response.ok, json, headers: response.headers };
   } finally {
     clearTimer(timeout);
   }
@@ -387,16 +405,31 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         definition.credentialMode === 'shared'
           ? await instance.store.get(GATE_SHARED_CREDENTIAL_SLOT)
           : undefined;
+      // Legacy 797: `listTools` reads at most `MAX_MCP_TOOLS_LIST_BYTES` of the answer.
       operations = importMcpTools(await (transport as McpTransport).listTools(shared));
     } else if (definition.manifestSource) {
+      // Legacy 199 (#532 review P): never followed, as the kernel's own fetch of the same URL
+      // (`create_connection`, R-27) and the gate's transports (`kinds/redirect.ts`). No credential
+      // goes along, but a redirect would read the Operations from an address nobody set — one the
+      // kernel's outbound-target check never saw.
+      // Legacy 797: read up to `MAX_OPENAPI_DOCUMENT_BYTES` — a larger document fails the build.
       const fetched = await fetchJsonWithTimeout(
         targetFetch,
         definition.manifestSource,
-        { method: 'GET' },
+        { method: 'GET', redirect: NO_REDIRECTS },
         BUILD_TIMEOUT_MS,
         setTimer,
         clearTimer,
+        readOpenApiDocument,
       );
+      if (isRedirectStatus(fetched.status)) {
+        throw new Error(
+          redirectRefusalMessage('OpenAPI document', fetched, definition.manifestSource, {
+            follower: 'The gate host does not follow redirects for an owner-supplied URL',
+            fix: 'set manifestSource to the final address',
+          }),
+        );
+      }
       if (!fetched.ok || fetched.json === undefined) {
         throw new Error(`OpenAPI document responded ${fetched.status}`);
       }
@@ -439,7 +472,9 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
             level: 'warn',
             msg: instance.gate
               ? 'gate host: re-handshake failed, the instance keeps its previous build'
-              : 'gate host: instance not ready (target or manifest unreachable), will retry',
+              : // Legacy 794: any build failure lands here (a redirect, a manifest that does not
+                // parse, a target that refuses) — `error` says which, so the message names none.
+                'gate host: instance not ready (could not build it from its target or manifest), will retry',
             gateId: instance.gateId,
             error: instance.buildError,
           }),
@@ -621,7 +656,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     if (!items) return false;
     await reconcile(items);
     for (const instance of table.values()) {
-      // Rebuild while not ready (target was unreachable) or while it still has no Operations (an
+      // Rebuild while not ready (the last build failed) or while it still has no Operations (an
       // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every
       // tick — or when a preset's Operations changed (S11 P1-F; a failed rebuild keeps the gate
       // already built and retries next tick).

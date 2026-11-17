@@ -1,4 +1,5 @@
 import type { Operation } from '@nexttime/shared';
+import { readBodyWithin } from '../bounded-body.js';
 import {
   BindingKindMismatchError,
   GateOwnedParamRefusedError,
@@ -555,6 +556,18 @@ interface OpenApiParameter {
   readonly schema?: Record<string, unknown>;
 }
 
+/** OpenAPI's Reference Object: a `$ref` in place of a parameter, a request body or a schema. */
+interface OpenApiReference {
+  readonly $ref: string;
+}
+
+interface OpenApiRequestBody {
+  /** By media type — only JSON is read (legacy 798, `jsonMediaOf`). */
+  readonly content?: {
+    readonly [mediaType: string]: { readonly schema?: Record<string, unknown> } | undefined;
+  };
+}
+
 interface OpenApiOperationObject {
   readonly operationId?: string;
   /** S8 W2-K1 (leftover 71/72, audit CO1/B3): OpenAPI's own short human summary — preferred over
@@ -565,19 +578,23 @@ interface OpenApiOperationObject {
    *  way. */
   readonly summary?: string;
   readonly description?: string;
-  readonly parameters?: readonly OpenApiParameter[];
-  readonly requestBody?: {
-    readonly content?: {
-      readonly 'application/json'?: { readonly schema?: Record<string, unknown> };
-    };
-  };
-}
-
-export interface OpenApiDocumentLike {
-  readonly paths?: Record<string, Record<string, OpenApiOperationObject>>;
+  readonly parameters?: readonly (OpenApiParameter | OpenApiReference)[];
+  readonly requestBody?: OpenApiRequestBody | OpenApiReference;
 }
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
+
+/** A path item: its Operations by method, and (legacy 197) the parameters every one of them takes
+ *  unless it declares the same one itself. */
+type OpenApiPathItem = {
+  readonly parameters?: readonly (OpenApiParameter | OpenApiReference)[];
+} & { readonly [M in (typeof HTTP_METHODS)[number]]?: OpenApiOperationObject };
+
+export interface OpenApiDocumentLike {
+  readonly paths?: Record<string, OpenApiPathItem>;
+  /** Where the document's own `$ref`s point (`#/components/schemas/Pet`, legacy 197). */
+  readonly components?: Record<string, unknown>;
+}
 
 function defaultBlastRadiusForVerb(method: string): 'low' | 'medium' | 'high' {
   if (method === 'get') return 'low';
@@ -592,10 +609,412 @@ function sanitizeName(path: string, method: string): string {
     .replace(/^_+|_+$/g, '')}`;
 }
 
-function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
+// ---- $ref (legacy 197) ----------------------------------------------------------------------
+//
+// Most OpenAPI documents put their request bodies, shared parameters and schemas under
+// `components` and point at them with `$ref`. None was followed here before, so a `$ref` request
+// body added nothing and an Operation with no other parameter got `params_schema: {}` — which
+// accepts anything. A reference into the same document (`#/…`) is now written out in place; the
+// gate's own validator (`params-validation.ts`) has no document to resolve it against. A reference
+// that cannot be followed — another document's, or a pointer that leads nowhere — is not guessed
+// at: the Operation gets a schema that takes only what it could read (below, `unread`).
+
+/** What a reference may cost (review #501 on #1354). Written out, a reference copies what it points
+ *  at, so a small document whose references fan out (A uses B twice, B uses C twice, …), or one
+ *  large schema many Operations use, would grow without bound — in the kernel's import inside a
+ *  database transaction, and in the gate host's. Following a reference costs one unit, and
+ *  everything copied out of one counts: each schema value is one unit, and text (a key, a string,
+ *  an `example`, the reference itself) one more per 64 characters. The budget is spent in the
+ *  document's order, so an Operation that spends much leaves less for those after it. What an
+ *  Operation declares in place is not counted — it is copied once, as large as it was written.
+ *  An Operation whose references cost more than its share, or whose share the document has already
+ *  spent, gets {@link INLINE_LIMIT_SCHEMA}. */
+const MAX_INLINED_UNITS_PER_OPERATION = 10_000;
+const MAX_INLINED_UNITS_PER_DOCUMENT = 100_000;
+
+/** How many references deep one schema may be written out; deeper ones stay as they are. */
+const MAX_REF_DEPTH = 64;
+
+/** How deeply nested one schema may be, references and all — past it, as past the units above. */
+const MAX_SCHEMA_DEPTH = 512;
+
+/** The `params_schema` of an Operation past the limits above: a reference ajv cannot resolve, so
+ *  the schema does not compile and every call is refused (400 `invalid_operation_schema`) — never
+ *  a looser schema. Its name says why. */
+const INLINE_LIMIT_SCHEMA = { $ref: '#/x-nexttime-inline-limit' } as const;
+
+/** Thrown, by identity, when a schema goes past the limits above. */
+const INLINE_LIMIT = Symbol('inline limit');
+
+/** Where a reference recurs inside itself: any value (a fresh `{}`), as `@nexttime/shared`'s
+ *  `toJsonSchema` does — a tree's children are checked one level down, not forever. Each one is
+ *  remembered so a request body that is nothing but such a reference is not read as one that takes
+ *  anything. */
+const recursionPlaceholders = new WeakSet<object>();
+
+function recursionPlaceholder(): Record<string, unknown> {
+  const placeholder = {};
+  recursionPlaceholders.add(placeholder);
+  return placeholder;
+}
+
+function isRecursionPlaceholder(value: unknown): boolean {
+  return isObjectNode(value) && recursionPlaceholders.has(value);
+}
+
+/** Keywords whose value is data, not a schema: copied as is, never searched for `$ref`. */
+const SCHEMA_DATA_KEYWORDS = new Set(['example', 'examples', 'default', 'enum', 'const']);
+
+/** Keywords whose value maps names to schemas — a property may be called `default`. */
+const SCHEMA_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'definitions',
+  '$defs',
+  'dependentSchemas',
+]);
+
+/** Keywords that say nothing about which values pass: a `$ref`'s sibling may restate them.
+ *  OpenAPI's `discriminator` only tells a reader which `oneOf` branch to look at, and the gate's
+ *  validator (`params-validation.ts`) does not read it (review #493 on #1365). */
+const SCHEMA_ANNOTATION_KEYWORDS = new Set([
+  'discriminator',
+  'title',
+  'description',
+  'example',
+  'examples',
+  'default',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+  'externalDocs',
+  'xml',
+  '$comment',
+]);
+
+/** Keywords that combine schemas: a request body written with one at its top is not read. */
+const SCHEMA_COMBINING_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'not'] as const;
+
+function isObjectNode(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** `target[key] = value` as `target`'s own property — also for `__proto__`, a name the document
+ *  may use, which plain assignment would turn into `target`'s prototype instead. */
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+/** What a reference into the same document (`#/components/schemas/a~1b`, RFC 6901 escapes
+ *  percent-decoded first) points at, or `undefined` — another document's reference, a pointer that
+ *  does not decode, a name the document does not have (only its own keys, never `constructor`). */
+function resolveLocalRef(document: unknown, ref: string): unknown {
+  if (!ref.startsWith('#/')) return undefined;
+  let node: unknown = document;
+  for (const raw of ref.slice(2).split('/')) {
+    let key: string;
+    try {
+      key = decodeURIComponent(raw).replace(/~1/g, '/').replace(/~0/g, '~');
+    } catch {
+      return undefined;
+    }
+    if (node === null || typeof node !== 'object' || !Object.hasOwn(node, key)) return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
+}
+
+/** What writing out one document's references has left to spend: shared by its Operations. */
+interface DocumentBudget {
+  unitsLeft: number;
+  /** What each data value (`example`, `enum`, …) costs, by identity, so a large one is measured
+   *  once however many references copy it. */
+  readonly dataUnits: WeakMap<object, number>;
+}
+
+interface InlineState {
+  readonly document: unknown;
+  readonly budget: DocumentBudget;
+  unitsLeft: number;
+}
+
+function textUnits(text: string): number {
+  return text.length >> 6;
+}
+
+function spend(state: InlineState, units: number): void {
+  state.unitsLeft -= units;
+  state.budget.unitsLeft -= units;
+  if (state.unitsLeft < 0 || state.budget.unitsLeft < 0) throw INLINE_LIMIT;
+}
+
+/** Following one reference costs a unit, plus its text's (review #501 on #1354: a document can
+ *  make many entries follow one long chain, or a loop, and each hop reads the pointer anew). */
+function spendOnReference(state: InlineState, ref: string): void {
+  spend(state, 1 + textUnits(ref));
+}
+
+/** A parameter or request body object, following `$ref`s to it (a component may itself be a
+ *  `$ref`), each hop paid for; `undefined` when one of them cannot be followed. `viaRef`: it came
+ *  out of one, so what it holds is copied wherever it is used, and counts. */
+function dereference(state: InlineState, node: unknown): { node: unknown; viaRef: boolean } {
+  let current = node;
+  for (let hop = 0; hop < MAX_REF_DEPTH; hop += 1) {
+    if (!isObjectNode(current) || typeof current.$ref !== 'string') {
+      return { node: current, viaRef: hop > 0 };
+    }
+    spendOnReference(state, current.$ref);
+    current = resolveLocalRef(state.document, current.$ref);
+  }
+  return { node: undefined, viaRef: true };
+}
+
+/** What copying a data value costs: one unit, plus its JSON text's. */
+function dataUnits(state: InlineState, value: unknown): number {
+  if (typeof value === 'string') return 1 + textUnits(value);
+  if (value === null || typeof value !== 'object') return 1;
+  const known = state.budget.dataUnits.get(value);
+  if (known !== undefined) return known;
+  let units: number;
+  try {
+    units = 1 + textUnits(JSON.stringify(value) ?? '');
+  } catch {
+    // Nested too deeply to write out at all.
+    units = Number.POSITIVE_INFINITY;
+  }
+  state.budget.dataUnits.set(value, units);
+  return units;
+}
+
+/** Keywords each of which holds on its own, whatever else its schema says: one a `$ref`'s sibling
+ *  adds narrows the target exactly as it would beside it under `allOf`. */
+const SCHEMA_INDEPENDENT_KEYWORDS = new Set([
+  'type',
+  'enum',
+  'const',
+  'multipleOf',
+  'maximum',
+  'exclusiveMaximum',
+  'minimum',
+  'exclusiveMinimum',
+  'maxLength',
+  'minLength',
+  'pattern',
+  'format',
+  'maxItems',
+  'minItems',
+  'uniqueItems',
+  'maxProperties',
+  'minProperties',
+  'required',
+  'dependentRequired',
+  'propertyNames',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'dependentSchemas',
+  'dependencies',
+]);
+
+/** Keywords whose meaning depends on the others of their family in the same schema —
+ *  `additionalProperties` holds for what `properties` and `patternProperties` leave out, `items`
+ *  for what `prefixItems` leaves out, `then` only where `if` holds (legacy 799). */
+const SCHEMA_KEYWORD_FAMILIES: readonly (readonly string[])[] = [
+  ['properties', 'patternProperties', 'additionalProperties'],
+  ['prefixItems', 'items', 'additionalItems'],
+  ['contains', 'minContains', 'maxContains'],
+  ['if', 'then', 'else'],
+];
+
+/** Keywords that hold for what every other keyword of their schema left unevaluated. */
+const SCHEMA_UNEVALUATED_KEYWORDS = ['unevaluatedProperties', 'unevaluatedItems'] as const;
+
+function familyOf(key: string): readonly string[] | undefined {
+  return SCHEMA_KEYWORD_FAMILIES.find((family) => family.includes(key));
+}
+
+/** Whether the sibling `key: value` can be written into `resolved` and mean what the two mean
+ *  together. An annotation (or an `x-` extension, which no validator reads) only says something
+ *  else. A keyword the target has must say the same. One that holds on its own adds a constraint;
+ *  one of a family only beside a target with none of that family — `properties` beside a target's
+ *  `additionalProperties: false` would let through what the target refuses. Beside a target's own
+ *  `unevaluated*` nothing else is, since it would then see more evaluated; a sibling's
+ *  `unevaluated*` sees the target's keywords through the `$ref` as it does written in beside them
+ *  (`{ $ref, unevaluatedProperties: false }` is OpenAPI 3.1's way to close what it points at;
+ *  review #501 on #1365). A keyword not named here is never written in. */
+function siblingMerges(resolved: Record<string, unknown>, key: string, value: unknown): boolean {
+  if (SCHEMA_ANNOTATION_KEYWORDS.has(key) || key.startsWith('x-')) return true;
+  if (Object.hasOwn(resolved, key)) return Object.is(resolved[key], value);
+  if (SCHEMA_UNEVALUATED_KEYWORDS.some((keyword) => Object.hasOwn(resolved, keyword))) {
+    return false;
+  }
+  if (
+    SCHEMA_INDEPENDENT_KEYWORDS.has(key) ||
+    (SCHEMA_UNEVALUATED_KEYWORDS as readonly string[]).includes(key)
+  ) {
+    return true;
+  }
+  const family = familyOf(key);
+  return family !== undefined && !family.some((member) => Object.hasOwn(resolved, member));
+}
+
+/** `resolved` (what a `$ref` points at) and its `siblings` together — what OpenAPI 3.1 means by
+ *  them, both applied (3.0 ignores the siblings). Siblings that only add to the target, or
+ *  annotate it, are written next to it ({@link siblingMerges}). Any other — one that would replace
+ *  the target's own constraint (`maxLength: 100` beside a target's `maxLength: 3`), or change what
+ *  one of them means (legacy 799) — would loosen it, so both are kept, under `allOf`.
+ *
+ *  OpenAPI 3.0's `nullable` is how a document says one use of a schema may also be null, and was
+ *  written into the target here before; it still is, also beside a target's own `nullable` or a
+ *  sibling kept under `allOf`. It means something only beside `type` — ajv refuses a schema with
+ *  it anywhere else — so beside a target without one it is left out. */
+function withSiblings(resolved: unknown, siblings: unknown): unknown {
+  if (!isObjectNode(resolved) || !isObjectNode(siblings)) return resolved;
+  const placeholder = isRecursionPlaceholder(resolved);
+  const { nullable, ...rest } = siblings;
+  const target =
+    Object.hasOwn(siblings, 'nullable') && !placeholder && Object.hasOwn(resolved, 'type')
+      ? { ...resolved, nullable }
+      : resolved;
+  if (Object.keys(rest).length === 0) return target;
+  const merges =
+    !placeholder &&
+    Object.entries(rest).every(([key, value]) => siblingMerges(resolved, key, value));
+  return merges ? { ...target, ...rest } : { allOf: [target, rest] };
+}
+
+/** `schema` with every reference into the same document written out in place — where one recurs
+ *  inside itself, a {@link recursionPlaceholder}; one that cannot be followed, or deeper than `MAX_REF_DEPTH`,
+ *  stays a `$ref` (ajv cannot compile it). `counted`: `schema` was copied out of a reference.
+ *  Throws {@link INLINE_LIMIT} past the limits above. */
+function inlineSchema(
+  state: InlineState,
+  schema: unknown,
+  open: readonly string[],
+  counted: boolean,
+  depth: number,
+): unknown {
+  if (depth > MAX_SCHEMA_DEPTH) throw INLINE_LIMIT;
+  if (counted) spend(state, typeof schema === 'string' ? 1 + textUnits(schema) : 1);
+  if (Array.isArray(schema)) {
+    return schema.map((item) => inlineSchema(state, item, open, counted, depth + 1));
+  }
+  if (!isObjectNode(schema)) return schema;
+  const ref = schema.$ref;
+  if (typeof ref === 'string') {
+    spendOnReference(state, ref);
+    if (open.includes(ref)) return recursionPlaceholder();
+    const target = open.length < MAX_REF_DEPTH ? resolveLocalRef(state.document, ref) : undefined;
+    if (isObjectNode(target)) {
+      const { $ref: _ref, ...siblings } = schema;
+      const resolved = inlineSchema(state, target, [...open, ref], true, depth + 1);
+      if (Object.keys(siblings).length === 0) return resolved;
+      return withSiblings(resolved, inlineSchema(state, siblings, open, counted, depth + 1));
+    }
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (counted) spend(state, textUnits(key));
+    if (SCHEMA_DATA_KEYWORDS.has(key)) {
+      if (counted) spend(state, dataUnits(state, value));
+      setOwn(out, key, value);
+    } else if (SCHEMA_MAP_KEYWORDS.has(key) && isObjectNode(value)) {
+      if (counted) spend(state, 1);
+      const named: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(value)) {
+        if (counted) spend(state, textUnits(name));
+        setOwn(named, name, inlineSchema(state, sub, open, counted, depth + 2));
+      }
+      setOwn(out, key, named);
+    } else {
+      setOwn(out, key, inlineSchema(state, value, open, counted, depth + 1));
+    }
+  }
+  return out;
+}
+
+interface ReadParameter {
+  readonly param: OpenApiParameter;
+  readonly viaRef: boolean;
+}
+
+/** The parameters `op` takes: the path item's, then its own. One of its own replaces the path
+ *  item's of the same name and location (OpenAPI 3: "can be overridden at the operation level, but
+ *  cannot be removed there"). `unread` when a `$ref` to one could not be followed. */
+function parametersOf(
+  state: InlineState,
+  pathItem: OpenApiPathItem,
+  op: OpenApiOperationObject,
+): { parameters: ReadParameter[]; unread: boolean } {
+  let unread = false;
+  const read = (list: unknown): ReadParameter[] => {
+    if (!Array.isArray(list)) return [];
+    const out: ReadParameter[] = [];
+    for (const entry of list) {
+      const { node: param, viaRef } = dereference(state, entry);
+      if (param === undefined) unread = true;
+      if (!isObjectNode(param) || typeof param.name !== 'string' || typeof param.in !== 'string') {
+        continue;
+      }
+      out.push({ param: param as unknown as OpenApiParameter, viaRef });
+    }
+    return out;
+  };
+  const own = read(op.parameters);
+  const ownKeys = new Set(own.map(({ param }) => `${param.in}\u0000${param.name}`));
+  const shared = read(pathItem.parameters).filter(
+    ({ param }) => !ownKeys.has(`${param.in}\u0000${param.name}`),
+  );
+  return { parameters: [...shared, ...own], unread };
+}
+
+function paramsSchemaFor(
+  document: OpenApiDocumentLike,
+  budget: DocumentBudget,
+  pathItem: OpenApiPathItem,
+  op: OpenApiOperationObject,
+): Record<string, unknown> {
+  const state: InlineState = { document, budget, unitsLeft: MAX_INLINED_UNITS_PER_OPERATION };
+  try {
+    return writeParamsSchema(state, pathItem, op);
+  } catch (error) {
+    if (error === INLINE_LIMIT) return { ...INLINE_LIMIT_SCHEMA };
+    throw error;
+  }
+}
+
+/** The request body's `application/json` media type object — also written with parameters
+ *  (`application/json; charset=utf-8`), the only JSON the call sends (`content-type:
+ *  application/json`); a `+json` type such as `application/merge-patch+json` is not it. */
+function jsonMediaOf(content: Record<string, unknown>): unknown {
+  const key = Object.keys(content).find(
+    (name) => name.split(';')[0]?.trim().toLowerCase() === 'application/json',
+  );
+  return key === undefined ? undefined : content[key];
+}
+
+/** Whether a schema's `type` lets an object through: none declared, `object`, or a list with it. */
+function takesObjects(type: unknown): boolean {
+  if (type === undefined) return true;
+  return Array.isArray(type) ? type.includes('object') : type === 'object';
+}
+
+function writeParamsSchema(
+  state: InlineState,
+  pathItem: OpenApiPathItem,
+  op: OpenApiOperationObject,
+): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
-  for (const param of op.parameters ?? []) {
+  const { parameters, unread: parameterUnread } = parametersOf(state, pathItem, op);
+  let unread = parameterUnread;
+  for (const { param, viaRef } of parameters) {
     // Legacy 175 follow-up (review of #532): what the gate owns is never a param — a cookie, a
     // header that says who is calling, on whose account or where the call goes, a credential in
     // the query string. OpenAPI 3 itself says an `Authorization` header parameter SHALL be ignored
@@ -609,20 +1028,62 @@ function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
     ) {
       continue;
     }
+    const schema = inlineSchema(state, param.schema ?? {}, [], viaRef, 0);
     // `x-in` (review lane 5, P2-4) — see `paramLocation`'s own doc comment above for why this
     // survives both ajv (strict:false) and OperationSchema's params_schema passthrough.
-    properties[param.name] = { ...(param.schema ?? {}), 'x-in': param.in };
+    setOwn(properties, param.name, { ...(isObjectNode(schema) ? schema : {}), 'x-in': param.in });
     if (param.required) required.push(param.name);
   }
-  const bodySchema = op.requestBody?.content?.['application/json']?.schema;
-  if (bodySchema && typeof bodySchema === 'object') {
-    const bodyProps = (bodySchema as { properties?: Record<string, unknown> }).properties;
-    if (bodyProps) Object.assign(properties, bodyProps);
-    const bodyRequired = (bodySchema as { required?: string[] }).required;
-    if (bodyRequired) required.push(...bodyRequired);
+  if (op.requestBody !== undefined) {
+    const { node: requestBody, viaRef } = dereference(state, op.requestBody);
+    const content = isObjectNode(requestBody) ? requestBody.content : undefined;
+    const media = isObjectNode(content) ? jsonMediaOf(content) : undefined;
+    // JSON with no schema may be anything, an object among them: as one that names no properties.
+    const rawSchema = isObjectNode(media) ? (media.schema ?? {}) : undefined;
+    const bodySchema = isObjectNode(rawSchema)
+      ? inlineSchema(state, rawSchema, [], viaRef, 0)
+      : undefined;
+    // Legacy 798: the call sends what is left of its params as one JSON object
+    // (`HttpTransport.request`), so a body that cannot be one — another media type, an array, a
+    // string — is not read either.
+    if (
+      bodySchema === undefined ||
+      isRecursionPlaceholder(bodySchema) ||
+      (isObjectNode(bodySchema) &&
+        ('$ref' in bodySchema ||
+          SCHEMA_COMBINING_KEYWORDS.some((keyword) => keyword in bodySchema) ||
+          !takesObjects(bodySchema.type)))
+    ) {
+      unread = true;
+    } else if (isObjectNode(bodySchema)) {
+      const bodyProps = bodySchema.properties;
+      if (isObjectNode(bodyProps)) {
+        for (const [name, sub] of Object.entries(bodyProps)) setOwn(properties, name, sub);
+      }
+      const bodyRequired = bodySchema.required;
+      if (Array.isArray(bodyRequired)) required.push(...(bodyRequired as string[]));
+    }
   }
-  if (Object.keys(properties).length === 0) return {};
+  // Legacy 197: a parameter or body the document points at but this could not read is not
+  // offered — and the schema is not left empty either, which would take anything.
+  if (Object.keys(properties).length === 0 && !unread) return {};
   return { type: 'object', properties, ...(required.length > 0 ? { required } : {}) };
+}
+
+/** Legacy 797: the largest OpenAPI document read from an owner-supplied `manifestSource` — by the
+ *  kernel (`create_connection`) and by the gate host — so a URL answering with hundreds of MB
+ *  cannot fill either process's memory before anything parses it. Large public API descriptions
+ *  run to several MB; the expansion budget (`MAX_INLINED_UNITS_PER_DOCUMENT`) bounds what the
+ *  import then does with one. */
+export const MAX_OPENAPI_DOCUMENT_BYTES = 16 * 1024 * 1024;
+
+/** An OpenAPI document (JSON) read from `response`, at most {@link MAX_OPENAPI_DOCUMENT_BYTES} —
+ *  `ResponseBodyTooLargeError` past that; a body that is not JSON throws as `JSON.parse` does. */
+export async function readOpenApiDocument(response: Response): Promise<unknown> {
+  const text = await readBodyWithin(response, MAX_OPENAPI_DOCUMENT_BYTES, 'the OpenAPI document', {
+    fix: 'serve a document with only the paths this gate needs, or write its manifest by hand',
+  });
+  return JSON.parse(text);
 }
 
 /** Imports an OpenAPI document into a manifest draft — one Operation per (path, method). Every
@@ -630,6 +1091,10 @@ function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
  *  marked `auto_approvable: true` since `mode: observe` never goes through an ActionRequest. */
 export function importOpenApi(document: OpenApiDocumentLike): Operation[] {
   const operations: Operation[] = [];
+  const budget: DocumentBudget = {
+    unitsLeft: MAX_INLINED_UNITS_PER_DOCUMENT,
+    dataUnits: new WeakMap(),
+  };
   for (const [path, pathItem] of Object.entries(document.paths ?? {})) {
     for (const method of HTTP_METHODS) {
       const op = pathItem[method];
@@ -643,7 +1108,7 @@ export function importOpenApi(document: OpenApiDocumentLike): Operation[] {
         // can use.
         description: op.summary ?? op.description ?? `${method.toUpperCase()} ${path}`,
         binding: { kind: 'http', method: method.toUpperCase(), path },
-        params_schema: paramsSchemaFor(op),
+        params_schema: paramsSchemaFor(document, budget, pathItem, op),
         mode,
         blast_radius: defaultBlastRadiusForVerb(method),
         reversibility: false,

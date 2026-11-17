@@ -3,6 +3,7 @@ import {
   importMcpTools,
   importOpenApi,
   isRedirectStatus,
+  readOpenApiDocument,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
@@ -542,7 +543,8 @@ async function resolveManifestOperations(
       if (!response.ok) {
         throw new Error(`responded ${response.status}`);
       }
-      document = (await response.json()) as OpenApiDocumentLike;
+      // Legacy 797: at most `MAX_OPENAPI_DOCUMENT_BYTES` — a larger one fails the fetch, as here.
+      document = (await readOpenApiDocument(response)) as OpenApiDocumentLike;
     } catch (err) {
       throw new ConnectionManifestFetchError(manifestSource, { cause: err });
     }
@@ -553,6 +555,7 @@ async function resolveManifestOperations(
     let toolsList: McpToolsListResult;
     try {
       const transport = new McpTransport({ endpoint: manifestSource, fetchImpl: ownerFetch });
+      // Legacy 797: reads at most `MAX_MCP_TOOLS_LIST_BYTES` of the answer, as the OpenAPI fetch.
       toolsList = await transport.listTools(credentials);
     } catch (err) {
       throw new ConnectionManifestFetchError(manifestSource, { cause: err });

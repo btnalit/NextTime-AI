@@ -3390,6 +3390,54 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.198 门宿主拉 OpenAPI 文档时不跟随重定向（#1342，遗留 199，0.69.2 之后的下一版）
+
+无迁移。门宿主给 http 实例拉 OpenAPI `manifestSource` 时，以前跟随重定向，现在与内核（R-27）和门的 transport 一致，不跟随。
+
+- **含义变化（收窄）**：OpenAPI 文档地址会重定向的 http 实例，升级后不再构建、不再接管、不再公告。原因写在门宿主的 warn 日志和 `/healthz` 里，原文含 `does not follow redirects`。门宿主每轮 tick 照常重试。
+- **影响范围**：内核在创建连接时本来就拒绝会重定向的 `manifestSource`，所以只影响创建之后地址才开始重定向的实例。mcp 实例、预置连接器实例、没有 `manifestSource` 的 http 实例不受影响。
+- **升级后核对（可选，只读，结果记 `docs/private/`）**：在门宿主日志里查 `does not follow redirects`。正常没有命中。有命中时，把该实例的 OpenAPI 文档地址改成日志里给出的最终地址。
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
+### 3.199 ssh 门的 `command_pattern` 必须匹配整条命令（#1346，遗留 195，0.69.2 之后的下一版）
+
+无迁移。ssh 门以前只要 `command_pattern` 出现在命令里就放行，`^show\b` 会放行 `show x; reboot`。现在模式必须匹配整条命令。Operation 摘要不变，不需要重新接管。
+
+- **含义变化（收窄，fail-closed）**：按前缀写的模式（如 `^show\b`）升级后只放行恰好是 `show` 的命令，带参数的命令会被拒（403 `operation_refused`）。空的 `command_template`、既没有模板也没有模式的 binding 改为普通失败。
+- **不受影响**：`command_pattern` 是 `.*` 的 Operation（单行命令仍然都放行）；只用 `command_template` 的 ssh Operation（空模板除外）；http、mcp、cli、docker 门；策略表规则（仍在整行里查找，见遗留 148）。
+- **升级前核对（可选，只读，结果记 `docs/private/`）**：看主机上 ssh 门的清单文件里有没有 `command_pattern` 不是整行写法的 Operation。只有 `.*` 的不用管。有的话，升级后相应调用会被拒，处置是把模式写成整行，参数只放普通字符，如 `show( [A-Za-z0-9_./:@%+=,-]+)*`。不要写成 `show\b.*`，那样第二条命令仍能搭车。
+- **升级顺序**：不限。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
+### 3.201 OpenAPI 导入读 path 级参数并展开文档内 `$ref`（#1354，遗留 197，0.69.2 之后的下一版）
+
+无迁移。门宿主与内核同版本升级。OpenAPI 导入开始读 path 级参数，并展开文档内的 `$ref`（参数、请求体、schema）；读不到的引用不再让 Operation 接受任意参数。
+
+- **含义变化**：
+  - 用到 path 级参数或 `$ref` 的 http 门，升级后相关 Operation 的定义摘要会变，调用返回 409 `operation_definition_mismatch`，直到在控制台审阅采用、对齐并发布修订。往安全方向失败，不执行任何东西。
+  - **会变严的一类**：请求体顶层是 `allOf` / `anyOf` / `oneOf` / `not` 的 Operation（包括 `$ref` 旁边写了与目标冲突的兄弟关键字），以前是接受一切的 `{}`，升级后只收参数、发不出请求体。
+  - 引用很多、很深的文档，超出导入上限的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，调用 400 `invalid_operation_schema`。
+  - **`$ref` 旁边的兄弟关键字（#1365，遗留 799，同一版）**：兄弟会改变目标关键字含义时（例如目标有 `properties` 和 `additionalProperties: false`，`$ref` 旁边又写了 `properties`），不再合并进目标，而是写成 `allOf` 与目标同时生效，这类 Operation 的定义也会变，处置同上。目标有 `properties`、`$ref` 旁边写 `additionalProperties: false` 的，这一处升级后只收空对象 `{}`；写在请求体顶层的，请求体不再读入。处置是把 `additionalProperties` 写进被引用的 schema，或手写 `params_schema`。`$ref` 旁边的 `nullable` 在目标没有 `type` 时忽略，不再让整个 Operation 编译失败。
+  - **请求体的媒体类型与形状（#1368，遗留 798，同一版）**：请求体是其他媒体类型（multipart、`+json` 等）、数组或字符串的 Operation，以前接受任意参数，升级后只收自己声明的参数；要带这类请求体，就手写门清单的 `params_schema`。请求体写成 `application/json; charset=…` 或媒体类型大小写不同的 JSON，以前读不出（得到 `{}`），升级后**开始**按 JSON 读出请求体属性。这两类 Operation 的定义都会变，处置同上。
+- **升级前核对（可选，只读，结果记 `docs/private/`）**：对每个以 OpenAPI 文档为清单源的 http 门实例，取文档看是否用到 path 级参数或 `$ref`，两个数都是 0 的门不受影响：
+
+    ```sh
+    jq '([.paths[] | select(has("parameters"))] | length), ([.. | objects | select(has("$ref"))] | length)'
+    ```
+
+  顺带数一下顶层组合的请求体（经 `$ref` 指过去的不在这个数里）：
+
+    ```sh
+    jq '[.paths[][]? | objects | .requestBody?.content?["application/json"]?.schema? // empty | select(has("allOf") or has("anyOf") or has("oneOf") or has("not"))] | length'
+    ```
+
+- **升级后**：在控制台看各 http 门的可达性，显示定义不一致的，按 §3.24 窗口后的步骤审阅采用、对齐、逐条发布修订。对齐前先看一眼新定义：请求体顶层是组合的 Operation 只剩参数，超过导入上限的 Operation 调用 400。这两类发布了也用不了，处置是手写门清单里的 `params_schema`，或者换一份文档（请求体写成带 `properties` 的对象、引用少一些）。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

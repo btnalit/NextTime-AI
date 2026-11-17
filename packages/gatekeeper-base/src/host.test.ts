@@ -1,4 +1,6 @@
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { type Server, createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -1036,6 +1038,250 @@ describe('createGateHost (P-B2a)', () => {
       expect(kept).toMatchObject({ gateId: 'kb', ready: true, operationCount: 1 });
       expect(kept?.buildError).toMatch(/no Operations for preset "ragflow"/);
       expect(state.announcements).toHaveLength(announcedBefore);
+    });
+  });
+
+  describe('legacy 199: an OpenAPI manifestSource is never fetched through a redirect', () => {
+    const OPENAPI = {
+      openapi: '3.0.0',
+      info: { title: 'Items', version: '1' },
+      paths: {
+        '/items': {
+          get: { operationId: 'listItems', responses: { '200': { description: 'ok' } } },
+        },
+      },
+    };
+    let server: Server;
+    let base: string;
+    let seen: string[];
+
+    beforeEach(async () => {
+      seen = [];
+      server = createServer((req, res) => {
+        seen.push(req.url ?? '');
+        if (req.url === '/moved.json') {
+          res.writeHead(302, { location: '/elsewhere/openapi.json?token=redirect-query-secret' });
+          res.end();
+          return;
+        }
+        if (req.url === '/away.json') {
+          res.writeHead(307, { location: 'http://other.test/openapi.json' });
+          res.end();
+          return;
+        }
+        if (req.url === '/openapi.json' || req.url?.startsWith('/elsewhere/openapi.json')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(OPENAPI));
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    /** The fake kernel for its own URLs, a real fetch for the OpenAPI document. */
+    function hostFetch(): typeof fetch {
+      const kernel = makeFetch(state);
+      return (async (input: string | URL | Request, init?: RequestInit) =>
+        new URL(String(input)).origin === KERNEL_URL
+          ? kernel(input, init)
+          : fetch(input, init)) as unknown as typeof fetch;
+    }
+
+    function openApiItem(manifestSource: string): FakeItem {
+      return {
+        gateId: 'demo-http',
+        displayName: 'Demo',
+        status: 'enabled',
+        definition: {
+          transportKind: 'http',
+          target: 'http://api.test/',
+          credentialMode: 'shared',
+          manifestSource,
+        },
+      };
+    }
+
+    it('builds from the document at the address it was given', async () => {
+      state.items = [openApiItem(`${base}/openapi.json`)];
+      host = await createGateHost({ env, fetchImpl: hostFetch(), listen: false });
+      await host.tick();
+      expect(host.instances()).toEqual([{ gateId: 'demo-http', ready: true, operationCount: 1 }]);
+      expect(state.announcements.map((a) => a.body.gateId)).toEqual(['demo-http']);
+    });
+
+    it('a redirect leaves the instance unbuilt and unannounced, says where it pointed, and is never followed', async () => {
+      state.items = [openApiItem(`${base}/moved.json`)];
+      const lines: string[] = [];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(),
+        listen: false,
+        log: (line) => lines.push(line),
+      });
+      await host.tick();
+      const [instance] = host.instances();
+      expect(instance).toMatchObject({ gateId: 'demo-http', ready: false, operationCount: 0 });
+      const why =
+        'OpenAPI document responded 302, a redirect to "/elsewhere/openapi.json". The gate host does not follow redirects for an owner-supplied URL: set manifestSource to the final address.';
+      expect(instance?.buildError).toBe(why);
+      expect(seen).toEqual(['/moved.json']);
+      expect(state.announcements).toEqual([]);
+      // Legacy 794: the warn line does not call a redirect "unreachable"; `error` says what it was.
+      const warn = lines
+        .map((line) => JSON.parse(line))
+        .find((line) => line.gateId === 'demo-http' && line.level === 'warn');
+      expect(warn).toEqual({
+        level: 'warn',
+        msg: 'gate host: instance not ready (could not build it from its target or manifest), will retry',
+        gateId: 'demo-http',
+        error: why,
+      });
+    });
+
+    it('a redirect to another origin names that origin, and is never followed', async () => {
+      state.items = [openApiItem(`${base}/away.json`)];
+      host = await createGateHost({ env, fetchImpl: hostFetch(), listen: false });
+      await host.tick();
+      expect(host.instances()[0]?.buildError).toMatch(
+        /^OpenAPI document responded 307, a redirect to "http:\/\/other\.test\/openapi\.json"\. /,
+      );
+      expect(seen).toEqual(['/away.json']);
+    });
+  });
+
+  describe('legacy 797: an OpenAPI document larger than the limit fails the build', () => {
+    const DOC_URL = 'https://api.test/openapi.json';
+
+    /** The fake kernel for its own URLs, `document()` for the OpenAPI document. */
+    function hostFetch(document: () => Response): typeof fetch {
+      const kernel = makeFetch(state);
+      return (async (input: string | URL | Request, init?: RequestInit) =>
+        new URL(String(input)).origin === KERNEL_URL
+          ? kernel(input, init)
+          : document()) as unknown as typeof fetch;
+    }
+
+    const item: FakeItem = {
+      gateId: 'demo-http',
+      displayName: 'Demo',
+      status: 'enabled',
+      definition: {
+        transportKind: 'http',
+        target: 'http://api.test/',
+        credentialMode: 'shared',
+        manifestSource: DOC_URL,
+      },
+    };
+    const why =
+      'the OpenAPI document is larger than 16 MiB: serve a document with only the paths this gate needs, or write its manifest by hand';
+
+    it('one that declares its length is refused before it is read', async () => {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(1024));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      state.items = [item];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(body, {
+              headers: {
+                'content-type': 'application/json',
+                'content-length': String(16 * 1024 * 1024 + 1),
+              },
+            }),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([
+        { gateId: 'demo-http', ready: false, operationCount: 0, buildError: why },
+      ]);
+      expect(cancelled).toBe(true);
+      expect(state.announcements).toEqual([]);
+    });
+
+    it('one that does not is cut off once it passes the limit', async () => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      let pulls = 0;
+      let cancelled = false;
+      state.items = [item];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  pulls += 1;
+                  controller.enqueue(chunk);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+              { headers: { 'content-type': 'application/json' } },
+            ),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()[0]?.buildError).toBe(why);
+      expect(cancelled).toBe(true);
+      expect(pulls).toBeLessThan(20);
+      expect(state.announcements).toEqual([]);
+    });
+
+    it('an MCP target whose tools/list answer passes the same limit is not built either (#501 review of #1374)', async () => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      let pulls = 0;
+      let cancelled = false;
+      state.items = [DEMO_MCP_ITEM];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  pulls += 1;
+                  controller.enqueue(chunk);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+              { headers: { 'content-type': 'application/json' } },
+            ),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([
+        {
+          gateId: 'demo-mcp',
+          ready: false,
+          operationCount: 0,
+          buildError:
+            'mcp transport: tools/list: the target answered (status 200) but its answer is larger than 16 MiB — it had the request and may have run it',
+        },
+      ]);
+      expect(cancelled).toBe(true);
+      expect(pulls).toBeLessThan(20);
+      expect(state.announcements).toEqual([]);
     });
   });
 });

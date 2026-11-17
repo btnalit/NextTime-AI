@@ -83,7 +83,12 @@ export function taskSourceId(workspaceId: string, workerRunId: string): string {
 
 export interface EgressMapStore {
   register(ip: string, entry: SourceMapEntry): void;
-  unregister(ip: string): void;
+  /** Removes `ip`'s entry while it is still `sourceId`'s (legacy 169). Docker may already have
+   *  handed the address of a container that has gone to the next one, whose own entry is then at
+   *  `ip`: removing that would leave the next container without egress for its whole run. A
+   *  caller that cannot tell whose the container was passes `undefined`, and the entry goes
+   *  whoever's it is — never left for a later container at that address to be taken for. */
+  unregister(ip: string, sourceId: string | undefined): void;
   read(): SourceMapFile;
 }
 
@@ -115,12 +120,13 @@ export function createEgressMapStore(filePath: string): EgressMapStore {
       map[ip] = entry;
       writeFile(map);
     },
-    unregister(ip: string): void {
+    unregister(ip: string, sourceId: string | undefined): void {
       const map = readFile();
-      if (ip in map) {
-        delete map[ip];
-        writeFile(map);
-      }
+      const entry = map[ip];
+      if (entry === undefined) return;
+      if (sourceId !== undefined && entry.sourceId !== sourceId) return;
+      delete map[ip];
+      writeFile(map);
     },
     read(): SourceMapFile {
       return readFile();

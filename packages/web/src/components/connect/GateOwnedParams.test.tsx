@@ -64,6 +64,7 @@ describe('ManifestPublishResultNotice', () => {
           skippedDraftOperationNames: ['stock.export'],
           gateOwnedParamDrafts: HELD,
           absentAnswerDrafts: [{ name: 'stock.lookup', absentAnswers: { statuses: [404] } }],
+          credentialDrafts: [],
         }}
         fix="resync"
         testId="result"
@@ -82,5 +83,76 @@ describe('ManifestPublishResultNotice', () => {
     expect(within(absent).getByText('stock.lookup').closest('a')?.getAttribute('href')).toBe(
       '#/govern/catalog/operations/gk-1%3A%3Astock.lookup',
     );
+  });
+});
+
+describe('ManifestPublishResultNotice — legacy 800', () => {
+  it('lists the drafts held for suspected credentials by name and place, each linked to its draft, with the next step that fits the gate', () => {
+    render(
+      <ManifestPublishResultNotice
+        result={{
+          gatekeeperId: 'gk-1',
+          publishedOperationNames: ['stock.get'],
+          skippedDraftOperationNames: [],
+          gateOwnedParamDrafts: [],
+          absentAnswerDrafts: [],
+          credentialDrafts: [
+            {
+              name: 'stock.login',
+              suspectedSecretValues: 2,
+              suspectedSecretPaths: ['description', 'params_schema.properties.password.example'],
+            },
+            { name: 'stock.audit', suspectedSecretValues: 1, suspectedSecretPaths: [] },
+          ],
+        }}
+        fix="resync"
+        testId="result"
+      />,
+    );
+    const held = screen.getByTestId('result-credentials');
+    expect(held.getAttribute('data-tone')).toBe('warn');
+    expect(held.textContent).toContain('2 个 Operation 没有发布，还是草稿');
+    const login = screen.getAllByTestId('result-credentials-item')[0];
+    expect(login?.textContent).toContain('stock.login：2 处疑似凭据，在');
+    // UX acceptance of #1370: the definition's top-level fields read as words.
+    expect(login?.textContent).toContain('描述、参数定义.properties.password.example');
+    // The console never shows the values: the next step points at the gate's document.
+    expect(held.textContent).toContain('控制台不显示这些值');
+    // A kernel that named no place still says how many.
+    expect(held.textContent).toContain('stock.audit：1 处疑似凭据');
+    expect(held.textContent).not.toContain('stock.audit：1 处疑似凭据，在');
+    expect(within(held).getByText('stock.login').closest('a')?.getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Astock.login',
+    );
+    expect(held.textContent).toContain('勾选「已核对凭据」后发布');
+    expect(held.textContent).toContain('重新读取门的清单');
+    expect(held.textContent).not.toContain('与门公告对齐');
+    expect(screen.getAllByTestId('result-credentials-item')).toHaveLength(2);
+  });
+
+  it('says nothing when no draft was held for credentials, or an older kernel left the field out', () => {
+    const result = {
+      gatekeeperId: 'gk-1',
+      publishedOperationNames: ['stock.get'],
+      skippedDraftOperationNames: [],
+      gateOwnedParamDrafts: [],
+      absentAnswerDrafts: [],
+    };
+    const { rerender } = render(
+      <ManifestPublishResultNotice
+        result={{ ...result, credentialDrafts: [] }}
+        fix="align"
+        testId="result"
+      />,
+    );
+    expect(screen.queryByTestId('result-credentials')).toBeNull();
+    rerender(
+      <ManifestPublishResultNotice
+        result={result as unknown as Parameters<typeof ManifestPublishResultNotice>[0]['result']}
+        fix="align"
+        testId="result"
+      />,
+    );
+    expect(screen.queryByTestId('result-credentials')).toBeNull();
   });
 });

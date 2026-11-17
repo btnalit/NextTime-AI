@@ -5,6 +5,7 @@ import {
   type HandleClaims,
   SOURCE_BOUND_CAPABILITY_HANDLE,
   handleHolderOf,
+  isRedirectStatus,
   resolveCorrelationId,
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
@@ -20,6 +21,7 @@ import {
   stripProviderServerTools,
 } from './outbound-policy.js';
 import { checkProviderKey } from './provider-keys.js';
+import { describeUpstreamRedirect } from './provider-test.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
 import { type ProxySourceBinding, socketPeerAddress } from './source-binding.js';
 import {
@@ -688,8 +690,9 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         body: outboundBody.length > 0 ? outboundBody : undefined,
         signal: controller.signal,
         // R-23 (L6-19): 'follow' would resend the real key to whatever host a 3xx names (`x-api-key`
-        // is not one of the headers fetch drops cross-origin). A redirect is a failed upstream call.
-        redirect: 'error',
+        // is not one of the headers fetch drops cross-origin). A redirect is a failed upstream call;
+        // 'manual' hands it back so the failure can say where it pointed (legacy 221).
+        redirect: 'manual',
       });
     } catch {
       if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -709,6 +712,32 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         }),
       );
       sendJson(res, 502, { error: { code: 'bad_gateway', message: 'upstream request failed' } });
+      return;
+    }
+
+    if (isRedirectStatus(upstreamRes.status)) {
+      // Never forwarded either: the client would follow it itself.
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      await upstreamRes.body?.cancel().catch(() => {});
+      metrics.observeUpstream(
+        providerName,
+        modelId,
+        'error',
+        (Date.now() - upstreamStartedMs) / 1000,
+      );
+      const message = describeUpstreamRedirect('upstream', upstreamRes, upstreamUrl, keyCheck.key);
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: upstream answered with a redirect, not followed',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+          status: upstreamRes.status,
+          error: message,
+        }),
+      );
+      sendJson(res, 502, { error: { code: 'bad_gateway', message } });
       return;
     }
 
