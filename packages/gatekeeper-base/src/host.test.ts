@@ -1089,7 +1089,7 @@ describe('createGateHost (P-B2a)', () => {
     function hostFetch(): typeof fetch {
       const kernel = makeFetch(state);
       return (async (input: string | URL | Request, init?: RequestInit) =>
-        String(input).startsWith(KERNEL_URL)
+        new URL(String(input)).origin === KERNEL_URL
           ? kernel(input, init)
           : fetch(input, init)) as unknown as typeof fetch;
     }
