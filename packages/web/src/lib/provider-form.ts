@@ -422,15 +422,20 @@ function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): stri
           '这个路径不像接口地址，可能是上游的说明页或登录页：对照上游的文档核对 Base URL。',
           'That path does not look like an API endpoint — it may be the upstream’s own page or a sign-in: check the Base URL against the upstream’s documentation.',
         )
-      : path.value === ''
+      : path.value.includes('***')
         ? t(
-            'Base URL 不该带路径：只留站点地址（协议加主机名）。',
-            'The Base URL should carry no path: keep only the site address (scheme and host).',
+            '去掉末尾 /v1/… 接口路径后的部分就是 Base URL 该带的路径。',
+            'What is left once the trailing /v1/… endpoint path is gone is the path the Base URL should carry.',
           )
-        : t(
-            `把 Base URL 的路径改成 ${path.value}（站点地址加上 ${path.value}）。`,
-            `Set the Base URL’s path to ${path.value} (the site address followed by ${path.value}).`,
-          );
+        : path.value === ''
+          ? t(
+              'Base URL 不该带路径：只留站点地址（协议加主机名）。',
+              'The Base URL should carry no path: keep only the site address (scheme and host).',
+            )
+          : t(
+              `把 Base URL 的路径改成 ${path.value}（站点地址加上 ${path.value}）。`,
+              `Set the Base URL’s path to ${path.value} (the site address followed by ${path.value}).`,
+            );
     return t(
       `上游返回 ${status} 重定向，转到同一站点的 ${target}。${why}多半是 Base URL 的路径不对（多了或少了前缀、末尾的 /，或多写了 /v1）。${fix}`,
       `The upstream answered ${status}, a redirect to ${target} on the same site. ${why} The Base URL’s path is most likely off (a prefix too many or too few, a trailing /, or an extra /v1). ${fix}`,

@@ -164,6 +164,13 @@ describe('lib/provider-form', () => {
         zh,
       ),
     ).toContain('这个路径不像接口地址');
+    // Review #501 on #1363: a path llm-proxy masked is not something to paste.
+    const masked = explainUpstreamError(
+      `GET /v1/models responded 301, a redirect to "/***/v1/models". ${advice}`,
+      zh,
+    );
+    expect(masked).toContain('去掉末尾 /v1/… 接口路径后的部分');
+    expect(masked).not.toContain('路径改成 /***');
     // A target llm-proxy shows with an escaped quote reads back as it was.
     expect(
       explainUpstreamError(`upstream responded 307, a redirect to "/a\\"b". ${advice}`, en),
