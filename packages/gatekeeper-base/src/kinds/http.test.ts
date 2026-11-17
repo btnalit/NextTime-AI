@@ -540,6 +540,65 @@ describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
     expect(schemaOf(operations, 'codes_by_reference')).toEqual(INLINE_LIMIT);
   });
 
+  it('following a reference costs too: many entries following one long chain, a loop or a long pointer stay bounded', () => {
+    const longName = 'n'.repeat(1024);
+    const parameters: Record<string, unknown> = {
+      [`P63${longName}`]: { name: 'p', in: 'query', schema: { type: 'string' } },
+      LoopA: { $ref: '#/components/parameters/LoopB' },
+      LoopB: { $ref: '#/components/parameters/LoopA' },
+    };
+    for (let hop = 62; hop >= 0; hop -= 1) {
+      parameters[`P${hop}${longName}`] = { $ref: `#/components/parameters/P${hop + 1}${longName}` };
+    }
+    const chain = Array.from({ length: 4_000 }, () => ({
+      $ref: `#/components/parameters/P0${longName}`,
+    }));
+    const loop = Array.from({ length: 4_000 }, () => ({ $ref: '#/components/parameters/LoopA' }));
+    const paths: Record<string, unknown> = {};
+    for (const [prefix, entries] of [
+      ['chain', chain],
+      ['loop', loop],
+    ] as const) {
+      const item: Record<string, unknown> = { parameters: entries };
+      for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+        item[method] = { operationId: `${prefix}_${method}` };
+      }
+      paths[`/${prefix}`] = item;
+    }
+    const started = Date.now();
+    const operations = importOpenApi({ components: { parameters }, paths } as OpenApiDocumentLike);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(operations).toHaveLength(10);
+    for (const op of operations)
+      expect([op.name, op.params_schema]).toEqual([op.name, INLINE_LIMIT]);
+  });
+
+  it('a schema reached through a long pointer pays for the pointer each time it is followed', () => {
+    const longName = 'n'.repeat(64 * 1024);
+    const paths: Record<string, unknown> = {};
+    for (let i = 0; i < 1000; i += 1) {
+      paths[`/r${i}`] = {
+        post: { operationId: `op${i}`, requestBody: bodyRef('#/components/schemas/Short') },
+      };
+    }
+    const started = Date.now();
+    const operations = importOpenApi({
+      components: {
+        schemas: {
+          Short: { $ref: `#/components/schemas/${longName}` },
+          [longName]: { type: 'object', properties: { id: { type: 'string' } } },
+        },
+      },
+      paths,
+    } as OpenApiDocumentLike);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(schemaOf(operations, 'op0')).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string' } },
+    });
+    expect(operations.filter((op) => '$ref' in op.params_schema).length).toBeGreaterThan(800);
+  });
+
   it('a schema nested past the depth limit is refused the same way', () => {
     let deep: Record<string, unknown> = { type: 'string' };
     for (let i = 0; i < 600; i += 1) deep = { type: 'array', items: deep };

@@ -620,11 +620,13 @@ function sanitizeName(path: string, method: string): string {
 /** What a reference may cost (review #501 on #1354). Written out, a reference copies what it points
  *  at, so a small document whose references fan out (A uses B twice, B uses C twice, …), or one
  *  large schema many Operations use, would grow without bound — in the kernel's import inside a
- *  database transaction, and in the gate host's. Everything copied out of a reference counts:
- *  each schema value is one unit, and text (a key, a string, an `example`) one more per 64
- *  characters. What an Operation declares in place is not counted — it is copied once, as large as
- *  it was written. An Operation whose references cost more than its share, or whose share the
- *  document has already spent, gets {@link INLINE_LIMIT_SCHEMA}. */
+ *  database transaction, and in the gate host's. Following a reference costs one unit, and
+ *  everything copied out of one counts: each schema value is one unit, and text (a key, a string,
+ *  an `example`, the reference itself) one more per 64 characters. The budget is spent in the
+ *  document's order, so an Operation that spends much leaves less for those after it. What an
+ *  Operation declares in place is not counted — it is copied once, as large as it was written.
+ *  An Operation whose references cost more than its share, or whose share the document has already
+ *  spent, gets {@link INLINE_LIMIT_SCHEMA}. */
 const MAX_INLINED_UNITS_PER_OPERATION = 10_000;
 const MAX_INLINED_UNITS_PER_DOCUMENT = 100_000;
 
@@ -722,20 +724,6 @@ function resolveLocalRef(document: unknown, ref: string): unknown {
   return node;
 }
 
-/** A parameter or request body object, following `$ref`s to it (a component may itself be a
- *  `$ref`); `undefined` when one of them cannot be followed. `viaRef`: it came out of one, so what
- *  it holds is copied wherever it is used, and counts. */
-function dereference(document: unknown, node: unknown): { node: unknown; viaRef: boolean } {
-  let current = node;
-  for (let hop = 0; hop < MAX_REF_DEPTH; hop += 1) {
-    if (!isObjectNode(current) || typeof current.$ref !== 'string') {
-      return { node: current, viaRef: hop > 0 };
-    }
-    current = resolveLocalRef(document, current.$ref);
-  }
-  return { node: undefined, viaRef: true };
-}
-
 /** What writing out one document's references has left to spend: shared by its Operations. */
 interface DocumentBudget {
   unitsLeft: number;
@@ -758,6 +746,27 @@ function spend(state: InlineState, units: number): void {
   state.unitsLeft -= units;
   state.budget.unitsLeft -= units;
   if (state.unitsLeft < 0 || state.budget.unitsLeft < 0) throw INLINE_LIMIT;
+}
+
+/** Following one reference costs a unit, plus its text's (review #501 on #1354: a document can
+ *  make many entries follow one long chain, or a loop, and each hop reads the pointer anew). */
+function spendOnReference(state: InlineState, ref: string): void {
+  spend(state, 1 + textUnits(ref));
+}
+
+/** A parameter or request body object, following `$ref`s to it (a component may itself be a
+ *  `$ref`), each hop paid for; `undefined` when one of them cannot be followed. `viaRef`: it came
+ *  out of one, so what it holds is copied wherever it is used, and counts. */
+function dereference(state: InlineState, node: unknown): { node: unknown; viaRef: boolean } {
+  let current = node;
+  for (let hop = 0; hop < MAX_REF_DEPTH; hop += 1) {
+    if (!isObjectNode(current) || typeof current.$ref !== 'string') {
+      return { node: current, viaRef: hop > 0 };
+    }
+    spendOnReference(state, current.$ref);
+    current = resolveLocalRef(state.document, current.$ref);
+  }
+  return { node: undefined, viaRef: true };
 }
 
 /** What copying a data value costs: one unit, plus its JSON text's. */
@@ -814,6 +823,7 @@ function inlineSchema(
   if (!isObjectNode(schema)) return schema;
   const ref = schema.$ref;
   if (typeof ref === 'string') {
+    spendOnReference(state, ref);
     if (open.includes(ref)) return recursionPlaceholder();
     const target = open.length < MAX_REF_DEPTH ? resolveLocalRef(state.document, ref) : undefined;
     if (isObjectNode(target)) {
@@ -853,7 +863,7 @@ interface ReadParameter {
  *  item's of the same name and location (OpenAPI 3: "can be overridden at the operation level, but
  *  cannot be removed there"). `unread` when a `$ref` to one could not be followed. */
 function parametersOf(
-  document: unknown,
+  state: InlineState,
   pathItem: OpenApiPathItem,
   op: OpenApiOperationObject,
 ): { parameters: ReadParameter[]; unread: boolean } {
@@ -862,7 +872,7 @@ function parametersOf(
     if (!Array.isArray(list)) return [];
     const out: ReadParameter[] = [];
     for (const entry of list) {
-      const { node: param, viaRef } = dereference(document, entry);
+      const { node: param, viaRef } = dereference(state, entry);
       if (param === undefined) unread = true;
       if (!isObjectNode(param) || typeof param.name !== 'string' || typeof param.in !== 'string') {
         continue;
@@ -899,10 +909,9 @@ function writeParamsSchema(
   pathItem: OpenApiPathItem,
   op: OpenApiOperationObject,
 ): Record<string, unknown> {
-  const { document } = state;
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
-  const { parameters, unread: parameterUnread } = parametersOf(document, pathItem, op);
+  const { parameters, unread: parameterUnread } = parametersOf(state, pathItem, op);
   let unread = parameterUnread;
   for (const { param, viaRef } of parameters) {
     // Legacy 175 follow-up (review of #532): what the gate owns is never a param — a cookie, a
@@ -925,7 +934,7 @@ function writeParamsSchema(
     if (param.required) required.push(param.name);
   }
   if (op.requestBody !== undefined) {
-    const { node: requestBody, viaRef } = dereference(document, op.requestBody);
+    const { node: requestBody, viaRef } = dereference(state, op.requestBody);
     const content = isObjectNode(requestBody) ? requestBody.content : undefined;
     const media = isObjectNode(content) ? content['application/json'] : undefined;
     const rawSchema = isObjectNode(media) ? media.schema : undefined;

@@ -152,9 +152,11 @@ out in place: the gate's validator has no document to resolve one against. A sch
 itself becomes `{}` where it recurs. A reference it cannot follow — another document's, a pointer
 that leads nowhere — is not guessed at: the Operation's `params_schema` takes only what it could
 read (`{"type":"object","properties":{…}}`, so nothing else passes), never `{}`. What references
-copy is bounded: 10,000 units for one Operation and 100,000 for the whole document (a unit is one
-schema value, or 64 characters of text; what an Operation writes in place does not count), and a
-schema at most 512 levels deep. An Operation past one of them gets `params_schema:
+copy is bounded: 10,000 units for one Operation and 100,000 for the whole document (following a
+reference is one unit, so is each schema value copied out of one, and text one more per 64
+characters; what an Operation writes in place does not count), and a schema at most 512 levels
+deep. The document's budget is spent in path order, so a large Operation early in the document
+leaves less for those after it. An Operation past one of them gets `params_schema:
 {"$ref":"#/x-nexttime-inline-limit"}`: ajv cannot compile it and calls are refused (400
 `invalid_operation_schema`) — import a smaller document, or write the gate's manifest by hand. A
 `$ref`'s sibling that would replace one of the target's own constraints is kept beside it under
