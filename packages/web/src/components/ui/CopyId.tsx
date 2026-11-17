@@ -6,7 +6,7 @@ import { Button } from './Button.js';
 export interface CopyIdProps {
   readonly id: string;
   /** What the id belongs to, in the current language ("任务" / "Task") — read out as "复制任务 id"
-   *  / "Copy Task id" (legacy 427: the copy button follows the interface language). */
+   *  / "Copy task id" (legacy 427: the copy button follows the interface language). */
   readonly label?: string;
   /** Show the full id instead of the 8-character short form. */
   readonly full?: boolean;
@@ -47,7 +47,7 @@ export function CopyId({ id, label, full = false }: CopyIdProps) {
         aria-label={
           copied
             ? t('已复制', 'Copied')
-            : t(`复制${label ?? ''} id`, `Copy ${label ? `${label} ` : ''}id`)
+            : t(`复制${label ?? ''} id`, `Copy ${label ? `${label.toLowerCase()} ` : ''}id`)
         }
         onClick={() => void copy()}
       />

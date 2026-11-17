@@ -651,7 +651,7 @@ describe('AuditPage entry points', () => {
     const subject = migration.querySelector('[data-ref-kind="object"][data-ref-id="p-1"]');
     // UX acceptance of #1220 (P2): by its name, not only its id.
     expect(subject?.querySelector('.ref-chip-name')?.textContent).toBe(
-      `成员 ${principal.displayName}`,
+      `账号 ${principal.displayName}`,
     );
 
     // It acted on that member, so no 「记在 …」 repeats them.

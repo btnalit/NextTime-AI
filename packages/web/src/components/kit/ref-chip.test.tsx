@@ -5,6 +5,7 @@ import { useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { RefChip, useResolveRefs } from './ref-chip.js';
 
 afterEach(cleanup);
@@ -29,7 +30,7 @@ describe('kit/RefChip', () => {
     const http = scriptedCaller(() => []);
     render(<RefChip kind="principal" id="p-1" name="Ada" http={http} testId="chip" />);
     expect(screen.getByText('Ada')).toBeTruthy();
-    expect(screen.getByText('成员')).toBeTruthy();
+    expect(screen.getByText('账号')).toBeTruthy();
     expect(http.call).not.toHaveBeenCalled();
   });
 
@@ -137,9 +138,39 @@ describe('kit/RefChip', () => {
     );
     expect(screen.getByTestId('agent').textContent).toMatch(/^智能体entry/);
     expect(screen.getByTestId('agent').textContent).not.toContain('(agent)');
-    expect(screen.getByTestId('human').textContent).toMatch(/^成员Ada/);
-    expect(screen.getByTestId('unknown').textContent).toMatch(/^成员New/);
+    expect(screen.getByTestId('human').textContent).toMatch(/^账号Ada/);
+    expect(screen.getByTestId('unknown').textContent).toMatch(/^账号New/);
     expect(screen.getByRole('button', { name: /^复制智能体 id$/ })).toBeTruthy();
+  });
+
+  // Legacy 615: 「成员」 read as a role (「成员 Administrator」 on an owner). A person reads 「账号」
+  // like a Principal of unknown kind, so the same person reads the same on every page.
+  // #1425 UX: the English copy button names the kind in lower case, as prose.
+  it('names its English copy button in lower case', () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <RefChip kind="principal" id="p-1" name="Ada" typeName="human" />
+        </LangProvider>,
+      );
+      expect(screen.getByRole('button', { name: 'Copy account id' })).toBeTruthy();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
+  });
+
+  it('never labels a Principal with the member role word', () => {
+    render(
+      <>
+        <RefChip kind="principal" id="p-owner" name="Administrator" typeName="human" testId="h" />
+        <RefChip kind="principal" id="p-any" name="Administrator" testId="any" />
+      </>,
+    );
+    expect(screen.getByTestId('h').textContent).toMatch(/^账号Administrator/);
+    expect(screen.getByTestId('any').textContent).toMatch(/^账号Administrator/);
+    expect(screen.getByTestId('h').textContent).not.toContain('成员');
+    expect(screen.getByTestId('any').textContent).not.toContain('成员');
   });
 
   it('an internal service Principal reads by what it is, given or self-resolved, never by its __…__ name (#822 UX P2-1)', async () => {

@@ -1,11 +1,29 @@
 // @vitest-environment jsdom
 import { cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { LangProvider } from '../../lib/i18n.js';
 import { RefChip, defaultRefName, useRefNames } from './RefChip.js';
 
 afterEach(cleanup);
 
 describe('RefChip', () => {
+  // #1425 UX: the English copy button names the kind in lower case, as prose ("Copy account id").
+  it('names its English copy button in lower case', () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <RefChip kind="principal" id="p-1" name="Ada" />
+          <RefChip kind="gatekeeper" id="g-1" name="Tickets" />
+        </LangProvider>,
+      );
+      expect(screen.getByRole('button', { name: 'Copy account id' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Copy gatekeeper id' })).toBeTruthy();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
+  });
+
   it('renders name + type label + truncated id + copy, linking the name when href is given', () => {
     const { container } = render(
       <RefChip
@@ -23,10 +41,10 @@ describe('RefChip', () => {
     expect(screen.getByRole('link', { name: 'Ada Lovelace' }).getAttribute('href')).toBe(
       '#/govern/members',
     );
-    expect(container.querySelector('.ref-chip-kind')?.textContent).toBe('成员');
+    expect(container.querySelector('.ref-chip-kind')?.textContent).toBe('账号');
     // CopyId: the 8-character short form and a copy button naming the kind.
     expect(container.querySelector('.copy-id-text')?.textContent).toBe('0f2c6e1a');
-    expect(screen.getByRole('button', { name: /^复制成员 id$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^复制账号 id$/ })).toBeTruthy();
   });
 
   it('names an internal service Principal by what it is, never by its __…__ name (#822 UX P2-1)', () => {
