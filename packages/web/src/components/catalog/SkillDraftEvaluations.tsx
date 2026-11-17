@@ -206,7 +206,7 @@ export function SkillDraftEvaluations({
                 <RouteLink href={hrefs.evaluation('drafts', row.id)} className="link-inline">
                   {row.suite.name} v{row.suite.version}
                 </RouteLink>
-                <span className="text-3 text-small">{formatRelative(row.createdAt)}</span>
+                <span className="text-3 text-small">{formatRelative(row.createdAt, t)}</span>
               </span>
               <span className="text-2 text-small">
                 {row.status === 'running' && row.stage !== null

@@ -321,7 +321,7 @@ function EvaluationsList({
               <span className="meta-sep" />
               <span className="tabular">{costText(row.costUsd, t)}</span>
               <span className="meta-sep" />
-              <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
+              <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt, t)}</time>
             </span>
           </ListRow>
         ))}
@@ -450,7 +450,7 @@ export function DraftEvaluationDetail({
       value: (
         <span>
           {who(row.createdBy)} ·{' '}
-          <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
+          <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt, t)}</time>
         </span>
       ),
     },
@@ -462,7 +462,9 @@ export function DraftEvaluationDetail({
             value: (
               <span>
                 {row.cancelledBy !== null ? `${who(row.cancelledBy)} · ` : ''}
-                <time title={formatDateTime(row.finishedAt)}>{formatRelative(row.finishedAt)}</time>
+                <time title={formatDateTime(row.finishedAt)}>
+                  {formatRelative(row.finishedAt, t)}
+                </time>
               </span>
             ),
           },

@@ -504,14 +504,16 @@ function userColumns(
         user.lastLoginAt === null ? (
           <span className="text-3">{t('从未', 'Never')}</span>
         ) : (
-          <time title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</time>
+          <time title={formatDateTime(user.lastLoginAt)}>
+            {formatRelative(user.lastLoginAt, t)}
+          </time>
         ),
     },
     {
       id: 'created',
       header: t('创建', 'Created'),
       cell: (user) => (
-        <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt)}</time>
+        <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt, t)}</time>
       ),
     },
   ];

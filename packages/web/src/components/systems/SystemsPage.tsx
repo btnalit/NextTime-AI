@@ -828,7 +828,7 @@ export function SystemsPage({
                     <AdminAgentActingMark testId="request-admin-agent" />
                   ) : null}
                   <time className="text-3 text-small" title={formatDateTime(row.requestedAt)}>
-                    {formatRelative(row.requestedAt)}
+                    {formatRelative(row.requestedAt, t)}
                   </time>
                   {row.gatekeeperId ? (
                     <span className="text-3 text-small" title={row.gatekeeperId}>

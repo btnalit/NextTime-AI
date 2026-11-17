@@ -266,7 +266,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                             .join(', ')}
                       {' · '}
                       <time title={formatDateTime(row.createdAt)}>
-                        {t('创建', 'created')} {formatRelative(row.createdAt)}
+                        {t('创建', 'created')} {formatRelative(row.createdAt, t)}
                       </time>
                     </span>
                   </span>

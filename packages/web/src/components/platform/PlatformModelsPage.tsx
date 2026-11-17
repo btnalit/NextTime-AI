@@ -498,7 +498,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             <span className="text-small text-3" data-testid="providers-models-json-written">
               {t('models.json 重写于 ', 'models.json rewritten ')}
               <time title={formatDateTime(meta.modelsJsonWrittenAt)}>
-                {formatRelative(meta.modelsJsonWrittenAt)}
+                {formatRelative(meta.modelsJsonWrittenAt, t)}
               </time>
             </span>
           ) : null}
@@ -645,7 +645,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     <dt>{t('更新', 'Updated')}</dt>
                     <dd>
                       <time title={formatDateTime(drawerProvider.updatedAt)}>
-                        {formatRelative(drawerProvider.updatedAt)}
+                        {formatRelative(drawerProvider.updatedAt, t)}
                       </time>
                     </dd>
                   </>

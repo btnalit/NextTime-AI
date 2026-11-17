@@ -255,7 +255,7 @@ function ProposalsTab({
                     title={formatDateTime(proposal.proposedAt)}
                     data-volatile=""
                   >
-                    {formatRelative(proposal.proposedAt)}
+                    {formatRelative(proposal.proposedAt, t)}
                   </time>
                 </span>
                 <ProposalPartsLine proposal={proposal} />

@@ -123,7 +123,7 @@ function ConflictRow({
         <div className="data-row-meta">
           {conflict.description ? <span>{conflict.description}</span> : null}
           <span className="meta-sep" title={formatDateTime(conflict.openedAt)}>
-            {t('发生于', 'Opened')} {formatRelative(conflict.openedAt)}
+            {t('发生于', 'Opened')} {formatRelative(conflict.openedAt, t)}
           </span>
         </div>
       </div>
@@ -296,7 +296,7 @@ function ConflictSide({
             </span>
             {side.observedAt ? (
               <span className="meta-sep" title={formatDateTime(side.observedAt)}>
-                {formatRelative(side.observedAt)}
+                {formatRelative(side.observedAt, t)}
               </span>
             ) : null}
             {side.assertedBy ? (

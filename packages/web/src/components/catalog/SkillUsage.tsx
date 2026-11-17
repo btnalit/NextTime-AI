@@ -239,8 +239,8 @@ function FailureGroups({
               >
                 <span>
                   {t(
-                    `v${group.skillVersion} · Worker ${workerName} v${worker.version} · ${group.tasks} 个 Task · 最近 ${formatRelative(group.lastFailedAt)}`,
-                    `v${group.skillVersion} · Worker ${workerName} v${worker.version} · ${group.tasks} Task(s) · last ${formatRelative(group.lastFailedAt)}`,
+                    `v${group.skillVersion} · Worker ${workerName} v${worker.version} · ${group.tasks} 个 Task · 最近一次 ${formatRelative(group.lastFailedAt, t)}`,
+                    `v${group.skillVersion} · Worker ${workerName} v${worker.version} · ${group.tasks} Task(s) · last failed ${formatRelative(group.lastFailedAt, t)}`,
                   )}
                 </span>
                 <span className="text-3 text-small">

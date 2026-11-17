@@ -166,6 +166,8 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
     show(http);
     const v2 = await screen.findByTestId('skill-usage-version-2');
     expect(v2.textContent).toContain('8 次');
+    // #1411 UX P3: the time is the last run's, not a window of days.
+    expect(v2.textContent).toMatch(/8 次 · 最近一次 /);
     expect(v2.textContent).toContain('完成 1 · 失败 4 · 取消 1 · 进行中 1');
     expect(within(v2).getAllByTestId('skill-usage-attainment')[0]?.textContent).toBe(
       '33%（1 / 3）',

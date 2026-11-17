@@ -112,7 +112,7 @@ export function PlatformResiduePage({ http }: PlatformResiduePageProps) {
           <span className="text-3">—</span>
         ) : (
           <time title={formatDateTime(container.startedAt)}>
-            {formatRelative(container.lastTouchedAt)}
+            {formatRelative(container.lastTouchedAt, t)}
           </time>
         ),
     },

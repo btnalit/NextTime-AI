@@ -371,7 +371,7 @@ function TasksList({
               <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                 <StatusChip machine="task" status={task.status} size="s" />
                 <time className="text-3" title={formatDateTime(task.createdAt)}>
-                  {formatRelative(task.createdAt)}
+                  {formatRelative(task.createdAt, t)}
                 </time>
               </span>
               <span className="truncate">
@@ -397,7 +397,7 @@ function TasksList({
                     : task.status === 'running'
                       ? `${t('运行中', 'running')} `
                       : `${t('等待中', 'waiting')} `}
-                  {formatDuration(task.createdAt, finished)}
+                  {formatDuration(task.createdAt, finished, t)}
                 </span>
                 {task.tokenBudget ? (
                   <>

@@ -876,7 +876,7 @@ function GateInstancesTab({
                       t('从未', 'Never')
                     ) : (
                       <time title={formatDateTime(row.lastSeenAt)}>
-                        {formatRelative(row.lastSeenAt)}
+                        {formatRelative(row.lastSeenAt, t)}
                       </time>
                     )}
                   </td>
@@ -1166,7 +1166,7 @@ function selfConnectionColumns(
             )}
           </div>
           <time className="text-3 text-small" title={formatDateTime(connection.connectedAt)}>
-            {formatRelative(connection.connectedAt)}
+            {formatRelative(connection.connectedAt, t)}
           </time>
         </div>
       ),
@@ -1186,7 +1186,7 @@ function selfConnectionColumns(
                 {connection.suspendedByLogin ?? t('平台管理员', 'A platform administrator')}
                 {' · '}
                 <time title={formatDateTime(connection.suspendedAt)}>
-                  {formatRelative(connection.suspendedAt)}
+                  {formatRelative(connection.suspendedAt, t)}
                 </time>
               </div>
               {connection.suspensionReason !== null ? (
@@ -1404,13 +1404,17 @@ function ExternalRuntimeRow({
       </td>
       <td data-label={t('会话种类', 'Session kind')}>{runtime.sessionKind}</td>
       <td data-label={t('创建时间', 'Created')}>
-        <time title={formatDateTime(runtime.createdAt)}>{formatRelative(runtime.createdAt)}</time>
+        <time title={formatDateTime(runtime.createdAt)}>
+          {formatRelative(runtime.createdAt, t)}
+        </time>
       </td>
       <td data-label={t('过期', 'Expires')}>
         {runtime.expiresAt === null ? (
           '—'
         ) : (
-          <time title={formatDateTime(runtime.expiresAt)}>{formatRelative(runtime.expiresAt)}</time>
+          <time title={formatDateTime(runtime.expiresAt)}>
+            {formatRelative(runtime.expiresAt, t)}
+          </time>
         )}
       </td>
       <td>

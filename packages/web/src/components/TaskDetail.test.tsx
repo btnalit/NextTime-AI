@@ -98,6 +98,8 @@ describe('TaskDetail', () => {
       '#/govern/audit?resourceType=worker_run&resourceId=run-1',
     );
     expect(screen.getByText('restart web')).toBeTruthy();
+    // #1411 UX P3: the limit reads in the console's language like the elapsed time beside it.
+    expect(screen.getByText('/ 上限 60 秒')).toBeTruthy();
   });
 
   it('offers Cancel only while the transition table allows it; Cancel opens a confirm anchored to itself (S8 W1-A7), which calls onCancel with the task', async () => {

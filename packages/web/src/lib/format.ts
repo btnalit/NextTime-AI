@@ -65,6 +65,9 @@ function formatShortDate(ms: number, now: number): string {
 /**
  * "刚刚" (±60s of `now`) / "N 分钟前" / "N 小时前" / "昨天 17:59" / "N 天前" / a short date beyond a
  * week — mirrored for the future: "N 分钟后" / "N 小时后" / "明天 17:59" / "N 天后" / a short date.
+ * In English (legacy 525 / 594 / 621): "just now" / "5 minutes ago" / "3 hours ago" /
+ * "yesterday 17:59" / "3 days ago", and "in 5 minutes" / "tomorrow 17:59" / "in 3 days" ahead.
+ * `t` is required, so no caller can forget the reader's language.
  *
  * Bucket order: an elapsed-time window (minutes, then hours) is checked *before* the calendar-day
  * comparison, so a timestamp from 23:55 yesterday sent 10 minutes ago still reads "10 分钟前" (the
@@ -74,31 +77,43 @@ function formatShortDate(ms: number, now: number): string {
  * to a human reader — and the minute bucket only starts once a full minute has elapsed, so a "0m
  * ago"/"0 分钟前" (the audit's other S9 complaint) cannot occur.
  */
-export function formatRelative(iso: string | null | undefined, now: number = Date.now()): string {
+export function formatRelative(
+  iso: string | null | undefined,
+  t: Translate,
+  now: number = Date.now(),
+): string {
   const ms = parse(iso);
   if (ms === undefined) return '—';
   const diff = now - ms; // > 0 past, < 0 future
   const absDiff = Math.abs(diff);
-  if (absDiff <= 60_000) return '刚刚';
+  if (absDiff <= 60_000) return t('刚刚', 'just now');
 
   const absMinutes = Math.floor(absDiff / 60_000);
-  if (absMinutes < 60) return diff > 0 ? `${absMinutes} 分钟前` : `${absMinutes} 分钟后`;
+  if (absMinutes < 60) return ago(t, diff > 0, absMinutes, '分钟', 'minute');
 
   const dayDiff = Math.round((localDayStart(now) - localDayStart(ms)) / 86_400_000);
-  if (dayDiff === 0) {
-    const absHours = Math.floor(absDiff / 3_600_000);
-    return diff > 0 ? `${absHours} 小时前` : `${absHours} 小时后`;
-  }
+  if (dayDiff === 0) return ago(t, diff > 0, Math.floor(absDiff / 3_600_000), '小时', 'hour');
 
   if (dayDiff === 1 || dayDiff === -1) {
     const target = new Date(ms);
     const clock = `${pad2(target.getHours())}:${pad2(target.getMinutes())}`;
-    return dayDiff === 1 ? `昨天 ${clock}` : `明天 ${clock}`;
+    return dayDiff === 1
+      ? t(`昨天 ${clock}`, `yesterday ${clock}`)
+      : t(`明天 ${clock}`, `tomorrow ${clock}`);
   }
-  if (dayDiff >= 2 && dayDiff <= 6) return `${dayDiff} 天前`;
-  if (dayDiff <= -2 && dayDiff >= -6) return `${-dayDiff} 天后`;
+  if (Math.abs(dayDiff) >= 2 && Math.abs(dayDiff) <= 6)
+    return ago(t, dayDiff > 0, Math.abs(dayDiff), '天', 'day');
   return formatShortDate(ms, now);
 }
+
+/** `N 分钟前` / `N 分钟后`; `N minute(s) ago` / `in N minute(s)`. */
+function ago(t: Translate, past: boolean, n: number, zhUnit: string, enUnit: string): string {
+  const en = `${n} ${enUnit}${n === 1 ? '' : 's'}`;
+  return past ? t(`${n} ${zhUnit}前`, `${en} ago`) : t(`${n} ${zhUnit}后`, `in ${en}`);
+}
+
+/** The Chinese half of `t(zh, en)` — for a test, or a caller that has no reader's language. */
+export const ZH: Translate = (zh) => zh;
 
 /** Full local date-time for detail views and `title` attributes — compact (`MM-DD HH:mm`, no
  *  seconds: minute precision is enough for an operator scanning a list; the adjacent
@@ -154,22 +169,25 @@ export function formatDateTimeSecondsRange(
   return `${startText} (${timeZoneLabel(start)}) – ${formatShortDate(end, now)} ${formatTimeSeconds(endIso)} (${timeZoneLabel(end)})`;
 }
 
-/** "12s" / "3m 04s" / "1h 02m" between two instants (`end` defaults to now — an elapsed time). */
+/** "12 秒" / "3 分 04 秒" / "1 小时 02 分" between two instants — "12s" / "3m 04s" / "1h 02m" in
+ *  English (legacy 525: it was the English form in both) — `end` absent is an elapsed time. */
 export function formatDuration(
   startIso: string | null | undefined,
-  endIso?: string | null,
+  endIso: string | null | undefined,
+  t: Translate,
   now: number = Date.now(),
 ): string {
   const start = parse(startIso);
   if (start === undefined) return '—';
   const end = parse(endIso) ?? now;
   const total = Math.max(0, Math.floor((end - start) / 1000));
-  if (total < 60) return `${total}s`;
+  if (total < 60) return t(`${total} 秒`, `${total}s`);
   const m = Math.floor(total / 60);
-  const s = total % 60;
-  if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`;
+  const s = String(total % 60).padStart(2, '0');
+  if (m < 60) return t(`${m} 分 ${s} 秒`, `${m}m ${s}s`);
   const h = Math.floor(m / 60);
-  return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  const mm = String(m % 60).padStart(2, '0');
+  return t(`${h} 小时 ${mm} 分`, `${h}h ${mm}m`);
 }
 
 /** `docker.container_restart` → `docker container restart` (the kernel's own label convention,

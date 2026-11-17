@@ -675,7 +675,7 @@ function ApprovalHistoryTab({
                       />
                     </span>
                     <time className="text-3" title={formatDateTime(row.requestedAt)}>
-                      {formatRelative(row.decidedAt ?? row.requestedAt)}
+                      {formatRelative(row.decidedAt ?? row.requestedAt, t)}
                     </time>
                   </span>
                   <ActionWaitingLine row={row} testId="approval-history-waiting" />
@@ -729,7 +729,7 @@ function ApprovalHistoryTab({
                       </span>
                       {row.decidedAt ? (
                         <time title={formatDateTime(row.decidedAt)}>
-                          {formatRelative(row.decidedAt)}
+                          {formatRelative(row.decidedAt, t)}
                         </time>
                       ) : null}
                       {row.decisionReason ? (

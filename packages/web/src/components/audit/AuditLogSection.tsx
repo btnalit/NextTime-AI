@@ -435,7 +435,7 @@ export function AuditLogSection({
                     <AuditUnchangedChip payload={row.payload} />
                     <span className="mono text-3 text-small">{row.action}</span>
                     <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
-                      {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
+                      {formatRelative(row.createdAt, t)} · {formatDateTime(row.createdAt)}
                     </time>
                   </div>
                   <div className="data-row-meta">

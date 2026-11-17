@@ -58,7 +58,7 @@ export function AwaitingAdoptionNotice({
   const t = useT();
   const when =
     announcedAt !== undefined
-      ? t(`（${formatRelative(announcedAt)}）`, ` (${formatDateTime(announcedAt)})`)
+      ? t(`（${formatRelative(announcedAt, t)}）`, ` (${formatDateTime(announcedAt)})`)
       : '';
   const droppedSet = new Set(dropped);
   const restorable = operations.filter((name) => !droppedSet.has(name));

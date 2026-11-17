@@ -682,7 +682,7 @@ function ProposalsListView({ http, onSelect }: ProposalsListViewProps) {
                 <StatusChip machine="publishable" status={row.status} size="s" />
               </span>
               <span className="text-3">
-                v{row.version} · <time data-volatile="">{formatRelative(row.createdAt)}</time>
+                v{row.version} · <time data-volatile="">{formatRelative(row.createdAt, t)}</time>
               </span>
             </ListRow>
           ))}

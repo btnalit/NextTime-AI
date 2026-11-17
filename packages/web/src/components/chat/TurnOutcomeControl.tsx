@@ -132,7 +132,9 @@ export function TurnOutcomeControl({
           />
           <span className="turn-outcome-meta">
             {outcome.givenBy === viewerId ? t('你', 'You') : t('请求人', 'Requester')} ·{' '}
-            <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt)}</time>
+            <time title={formatDateTime(outcome.givenAt)}>
+              {formatRelative(outcome.givenAt, t)}
+            </time>
             {outcome.revision === 2 && outcome.previousOutcome !== null
               ? ` · ${t('已更正，原为', 'corrected from')} ${outcomeLabel(outcome.previousOutcome)}`
               : null}

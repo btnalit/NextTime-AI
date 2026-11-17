@@ -313,7 +313,7 @@ function TrialWorkspaceCard({
                       </>
                     ) : null}
                     <span className="text-3" title={formatDateTime(target.chosenAt)}>
-                      {t('选于', 'chosen')} {formatRelative(target.chosenAt)}
+                      {t('选于', 'chosen')} {formatRelative(target.chosenAt, t)}
                     </span>
                   </li>
                 ))}

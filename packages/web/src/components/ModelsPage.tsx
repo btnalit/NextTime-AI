@@ -98,7 +98,7 @@ function quotaColumns(
       header: t('更新', 'Updated'),
       cell: (row) =>
         row.updatedAt ? (
-          <time title={formatDateTime(row.updatedAt)}>{formatRelative(row.updatedAt)}</time>
+          <time title={formatDateTime(row.updatedAt)}>{formatRelative(row.updatedAt, t)}</time>
         ) : (
           '—'
         ),
@@ -244,7 +244,7 @@ function policyColumns(
       id: 'updatedAt',
       header: t('更新', 'Updated'),
       cell: (policy) => (
-        <time title={formatDateTime(policy.updatedAt)}>{formatRelative(policy.updatedAt)}</time>
+        <time title={formatDateTime(policy.updatedAt)}>{formatRelative(policy.updatedAt, t)}</time>
       ),
     },
     ...(options.canManage

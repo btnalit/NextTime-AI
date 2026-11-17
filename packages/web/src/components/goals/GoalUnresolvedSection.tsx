@@ -74,7 +74,7 @@ export function GoalUnresolvedSection({
                   </span>
                   {action.failedAt ? (
                     <time className="text-3 text-small" title={formatDateTime(action.failedAt)}>
-                      {formatRelative(action.failedAt)}
+                      {formatRelative(action.failedAt, t)}
                     </time>
                   ) : null}
                 </span>

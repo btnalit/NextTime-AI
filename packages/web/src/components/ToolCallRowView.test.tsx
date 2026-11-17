@@ -132,7 +132,7 @@ describe('PersistedToolCallRowView', () => {
         }}
       />,
     );
-    expect(screen.getByTestId('tool-call-time').textContent).toBe('09:05:07 · 用时 12s');
+    expect(screen.getByTestId('tool-call-time').textContent).toBe('09:05:07 · 用时 12 秒');
     // UX P3 on #667: the hover reads both ends to the second.
     expect(screen.getByTestId('tool-call-time').title).toMatch(/09:05:07 – 09:05:19 \(UTC/);
     expect(screen.queryByTestId('tool-call-not-finished')).toBeNull();

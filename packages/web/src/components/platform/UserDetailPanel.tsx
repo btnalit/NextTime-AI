@@ -267,12 +267,14 @@ export function UserDetailPanel({
           {user.lastLoginAt === null ? (
             t('从未', 'Never')
           ) : (
-            <time title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</time>
+            <time title={formatDateTime(user.lastLoginAt)}>
+              {formatRelative(user.lastLoginAt, t)}
+            </time>
           )}
         </dd>
         <dt>{t('创建', 'Created')}</dt>
         <dd>
-          <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt)}</time>
+          <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt, t)}</time>
         </dd>
       </dl>
 

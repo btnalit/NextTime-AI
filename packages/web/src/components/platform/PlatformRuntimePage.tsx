@@ -355,7 +355,7 @@ function RuntimeBody({
       header: t('创建', 'Created'),
       cellClassName: 'text-small',
       cell: (image) => (
-        <time title={formatDateTime(image.createdAt)}>{formatRelative(image.createdAt)}</time>
+        <time title={formatDateTime(image.createdAt)}>{formatRelative(image.createdAt, t)}</time>
       ),
     },
     {
@@ -516,7 +516,9 @@ function RuntimeBody({
       header: t('启动', 'Started'),
       cellClassName: 'text-small',
       cell: (resident) => (
-        <time title={formatDateTime(resident.startedAt)}>{formatRelative(resident.startedAt)}</time>
+        <time title={formatDateTime(resident.startedAt)}>
+          {formatRelative(resident.startedAt, t)}
+        </time>
       ),
     },
     {
@@ -525,7 +527,7 @@ function RuntimeBody({
       cellClassName: 'text-small',
       cell: (resident) => (
         <time title={formatDateTime(resident.lastTouchedAt)}>
-          {formatRelative(resident.lastTouchedAt)}
+          {formatRelative(resident.lastTouchedAt, t)}
         </time>
       ),
     },
