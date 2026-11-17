@@ -25639,6 +25639,10 @@
                 ],
                 "type": "string"
               },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
               "target": {
                 "additionalProperties": false,
                 "properties": {
@@ -45547,6 +45551,10 @@
                   "deprecated"
                 ],
                 "type": "string"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               },
               "target": {
                 "additionalProperties": false,

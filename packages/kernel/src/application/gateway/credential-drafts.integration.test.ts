@@ -13,6 +13,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from './dispatch.js';
+import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -21,7 +22,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * them (`publish_operation`'s `credentialsReviewed`, decision 2026-10-09 「二次确认」). The bulk
  * paths publish with nobody confirming — `publish_manifest` and the landing of
  * `enable_gate_instance` (`publishImportedDrafts`) — so they leave such a draft unpublished and
- * list it in `credentialDrafts`, and publish the rest.
+ * list it in `credentialDrafts`, and publish the rest. Legacy 801: the catalog's draft rows say how
+ * many suspected values each carries, so the console knows which drafts a bulk publish leaves.
  *
  * DB-gated (real Postgres; auto-skip without DATABASE_URL).
  */
@@ -37,6 +39,7 @@ interface OperationRow {
   name: string;
   status: string;
   draftDigest?: string;
+  suspectedSecretValues?: number;
 }
 
 function lookup(name: string, example?: string): Operation {
@@ -167,9 +170,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         return registered.gatekeeperId;
       });
+      // Never make a real network call for get_gatekeeper's health probe.
+      setGatekeeperReadHandlerDeps({
+        gatekeeperClient: {
+          describeOperations: async () => ({ operations: [] }),
+          observe: async () => ({ data: null }),
+          simulate: async () => ({ description: 'no-op (test fake)' }),
+          apply: async () => ({ data: null, replayed: false }),
+          lookupApply: async () => ({ data: null, replayed: true }),
+          revert: async () => ({ data: null }),
+          health: async () => ({ status: 'ok' }),
+          storeConnectedAccount: async () => {},
+          deleteConnectedAccount: async () => {},
+        },
+      });
     });
 
     afterAll(async () => {
+      setGatekeeperReadHandlerDeps({});
       await pool.end();
     });
 
@@ -205,6 +223,40 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialsReviewed: true,
       });
       expect(confirmed.status).toBe('published');
+    });
+
+    it('list_operations and get_gatekeeper count the suspected credential values of a draft, never of a published version', async () => {
+      const carrying = `cd.count.get.${randomUUID().slice(0, 8)}`;
+      const plain = `cd.count.list.${randomUUID().slice(0, 8)}`;
+      await importDrafts([lookup(carrying, vendorShaped), lookup(plain, 'R-1')]);
+
+      const listed = await call<{ items: OperationRow[] }>('list_operations', { gatekeeperId });
+      const held = listed.items.find((item) => item.name === carrying);
+      expect(held).toMatchObject({ status: 'draft', suspectedSecretValues: 1 });
+      const clean = listed.items.find((item) => item.name === plain);
+      expect(clean?.status).toBe('draft');
+      expect(clean).not.toHaveProperty('suspectedSecretValues');
+      // A count, never where or what.
+      expect(JSON.stringify(listed)).not.toContain(vendorShaped);
+
+      const detail = await call<{ operations: OperationRow[] }>('get_gatekeeper', { gatekeeperId });
+      expect(detail.operations.find((item) => item.name === carrying)).toMatchObject({
+        status: 'draft',
+        suspectedSecretValues: 1,
+      });
+      expect(detail.operations.find((item) => item.name === plain)).not.toHaveProperty(
+        'suspectedSecretValues',
+      );
+
+      await call('publish_operation', {
+        gatekeeperId,
+        name: carrying,
+        draftDigest: held?.draftDigest,
+        credentialsReviewed: true,
+      });
+      const published = await row(carrying);
+      expect(published?.status).toBe('published');
+      expect(published).not.toHaveProperty('suspectedSecretValues');
     });
 
     it('enable-time publishing (publishImportedDrafts) holds the same draft and publishes the rest', async () => {

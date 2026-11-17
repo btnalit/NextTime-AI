@@ -1333,7 +1333,10 @@ const connectionCapabilities = [
       'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to ' +
       'one gate and/or narrowed by q (case-insensitive substring on name). A draft is listed ' +
       'only to its proposer, a builder or the owner (D-26, I16); published and deprecated ' +
-      'Operations are listed to every member.',
+      'Operations are listed to every member. A draft whose definition carries suspected ' +
+      'credential values says how many (suspectedSecretValues, never where or what): ' +
+      'publish_operation then needs credentialsReviewed, and publish_manifest leaves an ' +
+      'import-origin one a draft (credentialDrafts).',
   },
   {
     // S3.12 catalog-usage follow-up (docs/development-tasks.md S3.12, 2026-09-08+): the catalog's
