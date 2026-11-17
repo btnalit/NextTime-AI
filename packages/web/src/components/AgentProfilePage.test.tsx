@@ -379,6 +379,60 @@ describe('AgentProfilePage', () => {
     expect(saved.excludedGatekeepers).toEqual(['gk-ragflow']);
   });
 
+  it('legacy 200: a system whose platform gate is not healthy carries its health in the checklist and the effective panel; a healthy one and one connected by the workspace itself carry none', async () => {
+    const instance = (gateId: string, gatekeeperId: string | null, health: string) => ({
+      gateId,
+      connector: 'http',
+      displayName: gateId,
+      transportKind: 'http',
+      target: 'stock',
+      status: 'active',
+      trust: 'platform',
+      health,
+      operationCount: 2,
+      gatekeeperId,
+    });
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          availableGatekeepers: [
+            { gatekeeperId: 'gk-down', granted: true, inUse: true },
+            { gatekeeperId: 'gk-up', granted: false, inUse: true },
+            { gatekeeperId: 'gk-self', granted: true, inUse: true },
+          ],
+        }),
+      list_gatekeepers: () => ({
+        items: [
+          { id: 'gk-down', name: 'stock', kind: 'http', status: 'active' },
+          { id: 'gk-up', name: 'crm', kind: 'http', status: 'active' },
+          { id: 'gk-self', name: 'local', kind: 'http', status: 'active' },
+        ],
+      }),
+      list_available_gate_instances: () => ({
+        items: [
+          instance('gi-down', 'gk-down', 'unreachable'),
+          instance('gi-up', 'gk-up', 'ok'),
+          // Not enabled in this workspace: no Gatekeeper of ours to mark.
+          instance('gi-other', null, 'unreachable'),
+        ],
+      }),
+    });
+    renderPage(http);
+    const gates = await screen.findByTestId('agent-profile-gatekeepers');
+    const down = await within(gates).findByTestId('agent-profile-gatekeepers-health-gk-down');
+    expect(down.textContent).toBe('不可达');
+    expect(down.closest('label')?.textContent).toContain('stock');
+    expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-up')).toBeNull();
+    expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-self')).toBeNull();
+
+    const effective = screen.getByTestId('agent-profile-effective');
+    expect(
+      within(effective).getByTestId('agent-profile-effective-health-gk-down').textContent,
+    ).toBe('不可达');
+    expect(within(effective).queryByTestId('agent-profile-effective-health-gk-up')).toBeNull();
+    expect(within(effective).queryByTestId('agent-profile-effective-health-gk-self')).toBeNull();
+  });
+
   it('with no system granted, the systems field says who has to grant one instead of an empty checklist', async () => {
     const http = scriptedHttp({ get_agent_profile: () => profile() });
     renderPage(http);
