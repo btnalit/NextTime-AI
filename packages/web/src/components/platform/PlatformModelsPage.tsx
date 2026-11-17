@@ -441,7 +441,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   return (
     <div className="page" data-testid="platform-models-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformModels')}
+        breadcrumb={breadcrumbFor('platformModels', t)}
         title={t('模型与供应商', 'Models & providers')}
         description={t(
           '模型代理里配置的供应商：名称、API 种类、Base URL、鉴权头、密钥、模型清单和是否启用；「测试调用」会做一次对话和一次工具调用。工作区只能从这里列出的模型里选。',

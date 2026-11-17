@@ -88,7 +88,7 @@ export function GoalsPage({ http, pushes, onOpen }: GoalsPageProps) {
   return (
     <div className="page goals-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('goals')}
+        breadcrumb={breadcrumbFor('goals', t)}
         title={t('目标', 'Goals')}
         description={t(
           '多步的工作：计划、每一步的进展、验收和花费。目标由入口智能体提出，请求人确认后才开始。',

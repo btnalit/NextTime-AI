@@ -12,7 +12,7 @@ export interface PageHeaderProps {
   readonly title: string;
   readonly description?: ReactNode;
   /** The small-text trail above the title (§5.9 "壳与导航": 面包屑小字 + 标题 + 一句话说明 + 右侧主操作).
-   *  Build this with `lib/nav.ts`'s `breadcrumbFor(section)` rather than writing crumbs by hand —
+   *  Build this with `lib/nav.ts`'s `breadcrumbFor(section, t)` rather than writing crumbs by hand —
    *  that is the single source the Sidebar's own group/page names come from too (S8 W1-A1, audit
    *  S12: before this, per-page breadcrumbs drifted from the Sidebar and from each other — three
    *  spellings of the same group existed at once). */

@@ -127,7 +127,7 @@ export function PlatformResiduePage({ http }: PlatformResiduePageProps) {
   return (
     <div className="page" data-testid="platform-residue-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformResidue')}
+        breadcrumb={breadcrumbFor('platformResidue', t)}
         title={t('验收残留', 'Acceptance residue')}
         description={t(
           '一次验收或试用之后留下的东西：过期或已停用的工作区、还没人认领的草稿、已退出的入口容器。',

@@ -267,7 +267,7 @@ export function CatalogPage({
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('catalog')}
+        breadcrumb={breadcrumbFor('catalog', t)}
         title={t('能力目录', 'Catalog')}
         description={t(
           '工作区里已发布的 Operation、Skill、流程与 Worker 定义，以及你自己的草稿。',

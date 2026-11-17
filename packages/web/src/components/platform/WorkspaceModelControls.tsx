@@ -51,7 +51,10 @@ export function EntryModelSelect({
     <Field
       id={id}
       label={t('入口模型', 'Entry model')}
-      hint="成员在「我的智能体」里没有自己选模型时用它。 Used until a member picks their own in 我的智能体."
+      hint={t(
+        '成员在「我的智能体」里没有自己选模型时用它。',
+        'Used until a member picks their own model in My Agent.',
+      )}
     >
       <Select
         id={id}

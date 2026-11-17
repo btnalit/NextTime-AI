@@ -395,7 +395,7 @@ export function scopedWorkspacePurpose(
 }
 
 export interface MobileTopBarProps {
-  /** The current page's own name (`lib/nav.ts` `breadcrumbFor(active)`'s last crumb) — `AppShell`
+  /** The current page's own name (`lib/nav.ts` `breadcrumbFor(active, t)`'s last crumb) — `AppShell`
    *  resolves this; kept a plain string here so this file need not import `lib/router.ts`'s
    *  `NavSection` just to re-derive it. */
   readonly pageTitle: string;
@@ -416,6 +416,10 @@ export interface MobileTopBarProps {
    *  routing. */
   readonly onOpenMenu: () => void;
 }
+
+/** Legacy 572: a workspace may be named after the product itself; the top bar then says it once,
+ *  not 「NextTime AI · NextTime AI」. */
+const PRODUCT_NAME = 'NextTime AI';
 
 function roleText(role: WorkspaceRole, t: Translate): string {
   return role.kind === 'known' ? roleLabel(role.role, t) : inferredRoleLabel(role.role, t);
@@ -459,7 +463,9 @@ export function MobileTopBar({
       <div className="mobile-topbar-text">
         <span className="mobile-topbar-title truncate">{pageTitle}</span>
         <span className="mobile-topbar-sub truncate">
-          {`NextTime AI · ${scopeName} · ${roleText(role, t)}`}
+          {[PRODUCT_NAME, scopeName, roleText(role, t)]
+            .filter((part, index) => index === 0 || part !== PRODUCT_NAME)
+            .join(' · ')}
         </span>
       </div>
       <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus].en}`}>
@@ -567,18 +573,19 @@ function renderNavItem(
 }
 
 function renderExternalNavItem(item: ExternalNavItem, t: Translate): ReactNode {
+  const label = t(`打开 ${item.name}`, `Open ${item.name}`);
   return (
     <a
       key={item.testId}
       href={item.href}
       className="nav-item"
-      title={`${item.label} ${item.sub}`}
+      title={label}
       data-testid={item.testId}
       target="_blank"
       rel="noopener noreferrer"
     >
       <Icon name={item.icon as IconName} />
-      <span className="nav-label truncate">{t(item.label, item.sub)}</span>
+      <span className="nav-label truncate">{label}</span>
     </a>
   );
 }

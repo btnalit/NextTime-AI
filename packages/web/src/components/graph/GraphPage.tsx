@@ -113,7 +113,7 @@ export function GraphPage({ http }: GraphPageProps) {
   return (
     <div className="page graph-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('graph')}
+        breadcrumb={breadcrumbFor('graph', t)}
         title={t('图谱', 'Graph')}
         description={t(
           '浏览对象、展开邻居、追溯事实来源；颜色表示新鲜度。',

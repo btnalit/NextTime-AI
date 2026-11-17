@@ -143,7 +143,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformAudit')}
+        breadcrumb={breadcrumbFor('platformAudit', t)}
         title={t('平台审计', 'Platform audit')}
         description={t(
           '每一次平台范围的调用（workspace_id 为空）：谁做了什么、什么时候——默认隐藏纯读操作。',

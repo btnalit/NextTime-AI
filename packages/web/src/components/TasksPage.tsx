@@ -180,7 +180,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   return (
     <div className="page tasks-page">
       <PageHeader
-        breadcrumb={breadcrumbFor('tasks')}
+        breadcrumb={breadcrumbFor('tasks', t)}
         title={t('任务', 'Tasks')}
         description={t(
           '代表你委派给 Worker 的工作，及其运行与结果。',

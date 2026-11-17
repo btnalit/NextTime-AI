@@ -119,7 +119,7 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
           '随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。模块是只含一个本体的能力包，工作区所有者在「能力目录 · 能力包」里安装和升级。',
           "Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace. A module is a pack with one ontology; workspace owners install and upgrade it under Catalog · Packs.",
         )}
-        breadcrumb={breadcrumbFor('platformModules')}
+        breadcrumb={breadcrumbFor('platformModules', t)}
       />
 
       <PlatformError

@@ -127,6 +127,8 @@ describe('Sidebar', () => {
       expect(screen.getByTestId('nav-audit')).toBeTruthy();
       const explorerLink = screen.getByTestId('nav-explorer');
       expect(explorerLink.getAttribute('href')).toBe('/explorer/');
+      // Legacy 612: the label says what it opens.
+      expect(explorerLink.textContent).toMatch(/^打开 Explorer$/);
       expect(explorerLink.getAttribute('target')).toBe('_blank');
       unmount();
     }
@@ -636,6 +638,20 @@ describe('MobileTopBar', () => {
     expect(screen.getByText(/NextTime AI · Acme · 所有者/)).toBeTruthy();
     fireEvent.click(screen.getByTestId('nav-open'));
     expect(onOpenMenu).toHaveBeenCalledTimes(1);
+  });
+
+  // Legacy 572: a workspace named after the product is said once, not 「NextTime AI · NextTime AI」.
+  it('says the product name once when the workspace carries the same name', () => {
+    render(
+      <MobileTopBar
+        pageTitle="对话"
+        workspaceName="NextTime AI"
+        role={KNOWN_OWNER}
+        wsStatus="connected"
+        onOpenMenu={vi.fn()}
+      />,
+    );
+    expect(document.querySelector('.mobile-topbar-sub')?.textContent).toBe('NextTime AI · 所有者');
   });
 
   it('falls back to the inferred-role label when the role is not yet known', () => {

@@ -178,7 +178,7 @@ export function PlatformUsersPage({ http, ownUserId = null }: PlatformUsersPageP
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={breadcrumbFor('platformUsers')}
+        breadcrumb={breadcrumbFor('platformUsers', t)}
         title={t('用户', 'Users')}
         description={t(
           '谁能登录、属于哪些工作区、预算多少。',
