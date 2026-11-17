@@ -64,6 +64,7 @@ describe('ManifestPublishResultNotice', () => {
           skippedDraftOperationNames: ['stock.export'],
           gateOwnedParamDrafts: HELD,
           absentAnswerDrafts: [{ name: 'stock.lookup', absentAnswers: { statuses: [404] } }],
+          credentialDrafts: [],
         }}
         fix="resync"
         testId="result"

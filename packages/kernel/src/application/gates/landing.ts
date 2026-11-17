@@ -9,6 +9,7 @@ import {
 } from '../../governance/connections/index.js';
 import {
   type AbsentAnswerDraft,
+  type CredentialDraft,
   type GateOwnedParamDraft,
   type GatekeeperByEndpointEntry,
   findGatekeepersByEndpoint,
@@ -116,6 +117,9 @@ export interface LandingResult {
   /** Catalog only: imported drafts declaring answers that mean "does not exist", left for a person
    *  to publish confirming them (S11 「门确认不存在」 B-a). */
   readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
+  /** Catalog only: imported drafts carrying suspected credential values, left for a person to
+   *  publish confirming them (legacy 198). */
+  readonly credentialDrafts: readonly CredentialDraft[];
   /** Self: the resolved `request_connection` card, when one was given. */
   readonly connectionRequest: ConnectionRequestRow | null;
 }
@@ -277,7 +281,12 @@ export async function landGatekeeper(
   const published =
     source.kind === 'catalog'
       ? await publishImportedDrafts(client, workspaceId, gatekeeperId, imported.imported)
-      : { publishedOperationNames: [], gateOwnedParamDrafts: [], absentAnswerDrafts: [] };
+      : {
+          publishedOperationNames: [],
+          gateOwnedParamDrafts: [],
+          absentAnswerDrafts: [],
+          credentialDrafts: [],
+        };
 
   // The origin record — exactly one per Gatekeeper.
   let resolvedRequest: ConnectionRequestRow | null = null;
@@ -360,6 +369,7 @@ export async function landGatekeeper(
     publishedOperationNames: published.publishedOperationNames,
     gateOwnedParamDrafts: published.gateOwnedParamDrafts,
     absentAnswerDrafts: published.absentAnswerDrafts,
+    credentialDrafts: published.credentialDrafts,
     connectionRequest: resolvedRequest,
   };
 }

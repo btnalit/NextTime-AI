@@ -100,6 +100,8 @@ export type {
   OperationAbsentAnswers,
   OperationAbsentAnswersReview,
 } from './absent-answers-review.js';
+export { credentialDraftOf, suspectedCredentialValuesOf } from './credential-drafts.js';
+export type { CredentialDraft } from './credential-drafts.js';
 export type {
   OperationRecord,
   OperationViewer,
