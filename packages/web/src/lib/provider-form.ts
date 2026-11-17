@@ -419,13 +419,13 @@ function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): stri
     const path = withoutEndpointPath(target.replace(/\/+$/, ''));
     const fix = !path.stripped
       ? t(
-          '按这个路径改正 Base URL：去掉末尾 /v1/… 接口路径后的部分就是 Base URL 该带的路径。',
-          'Correct the Base URL by that path: what is left once the trailing /v1/… endpoint path is gone is the path the Base URL should carry.',
+          '这个路径不像接口地址，可能是上游的说明页或登录页：对照上游的文档核对 Base URL。',
+          'That path does not look like an API endpoint — it may be the upstream’s own page or a sign-in: check the Base URL against the upstream’s documentation.',
         )
       : path.value === ''
         ? t(
-            'Base URL 不该带路径：只留站点地址（https://主机名）。',
-            'The Base URL should carry no path: keep only the site address (https://host).',
+            'Base URL 不该带路径：只留站点地址（协议加主机名）。',
+            'The Base URL should carry no path: keep only the site address (scheme and host).',
           )
         : t(
             `把 Base URL 的路径改成 ${path.value}（站点地址加上 ${path.value}）。`,
@@ -446,8 +446,14 @@ function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): stri
   // The new address keeps any path prefix a relay serves under (`/api/openai`); only the
   // endpoint path llm-proxy appends itself (`/v1/models`, …) goes. A path llm-proxy masked
   // (`***`) is not something to paste, so then the rule alone is said.
-  const base = normalizeBaseUrl(target).value;
-  const suggestion = base.includes('***') ? '' : t(`（也就是 ${base}）`, ` (that is, ${base})`);
+  // Review #501 on #1363: only a target that ended in such an endpoint path names a Base URL —
+  // a host's root, a sign-in path the pattern above misses, or a cut-off target names none.
+  const normalized = normalizeBaseUrl(target);
+  const base = normalized.value;
+  const suggestion =
+    normalized.changed === 'none' || base.includes('***')
+      ? ''
+      : t(`（也就是 ${base}）`, ` (that is, ${base})`);
   return t(
     `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}如果这是同一个服务的新地址（http 换成了 https，或换了域名），确认可信后，把 Base URL 改成这个地址去掉末尾 /v1/… 接口路径后的部分${suggestion}。`,
     `The upstream answered ${status}, a redirect to another address, ${target}. ${why} If this is the same service at a new address (http moved to https, or a new domain), once you trust it set the Base URL to that address without the trailing /v1/… endpoint path${suggestion}.`,

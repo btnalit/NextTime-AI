@@ -111,6 +111,19 @@ describe('lib/provider-form', () => {
         'model_list',
       ),
     ).toContain('（也就是 https://relay.example/api/openai）');
+    // Review #501 on #1363: a target that did not end in an endpoint path names no Base URL.
+    for (const where of [
+      'https://auth.example.com/',
+      'https://relay.example/v2/chat',
+      'https://relay.example/very/long/pa…',
+    ]) {
+      const said = explainUpstreamError(
+        `GET /v1/models responded 302, a redirect to ${JSON.stringify(where)}. ${advice}`,
+        zh,
+      );
+      expect(said).toContain('重定向');
+      expect(said).not.toContain('也就是');
+    }
     // A sign-in page is never offered as a Base URL.
     const signIn = explainUpstreamError(
       `POST /v1/chat/completions responded 302, a redirect to "https://login.relay.example/oauth/authorize". ${advice}`,
@@ -150,7 +163,7 @@ describe('lib/provider-form', () => {
         `GET /v1/models responded 302, a redirect to "/models-list". ${advice}`,
         zh,
       ),
-    ).toContain('去掉末尾 /v1/… 接口路径后的部分');
+    ).toContain('这个路径不像接口地址');
     // A target llm-proxy shows with an escaped quote reads back as it was.
     expect(
       explainUpstreamError(`upstream responded 307, a redirect to "/a\\"b". ${advice}`, en),
