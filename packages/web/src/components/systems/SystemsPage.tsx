@@ -108,6 +108,7 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 const NO_DRAFTS: readonly DraftAsRead[] = [];
 const NO_FIRST_PUBLISHES: readonly FirstPublish[] = [];
+const NO_HELD_DRAFTS: readonly string[] = [];
 
 /** A system's card in the list, by its Gatekeeper id (`SystemAccessCard`'s `data-gatekeeper-id`). */
 function findGatekeeperCard(gatekeeperId: string): HTMLElement | undefined {
@@ -272,6 +273,21 @@ export function SystemsPage({
       const rows = operationsList.state.data.items;
       for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
         map.set(gatekeeperId, manifestPublishPlan(rows, gatekeeperId).publishable.length);
+      }
+    }
+    return map;
+  }, [operationsList.state]);
+
+  // UX acceptance of #1377 (P3): the gate's own drafts 「发布清单」 leaves for a person to publish in
+  // the catalog — suspected credentials, or answers that mean "does not exist".
+  const heldForAPersonByGate = useMemo(() => {
+    const map = new Map<string, readonly string[]>();
+    if (operationsList.state.status === 'ready') {
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        const plan = manifestPublishPlan(rows, gatekeeperId);
+        const held = [...plan.credentials, ...plan.absentAnswers];
+        if (held.length > 0) map.set(gatekeeperId, held);
       }
     }
     return map;
@@ -688,6 +704,7 @@ export function SystemsPage({
                 drafts={draftsByGate.get(gate.gateId) ?? NO_DRAFTS}
                 publishableCount={publishableByGate.get(gate.gateId) ?? 0}
                 firstPublishes={firstPublishesByGate.get(gate.gateId) ?? NO_FIRST_PUBLISHES}
+                heldForAPerson={heldForAPersonByGate.get(gate.gateId) ?? NO_HELD_DRAFTS}
                 canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}

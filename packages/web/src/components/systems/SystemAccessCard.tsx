@@ -13,10 +13,14 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import type { DraftAsRead } from '../../lib/connections.js';
 import { isDraftChangedError } from '../../lib/errors.js';
 import { actionKindTagText, shortId } from '../../lib/format.js';
-import { type GatekeeperDetail, gateGrantMakesApprover } from '../../lib/governance.js';
+import {
+  type GatekeeperDetail,
+  gateGrantMakesApprover,
+  operationKey,
+} from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
-import { hrefs } from '../../lib/router.js';
+import { hrefs, navigate } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
 import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
 import { DefinitionMismatchNotice } from '../connect/DefinitionDrift.js';
@@ -105,6 +109,10 @@ export interface SystemAccessCardProps {
   /** Legacy 349: the first versions among them that write or are high impact — 「发布清单」
    *  confirms these before it publishes, as the catalog's own Publish does. */
   readonly firstPublishes?: readonly FirstPublish[];
+  /** UX acceptance of #1377 (P3): the gate's own drafts 「发布清单」 leaves for a person to publish
+   *  in the catalog (suspected credentials, answers that mean "does not exist") — named in the
+   *  menu, so a greyed 「发布清单」 does not leave them unmentioned. */
+  readonly heldForAPerson?: readonly string[];
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -318,6 +326,7 @@ export function SystemAccessCard({
   drafts,
   publishableCount,
   firstPublishes = [],
+  heldForAPerson = [],
   canPublish,
   onPublished,
   workerNames,
@@ -460,6 +469,26 @@ export function SystemAccessCard({
             >
               {t('发布清单', 'Publish manifest')}
               {draftCount > 0 ? ` (${draftCount})` : ''}
+            </DropdownMenuItem>
+          ) : null}
+          {canPublish && heldForAPerson.length > 0 ? (
+            <DropdownMenuItem
+              onSelect={() =>
+                navigate(
+                  hrefs.catalog(
+                    'operations',
+                    heldForAPerson.length === 1
+                      ? operationKey({ gatekeeperId: gate.gateId, name: heldForAPerson[0] ?? '' })
+                      : undefined,
+                  ),
+                )
+              }
+              data-testid="gatekeeper-held-drafts"
+            >
+              {t(
+                `${heldForAPerson.length} 个草稿等人在能力目录里核对后发布`,
+                `${heldForAPerson.length} draft(s) wait for a person to check and publish in the catalog`,
+              )}
             </DropdownMenuItem>
           ) : null}
           {canManage && !healthInfo.linked ? (

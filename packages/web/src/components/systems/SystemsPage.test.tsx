@@ -7,6 +7,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { LangProvider } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
 import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { comboboxOptionTexts, openCombobox } from '../kit/combobox.test-helpers.js';
 import { SystemsPage } from './SystemsPage.js';
@@ -1395,11 +1396,43 @@ describe('SystemsPage', () => {
     fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
     const item = await screen.findByTestId('gatekeeper-publish-manifest');
     expect(item.textContent).toContain('(1)');
+    // UX acceptance of #1377 (P3): the held draft is named in the menu, not left unmentioned.
+    expect(screen.getByTestId('gatekeeper-held-drafts').textContent).toBe(
+      '1 个草稿等人在能力目录里核对后发布',
+    );
     fireEvent.click(item);
     const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
     expect(confirm.textContent).toContain('将发布 1 个');
     expect(confirm.textContent).toContain('stock.adjust');
     expect(confirm.textContent).not.toContain('stock.login');
+  });
+
+  it('UX acceptance of #1377 (P3): with only drafts left for a person, 「发布清单」 is greyed and the menu opens the held draft in the catalog', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.login',
+            status: 'draft',
+            origin: 'import',
+            draftDigest: 'd-1',
+            suspectedSecretValues: 1,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    const publish = await screen.findByTestId('gatekeeper-publish-manifest');
+    expect(publish.getAttribute('data-disabled')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('gatekeeper-held-drafts'));
+    await waitFor(() =>
+      expect(window.location.hash).toBe(hrefs.catalog('operations', 'gk-1::stock.login')),
+    );
+    window.location.hash = '';
   });
 
   it('legacy 349: 「发布清单」 that would publish a first version which writes or is high impact confirms it first', async () => {

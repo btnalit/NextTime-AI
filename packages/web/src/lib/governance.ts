@@ -234,6 +234,10 @@ export interface OperationCatalogRow {
   /** Review #493 on #583 (`OperationSummaryWire.draftDigest`): on a draft only — which content
    *  this row shows, handed back to discard / publish so a draft revised since is refused. */
   readonly draftDigest?: string;
+  /** Legacy 806 (`OperationSummaryWire.suspectedSecretValues`, #1372): on a draft whose definition
+   *  carries suspected credential values, how many — a bulk publish leaves such an import draft
+   *  for a person to publish in the catalog with the credential confirmation. */
+  readonly suspectedSecretValues?: number;
   /** S11 「门确认不存在」 A (`OperationSummaryWire.absentAnswers`): on an observe Operation that
    *  declares them, the target's answers that mean "does not exist". */
   readonly absentAnswers?: OperationAbsentAnswersWire;

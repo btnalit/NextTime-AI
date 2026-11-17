@@ -265,8 +265,8 @@ export function OnboardingWizard({
               {plan.credentials.length > 0 ? (
                 <p className="field-hint" data-testid="wizard-publish-credentials">
                   {t(
-                    `另有 ${plan.credentials.length} 个草稿暂不发布：${plan.credentials.map(actionKindTagText).join('、')}。它们的定义里有看起来像密钥、令牌或密码的值（常见的是文档里的示例，比如描述里写的 Authorization: Bearer <token>、password 字段的 example），要由人在能力目录里核对后逐个发布，发布后的结果页会列出位置。`,
-                    `${plan.credentials.length} draft(s) are held back: ${plan.credentials.map(actionKindTagText).join(', ')}. Their definitions hold values that look like a key, token or password (often an example in the document, such as Authorization: Bearer <token> in a description or a password field’s example); a person checks and publishes each in the catalog, and the result page after publishing lists where they are.`,
+                    `另有 ${plan.credentials.length} 个草稿暂不发布：${plan.credentials.map(actionKindTagText).join('、')}。它们的定义里有看起来像密钥、令牌或密码的值（常见的是文档里的示例，比如描述里写的 Authorization: Bearer <token>、password 字段的 example），要由人在能力目录里核对后逐个发布，发布后的结果页会列出这些值在定义里的位置。`,
+                    `${plan.credentials.length} draft(s) are held back: ${plan.credentials.map(actionKindTagText).join(', ')}. Their definitions hold values that look like a key, token or password (often an example in the document, such as Authorization: Bearer <token> in a description or a password field’s example); a person checks and publishes each in the catalog, and the result page after publishing lists where in each definition those values are.`,
                   )}
                 </p>
               ) : null}
