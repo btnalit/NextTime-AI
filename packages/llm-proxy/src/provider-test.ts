@@ -229,6 +229,21 @@ export function scrubUpstreamText(text: string, realKey: string): string {
   return scrubTokenLikeRuns(text, realKey).slice(0, ERROR_TEXT_MAX_LENGTH);
 }
 
+/** `LONG_BASE64ISH_PATTERN` without `/` (#1344 review): on a URL it is looked for one path segment
+ *  at a time, since with `/` any long ordinary API path (`/api/v1/chat/completions/`, or
+ *  `:8443/v1/chat/completions` after a port) read as one token and was hidden whole. */
+const LONG_SEGMENT_TOKEN_PATTERN = /[A-Za-z0-9+_-]{24,}/g;
+
+/** `realKey` replaced verbatim (when there is one) over the whole text, then token-like runs that
+ *  stay inside one path segment (`TOKEN_LIKE_PREFIX_PATTERN` never spans a `/`) — for a text that
+ *  carries a URL path, where `scrubTokenLikeRuns` would take the path itself for a token. */
+function scrubTokenLikeSegments(text: string, realKey: string): string {
+  const withoutKey = realKey === '' ? text : text.split(realKey).join('***');
+  return withoutKey
+    .replace(TOKEN_LIKE_PREFIX_PATTERN, '***')
+    .replace(LONG_SEGMENT_TOKEN_PATTERN, '***');
+}
+
 /** Legacy 221: who refuses a provider's redirect, and what to fix (R-23: the key would go along). */
 const UPSTREAM_REDIRECT_ADVICE: RedirectAdvice = {
   follower: 'llm-proxy does not follow redirects (the provider key would go along)',
@@ -237,7 +252,7 @@ const UPSTREAM_REDIRECT_ADVICE: RedirectAdvice = {
 
 /** Legacy 221: an upstream's redirect as a failure that names the status and where it pointed —
  *  the same wording as a gate's (`@nexttime/shared` `describeRedirect`: a path, or another
- *  origin and its path, never the query), key-scrubbed like every other upstream text. Each
+ *  origin and its path, never the query), with the key and token-like path segments scrubbed. Each
  *  upstream call asks for `redirect: 'manual'` and calls this before reading the body; until
  *  then `redirect: 'error'` failed as a bare "fetch failed". */
 export function describeUpstreamRedirect(
@@ -247,8 +262,9 @@ export function describeUpstreamRedirect(
   realKey: string,
 ): string {
   // Not cut at ERROR_TEXT_MAX_LENGTH: the text is this proxy's own, and the one part the upstream
-  // chose (where it pointed) is already bounded by `redirectTargetForDisplay`.
-  return scrubTokenLikeRuns(
+  // chose (where it pointed) is already bounded by `redirectTargetForDisplay`. Scrubbed a path
+  // segment at a time, so an ordinary long path still shows (#1344 review).
+  return scrubTokenLikeSegments(
     describeRedirect(label, response, requestUrl, UPSTREAM_REDIRECT_ADVICE),
     realKey,
   );

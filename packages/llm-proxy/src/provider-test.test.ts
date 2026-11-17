@@ -1,7 +1,11 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderConfig } from './config.js';
-import { PROVIDER_TEST_MAX_RESPONSE_BYTES, runProviderTest } from './provider-test.js';
+import {
+  PROVIDER_TEST_MAX_RESPONSE_BYTES,
+  describeUpstreamRedirect,
+  runProviderTest,
+} from './provider-test.js';
 
 /**
  * provider-test.test: fake upstreams for each api kind exercise the two round trips — the shape
@@ -538,5 +542,41 @@ describe('runProviderTest', () => {
       `POST /v1/messages responded 308, a redirect to "/v2/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`,
     );
     expect(calls).toBe(2);
+  });
+});
+
+describe('describeUpstreamRedirect: the key and token-like segments are scrubbed, an ordinary long path is not (#1344 review)', () => {
+  const REQUEST = 'https://api.example.invalid/v1/chat/completions';
+  const where = (location: string, realKey = REAL_KEY): string => {
+    const message = describeUpstreamRedirect(
+      'upstream',
+      { status: 307, headers: new Headers({ location }) },
+      REQUEST,
+      realKey,
+    );
+    const match =
+      /^upstream responded 307, a redirect to "(.*)"\. llm-proxy does not follow redirects \(the provider key would go along\): set the provider's Base URL to the final address\.$/.exec(
+        message,
+      );
+    expect(match, message).not.toBeNull();
+    return match?.[1] ?? '';
+  };
+
+  it('shows a long ordinary API path whole, same origin or another origin with a port', () => {
+    expect(where('/api/v1/chat/completions/')).toBe('/api/v1/chat/completions/');
+    expect(where('/openai/deployments/gpt-4o-mini/chat/completions')).toBe(
+      '/openai/deployments/gpt-4o-mini/chat/completions',
+    );
+    expect(where('https://llm.example.invalid:8443/v1/chat/completions?api-version=1')).toBe(
+      'https://llm.example.invalid:8443/v1/chat/completions',
+    );
+  });
+
+  it('still hides the real key anywhere, and a segment that looks like a token', () => {
+    expect(where(`/${REAL_KEY}/v1/chat/completions`)).toBe('/***/v1/chat/completions');
+    expect(where('/t/AbCdEfGhIjKlMnOpQrStUvWxYz012345/v1')).toBe('/t/***/v1');
+    expect(where('/v1/sk-another-provider-key/models')).toBe('/v1/***/models');
+    // A key that holds a `/` is still replaced verbatim over the whole text.
+    expect(where('/v1/abc/def-ghi-jkl/chat', 'abc/def-ghi-jkl')).toBe('/v1/***/chat');
   });
 });
