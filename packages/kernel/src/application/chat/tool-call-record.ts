@@ -14,6 +14,7 @@ import {
   safeStringify,
   scrubSecretLiterals,
   scrubSecretValues,
+  scrubbedCut,
   secretFieldLiterals,
 } from '../../governance/redaction/index.js';
 
@@ -38,10 +39,12 @@ import {
  *
  * Size, and time: a runtime frame may be up to 100 MiB, and redaction runs on the kernel's event
  * loop. So nothing past what is shown is read at all: a payload is read up to its preview length
- * plus `SECRET_MARGIN_CHARS`, scrubbed, then cut to the preview length — the margin is longer than
- * any secret replaced whole, so a secret that starts before the cut ends before the read bound and
- * the cut never leaves half of one behind. The live stream shows the same bounded, scrubbed copy.
- * A stored reply is scrubbed whole up to `MESSAGE_TEXT_MAX_CHARS`, past which it is cut.
+ * plus `SECRET_MARGIN_CHARS`, scrubbed, then cut to the preview length — the margin keeps the
+ * preview full however many secrets before the cut were replaced by shorter text. The live stream
+ * shows the same bounded, scrubbed copy. A stored reply is scrubbed whole up to
+ * `MESSAGE_TEXT_MAX_CHARS`, past which it is cut. Wherever reading stops inside a string, the copy
+ * never ends in the start of a secret (legacy 819, `scrubbedCut`): a secret the stop crosses is read
+ * whole and replaced, and one that reading stopped in is left out.
  */
 
 /** Characters of a call's arguments kept in its record. */
@@ -49,7 +52,8 @@ export const TOOL_CALL_ARGS_PREVIEW_CHARS = 4_000;
 /** Characters of a call's result kept in its record. */
 export const TOOL_CALL_RESULT_PREVIEW_CHARS = 16_000;
 /** Read past a preview's length before cutting it — longer than any secret replaced whole (a PEM
- *  RSA-4096 private key is ~3.3k characters, a Handle well under 2k). */
+ *  RSA-4096 private key is ~3.3k characters, a Handle well under 2k), so replacements before the
+ *  cut rarely leave the preview short. */
 export const SECRET_MARGIN_CHARS = 4_096;
 /** A stored reply's text fields are kept up to this length (256 Ki characters — far above what a
  *  model writes in one answer); past it the rest is cut, so scrubbing it stays bounded. */
@@ -108,30 +112,6 @@ function scrubResultText(text: string, rule: ResultRule): Scrubbed<string> {
   return { value: values.value, redactedValues: masked.redactedValues + values.redactedValues };
 }
 
-/** pi's tool result (`{content: [{type: 'text', text}, …], details}`) with each text part masked
- *  (`maskResultText`), read up to `readChars` — the rest of the result is left to `redactSecrets`.
- *  Anything else is returned as it is. */
-function maskResultTextParts(
-  result: unknown,
-  rule: ResultRule,
-  readChars: number,
-): Scrubbed<unknown> {
-  const content = (result as { content?: unknown } | null)?.content;
-  if (!Array.isArray(content)) return { value: result, redactedValues: 0 };
-  let redactedValues = 0;
-  const masked = content.map((part) => {
-    const record = part as { type?: unknown; text?: unknown } | null;
-    if (record?.type !== 'text' || typeof record.text !== 'string') return part;
-    const head = record.text.length > readChars ? record.text.slice(0, readChars) : record.text;
-    const fields = maskResultText(head, rule);
-    if (fields.redactedValues === 0) return part;
-    redactedValues += fields.redactedValues;
-    return { ...record, text: fields.value + record.text.slice(head.length) };
-  });
-  if (redactedValues === 0) return { value: result, redactedValues: 0 };
-  return { value: { ...(result as Record<string, unknown>), content: masked }, redactedValues };
-}
-
 /** A tool call's arguments with secret-looking keys and values replaced, read only as far as their
  *  record shows — the shape is kept, so the live console renders it as before, except that past
  *  the read bound the rest of an object or array is one `[…]` entry or item (`redactSecrets`'s
@@ -140,21 +120,23 @@ export function redactToolArgs(value: unknown, toolName?: string | null): Redact
   return redactPayload(value, toolName, ARGS_READ_CHARS);
 }
 
-/** A tool call's result, likewise — a text part that is JSON with the same key rule, and every
- *  value `args` (the call's arguments, when known) hid hidden wherever the result repeats it. */
+/** A tool call's result, likewise — a string that is JSON (pi's text parts) with the same key
+ *  rule, and every value `args` (the call's arguments, when known) hid hidden wherever the result
+ *  repeats it. One walk does all of it, so the key rule reads what the walk reads: before legacy
+ *  819 the text parts were masked up to the bound first and the rest of each appended as it was,
+ *  and a walk that then read past the masked part (masking shortens) showed it unmasked. */
 export function redactToolResult(
   value: unknown,
   toolName?: string | null,
   args?: unknown,
 ): RedactedValue {
   const rule = resultRule(toolName, args);
-  const masked = maskResultTextParts(value, rule, RESULT_READ_CHARS);
-  const redacted = redactSecrets(masked.value, {
+  return redactSecrets(value, {
     isSecretKey: rule.isSecretKey,
+    jsonTextFields: true,
     literals: rule.literals,
     maxChars: RESULT_READ_CHARS,
   });
-  return { ...redacted, redactedValues: redacted.redactedValues + masked.redactedValues };
 }
 
 /**
@@ -189,25 +171,27 @@ export function rescrubStoredToolCallResult(
 }
 
 /** A runtime `message`'s content with secrets scrubbed from its string fields (only the values;
- *  a reply has no secret-named keys to replace) — each cut at `MESSAGE_TEXT_MAX_CHARS` first. The
- *  agent can be talked into repeating its own Handle in its answer as easily as into running
- *  `env`. `cut` says whether any field was cut. */
+ *  a reply has no secret-named keys to replace) — each past `MESSAGE_TEXT_MAX_CHARS` cut there
+ *  (`scrubbedCut`: it reads `CUT_LOOKAHEAD_CHARS` further, so the cut never leaves the start of a
+ *  secret). The agent can be talked into repeating its own Handle in its answer as easily as into
+ *  running `env`. `cut` says whether any field was cut. */
 export function redactMessageContent(
   content: Record<string, unknown>,
 ): Scrubbed<Record<string, unknown>> & { readonly cut: boolean } {
   let redactedValues = 0;
   let cut = false;
   const out: Record<string, unknown> = {};
+  const scrub = (text: string): string => {
+    const scrubbed = scrubSecretValues(text);
+    redactedValues += scrubbed.redactedValues;
+    return scrubbed.value;
+  };
   for (const [key, value] of Object.entries(content)) {
-    if (typeof value === 'string') {
-      const kept =
-        value.length > MESSAGE_TEXT_MAX_CHARS ? value.slice(0, MESSAGE_TEXT_MAX_CHARS) : value;
-      cut ||= kept !== value;
-      const scrubbed = scrubSecretValues(kept);
-      redactedValues += scrubbed.redactedValues;
-      out[key] = kept === value ? scrubbed.value : `${scrubbed.value}…`;
-    } else {
-      out[key] = value;
+    if (typeof value !== 'string') out[key] = value;
+    else if (value.length <= MESSAGE_TEXT_MAX_CHARS) out[key] = scrub(value);
+    else {
+      cut = true;
+      out[key] = `${scrubbedCut(value, MESSAGE_TEXT_MAX_CHARS, scrub)}…`;
     }
   }
   return { value: out, redactedValues, cut };
@@ -231,7 +215,8 @@ function preview(
 /** pi's tool result is `{content: [{type:'text', text}, …], details}`: the model saw the text
  *  parts, so the record shows those (a non-text part as `[image]` etc.), each read up to what is
  *  left of `readChars` and scrubbed (`scrubResultText` — a part that is JSON gets the key rule
- *  too). `undefined` when the result has no such parts. */
+ *  too; the part reading stops in is cut by `scrubbedCut`). `undefined` when the result has no
+ *  such parts. */
 function resultContentText(
   result: unknown,
   readChars: number,
@@ -261,11 +246,16 @@ function resultContentText(
     parts += 1;
     totalChars += separator.length + partText.length;
     if (read >= readChars) continue;
-    const head = partText.slice(0, Math.max(0, readChars - read - separator.length));
-    read += separator.length + head.length;
-    const scrubbed = scrubResultText(head, rule);
-    redactedValues += scrubbed.redactedValues;
-    text += separator + scrubbed.value;
+    const room = Math.max(0, readChars - read - separator.length);
+    read += separator.length + Math.min(partText.length, room);
+    const scrub = (part: string): string => {
+      const scrubbed = scrubResultText(part, rule);
+      redactedValues += scrubbed.redactedValues;
+      return scrubbed.value;
+    };
+    // Reading stops inside this part: never in the start of a secret (legacy 819).
+    if (partText.length <= room) text += separator + scrub(partText);
+    else text += separator + (room > 0 ? scrubbedCut(partText, room, scrub) : '');
   }
   return parts > 0 ? { text, totalChars, readAll: read >= totalChars, redactedValues } : undefined;
 }

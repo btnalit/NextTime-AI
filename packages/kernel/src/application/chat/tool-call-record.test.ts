@@ -282,3 +282,54 @@ describe('redactMessageContent — a stored reply', () => {
     expect(long.value.text).toBe(`${'a'.repeat(MESSAGE_TEXT_MAX_CHARS)}…`);
   });
 });
+
+/**
+ * Legacy 819: where reading stops inside a string, no copy — the live stream's, the record's, a
+ * stored reply's — ends in the start of a secret, and the live stream's key rule reads what its
+ * walk reads.
+ */
+describe('legacy 819 — reading stops, a secret never shows', () => {
+  const PASSWORD = 'password: "qz7 correct horse battery staple" done';
+
+  it('the live stream hides every value under a secret-named key of a long JSON result, past where masking shortened it', () => {
+    // Field values the value patterns do not catch (only the key rule does), long enough that
+    // hiding them shortens the text by more than the rest of the bound.
+    const items = Array.from(
+      { length: 400 },
+      (_, index) => `{"credentials":{"user":"horse-${index}-${'v'.repeat(80)}"}}`,
+    );
+    const result = textResult(`{"items":[${items.join(',')}]}`);
+    const live = redactToolResult(result, 'some_tool');
+    expect(live.omitted).toBe(true);
+    expect(JSON.stringify(live.value)).not.toContain('horse-');
+    expect(record({ result, hasResult: true }).result?.text).not.toContain('horse-');
+  });
+
+  it('the live stream cuts a result where its bound falls inside a secret without keeping its start', () => {
+    const text = `${'x'.repeat(TOOL_CALL_RESULT_PREVIEW_CHARS + 4_096 - 60)} ${PASSWORD}`;
+    const live = redactToolResult(textResult(text), 'bash');
+    expect(live.omitted).toBe(true);
+    expect(JSON.stringify(live.value)).not.toContain('qz7');
+  });
+
+  it('the record never keeps the start of a secret its read stopped in, after Handles shortened the preview', () => {
+    // Handles before the read bound shorten the scrubbed text below the preview, so what ends the
+    // preview is where reading stopped — inside the password.
+    const handles = `${HANDLE} `.repeat(100);
+    const bound = TOOL_CALL_RESULT_PREVIEW_CHARS + 4_096;
+    const text = `${handles}${' '.repeat(bound - 15 - handles.length)}${PASSWORD}${'z'.repeat(9_000)}`;
+    expect(text.indexOf(PASSWORD)).toBe(bound - 15);
+    const content = record({ result: textResult(text), hasResult: true });
+    expect(content.result?.truncated).toBe(true);
+    expect(content.result?.text).not.toContain('qz7');
+    expect(content.result?.text).not.toContain('eyJ');
+  });
+
+  it('a stored reply cut inside a secret keeps none of it', () => {
+    const text = `${'a'.repeat(MESSAGE_TEXT_MAX_CHARS - 20)} ${PASSWORD}`;
+    const reply = redactMessageContent({ text });
+    expect(reply.cut).toBe(true);
+    expect(reply.value.text).not.toContain('qz7');
+    expect(String(reply.value.text).startsWith('a'.repeat(MESSAGE_TEXT_MAX_CHARS - 20))).toBe(true);
+  });
+});

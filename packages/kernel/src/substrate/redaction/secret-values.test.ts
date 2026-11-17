@@ -1,6 +1,7 @@
 import { namesASecretField } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  CUT_LOOKAHEAD_CHARS,
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
@@ -10,6 +11,7 @@ import {
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
   scrubSecretValues,
+  scrubbedCut,
   secretFieldLiterals,
 } from './index.js';
 
@@ -641,5 +643,109 @@ describe('secret literals — a secret param value quoted back in free text (leg
     });
     const same = { a: 'x' };
     expect(scrubSecretLiteralsIn(same, []).value).toBe(same);
+  });
+});
+
+/**
+ * Legacy 819: where a bounded walk stops reading inside a string or a key, its copy never ends in
+ * the start of a secret. A value pattern recognizes only a whole secret, so before this a cut inside
+ * one kept its start as it was.
+ */
+describe('a cut never ends in the start of a secret (legacy 819)', () => {
+  // Each with the part of it that is the secret.
+  const SECRETS: readonly (readonly [string, string])[] = [
+    ['password: "correct horse battery staple" done', 'correct horse battery staple'],
+    ['{"apiToken": "correct horse battery staple"}', 'correct horse battery staple'],
+    ['PGPASSWORD="correct horse battery staple" psql', 'correct horse battery staple'],
+    [`postgres://ops:${FAKE}@db/app`, FAKE],
+    [`Authorization: Bearer ${FAKE} next`, FAKE],
+    [`key sk-ant-${FAKE} next`, `sk-ant-${FAKE}`],
+    [`token ${HANDLE} next`, HANDLE],
+    [`-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----`, FAKE],
+  ];
+
+  it.each(SECRETS)(
+    'cut anywhere, %j keeps no part of its secret — as a string and as a key',
+    (text, secret) => {
+      const start = secret.slice(0, 3);
+      for (let length = 1; length < text.length; length += 1) {
+        const asString = redactSecrets([text], { maxChars: length });
+        expect(asString.omitted).toBe(true);
+        expect(String((asString.value as unknown[])[0])).not.toContain(start);
+        const asKey = redactSecrets({ [text]: 1 }, { maxChars: length });
+        expect(Object.keys(asKey.value as object)[0]).not.toContain(start);
+      }
+    },
+  );
+
+  it('reads far enough past the cut for a secret as long as any replaced whole (a 3 KB JWT)', () => {
+    // Claims of ~3 KB (a Handle is well under 2k, a PEM RSA-4096 key ~3.3k): cut short of its
+    // end, it would no longer be a JWT to the value patterns.
+    const claims = Buffer.from(JSON.stringify({ sub: 'a', pad: 'p'.repeat(2_300) }));
+    const jwt = `${HANDLE.split('.')[0]}.${claims.toString('base64url')}.${HANDLE.split('.')[2]}`;
+    expect(jwt.length).toBeGreaterThan(3_000);
+    const text = `token ${jwt} next`;
+    const kept = String((redactSecrets([text], { maxChars: 20 }).value as unknown[])[0]);
+    expect(kept).toBe(`${`token ${REDACTED} next`.slice(0, 20)}…`);
+  });
+
+  it('a string with nothing to replace is cut exactly where reading stops, however long', () => {
+    const text = 'a'.repeat(3 * CUT_LOOKAHEAD_CHARS);
+    expect(redactSecrets([text], { maxChars: 1000 }).value).toEqual([`${'a'.repeat(1000)}…`]);
+  });
+
+  it('a secret reading stopped in is left out, however much the replacements before it shortened the copy', () => {
+    // Handles replaced by `[redacted]` before the cut, then a long password that the read past the
+    // cut (`CUT_LOOKAHEAD_CHARS`) stops 1500 characters inside: its start is all the patterns see
+    // of it, and the replacements shortened what was read to less than the lookahead.
+    const length = 2_000;
+    const handles = `${HANDLE} `.repeat(35);
+    const password = `password: "qz7 ${'w'.repeat(3_000)}" done`;
+    const stop = length + CUT_LOOKAHEAD_CHARS;
+    const text = `${handles}${' '.repeat(stop - 1_500 - handles.length)}${password}`;
+    expect(text.indexOf(password)).toBe(stop - 1_500);
+
+    const cut = redactSecrets([text], { maxChars: length });
+    const kept = String((cut.value as unknown[])[0]);
+    expect(kept).not.toContain('qz7');
+    expect(kept).not.toContain(HANDLE.slice(0, 10));
+    expect(kept.length).toBeLessThan(length);
+    expect(cut.omitted).toBe(true);
+  });
+
+  it('scrubbedCut keeps at most the cut, and never the last lookahead of a read that stopped short of the end', () => {
+    // A scrub that shortens every `secret ` by one character.
+    const scrub = (read: string) => read.replaceAll('secret', 'secre');
+    const text = 'secret '.repeat(2_000);
+    const read = scrub(text.slice(0, 3_000 + CUT_LOOKAHEAD_CHARS));
+    expect(read.length - CUT_LOOKAHEAD_CHARS).toBeLessThan(3_000);
+    expect(scrubbedCut(text, 3_000, scrub)).toBe(read.slice(0, read.length - CUT_LOOKAHEAD_CHARS));
+    // Without replacements, exactly the cut.
+    expect(scrubbedCut(text, 3_000, (part) => part)).toBe(text.slice(0, 3_000));
+    // A read that reaches the end of the text keeps up to the cut.
+    expect(scrubbedCut('secret secret', 4, scrub)).toBe('secr');
+  });
+});
+
+describe('redactSecrets — jsonTextFields: the key rule over strings that are JSON text', () => {
+  // The value patterns alone take only the token after `"credentials": ` (here the `{`).
+  const text = '{"name": "db-1", "credentials": {"user": "bob", "pin": 1234}}';
+  const shown = (options: Parameters<typeof redactSecrets>[1]) => {
+    const redacted = redactSecrets({ text }, options);
+    return { text: (redacted.value as { text: string }).text, count: redacted.redactedValues };
+  };
+
+  it('hides every value under a secret-named key of a string that is JSON, and counts it', () => {
+    const fields = shown({ isSecretKey: namesASecretField, jsonTextFields: true });
+    expect(fields.text).not.toContain('bob');
+    expect(fields.text).not.toContain('1234');
+    expect(fields.text).toContain('"name": "db-1"');
+    expect(fields.count).toBe(shown({ isSecretKey: namesASecretField }).count + 2);
+  });
+
+  it('without it (or without isSecretKey), only the value patterns run over the text', () => {
+    for (const options of [{ isSecretKey: namesASecretField }, { jsonTextFields: true }]) {
+      expect(shown(options).text).toContain('"user": "bob", "pin": 1234');
+    }
   });
 });
