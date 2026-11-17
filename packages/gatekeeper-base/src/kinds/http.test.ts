@@ -776,7 +776,7 @@ describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
       ],
       ['tuple', { type: 'array', prefixItems: [{ type: 'string' }] }, { items: false }],
       ['contains', { type: 'array', contains: { type: 'string' } }, { minContains: 2 }],
-      ['cond', { type: 'string', if: { minLength: 3 } }, { then: { pattern: '^a' } }],
+      ['cond', { type: 'string', if: { minLength: 3 } }, { else: { pattern: '^a' } }],
       ['named', { type: 'object' }, { $id: 'https://example.invalid/other' }],
     ];
     const schemas: Record<string, unknown> = {
