@@ -34,7 +34,11 @@ import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
 import { Mutex } from './mutex.js';
-import { type ProviderCredentialFacts, providerCredentialFacts } from './provider-keys.js';
+import {
+  type ProviderCredentialFacts,
+  currentProviderKey,
+  providerCredentialFacts,
+} from './provider-keys.js';
 import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { ProviderStoreError } from './provider-store.js';
@@ -967,9 +971,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         }
         // S7-A: same resolution order as proxy.ts and credentialSource() above — a console key
         // wins over apiKeyEnv, so the test exercises exactly the key a real request would use.
-        const realKey =
-          options.keyStore.get(id) ??
-          (provider.config.api_key_env ? resolveApiKey(provider.config.api_key_env) : undefined);
+        const realKey = currentProviderKey(
+          id,
+          provider.config.api_key_env,
+          (providerId) => options.keyStore.get(providerId),
+          resolveApiKey,
+        );
         if (!realKey) {
           throw new AdminApiError(
             409,
@@ -982,7 +989,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         const result = await withinUpstreamLimits(claims, 'test', 3, () =>
           options.runTest(provider.config, model, realKey),
         );
-        await options.catalog.recordTest(id, result).catch((err: unknown) => {
+        await options.catalog.recordTest(id, result, realKey).catch((err: unknown) => {
           log(
             JSON.stringify({
               level: 'warn',

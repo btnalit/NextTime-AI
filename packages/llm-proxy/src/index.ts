@@ -25,6 +25,7 @@ import {
 } from './provider-health-file.js';
 import {
   createProviderKeyResolver,
+  currentProviderKey,
   loadProviderKeyFiles,
   providerCredentialFacts,
   reportUnusableProviderKeys,
@@ -38,6 +39,7 @@ import type { RevocationSync } from './revocation.js';
 import { startRevocationSync } from './revocation.js';
 import type { ProxySourceBinding } from './source-binding.js';
 import { createFileHandleBindingReader, createProxySourceBinding } from './source-binding.js';
+import { TestedKeys, testedKeysFile } from './tested-keys.js';
 
 /**
  * @nexttime/llm-proxy — per-provider passthrough proxy (design doc §7.7; docs/development-
@@ -167,6 +169,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
   for (const file of [
     config.providerStoreFile,
     config.keyStoreFile,
+    testedKeysFile(config.keyStoreFile),
     config.modelsJsonOutFile,
     providerHealthOutFile(config.modelsJsonOutFile),
   ]) {
@@ -189,7 +192,6 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
   // a separate file so a key never rides along in providers.json (key-store.ts).
   const keyStore = new KeyStore(config.keyStoreFile);
   await keyStore.load();
-  const catalog = new ProviderCatalog(providersFile.providers, store);
   const log = (line: string) => console.log(line);
   // R-24: `api_key_env` reads a key file first, the env var only as a deprecated fallback
   // (provider-keys.ts) — the same resolver for the proxy and the admin API, so the console's
@@ -199,6 +201,15 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
       ? await loadProviderKeyFiles(config.providerKeysDir, log)
       : new Map(),
     log,
+  });
+  // Legacy 202 / 203: which key each recorded test ran with, so a key rotated by this restart (or
+  // changed while a test ran) leaves the old result unshown (tested-keys.ts).
+  const testedKeys = new TestedKeys(testedKeysFile(config.keyStoreFile), log);
+  await testedKeys.load();
+  const catalog = new ProviderCatalog(providersFile.providers, store, {
+    store: testedKeys,
+    currentKey: (id, apiKeyEnv) =>
+      currentProviderKey(id, apiKeyEnv, (providerId) => keyStore.get(providerId), resolveApiKey),
   });
 
   // A provider whose saved base URL breaks the bare-base rule is loaded but never used

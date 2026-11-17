@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog } from './gen-models-json.js';
-import { ProviderStore } from './provider-store.js';
+import { currentProviderKey } from './provider-keys.js';
+import { ProviderStore, type StoreTestResult } from './provider-store.js';
+import { TestedKeys } from './tested-keys.js';
 
 /**
  * catalog.test: the S6-B merge rules — store over file by name, file entries always enabled,
@@ -109,8 +112,8 @@ describe('ProviderCatalog', () => {
       error: 'HTTP 400',
       tested_at: '2026-09-19T00:00:00.000Z',
     };
-    await catalog.recordTest('acme', result);
-    await catalog.recordTest('openai', result);
+    await catalog.recordTest('acme', result, 'sk-tested');
+    await catalog.recordTest('openai', result, 'sk-tested');
     expect(store.get('acme')?.last_test).toEqual(result);
     expect(catalog.get('openai')?.lastTest).toEqual(result);
   });
@@ -138,5 +141,178 @@ describe('ProviderCatalog — saved base URLs that break the bare-base rule (#51
       { id: 'yamlbad', problem: 'must not contain a query string (?)' },
       { id: 'legacy', problem: 'must not contain a fragment (#)' },
     ]);
+  });
+});
+
+describe('ProviderCatalog — a test result applies only to the key it ran with (legacy 202, 203)', () => {
+  /** A restartable llm-proxy state directory: each `start` is a new process reading the same
+   *  providers.json and tested-keys.json, with whatever keys the environment and console hold. */
+  async function stateDir() {
+    const dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-catalog-keys-'));
+    dirs.push(dir);
+    return {
+      dir,
+      start: async (keys: { env?: Record<string, string>; console?: Record<string, string> }) => {
+        const store = new ProviderStore(join(dir, 'providers.json'));
+        await store.load();
+        const testedKeys = new TestedKeys(join(dir, 'tested-keys.json'), () => {});
+        await testedKeys.load();
+        const catalog = new ProviderCatalog({ openai: fileOpenAi }, store, {
+          store: testedKeys,
+          currentKey: (id, apiKeyEnv) =>
+            currentProviderKey(
+              id,
+              apiKeyEnv,
+              (providerId) => keys.console?.[providerId],
+              (name) => keys.env?.[name],
+            ),
+        });
+        return { store, catalog, testedKeys };
+      },
+    };
+  }
+
+  const passed = (testedAt: string): StoreTestResult => ({
+    model: 'store-model',
+    completion: 'ok',
+    tool_call: 'ok',
+    latency_ms: 5,
+    error: null,
+    tested_at: testedAt,
+  });
+
+  it('an env or key-file key rotated by a restart leaves the old result unshown; the same key keeps it', async () => {
+    const state = await stateDir();
+    const first = `sk-${randomUUID()}`;
+    const second = `sk-${randomUUID()}`;
+    const result = passed('2026-11-17T00:00:00.000Z');
+
+    const before = await state.start({ env: { STORE_KEY: first } });
+    await before.store.upsert('acme', storeEntry);
+    await before.catalog.recordTest('acme', result, first);
+    expect(before.catalog.get('acme')?.lastTest).toEqual(result);
+
+    // Restarted with the same key: still applies.
+    const same = await state.start({ env: { STORE_KEY: first } });
+    expect(same.catalog.get('acme')?.lastTest).toEqual(result);
+
+    // Restarted after the key file was rotated: the result is about the old key.
+    const rotated = await state.start({ env: { STORE_KEY: second } });
+    expect(rotated.catalog.get('acme')?.lastTest).toBeNull();
+    // Nothing was deleted: rotating back shows it again.
+    expect(rotated.store.get('acme')?.last_test).toEqual(result);
+    const back = await state.start({ env: { STORE_KEY: first } });
+    expect(back.catalog.get('acme')?.lastTest).toEqual(result);
+
+    // No key at all now: nothing it says applies.
+    const none = await state.start({});
+    expect(none.catalog.get('acme')?.lastTest).toBeNull();
+  });
+
+  it('a console key wins over the env key, as in a request: a result tested with the env key is unshown once a console key is set', async () => {
+    const state = await stateDir();
+    const envKey = `sk-${randomUUID()}`;
+    const result = passed('2026-11-17T00:00:00.000Z');
+    const run = await state.start({ env: { FILE_KEY: envKey } });
+    await run.catalog.recordTest('openai', result, envKey);
+    expect(run.catalog.get('openai')?.lastTest).toEqual(result);
+
+    const withConsole = await state.start({
+      env: { FILE_KEY: envKey },
+      console: { openai: `sk-${randomUUID()}` },
+    });
+    // A file provider's result lives in memory only; record it again in this process.
+    await withConsole.catalog.recordTest('openai', result, envKey);
+    expect(withConsole.catalog.get('openai')?.lastTest).toBeNull();
+  });
+
+  it('a test still running when the key changed records a result that is not shown for the new key', async () => {
+    const state = await stateDir();
+    const keys = { console: { acme: `sk-${randomUUID()}` } };
+    const run = await state.start(keys);
+    await run.store.upsert('acme', storeEntry);
+    const ranWith = keys.console.acme;
+
+    // The key changes mid-test: admin-api.ts sets it and drops the last test.
+    keys.console.acme = `sk-${randomUUID()}`;
+    await run.catalog.clearTest('acme');
+    // Then the test that started with the old key finishes.
+    const late = passed('2026-11-17T00:00:01.000Z');
+    await run.catalog.recordTest('acme', late, ranWith);
+    expect(run.store.get('acme')?.last_test).toEqual(late);
+    expect(run.catalog.get('acme')?.lastTest).toBeNull();
+
+    // A test with the new key is shown.
+    const fresh = passed('2026-11-17T00:00:02.000Z');
+    await run.catalog.recordTest('acme', fresh, keys.console.acme);
+    expect(run.catalog.get('acme')?.lastTest).toEqual(fresh);
+  });
+
+  it('a result recorded before tested-keys.json existed is shown as before, until the next test or key change', async () => {
+    const state = await stateDir();
+    const key = `sk-${randomUUID()}`;
+    const old = passed('2026-11-01T00:00:00.000Z');
+    // As an older llm-proxy left it: the result in providers.json, no tested-keys.json.
+    const legacy = new ProviderStore(join(state.dir, 'providers.json'));
+    await legacy.load();
+    await legacy.upsert('acme', storeEntry);
+    await legacy.recordTest('acme', old);
+
+    const run = await state.start({ env: { STORE_KEY: `sk-${randomUUID()}` } });
+    expect(run.catalog.get('acme')?.lastTest).toEqual(old);
+
+    await run.catalog.recordTest('acme', passed('2026-11-17T00:00:00.000Z'), key);
+    expect(run.catalog.get('acme')?.lastTest).toBeNull();
+  });
+
+  it('a result written without its own key entry (a crash between the two writes) is not shown', async () => {
+    const state = await stateDir();
+    const key = `sk-${randomUUID()}`;
+    const run = await state.start({ env: { STORE_KEY: key } });
+    await run.store.upsert('acme', storeEntry);
+    await run.catalog.recordTest('acme', passed('2026-11-17T00:00:00.000Z'), key);
+    // The result write lands; the process dies before tested-keys.json says which key it ran
+    // with — the entry still describes the earlier result.
+    const orphan = passed('2026-11-17T00:00:05.000Z');
+    await run.store.recordTest('acme', orphan);
+
+    const restarted = await state.start({ env: { STORE_KEY: key } });
+    expect(restarted.catalog.get('acme')?.lastTest).toBeNull();
+  });
+
+  it('two tests finishing together leave the later result beside its own key entry', async () => {
+    const state = await stateDir();
+    const key = `sk-${randomUUID()}`;
+    const run = await state.start({ env: { STORE_KEY: key } });
+    await run.store.upsert('acme', storeEntry);
+    // The first test's key entry is slow to write; the second test finishes meanwhile.
+    const record = run.testedKeys.record.bind(run.testedKeys);
+    let calls = 0;
+    run.testedKeys.record = async (...args) => {
+      calls += 1;
+      if (calls === 1) await new Promise((resolve) => setTimeout(resolve, 50));
+      return record(...args);
+    };
+    const second = passed('2026-11-17T00:00:01.000Z');
+    await Promise.all([
+      run.catalog.recordTest('acme', passed('2026-11-17T00:00:00.000Z'), key),
+      run.catalog.recordTest('acme', second, key),
+    ]);
+    expect(run.store.get('acme')?.last_test).toEqual(second);
+    expect(run.catalog.get('acme')?.lastTest).toEqual(second);
+  });
+
+  it('a provider first tested on this version is tracked before its result is written: a crash between the writes shows nothing', async () => {
+    const state = await stateDir();
+    const key = `sk-${randomUUID()}`;
+    const run = await state.start({ env: { STORE_KEY: key } });
+    await run.store.upsert('acme', storeEntry);
+    // The process dies after the result write, before tested-keys.json names its key.
+    run.testedKeys.record = async () => {};
+    await run.catalog.recordTest('acme', passed('2026-11-17T00:00:00.000Z'), key);
+
+    const restarted = await state.start({ env: { STORE_KEY: `sk-${randomUUID()}` } });
+    expect(restarted.store.get('acme')?.last_test).not.toBeNull();
+    expect(restarted.catalog.get('acme')?.lastTest).toBeNull();
   });
 });

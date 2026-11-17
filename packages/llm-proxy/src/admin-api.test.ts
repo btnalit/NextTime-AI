@@ -21,11 +21,12 @@ import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
 import { KeyStore, KeyStoreError } from './key-store.js';
 import { buildProviderHealthFile, refreshProviderHealthFile } from './provider-health-file.js';
-import { providerCredentialFacts } from './provider-keys.js';
+import { currentProviderKey, providerCredentialFacts } from './provider-keys.js';
 import type { ListUpstreamModelsResult } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import type { StoreTestResult } from './provider-store.js';
 import { createProxyServer } from './proxy.js';
+import { TestedKeys } from './tested-keys.js';
 
 /**
  * admin-api.test: the S6-B / S7-A admin endpoints end-to-end through the real proxy listener (the
@@ -138,6 +139,8 @@ async function harness(
     modelsJsonUnwritable?: boolean;
     listResult?: ListUpstreamModelsResult;
     limits?: UpstreamCallLimits;
+    /** Every test run waits for this before it answers (a test still running). */
+    testGate?: Promise<void>;
   } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-admin-'));
@@ -150,7 +153,16 @@ async function harness(
   await store.load();
   const keyStore = new KeyStore(join(dir, 'state', 'keys.json'));
   await keyStore.load();
-  const catalog = new ProviderCatalog({ openai: FILE_PROVIDER }, store);
+  const env = options.env ?? { FILE_KEY: 'sk-file' };
+  const resolveApiKey = (name: string) => env[name];
+  // As index.ts wires it: a test result shows only for the key it ran with (legacy 202, 203).
+  const testedKeys = new TestedKeys(join(dir, 'state', 'tested-keys.json'), () => {});
+  await testedKeys.load();
+  const catalog = new ProviderCatalog({ openai: FILE_PROVIDER }, store, {
+    store: testedKeys,
+    currentKey: (id, apiKeyEnv) =>
+      currentProviderKey(id, apiKeyEnv, (providerId) => keyStore.get(providerId), resolveApiKey),
+  });
   const modelsJsonFile = options.modelsJsonUnwritable
     ? join(dir, 'missing-config-dir', 'models.json')
     : join(dir, 'models.json');
@@ -158,9 +170,7 @@ async function harness(
   const kernelEvents: KernelAuditEvent[] = [];
   const testRuns: Harness['testRuns'] = [];
   const listRuns: Harness['listRuns'] = [];
-  const env = options.env ?? { FILE_KEY: 'sk-file' };
   const healthFile = join(dir, 'provider-health.json');
-  const resolveApiKey = (name: string) => env[name];
 
   const adminHandler = createAdminApi({
     catalog,
@@ -189,6 +199,7 @@ async function harness(
     },
     runTest: async (provider, model, realKey) => {
       testRuns.push({ providerApi: provider.api, model, realKey });
+      await options.testGate;
       return (
         options.testResult ?? {
           model,
@@ -784,6 +795,52 @@ describe('admin API — provider secrets (S7-A)', () => {
     // openai falls back to its env key (untested with it); acme has no key left.
     expect(h.readHealth().providers.openai).toEqual({ status: 'untested', testedAt: null });
     expect(h.readHealth().providers.acme).toEqual({ status: 'key_missing', testedAt: null });
+  });
+
+  it('a test still running when the key changes is not shown for the new key (legacy 203)', async () => {
+    let release!: () => void;
+    const testGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = await harness({ testedAt: '2099-01-01T00:00:00.000Z', testGate });
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    for (const id of ['openai', 'acme']) {
+      await request(h.port, 'PUT', `/admin/providers/${id}/secret`, {
+        headers: admin,
+        body: { key: 'sk-first' },
+      });
+    }
+
+    const running = ['openai', 'acme'].map((id) =>
+      request(h.port, 'POST', `/admin/providers/${id}/test`, { headers: admin, body: {} }),
+    );
+    // Both tests have started (with sk-first) before the keys change.
+    await expect.poll(() => h.testRuns.length).toBe(2);
+    for (const id of ['openai', 'acme']) {
+      const set = await request(h.port, 'PUT', `/admin/providers/${id}/secret`, {
+        headers: admin,
+        body: { key: 'sk-second' },
+      });
+      expect(set.body).toMatchObject({ lastTest: null });
+    }
+    release();
+    for (const done of await Promise.all(running)) expect(done.status).toBe(200);
+    expect(h.testRuns.map((run) => run.realKey)).toEqual(['sk-first', 'sk-first']);
+
+    // The results landed after the key change: recorded, but about sk-first.
+    expect(h.store.get('acme')?.last_test).not.toBeNull();
+    for (const id of ['openai', 'acme']) {
+      const read = await request(h.port, 'GET', `/admin/providers/${id}`, { headers: admin });
+      expect(read.body).toMatchObject({ lastTest: null });
+      expect(h.readHealth().providers[id]).toEqual({ status: 'untested', testedAt: null });
+    }
+
+    // Tested with sk-second, they show again.
+    for (const id of ['openai', 'acme']) {
+      await request(h.port, 'POST', `/admin/providers/${id}/test`, { headers: admin, body: {} });
+      expect(h.readHealth().providers[id]?.status).toBe('ok');
+    }
   });
 
   // Review M2: concurrent mutations write the health file and models.json one at a time, each

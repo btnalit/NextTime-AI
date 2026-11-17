@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import type { LlmProxyConfig } from './config.js';
 import { loadConfig } from './config.js';
 import type { LlmProxyApp } from './index.js';
 import { VERSION, startLlmProxy } from './index.js';
+import { TestedKeys } from './tested-keys.js';
 
 function getJson(port: number, path: string): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -158,6 +160,85 @@ describe('@nexttime/llm-proxy', () => {
       ]);
       // Never written at startup (deploy/accept/docker-compose.fake.yml relies on this).
       expect(existsSync(join(dir, 'models.json'))).toBe(false);
+    });
+
+    it('legacy 202: a test recorded with a key file the restart rotated is not shown; the same key shows it again', async () => {
+      dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-index-'));
+      const root = dir;
+      const providersFile = join(root, 'llm-providers.yaml');
+      writeFileSync(providersFile, 'providers: {}\n');
+      const stateDir = join(root, 'state');
+      mkdirSync(stateDir);
+      const testedAt = '2026-11-17T00:00:00.000Z';
+      writeFileSync(
+        join(stateDir, 'providers.json'),
+        JSON.stringify({
+          version: 1,
+          providers: {
+            acme: {
+              api: 'openai-completions',
+              upstream_base_url: 'https://acme.example.invalid',
+              api_key_env: 'ACME_KEY',
+              auth: { header: 'authorization', scheme: 'Bearer' },
+              models: [{ id: 'acme-model' }],
+              enabled: true,
+              created_at: '2026-11-16T00:00:00.000Z',
+              updated_at: '2026-11-16T00:00:00.000Z',
+              last_test: {
+                model: 'acme-model',
+                completion: 'ok',
+                tool_call: 'ok',
+                latency_ms: 42,
+                error: null,
+                tested_at: testedAt,
+              },
+            },
+          },
+        }),
+      );
+      // The previous run tested acme with this key and wrote it down.
+      const testedKey = `sk-${randomUUID()}`;
+      const previous = new TestedKeys(join(stateDir, 'tested-keys.json'), () => {});
+      await previous.load();
+      await previous.record('acme', testedAt, testedKey);
+      // A crashed writer's temp copy, which startup removes like the other state files'.
+      const staleTemp = join(stateDir, `.tested-keys.json.${randomUUID()}.tmp`);
+      writeFileSync(staleTemp, '{}');
+
+      const { publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const handlePubFile = join(root, 'handle.pub');
+      writeFileSync(handlePubFile, await exportSPKI(publicKey));
+      const keysDir = join(root, 'keys');
+      mkdirSync(keysDir);
+      const start = async (key: string) => {
+        writeFileSync(join(keysDir, 'ACME_KEY'), key);
+        return startLlmProxy({
+          ...loadConfig({
+            LLM_PROVIDERS_FILE: providersFile,
+            HANDLE_PUBLIC_KEY_FILE: handlePubFile,
+            LLM_PROVIDER_STORE_FILE: join(stateDir, 'providers.json'),
+            LLM_KEY_STORE_FILE: join(stateDir, 'keys.json'),
+            LLM_PROVIDER_KEYS_DIR: keysDir,
+            MODELS_JSON_OUT_FILE: join(root, 'models.json'),
+          }),
+          port: 0,
+        });
+      };
+      const acmeTest = (running: LlmProxyApp) =>
+        running.catalog.resolve().find((p) => p.id === 'acme')?.lastTest ?? null;
+
+      // Rotated by editing the key file and restarting: the old result says nothing about it.
+      app = await start(`sk-${randomUUID()}`);
+      expect(acmeTest(app)).toBeNull();
+      expect(existsSync(staleTemp)).toBe(false);
+      await app.close();
+      app = undefined;
+
+      app = await start(testedKey);
+      expect(acmeTest(app)).toMatchObject({ completion: 'ok', tested_at: testedAt });
     });
 
     it('fails fast when KERNEL_URL is configured but the internal-plane token file is missing (fix/internal-plane-auth)', async () => {
