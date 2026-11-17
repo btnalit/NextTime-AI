@@ -1,7 +1,11 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderConfig } from './config.js';
-import { PROVIDER_TEST_MAX_RESPONSE_BYTES, runProviderTest } from './provider-test.js';
+import {
+  PROVIDER_TEST_MAX_RESPONSE_BYTES,
+  describeUpstreamRedirect,
+  runProviderTest,
+} from './provider-test.js';
 
 /**
  * provider-test.test: fake upstreams for each api kind exercise the two round trips — the shape
@@ -471,7 +475,9 @@ describe('runProviderTest', () => {
       body: { content: [{ type: 'text', text: 'OK' }] },
     }));
     const redirecting = http.createServer((_req, res) => {
-      res.writeHead(307, { location: `http://127.0.0.1:${elsewherePort}/v1/messages` });
+      res.writeHead(307, {
+        location: `http://127.0.0.1:${elsewherePort}/v1/messages?key=${REAL_KEY}`,
+      });
       res.end();
     });
     const port = await listen(redirecting);
@@ -483,7 +489,94 @@ describe('runProviderTest', () => {
       timeoutMs: 2000,
     });
     expect(result.completion).toBe('error');
-    expect(result.error).toContain('completion request failed');
+    // Legacy 221: says what answered and where it pointed (never the query), not "fetch failed".
+    expect(result.error).toBe(
+      `POST /v1/messages responded 307, a redirect to "http://127.0.0.1:${elsewherePort}/v1/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`,
+    );
     expect(elsewhere).toEqual([]);
+  });
+
+  it('a redirect whose path carries the key reports it with the key scrubbed (legacy 221)', async () => {
+    const redirecting = http.createServer((_req, res) => {
+      res.writeHead(301, { location: `/${REAL_KEY}/v1/messages` });
+      res.end();
+    });
+    const port = await listen(redirecting);
+    cleanup.push(() => new Promise<void>((resolve) => redirecting.close(() => resolve())));
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result.completion).toBe('error');
+    expect(result.error).toMatch(
+      /^POST \/v1\/messages responded 301, a redirect to "\/.+\/v1\/messages"\. /,
+    );
+    expect(result.error).not.toContain(REAL_KEY);
+  });
+
+  it('a redirect on the tool-call round trip is reported the same way (legacy 221)', async () => {
+    let calls = 0;
+    const server = http.createServer((_req, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ content: [{ type: 'text', text: 'OK' }] }));
+        return;
+      }
+      res.writeHead(308, { location: '/v2/messages' });
+      res.end();
+    });
+    const port = await listen(server);
+    cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result.completion).toBe('ok');
+    expect(result.tool_call).toBe('error');
+    expect(result.error).toBe(
+      `POST /v1/messages responded 308, a redirect to "/v2/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`,
+    );
+    expect(calls).toBe(2);
+  });
+});
+
+describe('describeUpstreamRedirect: the key and token-like segments are scrubbed, an ordinary long path is not (#1344 review)', () => {
+  const REQUEST = 'https://api.example.invalid/v1/chat/completions';
+  const where = (location: string, realKey = REAL_KEY): string => {
+    const message = describeUpstreamRedirect(
+      'upstream',
+      { status: 307, headers: new Headers({ location }) },
+      REQUEST,
+      realKey,
+    );
+    const match =
+      /^upstream responded 307, a redirect to "(.*)"\. llm-proxy does not follow redirects \(the provider key would go along\): set the provider's Base URL to the final address\.$/.exec(
+        message,
+      );
+    expect(match, message).not.toBeNull();
+    return match?.[1] ?? '';
+  };
+
+  it('shows a long ordinary API path whole, same origin or another origin with a port', () => {
+    expect(where('/api/v1/chat/completions/')).toBe('/api/v1/chat/completions/');
+    expect(where('/openai/deployments/gpt-4o-mini/chat/completions')).toBe(
+      '/openai/deployments/gpt-4o-mini/chat/completions',
+    );
+    expect(where('https://llm.example.invalid:8443/v1/chat/completions?api-version=1')).toBe(
+      'https://llm.example.invalid:8443/v1/chat/completions',
+    );
+  });
+
+  it('still hides the real key anywhere, and a segment that looks like a token', () => {
+    expect(where(`/${REAL_KEY}/v1/chat/completions`)).toBe('/***/v1/chat/completions');
+    expect(where('/t/AbCdEfGhIjKlMnOpQrStUvWxYz012345/v1')).toBe('/t/***/v1');
+    expect(where('/v1/sk-another-provider-key/models')).toBe('/v1/***/models');
+    // A key that holds a `/` is still replaced verbatim over the whole text.
+    expect(where('/v1/abc/def-ghi-jkl/chat', 'abc/def-ghi-jkl')).toBe('/v1/***/chat');
   });
 });

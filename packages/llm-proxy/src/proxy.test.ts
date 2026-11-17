@@ -1815,6 +1815,7 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     cleanup.push(() => closeServer(redirecting));
 
     const { privateKey, publicKey } = await ephemeralKeyPair();
+    const logLines: string[] = [];
     const proxy = createProxyServer({
       providers: { p: anthropicProvider(redirectPort) },
       publicKey,
@@ -1824,7 +1825,7 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
       upstreamConnectTimeoutMs: 2000,
       upstreamIdleTimeoutMs: 2000,
       resolveApiKey,
-      log: () => {},
+      log: (line) => logLines.push(line),
     });
     const proxyPort = await listen(proxy);
     cleanup.push(() => closeServer(proxy));
@@ -1841,6 +1842,75 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     });
     expect(res.status).toBe(502);
     expect(elsewhere).toEqual([]);
+    // Legacy 221: the 3xx is not forwarded (the client would follow it itself); the 502 and the
+    // log line say what answered and where it pointed.
+    const message = `upstream responded 307, a redirect to "http://127.0.0.1:${targetPort}/v1/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`;
+    expect(JSON.parse(res.body.toString('utf8'))).toEqual({
+      error: { code: 'bad_gateway', message },
+    });
+    expect(res.headers.location).toBeUndefined();
+    const warn = logLines.map((line) => JSON.parse(line)).find((line) => line.status === 307);
+    expect(warn).toMatchObject({
+      level: 'warn',
+      msg: 'llm-proxy: upstream answered with a redirect, not followed',
+      provider: 'p',
+      error: message,
+    });
+  });
+
+  it('scrubs the real key from a redirect target before bounding it, so a key across the bound never shows its leading part (#1344 review by #501)', async () => {
+    // The provider's (synthetic) key, echoed by the upstream. Dotted, no `sk`/`key`/`tok` prefix,
+    // every run under 24 characters: only the verbatim replacement hides it — none of the
+    // token-shape patterns would.
+    const ECHOED = 'Qm7Xv9Lp2R.4tZ8nW1yH6c.B3hJ5uD0fG';
+    // 280 characters of ordinary short segments, so the key starts at the 281st character of the
+    // shown path and the 300-character bound would cut it after 20.
+    const before = `/${'chat/'.repeat(55)}v12/`;
+    expect(before).toHaveLength(280);
+    const redirecting = http.createServer((_req, res) => {
+      res.writeHead(307, { location: `${before}${ECHOED}/messages` });
+      res.end();
+    });
+    const redirectPort = await listen(redirecting);
+    cleanup.push(() => closeServer(redirecting));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const logLines: string[] = [];
+    const proxy = createProxyServer({
+      providers: { p: anthropicProvider(redirectPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey: (name) => (name === 'FAKE_ANTHROPIC_API_KEY' ? ECHOED : undefined),
+      log: (line) => logLines.push(line),
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/p/v1/messages',
+      headers: {
+        'x-api-key': await signHandle(privateKey),
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({ model: 'claude-example', max_tokens: 8, messages: [] }),
+    });
+    expect(res.status).toBe(502);
+    const body = res.body.toString('utf8');
+    const message = `upstream responded 307, a redirect to "${before}***/messages". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`;
+    expect(JSON.parse(body)).toEqual({ error: { code: 'bad_gateway', message } });
+    const pieces = Array.from({ length: ECHOED.length - 7 }, (_, i) => ECHOED.slice(i, i + 8));
+    for (const text of [body, ...logLines]) {
+      for (const piece of pieces) expect(text).not.toContain(piece);
+    }
+    expect(
+      logLines.map((line) => JSON.parse(line)).find((line) => line.status === 307),
+    ).toMatchObject({ error: message });
   });
 });
 

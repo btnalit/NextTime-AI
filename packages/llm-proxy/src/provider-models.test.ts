@@ -49,7 +49,7 @@ describe('listUpstreamModels', () => {
     const headers = new Headers(calls[0]?.init.headers);
     expect(headers.get('authorization')).toBe('Bearer sk-real');
     expect(calls[0]?.init.method).toBe('GET');
-    expect(calls[0]?.init.redirect).toBe('error');
+    expect(calls[0]?.init.redirect).toBe('manual');
   });
 
   it('Anthropic: x-api-key + anthropic-version, display_name kept', async () => {
@@ -94,6 +94,32 @@ describe('listUpstreamModels', () => {
     expect(result.status).toBe(401);
     expect(result.message).toMatch(/^HTTP 401: Incorrect API key provided: \*\*\*/);
     expect(result.message).not.toContain('sk-real-secret-value');
+  });
+
+  it('a redirect is never followed: unreachable, with its status and where it pointed (legacy 221)', async () => {
+    const { fetchImpl, calls } = fakeFetch(
+      () =>
+        new Response('moved', {
+          status: 301,
+          headers: { location: 'https://other.example.invalid/sk-real-secret-value/models?k=v' },
+        }),
+    );
+    const result = await listUpstreamModels({
+      api: 'anthropic-messages',
+      upstreamBaseUrl: 'https://api.example.invalid',
+      authHeader: 'x-api-key',
+      realKey: 'sk-real-secret-value',
+      timeoutMs: 1000,
+      fetchImpl,
+    });
+    expect(calls).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('unreachable');
+    expect(result.status).toBe(301);
+    expect(result.message).toBe(
+      `GET /v1/models responded 301, a redirect to "https://other.example.invalid/***/models". llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.`,
+    );
   });
 
   it('a thrown fetch is unreachable; a 2xx without data is invalid_response', async () => {
