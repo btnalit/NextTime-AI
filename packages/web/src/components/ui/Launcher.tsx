@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useT } from '../../lib/i18n.js';
+import { LAUNCHER_STEPS } from '../../lib/launcher-steps.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from './Button.js';
 
@@ -45,13 +46,7 @@ const KIND_LABEL: Readonly<
   },
 };
 
-/** §5.9 / §5.6: 选类型 → 连接与凭证 → 能力与策略 → 握手验证. */
-export const LAUNCHER_STEPS = [
-  { key: 'kind', zh: '选类型', en: 'Type' },
-  { key: 'connection', zh: '连接与凭证', en: 'Connection & credentials' },
-  { key: 'policy', zh: '能力与策略', en: 'Capabilities & policy' },
-  { key: 'handshake', zh: '握手验证', en: 'Handshake' },
-] as const;
+export { LAUNCHER_STEPS } from '../../lib/launcher-steps.js';
 
 export type LauncherStep = 0 | 1 | 2 | 3;
 

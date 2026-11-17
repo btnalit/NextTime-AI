@@ -111,6 +111,21 @@ describe('OnboardingWizard', () => {
             name: 'accept_s2_mcp_lookup',
             absentAnswers: { statuses: [404] },
           },
+          // Legacy 801: the kernel's order is gate-owned params, then credentials, then answers
+          // that mean "does not exist" — each draft is named under one of them only.
+          { ...IMPORTED_DRAFTS[0], name: 'accept_s2_mcp_login', suspectedSecretValues: 2 },
+          {
+            ...IMPORTED_DRAFTS[0],
+            name: 'accept_s2_mcp_token_lookup',
+            suspectedSecretValues: 1,
+            absentAnswers: { statuses: [404] },
+          },
+          {
+            ...IMPORTED_DRAFTS[0],
+            name: 'accept_s2_mcp_owned_token',
+            suspectedSecretValues: 1,
+            gateOwnedParams: [{ path: 'tenant', reason: 'gate_sets' }],
+          },
         ],
       }),
     });
@@ -141,15 +156,40 @@ describe('OnboardingWizard', () => {
     expect(within(publishStep).getByTestId('wizard-publish-gate-owned').textContent).toContain(
       'accept_s2_mcp_\\u{200B}owned',
     );
+    const gateOwned = within(publishStep).getByTestId('wizard-publish-gate-owned');
+    expect(gateOwned.textContent).toContain('另有 2 个草稿暂不发布');
+    expect(gateOwned.textContent).toContain('accept_s2_mcp_owned_token');
     const absent = within(publishStep).getByTestId('wizard-publish-absent');
     expect(absent.textContent).toContain('另有 1 个草稿暂不发布');
     expect(absent.textContent).toContain('accept_s2_mcp_lookup');
+    expect(absent.textContent).not.toContain('accept_s2_mcp_token_lookup');
     expect(absent.textContent).toContain('确认门用的凭据看得到要查的东西');
-    // Legacy 800: the draft list cannot tell which carry suspected credentials, so it says the
-    // publish may hold some back and that the result lists them.
+    // Legacy 801: the draft rows say which carry suspected credentials, so they are named here and
+    // not counted among what the manifest publishes.
     const credentials = within(publishStep).getByTestId('wizard-publish-credentials');
-    expect(credentials.textContent).toContain('会留作草稿、不发布');
-    expect(credentials.textContent).toContain('发布后会列出它们');
+    expect(credentials.textContent).toContain('另有 2 个草稿暂不发布');
+    expect(credentials.textContent).toContain('accept_s2_mcp_login');
+    expect(credentials.textContent).toContain('accept_s2_mcp_token_lookup');
+    expect(credentials.textContent).not.toContain('accept_s2_mcp_owned_token');
+    expect(credentials.textContent).toContain('看起来像密钥、令牌或密码');
+  });
+
+  it('says nothing about suspected credentials when no draft carries them (legacy 801)', async () => {
+    const http = scriptedHttp(CONNECTION_HANDLERS);
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+    const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
+      target: { value: 'accept_s2_mcp' },
+    });
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
+      target: { value: 'http://accept-s2-mcp:8080' },
+    });
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
+    const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
+    expect(within(publishStep).queryByTestId('wizard-publish-credentials')).toBeNull();
   });
 
   it('walks kind → connect → publish → review → done, calling create_connection/publish_manifest', async () => {

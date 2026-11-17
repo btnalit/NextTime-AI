@@ -91,6 +91,16 @@ describe('namedReviewPath', () => {
     expect(namedReviewPath('steps[1].run', reviewFieldNames('procedure', zh))).toBe('步骤[1].run');
     expect(namedReviewPath('other.x', reviewFieldNames('skill', zh))).toBe('other.x');
     expect(namedReviewPath('toString', reviewFieldNames('skill', zh))).toBe('toString');
+    // UX acceptance of #1370: an Operation's definition reads the same in the catalog and after a
+    // bulk publish.
+    const en = ((_zh: string, enText: string) => enText) as Parameters<typeof reviewFieldNames>[1];
+    expect(
+      namedReviewPath(
+        'params_schema.properties.password.example',
+        reviewFieldNames('operation', en),
+      ),
+    ).toBe('Parameters.properties.password.example');
+    expect(namedReviewPath('description', reviewFieldNames('operation', zh))).toBe('描述');
     expect(namedReviewPath('markdown')).toBe('markdown');
   });
 });

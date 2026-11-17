@@ -331,11 +331,15 @@ export function draftsAsRead(
  *  gate sets, and never sweeps up a proposal — an agent's or a person's draft, or a legacy row with
  *  no origin on file — which waits for its own review in the catalog (kernel `publishManifest`).
  *  S11 「门确认不存在」 B-a: it also leaves a draft declaring answers that mean "does not exist"
- *  (`absentAnswers`) for a person to publish confirming them. */
+ *  (`absentAnswers`) for a person to publish confirming them. Legacy 801: and one whose definition
+ *  carries suspected credential values (`suspectedSecretValues`), which a person publishes in the
+ *  catalog confirming them. The kernel's order is gate-owned params, then credentials, then answers
+ *  that mean "does not exist", so a draft is in one list only — the one its result names it in. */
 export interface ManifestPublishPlan {
   readonly publishable: readonly string[];
   readonly proposals: readonly string[];
   readonly gateOwned: readonly string[];
+  readonly credentials: readonly string[];
   readonly absentAnswers: readonly string[];
 }
 
@@ -346,6 +350,7 @@ export function manifestPublishPlan(
     readonly status: string;
     readonly origin?: string | undefined;
     readonly gateOwnedParams?: readonly unknown[] | undefined;
+    readonly suspectedSecretValues?: number | undefined;
     readonly absentAnswers?: unknown;
   }[],
   gatekeeperId: string,
@@ -353,15 +358,17 @@ export function manifestPublishPlan(
   const publishable: string[] = [];
   const proposals: string[] = [];
   const gateOwned: string[] = [];
+  const credentials: string[] = [];
   const absentAnswers: string[] = [];
   for (const row of rows) {
     if (row.gatekeeperId !== gatekeeperId || row.status !== 'draft') continue;
     if (row.origin !== 'import') proposals.push(row.name);
     else if ((row.gateOwnedParams?.length ?? 0) > 0) gateOwned.push(row.name);
+    else if ((row.suspectedSecretValues ?? 0) > 0) credentials.push(row.name);
     else if (row.absentAnswers !== undefined) absentAnswers.push(row.name);
     else publishable.push(row.name);
   }
-  return { publishable, proposals, gateOwned, absentAnswers };
+  return { publishable, proposals, gateOwned, credentials, absentAnswers };
 }
 
 /** How many of a bulk publish's drafts it left for a person, which the 「已发布 N 个」 toast counts

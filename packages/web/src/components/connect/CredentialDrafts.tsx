@@ -1,6 +1,6 @@
 import type { CredentialDraftWire } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
-import { namedReviewPath } from '../../lib/credential-review.js';
+import { namedReviewPath, reviewFieldNames } from '../../lib/credential-review.js';
 import { actionKindTagText } from '../../lib/format.js';
 import { operationKey } from '../../lib/governance.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
@@ -26,13 +26,11 @@ import { RouteLink } from '../kit/route-link.js';
  *  gate aligns with the platform's announcement, a self-connected one re-reads its manifest. */
 export type CredentialDraftsFix = 'align' | 'resync' | 'either';
 
-/** 「description、paramsSchema.properties.password.example」, at most what the kernel listed. */
+/** 「描述、参数定义.properties.password.example」, at most what the kernel listed. */
 function placesText(draft: CredentialDraftWire, t: Translate): string {
-  // UX acceptance of #1370 (P3): the stored definition's top-level fields read as words.
-  const names = {
-    description: t('描述', 'description'),
-    params_schema: t('参数定义', 'params'),
-  };
+  // UX acceptance of #1370 (P3): the stored definition's top-level fields read as words, the same
+  // as the catalog's Publish names them.
+  const names = reviewFieldNames('operation', t);
   const places = draft.suspectedSecretPaths
     .map((path) => visibleText(namedReviewPath(path, names)))
     .join(t('、', ', '));

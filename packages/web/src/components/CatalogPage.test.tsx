@@ -3360,7 +3360,20 @@ describe('CatalogPage — credential confirmation on Publish', () => {
       get_operation_stats: () => ({ items: [] }),
       publish_operation: (params) => {
         seen.push(params);
-        if (seen.length === 1) return Promise.reject(refusal('operation', 1));
+        if (seen.length === 1) {
+          return Promise.reject(
+            new HttpError(
+              'capability_error',
+              'operation carries suspected credentials',
+              'credentials_review_required',
+              {
+                subject: 'operation',
+                suspectedSecretValues: 1,
+                suspectedSecretPaths: ['params_schema.properties.token.default'],
+              },
+            ),
+          );
+        }
         return {};
       },
     });
@@ -3369,6 +3382,10 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
     const review = await within(detail).findByTestId('credential-review');
     expect(review.getAttribute('data-count')).toBe('1');
+    // Legacy 807: an Operation's places read the same here as in the wizard and a bulk publish.
+    expect(within(review).getByTestId('credential-review-paths').textContent).toBe(
+      '参数定义.properties.token.default',
+    );
     expect(screen.queryByTestId('toast')).toBeNull();
     const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
