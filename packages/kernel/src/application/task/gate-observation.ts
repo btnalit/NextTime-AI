@@ -51,9 +51,9 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  * longer than any secret replaced whole, so a secret the cut crosses was read whole and replaced
  * (as application/chat/tool-call-record.ts reads a tool call's result). Replacements shorten the
  * copy, so after more than a margin's worth of them the cut can fall where reading stopped: the
- * copy then ends inside the one string reading stopped in, whose start the value patterns still
- * ran over (a PEM key is replaced to its end), and `truncated` is set though the copy is shorter
- * than the cut.
+ * copy then ends inside the one string or key reading stopped in, whose start the value patterns
+ * still ran over (a PEM key is replaced to its end), and `truncated` is set though the copy is
+ * shorter than the cut.
  */
 
 const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';

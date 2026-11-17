@@ -303,9 +303,9 @@ describe('redactSecrets — a bounded walk reads no further than its bound (lega
       redactedValues: 0,
       omitted: true,
     });
-    // `ab` and `1` leave 2 characters for the next key.
-    expect(redactSecrets({ ab: 1, longkey: 2 }, { maxChars: 5 })).toEqual({
-      value: { ab: 1, 'lo…': 2 },
+    // `ab` and `1` leave 2 characters for the next key; cutting it spends the rest.
+    expect(redactSecrets({ ab: 1, longkey: 2, c: 3 }, { maxChars: 5 })).toEqual({
+      value: { ab: 1, 'lo…': 2, [OMITTED]: OMITTED },
       redactedValues: 0,
       omitted: true,
     });
@@ -340,6 +340,40 @@ describe('redactSecrets — a bounded walk reads no further than its bound (lega
     );
     expect(redactSecrets(numbers, { maxChars: 5 }).value).toEqual([0, 1, 2, 3, 4, OMITTED]);
     expect(reads).toBe(5);
+  });
+
+  /** `items` behind a Proxy that counts the items read. */
+  function countingArray(items: unknown[]): { readonly value: unknown[]; reads(): number } {
+    let reads = 0;
+    const value = new Proxy(items, {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^\d+$/.test(property)) reads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    return { value, reads: () => reads };
+  }
+
+  it('charges an empty string one character: an array of them is read only up to the bound', () => {
+    const empties = countingArray(Array.from({ length: 10_000 }, () => ''));
+    expect(redactSecrets(empties.value, { maxChars: 5 })).toEqual({
+      value: ['', '', '', '', '', OMITTED],
+      redactedValues: 0,
+      omitted: true,
+    });
+    expect(empties.reads()).toBe(5);
+  });
+
+  it('charges a secret field’s value what replaces it: an array of them is read only up to the bound', () => {
+    const tokens = countingArray(Array.from({ length: 10_000 }, () => 'x'));
+    // `token` (5) leaves 25: three `[redacted]` (10 each) spend it.
+    const redacted = redactSecrets(
+      { token: tokens.value },
+      { maxChars: 30, isSecretKey: (key) => key === 'token' },
+    );
+    expect(redacted.value).toEqual({ token: [REDACTED, REDACTED, REDACTED, OMITTED] });
+    expect(redacted.omitted).toBe(true);
+    expect(tokens.reads()).toBe(3);
   });
 
   it('a bounded walk that runs out of nodes reads no further either', () => {

@@ -328,9 +328,9 @@ interface WalkState {
   nodes: number;
   chars: number;
   omitted: boolean;
-  /** A finite `maxChars` was passed: keys and other scalars are charged too, a key is cut like a
-   *  string, and once either budget is spent the rest of a container is left out unread
-   *  (`RedactSecretsOptions.maxChars`). */
+  /** A finite `maxChars` was passed: every item read is charged at least one character, a key is
+   *  cut like a string, and once either budget is spent the rest of a container is left out
+   *  unread (`RedactSecretsOptions.maxChars`). */
   readonly bounded: boolean;
   /** Hidden as literals in every string, before the patterns run (`RedactSecretsOptions`). */
   readonly literals: readonly string[];
@@ -672,9 +672,10 @@ export interface RedactSecretsOptions {
    *  writes the result back as structured data passes `Infinity` for a value already validated and
    *  bounded upstream (capability params, at most 1 MiB). */
   readonly maxNodes?: number;
-  /** Characters read in all: string content, object keys, and the characters of a number, a
-   *  boolean or null; a string or key past the budget is cut (ending in `…`), a value under a
-   *  secret-named field is replaced unread and charged nothing. Once the budget is spent — or
+  /** Characters read in all: string content (an empty string counts one), object keys, and the
+   *  characters of a number, a boolean or null; a string or key past the budget is cut (ending in
+   *  `…`), and a value under a secret-named field, replaced unread, is charged what replaces it
+   *  (`[redacted]`). Once the budget is spent — or
    *  `maxNodes` is — the rest of every container is left out unread, as one `[…]` (an array's
    *  last item, an object's last entry): a value is read only up to the bound, however many keys
    *  or items it has (legacy 237). Defaults to no bound — for display, or for a value nothing has
@@ -762,16 +763,19 @@ function redactInto(
   path: string | undefined,
 ): unknown {
   if (within === 'field' && isSecretFieldValue(value)) {
-    // Replaced unread: what it looks like does not matter.
+    // Replaced unread: what it looks like does not matter. A bounded walk charges what it writes,
+    // so an array of millions of them under a secret-named field stops at the bound too.
     state.count += 1;
     if (path !== undefined) state.onRedacted?.(path, 1);
+    if (state.bounded) state.chars -= REDACTED.length;
     return REDACTED;
   }
   if (typeof value === 'string') {
     const before = state.count;
     let out: string;
     if (value.length <= state.chars) {
-      state.chars -= value.length;
+      // A bounded walk charges an empty string one character, like any other item it reads.
+      state.chars -= state.bounded ? Math.max(value.length, 1) : value.length;
       out = scrubInto(value, state);
     } else {
       state.omitted = true;
