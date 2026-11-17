@@ -11,6 +11,7 @@ import {
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { ExhaustedBudgetRow } from './budget-sync.js';
+import { deliverToClient } from './client-delivery.js';
 import { CLIENT_STALL_TIMEOUT_MS, type ProviderApiKind, type ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
@@ -709,82 +710,6 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     };
     armTimeout(options.upstreamConnectTimeoutMs);
 
-    // Legacy 161: whether the client went away (or was cut off) before the whole answer reached
-    // it. The upstream call is never aborted or slowed down for that — see the module doc.
-    let clientClosed = false;
-    res.once('close', () => {
-      if (!res.writableFinished) clientClosed = true;
-    });
-    const clientGone = (): boolean => clientClosed || (res.destroyed && !res.writableFinished);
-    const clientStallTimeoutMs = options.clientStallTimeoutMs ?? CLIENT_STALL_TIMEOUT_MS;
-    const clientBufferLimitBytes = options.clientBufferLimitBytes ?? CLIENT_BUFFER_LIMIT_BYTES;
-    let stallTimer: NodeJS.Timeout | undefined;
-    const stopStallTimer = (): void => {
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = undefined;
-    };
-    /** Stops forwarding to a client that cannot keep up; the upstream read goes on regardless. */
-    const cutOffClient = (reason: 'stalled' | 'buffer_full'): void => {
-      stopStallTimer();
-      if (clientGone()) return;
-      clientClosed = true;
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg:
-            reason === 'stalled'
-              ? 'llm-proxy: client left the answer untaken for the stall timeout; cutting it off, the upstream answer is still read to its end'
-              : 'llm-proxy: client fell further behind than the buffer limit; cutting it off, the upstream answer is still read to its end',
-          correlationId,
-          provider: providerName,
-          model: modelId,
-          ...(reason === 'stalled'
-            ? { clientStallTimeoutMs }
-            : { clientBufferLimitBytes, bufferedBytes: res.writableLength }),
-        }),
-      );
-      res.destroy();
-    };
-    /** The client has a backlog: it has `clientStallTimeoutMs` to take it, counted from the first
-     *  moment it fell behind (a running clock is not restarted). */
-    const watchClient = (): void => {
-      if (stallTimer || clientGone()) return;
-      stallTimer = setTimeout(() => cutOffClient('stalled'), clientStallTimeoutMs);
-      stallTimer.unref?.();
-    };
-    /** While the answer streams, a client that has caught up has no backlog to time. */
-    const clientCaughtUp = (): void => stopStallTimer();
-    res.on('drain', clientCaughtUp);
-    /** Hands `chunk` to a client still there without ever waiting for it. */
-    const forward = (chunk: Uint8Array): void => {
-      if (clientGone()) return;
-      if (res.writableLength + chunk.byteLength > clientBufferLimitBytes) {
-        cutOffClient('buffer_full');
-        return;
-      }
-      if (!res.write(chunk)) watchClient();
-    };
-    /** After the answer ended: resolves once the client has taken all of it, or is gone (a backlog
-     *  left untaken is cut off by the stall timer, so this always settles). */
-    const clientTookAll = (): Promise<void> => {
-      res.off('drain', clientCaughtUp);
-      if (res.writableFinished || clientGone()) {
-        stopStallTimer();
-        return Promise.resolve();
-      }
-      watchClient();
-      return new Promise<void>((resolve) => {
-        const settle = (): void => {
-          stopStallTimer();
-          res.off('finish', settle);
-          res.off('close', settle);
-          resolve();
-        };
-        res.on('finish', settle);
-        res.on('close', settle);
-      });
-    };
-
     const upstreamStartedMs = Date.now();
     // R-67: this upstream request's usage identity — minted here, never taken from the caller,
     // so the kernel tells concurrent requests under one Handle apart (their `startedAt` can be
@@ -882,6 +807,33 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     } else {
       res.writeHead(upstreamRes.status, upstreamHeadersToNodeHeaders(upstreamRes.headers));
     }
+    // Legacy 161: a successful answer goes to the client without the upstream read ever waiting
+    // for it (client-delivery.ts); a client too far or too long behind is cut off.
+    const delivery = upstreamRes.ok
+      ? deliverToClient(res, {
+          stallTimeoutMs: options.clientStallTimeoutMs ?? CLIENT_STALL_TIMEOUT_MS,
+          bufferLimitBytes: options.clientBufferLimitBytes ?? CLIENT_BUFFER_LIMIT_BYTES,
+          onCutOff: (cutOff) =>
+            log(
+              JSON.stringify({
+                level: 'warn',
+                msg:
+                  cutOff.reason === 'stalled'
+                    ? 'llm-proxy: client left the answer untaken for the stall timeout; cutting it off, the upstream answer is still read to its end'
+                    : 'llm-proxy: client fell further behind than the buffer limit; cutting it off, the upstream answer is still read to its end',
+                correlationId,
+                provider: providerName,
+                model: modelId,
+                ...(cutOff.reason === 'stalled'
+                  ? { clientStallTimeoutMs: cutOff.stallTimeoutMs }
+                  : {
+                      clientBufferLimitBytes: cutOff.bufferLimitBytes,
+                      bufferedBytes: cutOff.bufferedBytes,
+                    }),
+              }),
+            ),
+        })
+      : undefined;
 
     if (upstreamRes.ok && upstreamRes.body) {
       const reader = upstreamRes.body.getReader();
@@ -889,7 +841,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          forward(value);
+          delivery?.forward(value);
           armTimeout(options.upstreamIdleTimeoutMs);
           if (isSse) {
             usageAccumulator?.push(decoder.decode(value, { stream: true }));
@@ -905,16 +857,13 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         streamError = err;
       }
     }
+    // The upstream call ends here, whatever the client is still doing (review of #1391): its
+    // duration and the record's `finishedAt` never include the wait for the client below.
+    const finishedAt = new Date();
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    if (upstreamRes.ok) {
-      res.end();
-      // Legacy 161: whether the whole answer reached the client decides `completed` against
-      // `client_closed`, so the record waits until it has (at most `clientStallTimeoutMs`).
-      await clientTookAll();
-    } else {
-      res.off('drain', clientCaughtUp);
-      stopStallTimer();
-    }
+    // Legacy 161: whether the whole answer reached the client decides `completed` against
+    // `client_closed`, so the record waits until it has (at most the client stall timeout).
+    await delivery?.end();
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
     if (nonSseTooLarge) {
@@ -936,12 +885,11 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       }
     }
 
-    const finishedAt = new Date();
     const upstreamOutcome = streamError || !upstreamRes.ok ? 'error' : 'completed';
     // Legacy 161: an upstream failure is `error` whether or not the client stayed; a full answer
     // the client left before receiving whole is `client_closed`, metered in full like `completed`.
     const usageStatus: LlmUsageStatus =
-      upstreamOutcome === 'completed' && clientGone() ? 'client_closed' : upstreamOutcome;
+      upstreamOutcome === 'completed' && delivery?.gone() ? 'client_closed' : upstreamOutcome;
     if (usageStatus === 'client_closed') {
       log(
         JSON.stringify({

@@ -2220,6 +2220,7 @@ describe('createProxyServer — slow and departed clients (legacy 161)', () => {
     // Whether the answer reached the client is not known yet, so nothing is recorded yet.
     expect(proxy.records).toHaveLength(0);
 
+    const resumedAtMs = Date.now();
     const body = await new Promise<Buffer>((resolve) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -2230,6 +2231,8 @@ describe('createProxyServer — slow and departed clients (legacy 161)', () => {
     expect(body.toString('utf8').endsWith(USAGE_FRAME)).toBe(true);
     await waitUntil(() => proxy.records.length === 1);
     expect(proxy.records[0]).toMatchObject({ ...FULL_USAGE, status: 'completed' });
+    // The upstream call ended long before the client took the answer; the record says so.
+    expect(Date.parse(proxy.records[0]?.finishedAt ?? '')).toBeLessThan(resumedAtMs);
     expect(upstream.cutShort()).toBe(false);
     expect(proxy.logs.some((line) => line.includes('cutting it off'))).toBe(false);
   }, 30_000);
