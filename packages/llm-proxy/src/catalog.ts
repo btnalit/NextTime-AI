@@ -1,7 +1,9 @@
 import { upstreamBaseUrlProblem } from '@nexttime/shared';
 import type { ProviderConfig } from './config.js';
+import { Mutex } from './mutex.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { storeProviderToConfig } from './provider-store.js';
+import type { TestedKeys } from './tested-keys.js';
 
 /**
  * catalog: the one merged view of "which providers exist" that every consumer in this process
@@ -22,7 +24,20 @@ import { storeProviderToConfig } from './provider-store.js';
  * cheap (a handful of providers), and it means an admin mutation is visible to the very next
  * proxied request with no restart and no cache to invalidate. The yaml is read once at startup
  * (config.ts) — a change there still needs a restart, unchanged from S1.7.
+ *
+ * Which test result applies (legacy 202, 203): with `testedKeys` wired (index.ts does), a
+ * provider's `lastTest` is the recorded result only while the provider would still send the key
+ * that result ran with (tested-keys.ts). A key rotated by a restart, or changed while a test was
+ * running, leaves the result unshown — the provider reads 未测试 until it is tested again.
  */
+
+/** What the catalog needs to tell whether a test result is about the key in use now. */
+export interface CatalogTestedKeys {
+  readonly store: TestedKeys;
+  /** The key the provider would send now — the S7-A order (a console key, then `apiKeyEnv`),
+   *  provider-keys.ts `currentProviderKey`. */
+  readonly currentKey: (id: string, apiKeyEnv: string | undefined) => string | undefined;
+}
 
 export type ProviderSource = 'file' | 'store';
 
@@ -45,10 +60,19 @@ export class ProviderCatalog {
   /** Test outcomes for file-only providers — nothing on disk to record them on (the yaml is
    *  read-only), so they live for this process's lifetime only. */
   private readonly fileTestResults = new Map<string, StoreTestResult>();
+  private readonly testedKeys: CatalogTestedKeys | undefined;
+  /** One `recordTest` at a time, so a result and the entry naming its key are written as a pair:
+   *  two tests finishing together cannot leave one's result beside the other's entry. */
+  private readonly testWrites = new Mutex();
 
-  constructor(fileProviders: Readonly<Record<string, ProviderConfig>>, store: ProviderStore) {
+  constructor(
+    fileProviders: Readonly<Record<string, ProviderConfig>>,
+    store: ProviderStore,
+    testedKeys?: CatalogTestedKeys,
+  ) {
     this.fileProviders = fileProviders;
     this.store = store;
+    this.testedKeys = testedKeys;
   }
 
   /** Every provider from both sources, merged (store over file), in a stable order: file
@@ -63,7 +87,7 @@ export class ProviderCatalog {
       seen.add(id);
       result.push(
         override
-          ? fromStore(id, override, true)
+          ? this.fromStore(id, override, true)
           : {
               id,
               config,
@@ -73,13 +97,13 @@ export class ProviderCatalog {
               displayName: config.display_name ?? id,
               createdAt: null,
               updatedAt: null,
-              lastTest: this.fileTestResults.get(id) ?? null,
+              lastTest: this.applicableTest(id, config, this.fileTestResults.get(id) ?? null),
             },
       );
     }
     for (const [id, entry] of storeEntries) {
       if (seen.has(id)) continue;
-      result.push(fromStore(id, entry, false));
+      result.push(this.fromStore(id, entry, false));
     }
     return result;
   }
@@ -120,33 +144,56 @@ export class ProviderCatalog {
     });
   }
 
-  /** Records a test outcome where it can live: on the store entry when there is one, else in
-   *  memory for a file-only provider. */
-  async recordTest(id: string, result: StoreTestResult): Promise<void> {
-    const recorded = await this.store.recordTest(id, result);
-    if (!recorded) this.fileTestResults.set(id, result);
+  /** Records a test outcome where it can live — on the store entry when there is one, else in
+   *  memory for a file-only provider — and then which key it ran with (`key`, the one the test
+   *  sent). The result is written first: a crash between the two writes leaves a result whose
+   *  `tested_at` has no entry of its own, which is not shown (tested-keys.ts). A provider not yet
+   *  tracked is tracked before the result is written, for the same reason. */
+  async recordTest(id: string, result: StoreTestResult, key: string): Promise<void> {
+    await this.testWrites.runExclusive(async () => {
+      const testedKeys = this.testedKeys?.store;
+      if (testedKeys && !testedKeys.tracks(id)) await testedKeys.track(id);
+      const recorded = await this.store.recordTest(id, result);
+      if (!recorded) this.fileTestResults.set(id, result);
+      await testedKeys?.record(id, result.tested_at, key);
+    });
   }
 
   /** Forgets the provider's last test, wherever it lives (review S1): called when its console key
-   *  is set or cleared, so the provider reads 未测试 until it is tested with the key now in use. */
+   *  is set or cleared, so the provider reads 未测试 until it is tested with the key now in use. A
+   *  test still running when this is called records its result afterwards; that result names the
+   *  key it ran with, so it is not shown for the new one (legacy 203). */
   async clearTest(id: string): Promise<void> {
     this.fileTestResults.delete(id);
     await this.store.clearTest(id);
   }
-}
 
-function fromStore(id: string, entry: StoreProvider, overridesFile: boolean): ResolvedProvider {
-  return {
-    id,
-    config: storeProviderToConfig(entry),
-    enabled: entry.enabled,
-    source: 'store',
-    overridesFile,
-    displayName: entry.display_name ?? id,
-    createdAt: entry.created_at,
-    updatedAt: entry.updated_at,
-    lastTest: entry.last_test ?? null,
-  };
+  /** `test` when it ran with the key the provider would send now, or when its key is unknown
+   *  (recorded before tested-keys.json existed: shown as before); else `null`. */
+  private applicableTest(
+    id: string,
+    config: ProviderConfig,
+    test: StoreTestResult | null,
+  ): StoreTestResult | null {
+    if (test === null || this.testedKeys === undefined) return test;
+    const currentKey = this.testedKeys.currentKey(id, config.api_key_env);
+    return this.testedKeys.store.match(id, test.tested_at, currentKey) === 'other' ? null : test;
+  }
+
+  private fromStore(id: string, entry: StoreProvider, overridesFile: boolean): ResolvedProvider {
+    const config = storeProviderToConfig(entry);
+    return {
+      id,
+      config,
+      enabled: entry.enabled,
+      source: 'store',
+      overridesFile,
+      displayName: entry.display_name ?? id,
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+      lastTest: this.applicableTest(id, config, entry.last_test ?? null),
+    };
+  }
 }
 
 /** Enabled, and its upstream base passes the bare-base rule — the one test for "requests may be

@@ -387,12 +387,13 @@ docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.j
 鉴权是内核 `issue_llm_admin_token` 签发的 5 分钟平台 JWT（Handle 密钥签名，`typ` / `aud` 不同——Handle 永远进不了
 管理端点，管理令牌也永远不是 Handle）。内核只签令牌、只记审计，**不存供应商记录、不见密钥**。
 
-**三处状态**：
+**llm-proxy 的状态**：
 
 | 主机路径 | 容器内 | 内容 | 谁写 |
 |---|---|---|---|
 | `${NEXTTIME_DATA}/llm-proxy/providers.json` | `/data/state/providers.json`（rw） | 控制台写入的供应商（`provider-store.ts`，原子写：`.tmp` + rename） | llm-proxy（uid 10001） |
 | `${NEXTTIME_DATA}/llm-proxy/keys.json` | `/data/state/keys.json`（rw，mode 0600） | 控制台写入的供应商密钥（`key-store.ts`，S7-A，按 provider id）——**从不出现在响应 / 日志 / 审计里** | llm-proxy（uid 10001） |
+| `${NEXTTIME_DATA}/llm-proxy/tested-keys.json` | `/data/state/tested-keys.json`（rw，mode 0600） | 每个供应商最近一次测试用的是哪把密钥：加盐的摘要与那次测试的时间，不含密钥本身（`tested-keys.ts`，遗留 202 / 203）。密钥换了（重启轮换 env / 密钥文件，或测试进行中改了控制台密钥），旧测试结果就不再显示，供应商显示「未测试」。文件缺失或损坏只记一条 warn，测试结果照旧显示，下次测试时重写 | llm-proxy（uid 10001） |
 | `${NEXTTIME_DATA}/config/llm-providers.yaml` | `/data/config/llm-providers.yaml`（**ro**） | 操作员的基础配置，不变 | 操作员 |
 | `${NEXTTIME_DATA}/models/models.json` | `/data/models/models.json`（`models/` 目录 rw） | 合并目录（yaml + store，仅启用的），每次变更后原子重写 | llm-proxy 与 `make gen-models` |
 
