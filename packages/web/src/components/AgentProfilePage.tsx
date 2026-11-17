@@ -1,9 +1,9 @@
-import type { AvailableGateInstanceWire, GateHealthWire } from '@nexttime/shared';
+import type { GateHealthWire } from '@nexttime/shared';
 import { Fragment, useMemo, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
-import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
+import { type AgentPolicy, type AgentProfile, keepGateHealth } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
@@ -90,31 +90,27 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     {},
     { autoLoadAll: true, enabled: can('list_principals') === true && role.role === 'owner' },
   );
-  // Legacy 200: a gate that is offline must not look usable. The systems linked to a platform gate
-  // instance carry its health (`list_available_gate_instances`, the read 「系统与授权」 marks its
-  // cards with); one the workspace connected itself has no health signal on any read a member
-  // makes, so it carries no mark.
-  const gateInstances = useCapabilityList<AvailableGateInstanceWire>(
-    http,
-    'list_available_gate_instances',
-    {},
-    { enabled: can('list_available_gate_instances') === true },
-  );
-  const gateHealth = useMemo(() => {
-    const map = new Map<string, GateHealthWire>();
-    if (gateInstances.state.status === 'ready') {
-      for (const row of gateInstances.state.data.items) {
-        if (row.gatekeeperId) map.set(row.gatekeeperId, row.health);
-      }
-    }
-    return map;
-  }, [gateInstances.state]);
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
+  // Legacy 200 / 812: a gate that is offline must not look usable. This page alone asks for each
+  // offered gate's health (`includeGateHealth`: a platform gate's stored health, a self-connected
+  // gate probed live); the chat header's model switcher reads the same profile without it, so
+  // opening a chat probes no gate.
   const profile = useCapability<AgentProfile>(
     http,
     'get_agent_profile',
-    selectedPrincipalId ? { principalId: selectedPrincipalId } : undefined,
+    selectedPrincipalId
+      ? { principalId: selectedPrincipalId, includeGateHealth: true }
+      : { includeGateHealth: true },
   );
+  const gateHealth = useMemo(() => {
+    const map = new Map<string, GateHealthWire>();
+    if (profile.state.status === 'ready') {
+      for (const gate of profile.state.data.availableGatekeepers) {
+        if (gate.health !== undefined) map.set(gate.gatekeeperId, gate.health);
+      }
+    }
+    return map;
+  }, [profile.state]);
 
   // B3 (§5.8 "id → 名称"): the effective panel's ids resolve against the lists this page already
   // loads for the form — the same rows, no extra read (a `kit/ref-chip` self-resolve would add a
@@ -146,7 +142,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
 
   function handleSaved(saved: AgentProfile): void {
     invalidateCapability(http, 'get_agent_profile');
-    profile.mutate(() => saved);
+    profile.mutate((previous) => keepGateHealth(saved, previous));
     toast.push({ tone: 'ok', title: t('已保存', 'Saved') });
   }
 

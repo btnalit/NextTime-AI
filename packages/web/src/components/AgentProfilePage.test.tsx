@@ -379,26 +379,17 @@ describe('AgentProfilePage', () => {
     expect(saved.excludedGatekeepers).toEqual(['gk-ragflow']);
   });
 
-  it('legacy 200: a system whose platform gate is not healthy carries its health in the checklist and the effective panel; a healthy one and one connected by the workspace itself carry none', async () => {
-    const instance = (gateId: string, gatekeeperId: string | null, health: string) => ({
-      gateId,
-      connector: 'http',
-      displayName: gateId,
-      transportKind: 'http',
-      target: 'stock',
-      status: 'active',
-      trust: 'platform',
-      health,
-      operationCount: 2,
-      gatekeeperId,
-    });
+  it('legacy 200 / 812: a system whose gate is not healthy — platform or self-connected — carries its health in the checklist and the effective panel; a healthy one and one with no health carry none', async () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         profile({
           availableGatekeepers: [
-            { gatekeeperId: 'gk-down', granted: true, inUse: true },
-            { gatekeeperId: 'gk-up', granted: false, inUse: true },
-            { gatekeeperId: 'gk-self', granted: true, inUse: true },
+            // A platform gate's stored health.
+            { gatekeeperId: 'gk-down', granted: true, inUse: true, health: 'unreachable' },
+            { gatekeeperId: 'gk-up', granted: false, inUse: true, health: 'ok' },
+            // A gate the workspace connected itself, probed live by the kernel.
+            { gatekeeperId: 'gk-self', granted: true, inUse: true, health: 'unauthorized' },
+            { gatekeeperId: 'gk-none', granted: true, inUse: true },
           ],
         }),
       list_gatekeepers: () => ({
@@ -406,14 +397,7 @@ describe('AgentProfilePage', () => {
           { id: 'gk-down', name: 'stock', kind: 'http', status: 'active' },
           { id: 'gk-up', name: 'crm', kind: 'http', status: 'active' },
           { id: 'gk-self', name: 'local', kind: 'http', status: 'active' },
-        ],
-      }),
-      list_available_gate_instances: () => ({
-        items: [
-          instance('gi-down', 'gk-down', 'unreachable'),
-          instance('gi-up', 'gk-up', 'ok'),
-          // Not enabled in this workspace: no Gatekeeper of ours to mark.
-          instance('gi-other', null, 'unreachable'),
+          { id: 'gk-none', name: 'wiki', kind: 'http', status: 'active' },
         ],
       }),
     });
@@ -422,15 +406,62 @@ describe('AgentProfilePage', () => {
     const down = await within(gates).findByTestId('agent-profile-gatekeepers-health-gk-down');
     expect(down.textContent).toBe('不可达');
     expect(down.closest('label')?.textContent).toContain('stock');
+    const self = within(gates).getByTestId('agent-profile-gatekeepers-health-gk-self');
+    expect(self.textContent).toBe('未授权');
+    expect(self.closest('label')?.textContent).toContain('local');
     expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-up')).toBeNull();
-    expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-self')).toBeNull();
+    expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-none')).toBeNull();
 
     const effective = screen.getByTestId('agent-profile-effective');
     expect(
       within(effective).getByTestId('agent-profile-effective-health-gk-down').textContent,
     ).toBe('不可达');
+    expect(
+      within(effective).getByTestId('agent-profile-effective-health-gk-self').textContent,
+    ).toBe('未授权');
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-up')).toBeNull();
-    expect(within(effective).queryByTestId('agent-profile-effective-health-gk-self')).toBeNull();
+    expect(within(effective).queryByTestId('agent-profile-effective-health-gk-none')).toBeNull();
+
+    // This page asks for the health; no other read is made for it.
+    const reads = http.calls.filter((c) => c.name === 'get_agent_profile');
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) expect(read.params).toMatchObject({ includeGateHealth: true });
+    expect(http.calls.some((c) => c.name === 'list_available_gate_instances')).toBe(false);
+  });
+
+  it("legacy 812: saving keeps each gate's health — set_agent_profile probes no gate and returns none", async () => {
+    const gates = (withHealth: boolean) => [
+      {
+        gatekeeperId: 'gk-self',
+        granted: true,
+        inUse: true,
+        ...(withHealth ? { health: 'unreachable' as const } : {}),
+      },
+    ];
+    const http = scriptedHttp({
+      get_agent_profile: () => profile({ availableGatekeepers: gates(true) }),
+      // The saved profile reads differently (its addendum), so the test can see the save land.
+      set_agent_profile: () =>
+        profile({
+          availableGatekeepers: gates(false),
+          effective: { ...profile().effective, promptAddendum: 'saved addendum' },
+        }),
+      list_gatekeepers: () => ({
+        items: [{ id: 'gk-self', name: 'local', kind: 'http', status: 'active' }],
+      }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-profile-form');
+    await screen.findByTestId('agent-profile-gatekeepers-health-gk-self');
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'set_agent_profile')).toHaveLength(1),
+    );
+    await within(screen.getByTestId('agent-profile-effective')).findByText(/saved addendum/);
+    expect(screen.getByTestId('agent-profile-gatekeepers-health-gk-self').textContent).toBe(
+      '不可达',
+    );
+    expect(screen.getByTestId('agent-profile-effective-health-gk-self').textContent).toBe('不可达');
   });
 
   it('with no system granted, the systems field says who has to grant one instead of an empty checklist', async () => {
