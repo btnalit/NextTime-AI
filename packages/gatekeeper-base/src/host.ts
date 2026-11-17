@@ -20,6 +20,7 @@ import {
   loadInternalToken,
   postAnnouncement,
 } from './announce.js';
+import { ResponseBodyTooLargeError } from './bounded-body.js';
 import { ConnectedAccountStore, HostedCredentialResolver } from './credentials/index.js';
 import { createGateAuthGuard, loadGateKernelToken } from './gate-auth.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
@@ -31,6 +32,7 @@ import {
   importMcpTools,
   importOpenApi,
   isRedirectStatus,
+  readOpenApiDocument,
   redirectRefusalMessage,
 } from './kinds/index.js';
 import type { OpenApiDocumentLike } from './kinds/index.js';
@@ -198,6 +200,8 @@ function connectorOf(item: HostedInstanceListItem): string {
   return item.connector ?? item.definition.transportKind;
 }
 
+/** `readJson`: how the body is read — a body it refuses as too large fails the fetch
+ *  (`ResponseBodyTooLargeError`); one that is not JSON reads as `json: undefined`. */
 async function fetchJsonWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
@@ -205,6 +209,7 @@ async function fetchJsonWithTimeout(
   timeoutMs: number,
   setTimer: typeof setTimeout,
   clearTimer: typeof clearTimeout,
+  readJson: (response: Response) => Promise<unknown> = (response) => response.json(),
 ): Promise<{ status: number; ok: boolean; json: unknown; headers: Headers }> {
   const controller = new AbortController();
   const timeout = setTimer(() => controller.abort(), timeoutMs);
@@ -215,8 +220,9 @@ async function fetchJsonWithTimeout(
       await response.body?.cancel().catch(() => {});
     } else {
       try {
-        json = await response.json();
-      } catch {
+        json = await readJson(response);
+      } catch (err) {
+        if (err instanceof ResponseBodyTooLargeError) throw err;
         json = undefined;
       }
     }
@@ -405,6 +411,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       // (`create_connection`, R-27) and the gate's transports (`kinds/redirect.ts`). No credential
       // goes along, but a redirect would read the Operations from an address nobody set — one the
       // kernel's outbound-target check never saw.
+      // Legacy 797: read up to `MAX_OPENAPI_DOCUMENT_BYTES` — a larger document fails the build.
       const fetched = await fetchJsonWithTimeout(
         targetFetch,
         definition.manifestSource,
@@ -412,6 +419,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         BUILD_TIMEOUT_MS,
         setTimer,
         clearTimer,
+        readOpenApiDocument,
       );
       if (isRedirectStatus(fetched.status)) {
         throw new Error(

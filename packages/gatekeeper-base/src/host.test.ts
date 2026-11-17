@@ -1155,4 +1155,94 @@ describe('createGateHost (P-B2a)', () => {
       expect(seen).toEqual(['/away.json']);
     });
   });
+
+  describe('legacy 797: an OpenAPI document larger than the limit fails the build', () => {
+    const DOC_URL = 'https://api.test/openapi.json';
+
+    /** The fake kernel for its own URLs, `document()` for the OpenAPI document. */
+    function hostFetch(document: () => Response): typeof fetch {
+      const kernel = makeFetch(state);
+      return (async (input: string | URL | Request, init?: RequestInit) =>
+        new URL(String(input)).origin === KERNEL_URL
+          ? kernel(input, init)
+          : document()) as unknown as typeof fetch;
+    }
+
+    const item: FakeItem = {
+      gateId: 'demo-http',
+      displayName: 'Demo',
+      status: 'enabled',
+      definition: {
+        transportKind: 'http',
+        target: 'http://api.test/',
+        credentialMode: 'shared',
+        manifestSource: DOC_URL,
+      },
+    };
+    const why =
+      'the OpenAPI document is larger than 16 MiB: serve a document with only the paths this gate needs, or write its manifest by hand';
+
+    it('one that declares its length is refused before it is read', async () => {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(1024));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      state.items = [item];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(body, {
+              headers: {
+                'content-type': 'application/json',
+                'content-length': String(16 * 1024 * 1024 + 1),
+              },
+            }),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([
+        { gateId: 'demo-http', ready: false, operationCount: 0, buildError: why },
+      ]);
+      expect(cancelled).toBe(true);
+      expect(state.announcements).toEqual([]);
+    });
+
+    it('one that does not is cut off once it passes the limit', async () => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      let pulls = 0;
+      let cancelled = false;
+      state.items = [item];
+      host = await createGateHost({
+        env,
+        fetchImpl: hostFetch(
+          () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  pulls += 1;
+                  controller.enqueue(chunk);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+              { headers: { 'content-type': 'application/json' } },
+            ),
+        ),
+        listen: false,
+      });
+      await host.tick();
+      expect(host.instances()[0]?.buildError).toBe(why);
+      expect(cancelled).toBe(true);
+      expect(pulls).toBeLessThan(20);
+      expect(state.announcements).toEqual([]);
+    });
+  });
 });

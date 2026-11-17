@@ -12,6 +12,8 @@ export {
   importOpenApi,
   isGateOwnedHeader,
   isGateOwnedQueryParam,
+  MAX_OPENAPI_DOCUMENT_BYTES,
+  readOpenApiDocument,
   resolveBindingUrl,
 } from './http.js';
 export type {

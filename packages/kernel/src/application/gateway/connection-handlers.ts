@@ -3,6 +3,7 @@ import {
   importMcpTools,
   importOpenApi,
   isRedirectStatus,
+  readOpenApiDocument,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
@@ -542,7 +543,8 @@ async function resolveManifestOperations(
       if (!response.ok) {
         throw new Error(`responded ${response.status}`);
       }
-      document = (await response.json()) as OpenApiDocumentLike;
+      // Legacy 797: at most `MAX_OPENAPI_DOCUMENT_BYTES` — a larger one fails the fetch, as here.
+      document = (await readOpenApiDocument(response)) as OpenApiDocumentLike;
     } catch (err) {
       throw new ConnectionManifestFetchError(manifestSource, { cause: err });
     }
