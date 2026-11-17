@@ -3412,6 +3412,30 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.201 OpenAPI 导入读 path 级参数并展开文档内 `$ref`（#1354，遗留 197，0.69.2 之后的下一版）
+
+无迁移。门宿主与内核同版本升级。OpenAPI 导入开始读 path 级参数，并展开文档内的 `$ref`（参数、请求体、schema）；读不到的引用不再让 Operation 接受任意参数。
+
+- **含义变化**：
+  - 用到 path 级参数或 `$ref` 的 http 门，升级后相关 Operation 的定义摘要会变，调用返回 409 `operation_definition_mismatch`，直到在控制台审阅采用、对齐并发布修订。往安全方向失败，不执行任何东西。
+  - **会变严的一类**：请求体顶层是 `allOf` / `anyOf` / `oneOf` / `not` 的 Operation（包括 `$ref` 旁边写了与目标冲突的兄弟关键字），以前是接受一切的 `{}`，升级后只收参数、发不出请求体。
+  - 引用很多、很深的文档，超出导入上限的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，调用 400 `invalid_operation_schema`。
+- **升级前核对（可选，只读，结果记 `docs/private/`）**：对每个以 OpenAPI 文档为清单源的 http 门实例，取文档看是否用到 path 级参数或 `$ref`，两个数都是 0 的门不受影响：
+
+    ```sh
+    jq '([.paths[] | select(has("parameters"))] | length), ([.. | objects | select(has("$ref"))] | length)'
+    ```
+
+  顺带数一下顶层组合的请求体（经 `$ref` 指过去的不在这个数里）：
+
+    ```sh
+    jq '[.paths[][]? | objects | .requestBody?.content?["application/json"]?.schema? // empty | select(has("allOf") or has("anyOf") or has("oneOf") or has("not"))] | length'
+    ```
+
+- **升级后**：在控制台看各 http 门的可达性，显示定义不一致的，按 §3.24 窗口后的步骤审阅采用、对齐、逐条发布修订。对齐前先看一眼新定义：请求体顶层是组合的 Operation 只剩参数，超过导入上限的 Operation 调用 400。这两类发布了也用不了，处置是手写门清单里的 `params_schema`，或者换一份文档（请求体写成带 `properties` 的对象、引用少一些）。
+- **回滚**：只回退代码即可。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
