@@ -504,7 +504,7 @@ function ChecklistField({
         <EmptyState variant="inline" title={emptyTitle} body={empty} testId={`${testId}-empty`} />
       ) : (
         <fieldset
-          className="stack-s"
+          className="stack-s checklist-options"
           aria-label={title}
           style={{ border: 0, padding: 0, margin: 0 }}
         >
@@ -516,21 +516,23 @@ function ChecklistField({
                 onChange={() => onToggle(option.id)}
                 disabled={disabled}
               />
-              <span>{option.label}</span>
-              {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
-              {option.health !== undefined ? (
-                <StatusChip
-                  machine="gateHealth"
-                  status={option.health}
-                  size="s"
-                  testId={`${testId}-health-${option.id}`}
-                />
-              ) : null}
-              {option.detail !== undefined ? (
-                <span className="mono text-3" title={option.id} data-volatile="">
-                  {option.detail}
-                </span>
-              ) : null}
+              <span className="checklist-option-body">
+                <span>{option.label}</span>
+                {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
+                {option.health !== undefined ? (
+                  <StatusChip
+                    machine="gateHealth"
+                    status={option.health}
+                    size="s"
+                    testId={`${testId}-health-${option.id}`}
+                  />
+                ) : null}
+                {option.detail !== undefined ? (
+                  <span className="mono text-3" title={option.id} data-volatile="">
+                    {option.detail}
+                  </span>
+                ) : null}
+              </span>
             </label>
           ))}
         </fieldset>

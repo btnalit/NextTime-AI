@@ -1435,6 +1435,27 @@
   color: var(--text-3);
 }
 
+/* Legacy 200 UX acceptance (#1383): a row carrying a gate-health chip and a short id outgrew a
+ * 390px card — a fieldset's min-inline-size is min-content and `.checkbox` does not wrap, so the
+ * widest row widened the whole column. The checkbox stays pinned; the row's text, tags, chip and
+ * id wrap under each other inside the body instead. */
+.checklist-options {
+  min-width: 0;
+}
+
+.checklist-option-body {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.checklist-option-body > .mono {
+  overflow-wrap: anywhere;
+}
+
 /* ---- Systems & access (console redesign P3-3, V5): one row per system — the artboard's list
  * has more per-row content (kind chip, ops summary, who-can-use, reachability, two actions) than
  * `.data-row`'s other sitewide consumers, so this list wraps rather than truncating at 768px. */
