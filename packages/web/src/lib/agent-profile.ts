@@ -48,23 +48,6 @@ export interface AvailableGatekeeper {
   readonly health?: GateHealthWire;
 }
 
-/** Legacy 812: `saved` (a `set_agent_profile` result, which probes no gate and so carries no
- *  health) with each gate's health from the profile it replaces — the save changed what the agent
- *  uses, not how the gates stand. A gate the earlier read had no health for stays without. */
-export function keepGateHealth(saved: AgentProfile, previous: AgentProfile): AgentProfile {
-  const health = new Map<string, GateHealthWire>();
-  for (const gate of previous.availableGatekeepers) {
-    if (gate.health !== undefined) health.set(gate.gatekeeperId, gate.health);
-  }
-  return {
-    ...saved,
-    availableGatekeepers: saved.availableGatekeepers.map((gate) => {
-      const known = gate.health ?? health.get(gate.gatekeeperId);
-      return known === undefined ? gate : { ...gate, health: known };
-    }),
-  };
-}
-
 export interface EffectiveAgentProfile {
   readonly model: string;
   readonly enabledSkills: readonly string[];

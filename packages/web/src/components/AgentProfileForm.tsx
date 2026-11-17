@@ -43,10 +43,15 @@ export interface AgentProfileFormProps {
   readonly models: readonly ModelRow[];
   readonly skills: readonly SkillRow[];
   readonly gatekeepers: readonly GatekeeperListRow[];
-  /** Legacy 200: each system's health as 「系统与授权」 shows it — known for a system linked to a
-   *  platform gate instance (`list_available_gate_instances`), absent for one the workspace
-   *  connected itself, which carries no health signal. */
+  /** Legacy 200 / 812: each system's health — a platform gate's stored health, a self-connected
+   *  gate's probed live; absent for a gate with no health signal. */
   readonly gateHealth?: ReadonlyMap<string, GateHealthWire>;
+  /** Legacy 816: where the separate health read stands. While it is out (a self-connected gate's
+   *  probe can take seconds) or after it failed, no system's lack of a mark means it is healthy, so
+   *  the field says so. */
+  readonly gateHealthStatus?: 'loading' | 'error' | 'ready';
+  /** Legacy 816 (#1429 review P3): reads the gates' health again after a failed read. */
+  readonly onRetryGateHealth?: () => void;
   readonly workerDefinitions: readonly WorkerDefinitionSummary[];
   /** `true` for a member editing their own profile when policy says they may not
    *  (`memberCanEditProfile === false`) — disables every control instead of offering a Save that
@@ -107,6 +112,8 @@ export function AgentProfileForm({
   skills,
   gatekeepers,
   gateHealth,
+  gateHealthStatus = 'ready',
+  onRetryGateHealth,
   workerDefinitions,
   editForbidden,
   forbiddenBy = 'policy',
@@ -315,10 +322,40 @@ export function AgentProfileForm({
 
         <ChecklistField
           title={t('系统接入', 'Connected systems')}
-          subtitle={t(
-            '本工作区可读的系统，以及授权给你的系统',
-            'Systems readable in this workspace, and those granted to you',
-          )}
+          subtitle={
+            <>
+              {t(
+                '本工作区可读的系统，以及授权给你的系统',
+                'Systems readable in this workspace, and those granted to you',
+              )}
+              {allowedGatekeepers.length > 0 && gateHealthStatus === 'loading' ? (
+                <span data-testid="agent-profile-gate-health-pending">
+                  {t('。正在检查各系统的连接状态…', '. Checking each system’s connection…')}
+                </span>
+              ) : null}
+              {allowedGatekeepers.length > 0 && gateHealthStatus === 'error' ? (
+                <span className="text-warn" data-testid="agent-profile-gate-health-error">
+                  {t(
+                    '。无法检查各系统的连接状态，没有标记不代表连接正常。',
+                    '. Could not check each system’s connection; a system without a mark may still be unreachable.',
+                  )}
+                  {onRetryGateHealth !== undefined ? (
+                    <>
+                      {' '}
+                      <Button
+                        variant="secondary"
+                        size="s"
+                        onClick={onRetryGateHealth}
+                        data-testid="agent-profile-gate-health-retry"
+                      >
+                        {t('重新检查', 'Check again')}
+                      </Button>
+                    </>
+                  ) : null}
+                </span>
+              ) : null}
+            </>
+          }
           options={allowedGatekeepers.map((g) => ({
             id: g.gatekeeperId,
             label: g.name,
@@ -326,7 +363,7 @@ export function AgentProfileForm({
             note: g.granted
               ? t('读写（已授权）', 'Read & write (granted)')
               : t('只读（未授权）', 'Read only (not granted)'),
-            ...unhealthy(gateHealth?.get(g.gatekeeperId)),
+            ...gateHealthMark(gateHealthStatus, gateHealth?.get(g.gatekeeperId)),
           }))}
           excluded={state.excludedGatekeepers}
           onToggle={(id) =>
@@ -477,14 +514,14 @@ function ChecklistField({
   empty,
 }: {
   readonly title: string;
-  readonly subtitle: string;
+  readonly subtitle: ReactNode;
   /** `note`: a short qualifier shown after the label (the systems list's 读写 / 只读). */
   readonly options: readonly {
     readonly id: string;
     readonly label: string;
     readonly note?: string;
-    /** Legacy 200: a system whose gate is not healthy — its calls fail until it is. */
-    readonly health?: GateHealthWire;
+    /** Legacy 200 / 816: the system's health mark (see `gateHealthMark`). */
+    readonly health?: GateHealthWire | 'checking';
     /** Tells an option apart from a same-named one (a Worker definition's short id). */
     readonly detail?: string;
   }[];
@@ -520,12 +557,7 @@ function ChecklistField({
                 <span>{option.label}</span>
                 {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
                 {option.health !== undefined ? (
-                  <StatusChip
-                    machine="gateHealth"
-                    status={option.health}
-                    size="s"
-                    testId={`${testId}-health-${option.id}`}
-                  />
+                  <GateHealthChip health={option.health} testId={`${testId}-health-${option.id}`} />
                 ) : null}
                 {option.detail !== undefined ? (
                   <span className="mono text-3" title={option.id} data-volatile="">
@@ -546,8 +578,32 @@ function ChecklistField({
   );
 }
 
-/** Legacy 200: only a system whose gate is not healthy carries a mark — a healthy one, or one with
- *  no health signal (connected by the workspace itself), reads as before. */
-export function unhealthy(health: GateHealthWire | undefined): { health?: GateHealthWire } {
-  return health === undefined || health === 'ok' ? {} : { health };
+/** Legacy 200 / 816: each system's health beside it — 「检查中」 while the health read is out, so
+ *  the row already holds the mark's place and does not grow when the health lands (#1429 UX P2-1);
+ *  then the gate's health, 「健康」 included. Nothing after a failed read (the field says why) or
+ *  for a gate with no health signal. */
+export function gateHealthMark(
+  status: 'loading' | 'error' | 'ready',
+  health: GateHealthWire | undefined,
+): { health?: GateHealthWire | 'checking' } {
+  if (status === 'loading') return { health: 'checking' };
+  return status === 'ready' && health !== undefined ? { health } : {};
+}
+
+/** The mark `gateHealthMark` picked: a neutral 「检查中」, or the gate's health chip. */
+export function GateHealthChip({
+  health,
+  testId,
+}: {
+  readonly health: GateHealthWire | 'checking';
+  readonly testId: string;
+}) {
+  const t = useT();
+  return health === 'checking' ? (
+    <span className="tag text-3" data-testid={`${testId}-checking`}>
+      {t('检查中', 'Checking')}
+    </span>
+  ) : (
+    <StatusChip machine="gateHealth" status={health} size="s" testId={testId} />
+  );
 }
