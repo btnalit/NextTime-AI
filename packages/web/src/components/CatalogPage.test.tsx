@@ -468,9 +468,14 @@ describe('CatalogPage', () => {
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('无法发布');
     expect(toast.textContent).toContain('docker.restart');
-    // P1-1: the readable next step for the code, the code itself in brackets for a report.
+    // P1-1: the readable next step for the code. Legacy 212: the code and the kernel's own text
+    // in the 「技术细节」 fold, for a report.
     expect(toast.textContent).toContain('刷新后再试');
-    expect(toast.textContent).toContain('(conflict)');
+    const details = within(toast).getByText('技术细节').closest('details');
+    expect(details?.querySelector('code')?.textContent).toBe('conflict');
+    expect(within(toast).getByTestId('toast-detail').textContent).toBe(
+      'operation docker.restart is not a draft',
+    );
   });
 
   it('R-19 (D-17): publishing a draft that loosens the published classification asks first, old → new, danger-styled', async () => {

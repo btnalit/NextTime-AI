@@ -7,7 +7,7 @@ import {
   unarchiveChat,
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { errorToastText } from '../../lib/errors.js';
+import { errorToast } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
 import { useToast } from '../ui/Toast.js';
@@ -75,7 +75,7 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
             toast.push({
               tone: 'danger',
               title: t('撤销失败', 'Could not undo the archive'),
-              description: errorToastText(err, t),
+              ...errorToast(err, t),
             });
           }
         },
