@@ -341,6 +341,59 @@ export function upstreamStatus(error: string | null): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/** A redirect llm-proxy did not follow (legacy 221, #1344): `… responded 301, a redirect to
+ *  "https://…/v1/models". llm-proxy does not follow redirects …` — its status, and where it
+ *  pointed as llm-proxy shows it (a path on the same origin, else another origin and its path;
+ *  `null` when the answer named nowhere, or nothing readable). */
+interface UpstreamRedirect {
+  readonly status: number;
+  readonly target: string | null;
+}
+
+const UPSTREAM_REDIRECT_PATTERN =
+  /responded (3\d\d), a redirect to ("(?:[^"\\]|\\.)*"|nowhere \(no Location header\)|an unparseable Location header)/;
+
+function upstreamRedirectOf(error: string): UpstreamRedirect | null {
+  const match = UPSTREAM_REDIRECT_PATTERN.exec(error);
+  if (!match) return null;
+  const where = match[2] ?? '';
+  let target: string | null = null;
+  if (where.startsWith('"')) {
+    try {
+      target = JSON.parse(where) as string;
+    } catch {
+      target = null;
+    }
+  }
+  return { status: Number(match[1]), target };
+}
+
+/** Legacy 795: what a redirect means for the provider's Base URL. llm-proxy never follows one —
+ *  the provider key would go along to wherever it points — so the fix is the address itself. */
+function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): string {
+  const { status, target } = redirect;
+  if (target === null) {
+    return t(
+      `上游返回 ${status} 重定向，却没有说转到哪里：检查 Base URL 是否写对。`,
+      `The upstream answered ${status}, a redirect that names no readable address — check the Base URL.`,
+    );
+  }
+  const why = t(
+    'llm-proxy 不会跟着重定向走，否则密钥会被一起发到那个地址。',
+    'llm-proxy does not follow redirects, since the provider key would go along to that address.',
+  );
+  if (target.startsWith('/')) {
+    return t(
+      `上游返回 ${status} 重定向，转到同一站点的 ${target}。${why}多半是 Base URL 的路径写法不对（比如末尾多了或少了 /，或多写了 /v1），按这个路径改正 Base URL。`,
+      `The upstream answered ${status}, a redirect to ${target} on the same site. ${why} The Base URL’s path is most likely off (a trailing / too many or too few, or an extra /v1) — correct it to match.`,
+    );
+  }
+  return t(
+    `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}常见于 http 被转到 https、服务换了域名，或中转要求先登录。确认这个地址可信后，把 Base URL 改成它的源站（不带 /v1）。`,
+    `The upstream answered ${status}, a redirect to another address, ${target}. ${why} This is usually http moved to https, a service that changed its domain, or a relay asking to sign in first. Once you trust that address, set the Base URL to its origin (without /v1).`,
+  );
+}
+
 /** One plain sentence on what an upstream failure most likely means and what to change.
  *  `phase` says which round trip of a provider test failed (`'tool_call'` once the completion
  *  passed): a 400 there means the endpoint refused a request carrying tools. */
@@ -358,6 +411,8 @@ export function explainUpstreamError(
       'The model answered but did not call the tool — this model or relay may not support tool calling, so Workers and gate tools will not work.',
     );
   }
+  const redirect = upstreamRedirectOf(error);
+  if (redirect !== null) return explainUpstreamRedirect(redirect, t);
   const status = upstreamStatus(error);
   if (status === 401 || status === 403) {
     return t(

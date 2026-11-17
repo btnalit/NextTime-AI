@@ -10,6 +10,7 @@ import {
 } from './provider-form.js';
 
 const zh: Translate = (zhText) => zhText;
+const en: Translate = (_zhText, enText) => enText;
 
 describe('lib/provider-form', () => {
   it('normalizeEnvName turns typed or pasted names into the proxy’s form, never keeping a value', () => {
@@ -87,6 +88,41 @@ describe('lib/provider-form', () => {
       '工具调用',
     );
     expect(explainUpstreamError(null, zh)).toBeNull();
+  });
+
+  // Legacy 795: llm-proxy says an upstream redirect's status and where it pointed (#1344).
+  it('explains a redirect llm-proxy did not follow, by where it pointed', () => {
+    const advice =
+      "llm-proxy does not follow redirects (the provider key would go along): set the provider's Base URL to the final address.";
+    const elsewhere = explainUpstreamError(
+      `GET /v1/models responded 301, a redirect to "https://api.example.net/***/models". ${advice}`,
+      zh,
+      'model_list',
+    );
+    expect(elsewhere).toBe(
+      '上游返回 301 重定向，转到另一个地址 https://api.example.net/***/models。llm-proxy 不会跟着重定向走，否则密钥会被一起发到那个地址。常见于 http 被转到 https、服务换了域名，或中转要求先登录。确认这个地址可信后，把 Base URL 改成它的源站（不带 /v1）。',
+    );
+    expect(elsewhere).not.toContain('连不上上游');
+    const samePath = explainUpstreamError(
+      `POST /v1/messages responded 308, a redirect to "/api/v1/messages". ${advice}`,
+      zh,
+      'completion',
+    );
+    expect(samePath).toContain('上游返回 308 重定向，转到同一站点的 /api/v1/messages');
+    expect(samePath).toContain('路径写法不对');
+    // A target llm-proxy shows with an escaped quote reads back as it was.
+    expect(
+      explainUpstreamError(`upstream responded 307, a redirect to "/a\\"b". ${advice}`, en),
+    ).toContain('a redirect to /a"b on the same site');
+    for (const where of ['nowhere (no Location header)', 'an unparseable Location header']) {
+      expect(
+        explainUpstreamError(`upstream responded 302, a redirect to ${where}. ${advice}`, zh),
+      ).toBe('上游返回 302 重定向，却没有说转到哪里：检查 Base URL 是否写对。');
+    }
+    // Before #1344 a redirect failed as a bare fetch error: still read as unreachable.
+    expect(
+      explainUpstreamError('model list request failed: TypeError: fetch failed', zh),
+    ).toContain('连不上上游');
   });
 
   // 4.7b host check: DeepSeek thinking mode refused the probe's forced tool_choice.
