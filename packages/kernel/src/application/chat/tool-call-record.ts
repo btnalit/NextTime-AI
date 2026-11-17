@@ -4,6 +4,7 @@ import {
   type ToolCallOutcome,
   type ToolCallPayloadPreview,
   getCapability,
+  sliceKeepingPairs,
 } from '@nexttime/shared';
 import {
   type RedactedValue,
@@ -197,8 +198,9 @@ export function redactMessageContent(
   return { value: out, redactedValues, cut };
 }
 
-/** `text` (already scrubbed) cut to `limit`. `totalChars` is how long the payload was before
- *  anything was cut — at least that long when part of it was never read (`unread`). */
+/** `text` (already scrubbed) cut to `limit`, never through a surrogate pair (legacy 834).
+ *  `totalChars` is how long the payload was before anything was cut — at least that long when
+ *  part of it was never read (`unread`). */
 function preview(
   text: string,
   limit: number,
@@ -206,7 +208,7 @@ function preview(
   unread: boolean,
 ): ToolCallPayloadPreview {
   return {
-    text: text.length <= limit ? text : text.slice(0, limit),
+    text: text.length <= limit ? text : sliceKeepingPairs(text, limit),
     totalChars,
     truncated: unread || text.length > limit,
   };

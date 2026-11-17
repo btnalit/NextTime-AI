@@ -610,6 +610,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.metadata.messagePersistFailure).toBeUndefined();
     });
 
+    it('legacy 834: an answer and a Turn summary holding half of an emoji are stored with it as U+FFFD', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+      const half = '\u{1F600}'.slice(0, 1);
+
+      await sink.handle(messageEvent(chatId, turnId, `cut through an emoji: ${half}`));
+      const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: `answered ${half}`,
+      })) as { status: string };
+
+      // Before: `jsonb` refused the half (22P05) — the answer was lost and the Turn ended `failed`.
+      expect(reported.status).toBe('completed');
+      expect(await assistantTexts(chatId)).toEqual(['cut through an emoji: \ufffd']);
+      const row = await turnRow(turnId);
+      expect(row?.metadata.summary).toBe('answered \ufffd');
+      expect(row?.metadata.unstorableEscaped).toBe(1);
+      expect(row?.metadata.messagePersistFailure).toBeUndefined();
+    });
+
     it('legacy 128: a Stop still ends the Turn interrupted when a message was lost; the loss stays on the Turn', async () => {
       setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
       const { chatId, turnId } = await startTurn();

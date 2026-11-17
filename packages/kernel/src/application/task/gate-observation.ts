@@ -1,3 +1,4 @@
+import { sliceKeepingPairs } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { redactSuspectedSecretsUpTo } from '../../governance/redaction/index.js';
 import {
@@ -98,9 +99,11 @@ function truncatePayload(payload: unknown): {
   if (serialized.length <= GATE_OBSERVATION_PAYLOAD_MAX_CHARS) {
     return { value: payload ?? null, truncated: false };
   }
-  const omitted = serialized.length - GATE_OBSERVATION_PAYLOAD_MAX_CHARS;
+  // Never through a surrogate pair: half of one is no text `jsonb` stores (legacy 834).
+  const kept = sliceKeepingPairs(serialized, GATE_OBSERVATION_PAYLOAD_MAX_CHARS);
+  const omitted = serialized.length - kept.length;
   return {
-    value: `${serialized.slice(0, GATE_OBSERVATION_PAYLOAD_MAX_CHARS)}… [${omitted} more characters omitted]`,
+    value: `${kept}… [${omitted} more characters omitted]`,
     truncated: true,
   };
 }

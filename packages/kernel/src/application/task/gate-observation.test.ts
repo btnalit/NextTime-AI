@@ -109,4 +109,18 @@ describe('keptGatePayload (legacy 237)', () => {
     expect(JSON.stringify(kept.value).length).toBeLessThan(KEPT_CHARS);
     expect(JSON.stringify(kept.value)).not.toContain('qz7');
   });
+
+  it('a copy cut where an emoji falls ends before it, never in half of it, and says how much it left out (legacy 834)', () => {
+    const EMOJI = '\u{1F600}';
+    // `"` + filler puts the emoji's first half last before the cut.
+    const note = `${'x'.repeat(KEPT_CHARS - 2)}${EMOJI}${'y'.repeat(100)}`;
+    expect(JSON.stringify(note).charCodeAt(KEPT_CHARS - 1)).toBe(0xd83d);
+
+    const kept = keptGatePayload(note);
+    expect(kept.truncated).toBe(true);
+    const serialized = JSON.stringify(note);
+    expect(kept.value).toBe(
+      `"${'x'.repeat(KEPT_CHARS - 2)}… [${serialized.length - (KEPT_CHARS - 1)} more characters omitted]`,
+    );
+  });
 });

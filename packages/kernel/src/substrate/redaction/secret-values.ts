@@ -1,4 +1,9 @@
-import { SECRET_FIELD_MASK, isSecretFieldValue, namesASecretField } from '@nexttime/shared';
+import {
+  SECRET_FIELD_MASK,
+  isSecretFieldValue,
+  namesASecretField,
+  sliceKeepingPairs,
+} from '@nexttime/shared';
 
 /**
  * substrate/redaction/secret-values: the kernel's one definition of "a value that looks like a
@@ -71,7 +76,8 @@ export const CUT_LOOKAHEAD_CHARS = 4_096;
  * `length` characters are kept — and, unless reading reached the end of `text`, never its last
  * `CUT_LOOKAHEAD_CHARS`. A secret the cut crosses lies whole in what was read and is replaced; one
  * that reading stopped in lies in the part never kept, however much the replacements before it
- * shortened the copy (which is then shorter than `length`, possibly empty). Reads at most
+ * shortened the copy (which is then shorter than `length`, possibly empty). Never cuts a surrogate
+ * pair in two (legacy 834: half of one is no text `jsonb` stores). Reads at most
  * `length + CUT_LOOKAHEAD_CHARS` characters of `text`.
  */
 export function scrubbedCut(text: string, length: number, scrub: (read: string) => string): string {
@@ -79,7 +85,7 @@ export function scrubbedCut(text: string, length: number, scrub: (read: string) 
   const scrubbed = scrub(read);
   const keep =
     read.length === text.length ? length : Math.min(length, scrubbed.length - CUT_LOOKAHEAD_CHARS);
-  return scrubbed.slice(0, Math.max(keep, 0));
+  return sliceKeepingPairs(scrubbed, keep);
 }
 
 /** A field name that names a secret (`apiKey0`, `x-api-key`, `PGPASSWORD`, `accessToken` —
