@@ -700,6 +700,122 @@ describe('importOpenApi — path item parameters and $ref (legacy 197)', () => {
     expect(schemaOf(operations, 'codes_post')).toEqual({ type: 'object', properties: {} });
   });
 
+  // Legacy 799: a sibling that changes what one of the target's keywords means is no more written
+  // into it than one that replaces it.
+  it("a `$ref`'s sibling of a keyword family the target already uses, or beside `unevaluated*`, is kept under `allOf`", () => {
+    const meta = (sibling: Record<string, unknown>) => ({
+      type: 'object',
+      properties: { meta: { $ref: '#/components/schemas/Closed', ...sibling } },
+    });
+    const body = (schema: Record<string, unknown>) => ({
+      content: { 'application/json': { schema } },
+    });
+    const operations = importOpenApi({
+      components: {
+        schemas: {
+          Closed: { type: 'object', additionalProperties: false },
+          Strict: { type: 'object', unevaluatedProperties: false },
+        },
+      },
+      paths: {
+        '/meta': {
+          post: {
+            operationId: 'meta_post',
+            requestBody: body(meta({ properties: { extra: { type: 'string' } } })),
+          },
+          put: { operationId: 'meta_put', requestBody: body(meta({ required: ['extra'] })) },
+          patch: {
+            operationId: 'meta_patch',
+            requestBody: body({
+              type: 'object',
+              properties: {
+                meta: { $ref: '#/components/schemas/Strict', maxProperties: 2 },
+                tagged: { $ref: '#/components/schemas/Closed', 'x-origin': 'billing' },
+              },
+            }),
+          },
+        },
+      },
+    });
+    const post = schemaOf(operations, 'meta_post');
+    expect(post.properties?.meta).toEqual({
+      allOf: [
+        { type: 'object', additionalProperties: false },
+        { properties: { extra: { type: 'string' } } },
+      ],
+    });
+    // Written in, `properties` would let through what `additionalProperties: false` refuses.
+    expect(() => assertParamsValid('meta_post', post, { meta: { extra: 'x' } })).toThrow(
+      ParamsValidationError,
+    );
+    expect(() => assertParamsValid('meta_post', post, { meta: {} })).not.toThrow();
+    // A keyword that holds on its own is still written in.
+    expect(schemaOf(operations, 'meta_put').properties?.meta).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      required: ['extra'],
+    });
+    const patch = schemaOf(operations, 'meta_patch');
+    expect(patch.properties?.meta).toEqual({
+      allOf: [{ type: 'object', unevaluatedProperties: false }, { maxProperties: 2 }],
+    });
+    // An extension no validator reads is an annotation.
+    expect(patch.properties?.tagged).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      'x-origin': 'billing',
+    });
+  });
+
+  it("OpenAPI 3.0's `nullable` beside a `$ref` stays with the target — beside a sibling kept under `allOf` too — and is left out where the target has no `type`", () => {
+    const operations = importOpenApi({
+      components: {
+        schemas: {
+          Code: { type: 'string', maxLength: 3 },
+          Colour: { enum: ['red', 'green'] },
+        },
+      },
+      paths: {
+        '/codes': {
+          post: {
+            operationId: 'codes_nullable',
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      plain: { $ref: '#/components/schemas/Code', nullable: true },
+                      clash: { $ref: '#/components/schemas/Code', nullable: true, maxLength: 100 },
+                      untyped: { $ref: '#/components/schemas/Colour', nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const schema = schemaOf(operations, 'codes_nullable');
+    expect(schema.properties).toEqual({
+      plain: { type: 'string', maxLength: 3, nullable: true },
+      clash: { allOf: [{ type: 'string', maxLength: 3, nullable: true }, { maxLength: 100 }] },
+      untyped: { enum: ['red', 'green'] },
+    });
+    // Each compiles — ajv refuses `nullable` without `type` beside it.
+    expect(() =>
+      assertParamsValid('codes_nullable', schema, { plain: null, clash: null }),
+    ).not.toThrow();
+    expect(() => assertParamsValid('codes_nullable', schema, { clash: 'abcd' })).toThrow(
+      ParamsValidationError,
+    );
+    expect(() => assertParamsValid('codes_nullable', schema, { untyped: null })).toThrow(
+      ParamsValidationError,
+    );
+    expect(() => assertParamsValid('codes_nullable', schema, { untyped: 'red' })).not.toThrow();
+  });
+
   it('a request body that is nothing but a reference to itself, or combines schemas at its top, takes nothing', () => {
     const operations = importOpenApi({
       components: {

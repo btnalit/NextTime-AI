@@ -786,22 +786,103 @@ function dataUnits(state: InlineState, value: unknown): number {
   return units;
 }
 
-/** `resolved` (what a `$ref` points at) and its `siblings` together. Siblings that restate only
- *  what the target leaves open, or annotations, are written next to it. A sibling that would replace
- *  the target's own constraint (`maxLength: 100` beside a target's `maxLength: 3`) would loosen it
- *  — OpenAPI 3.0 ignores such a sibling, 3.1 applies both — so both are kept, under `allOf`. */
+/** Keywords each of which holds on its own, whatever else its schema says: one a `$ref`'s sibling
+ *  adds narrows the target exactly as it would beside it under `allOf`. */
+const SCHEMA_INDEPENDENT_KEYWORDS = new Set([
+  'type',
+  'enum',
+  'const',
+  'multipleOf',
+  'maximum',
+  'exclusiveMaximum',
+  'minimum',
+  'exclusiveMinimum',
+  'maxLength',
+  'minLength',
+  'pattern',
+  'format',
+  'maxItems',
+  'minItems',
+  'uniqueItems',
+  'maxProperties',
+  'minProperties',
+  'required',
+  'dependentRequired',
+  'propertyNames',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'dependentSchemas',
+  'dependencies',
+]);
+
+/** Keywords whose meaning depends on the others of their family in the same schema —
+ *  `additionalProperties` holds for what `properties` and `patternProperties` leave out, `items`
+ *  for what `prefixItems` leaves out, `then` only where `if` holds (legacy 799). */
+const SCHEMA_KEYWORD_FAMILIES: readonly (readonly string[])[] = [
+  ['properties', 'patternProperties', 'additionalProperties'],
+  ['prefixItems', 'items', 'additionalItems'],
+  ['contains', 'minContains', 'maxContains'],
+  ['if', 'then', 'else'],
+];
+
+/** Keywords that hold for what every other keyword of their schema left unevaluated. */
+const SCHEMA_UNEVALUATED_KEYWORDS = ['unevaluatedProperties', 'unevaluatedItems'] as const;
+
+function familyOf(key: string): readonly string[] | undefined {
+  return SCHEMA_KEYWORD_FAMILIES.find((family) => family.includes(key));
+}
+
+/** Whether the sibling `key: value` can be written into `resolved` and mean what `allOf` would. An
+ *  annotation (or an `x-` extension, which no validator reads) only says something else. A keyword
+ *  the target has must say the same. One that holds on its own adds a constraint; one of a family
+ *  only beside a target with none of that family — `properties` beside a target's
+ *  `additionalProperties: false` would let through what the target refuses. Beside
+ *  `unevaluated*` (either side's) nothing else is; neither is a keyword not named above. */
+function siblingMerges(
+  resolved: Record<string, unknown>,
+  siblings: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): boolean {
+  if (SCHEMA_ANNOTATION_KEYWORDS.has(key) || key.startsWith('x-')) return true;
+  if (Object.hasOwn(resolved, key)) return Object.is(resolved[key], value);
+  if (
+    SCHEMA_UNEVALUATED_KEYWORDS.some(
+      (keyword) => Object.hasOwn(resolved, keyword) || Object.hasOwn(siblings, keyword),
+    )
+  ) {
+    return false;
+  }
+  if (SCHEMA_INDEPENDENT_KEYWORDS.has(key)) return true;
+  const family = familyOf(key);
+  return family !== undefined && !family.some((member) => Object.hasOwn(resolved, member));
+}
+
+/** `resolved` (what a `$ref` points at) and its `siblings` together — what OpenAPI 3.1 means by
+ *  them, both applied (3.0 ignores the siblings). Siblings that only add to the target, or
+ *  annotate it, are written next to it ({@link siblingMerges}). Any other — one that would replace
+ *  the target's own constraint (`maxLength: 100` beside a target's `maxLength: 3`), or change what
+ *  one of them means (legacy 799) — would loosen it, so both are kept, under `allOf`.
+ *
+ *  OpenAPI 3.0's `nullable` is how a document says one use of a schema may also be null, and was
+ *  written into the target here before; it still is, also beside a target's own `nullable` or a
+ *  sibling kept under `allOf`. It means something only beside `type` — ajv refuses a schema with
+ *  it anywhere else — so beside a target without one it is left out. */
 function withSiblings(resolved: unknown, siblings: unknown): unknown {
   if (!isObjectNode(resolved) || !isObjectNode(siblings)) return resolved;
-  const clashes =
-    isRecursionPlaceholder(resolved) ||
-    Object.keys(siblings).some(
-      (key) =>
-        Object.hasOwn(resolved, key) &&
-        !SCHEMA_ANNOTATION_KEYWORDS.has(key) &&
-        !Object.is(resolved[key], siblings[key]),
-    );
-  if (clashes) return { allOf: [resolved, siblings] };
-  return { ...resolved, ...siblings };
+  const placeholder = isRecursionPlaceholder(resolved);
+  const { nullable, ...rest } = siblings;
+  const target =
+    Object.hasOwn(siblings, 'nullable') && !placeholder && Object.hasOwn(resolved, 'type')
+      ? { ...resolved, nullable }
+      : resolved;
+  if (Object.keys(rest).length === 0) return target;
+  const merges =
+    !placeholder &&
+    Object.entries(rest).every(([key, value]) => siblingMerges(resolved, rest, key, value));
+  return merges ? { ...target, ...rest } : { allOf: [target, rest] };
 }
 
 /** `schema` with every reference into the same document written out in place — where one recurs

@@ -159,8 +159,13 @@ deep. The document's budget is spent in path order, so a large Operation early i
 leaves less for those after it. An Operation past one of them gets `params_schema:
 {"$ref":"#/x-nexttime-inline-limit"}`: ajv cannot compile it and calls are refused (400
 `invalid_operation_schema`) — import a smaller document, or write the gate's manifest by hand. A
-`$ref`'s sibling that would replace one of the target's own constraints is kept beside it under
-`allOf`, never instead of it; an annotation (`description`, `example`, …) replaces. A request body
+`$ref`'s sibling that would replace one of the target's own constraints, or change what one of them
+means (`properties` beside a target's `additionalProperties: false`, anything beside
+`unevaluatedProperties`), is kept beside it under `allOf`, never written into it; one that only adds
+a constraint of its own (`pattern`, `required`, …) is written in, and an annotation (`description`,
+`example`, an `x-` extension) replaces. OpenAPI 3.0's `nullable: true` beside a `$ref` lets that use
+be null where the target has a `type`, and is left out where it has none (ajv refuses it there).
+A request body
 that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
 or is nothing but a reference to itself is not read: the Operation takes only its parameters.
 Request bodies that are an array, or of another media type, still add nothing.

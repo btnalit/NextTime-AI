@@ -326,8 +326,12 @@ true`，等 owner 逐条审核后再发布，I17）——不需要手写每一�
 Operation 自己原地写的不算），嵌套最多 512 层。整份文档的预算按 path 的顺序花，文档前部有个很大的
 Operation，后面的 Operation 就可能落到上限，定义随之变化（已发布的会回到 409，等对齐）。超过的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，ajv 编译
 不了，调用一律 400 `invalid_operation_schema`：换一份小一些的文档导入，或者手写门的清单。`$ref`
-旁边的兄弟关键字如果会盖掉目标自己的约束（目标 `maxLength: 3`，旁边写 `maxLength: 100`），两者
-放进 `allOf` 同时生效，不会放宽；`description`、`example` 这类注解照常覆盖。请求体顶层是组合
+旁边的兄弟关键字如果会盖掉目标自己的约束（目标 `maxLength: 3`，旁边写 `maxLength: 100`），或者会
+改变目标某个关键字的含义（目标 `additionalProperties: false`，旁边写 `properties`；任何一边有
+`unevaluatedProperties`），两者放进 `allOf` 同时生效，不会放宽；只是自己加一条约束的（`pattern`、
+`required` 等）照常写进目标；`description`、`example`、`x-` 扩展这类注解照常覆盖。OpenAPI 3.0 的
+`nullable: true` 写在 `$ref` 旁边时，目标有 `type` 就让这一处可以为 null，没有 `type` 就忽略（ajv
+不接受没有 `type` 的 `nullable`）。请求体顶层是组合
 （`allOf`、`anyOf`、`oneOf`、`not`，包括上面兄弟关键字产生的 `allOf`）或者只是引用自己时读不出来：
 这个 Operation 只收参数。数组、其他媒体类型的请求体仍然不进 `params_schema`，导入后要人工补。
 
