@@ -209,15 +209,9 @@ export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
     value = `https://${value}`;
     schemeAdded = true;
   }
-  value = value.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  let stripped = false;
-  for (;;) {
-    const lower = value.toLowerCase();
-    const suffix = ENDPOINT_SUFFIXES.find((s) => lower.endsWith(s));
-    if (!suffix) break;
-    value = value.slice(0, value.length - suffix.length).replace(/\/+$/, '');
-    stripped = true;
-  }
+  const endpoint = withoutEndpointPath(value.replace(/[?#].*$/, '').replace(/\/+$/, ''));
+  value = endpoint.value;
+  const stripped = endpoint.stripped;
   return {
     value,
     changed:
@@ -229,6 +223,25 @@ export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
             ? 'suffix-stripped'
             : 'none',
   };
+}
+
+/** `value` without a trailing `/v1` or full endpoint path the proxy appends itself (`/v1/models`,
+ *  `/v1/chat/completions`, …) and the slashes before it — a relay's own prefix (`/api/openai`)
+ *  stays. */
+function withoutEndpointPath(value: string): {
+  readonly value: string;
+  readonly stripped: boolean;
+} {
+  let rest = value;
+  let stripped = false;
+  for (;;) {
+    const lower = rest.toLowerCase();
+    const suffix = ENDPOINT_SUFFIXES.find((s) => lower.endsWith(s));
+    if (!suffix) break;
+    rest = rest.slice(0, rest.length - suffix.length).replace(/\/+$/, '');
+    stripped = true;
+  }
+  return { value: rest, stripped };
 }
 
 export function isHttpUrl(value: string): boolean {
@@ -401,9 +414,26 @@ function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): stri
     'llm-proxy does not follow redirects, since the provider key would go along to that address.',
   );
   if (target.startsWith('/')) {
+    // UX acceptance of #1363 (P2): the path the Base URL should carry is the target without the
+    // endpoint path llm-proxy appends — said outright, a missing prefix included.
+    const path = withoutEndpointPath(target.replace(/\/+$/, ''));
+    const fix = !path.stripped
+      ? t(
+          '按这个路径改正 Base URL：去掉末尾 /v1/… 接口路径后的部分就是 Base URL 该带的路径。',
+          'Correct the Base URL by that path: what is left once the trailing /v1/… endpoint path is gone is the path the Base URL should carry.',
+        )
+      : path.value === ''
+        ? t(
+            'Base URL 不该带路径：只留站点地址（https://主机名）。',
+            'The Base URL should carry no path: keep only the site address (https://host).',
+          )
+        : t(
+            `把 Base URL 的路径改成 ${path.value}（站点地址加上 ${path.value}）。`,
+            `Set the Base URL’s path to ${path.value} (the site address followed by ${path.value}).`,
+          );
     return t(
-      `上游返回 ${status} 重定向，转到同一站点的 ${target}。${why}多半是 Base URL 的路径写法不对（比如末尾多了或少了 /，或多写了 /v1），按这个路径改正 Base URL。`,
-      `The upstream answered ${status}, a redirect to ${target} on the same site. ${why} The Base URL’s path is most likely off (a trailing / too many or too few, or an extra /v1) — correct it to match.`,
+      `上游返回 ${status} 重定向，转到同一站点的 ${target}。${why}多半是 Base URL 的路径不对（多了或少了前缀、末尾的 /，或多写了 /v1）。${fix}`,
+      `The upstream answered ${status}, a redirect to ${target} on the same site. ${why} The Base URL’s path is most likely off (a prefix too many or too few, a trailing /, or an extra /v1). ${fix}`,
     );
   }
   // Review #501 on #1363: a sign-in page is never a Base URL — the key would go to its host.

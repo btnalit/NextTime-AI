@@ -137,7 +137,20 @@ describe('lib/provider-form', () => {
       'completion',
     );
     expect(samePath).toContain('上游返回 308 重定向，转到同一站点的 /api/v1/messages');
-    expect(samePath).toContain('路径写法不对');
+    // UX acceptance of #1363: the path the Base URL should carry, a missing prefix included.
+    expect(samePath).toContain('把 Base URL 的路径改成 /api（');
+    expect(
+      explainUpstreamError(
+        `GET /api/v1/models responded 301, a redirect to "/v1/models/". ${advice}`,
+        zh,
+      ),
+    ).toContain('Base URL 不该带路径');
+    expect(
+      explainUpstreamError(
+        `GET /v1/models responded 302, a redirect to "/models-list". ${advice}`,
+        zh,
+      ),
+    ).toContain('去掉末尾 /v1/… 接口路径后的部分');
     // A target llm-proxy shows with an escaped quote reads back as it was.
     expect(
       explainUpstreamError(`upstream responded 307, a redirect to "/a\\"b". ${advice}`, en),
