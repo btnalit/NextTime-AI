@@ -27,7 +27,7 @@ import {
  *      门的 GATE_KERNEL_TOKEN_FILE，再填目标系统和门端点，注册（`create_connection`）。随后打开的
  *      「健康与操作」说门健康，清单导入成草稿。
  *   2. 所有者重新签发这个门的连接密钥（`rotate_connection_secret`）：旧密钥当场失效，「健康与操作」说
- *      未授权；把新密钥放进门之后，又说健康。
+ *      凭据被拒；把新密钥放进门之后，又说健康。
  *   3. 平台管理员在「集成 → 自己接入的门」暂停它，写上原因（`suspend_self_connection`）；所有者那边
  *      这个门的 Operation 全部不可用。
  *   4. 平台管理员恢复它（`resume_self_connection`）；所有者那边两个 Operation 又列出来了。
@@ -40,7 +40,7 @@ import {
  *      批准（`approve_`），门还是同一个 id，从此在新地址健康，Operation 原样保留。
  * 状态覆盖:
  *   - 空: 跳过——全新工作区本来就没有系统，`createFreshWorkspace` 之后第 1 步从空开始。
- *   - 错: 第 2 步就是一个：密钥换了、门还拿着旧的，「健康与操作」说未授权，不说健康。表单的字段级
+ *   - 错: 第 2 步就是一个：密钥换了、门还拿着旧的，「健康与操作」说凭据被拒，不说健康。表单的字段级
  *     拒绝（端点是平台门、已接入过、带凭据）由 CompleteConnectionForm 的组件测试覆盖；换地址的
  *     拒绝（清单不一致、摘要过期、在途请求）由 GateAddressChangeSheet 的组件测试和内核集成测试覆盖。
  *   - 无权限: 第 3、4 步——暂停后所有者的「健康与操作」说平台暂停了它、原因，以及要找平台管理员
@@ -60,7 +60,7 @@ import {
  * 新清单只有在管理员已经决定过的实例上才会被扣下待审，所以这个旅程公告自己的实例、在页面外把它设为
  * 停用，再公告一次多一个 Operation 的清单。第 6 步的新地址是同一个 `ci-self-gate` 在 CI 网络上的第二个
  * 名字（docker-compose.ci.yml 的 `ci-self-gate-moved`）：真实的搬迁是另起一个门，CI 里新旧地址背后是
- * 同一个进程、同一个密钥文件，所以给新地址放密钥的同时旧地址就答未授权了——测试在撤回和驳回之后把旧
+ * 同一个进程、同一个密钥文件，所以给新地址放密钥的同时旧地址就答凭据被拒了——测试在撤回和驳回之后把旧
  * 密钥放回去，批准之前让门拿着新密钥。测试按顺序跑，共享这一轮的工作区和门；重试时整组重来。
  */
 
@@ -334,7 +334,7 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await expect(reveal).toHaveCount(0);
 
     // The old secret stopped working the moment the rotation committed.
-    await openHealth(page, '未授权');
+    await openHealth(page, '凭据被拒');
     await closeDialog(page, '健康与操作');
     expect((await ownerGatekeeper(page)).health).toBe('unauthorized');
 
@@ -551,7 +551,7 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     expect(gate.pendingAddressChange, 'the rejected move is no longer open').toBeUndefined();
     expect(gate.endpoint).toBe(ENDPOINT);
     // This time the gate keeps the secret the proposal carries: once the move is applied, it is
-    // the connection's (and the old address, the same gate here, answers 未授权 meanwhile).
+    // the connection's (and the old address, the same gate here, answers 凭据被拒 meanwhile).
     connectionSecret = await proposeMove(page);
     changeId = (await ownerGatekeeper(page)).pendingAddressChange?.id ?? '';
     expect(changeId).not.toBe('');

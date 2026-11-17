@@ -407,7 +407,7 @@ describe('AgentProfilePage', () => {
     expect(down.textContent).toBe('不可达');
     expect(down.closest('label')?.textContent).toContain('stock');
     const self = within(gates).getByTestId('agent-profile-gatekeepers-health-gk-self');
-    expect(self.textContent).toBe('未授权');
+    expect(self.textContent).toBe('凭据被拒');
     expect(self.closest('label')?.textContent).toContain('local');
     expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-up')).toBeNull();
     expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-none')).toBeNull();
@@ -418,7 +418,7 @@ describe('AgentProfilePage', () => {
     ).toBe('不可达');
     expect(
       within(effective).getByTestId('agent-profile-effective-health-gk-self').textContent,
-    ).toBe('未授权');
+    ).toBe('凭据被拒');
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-up')).toBeNull();
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-none')).toBeNull();
 

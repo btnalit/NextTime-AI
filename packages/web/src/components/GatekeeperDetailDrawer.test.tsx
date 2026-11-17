@@ -353,7 +353,7 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByText('这个门没有 Operation')).toBeTruthy();
   });
 
-  it('legacy 271: a gate whose credential is refused reads 未授权', async () => {
+  it('legacy 271: a gate whose credential is refused reads 凭据被拒 (#1394 UX P2)', async () => {
     const http = callerReturning({
       id: 'gk-1',
       name: 'docker',
@@ -366,7 +366,7 @@ describe('GatekeeperDetailDrawer', () => {
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('未授权');
+    expect(health.textContent).toBe('凭据被拒');
     expect(health.getAttribute('data-status')).toBe('unauthorized');
     expect(health.className).toContain('chip-danger');
   });
