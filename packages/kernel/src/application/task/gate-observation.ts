@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import {
   endActivity,
   recordSourceObservation,
@@ -33,6 +34,14 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  * `MAX_GATE_OBSERVATIONS_PER_WORKER_RUN` bounds how many of these rows one WorkerRun can ever write
  * (a Worker looping the same gate call must not grow the graph without bound) — past the cap, this
  * silently stops recording rather than throwing or blocking the Worker's own tool result.
+ *
+ * **Never the raw result (legacy 237).** `payload` is kept as the call-argument rule's copy
+ * (`redactSuspectedSecrets` with `secretFields`: every value under a field named after a secret, at
+ * any depth, and every secret-looking value, shape kept) — the rule the platform's own goal
+ * observations keep their evidence by (`application/goal/platform-observation.ts`). An execute
+ * branch's result arrives here already in that form (read back from its audit row,
+ * `readTerminalOutcome`) and the rule replaces nothing twice; an observe branch's result arrives as
+ * the gate sent it and would otherwise be written as is, and go into every dump of the table.
  */
 
 const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
@@ -56,6 +65,7 @@ export interface RecordWorkerGateObservationInput {
    *  lifecycle vocabulary, just enough for a reader of this Observation's `content` to tell what
    *  kind of result `payload` holds. */
   readonly status: string;
+  /** The gate's result as the caller got it; kept redacted (module doc). */
   readonly payload: unknown;
 }
 
@@ -106,7 +116,9 @@ export async function recordWorkerGateObservation(
     ownerPrincipalId: input.ownerPrincipalId,
   });
 
-  const { value: payload, truncated } = truncatePayload(input.payload);
+  const { value: payload, truncated } = truncatePayload(
+    redactSuspectedSecrets(input.payload ?? null, { secretFields: true }).value,
+  );
   const activity = await startActivity(client, workspaceId, {
     kind: GATE_OBSERVATION_ACTIVITY_KIND,
     principalId: input.agentPrincipalId,
