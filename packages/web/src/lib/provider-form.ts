@@ -455,10 +455,17 @@ function explainUpstreamRedirect(redirect: UpstreamRedirect, t: Translate): stri
   // a host's root, a sign-in path the pattern above misses, or a cut-off target names none.
   const normalized = normalizeBaseUrl(target);
   const base = normalized.value;
-  const suggestion =
-    normalized.changed === 'none' || base.includes('***')
-      ? ''
-      : t(`（也就是 ${base}）`, ` (that is, ${base})`);
+  // A target llm-proxy masked or cut off may still have ended in an endpoint path: the rule
+  // stands, with no address to paste.
+  const unreadable = base.includes('***') || target.endsWith('…');
+  // UX acceptance of #1363 (P3): a target that plainly does not end in one is no Base URL at all.
+  if (normalized.changed === 'none' && !unreadable) {
+    return t(
+      `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}这个地址不像接口地址，可能是上游的说明页或换了入口：对照上游的文档核对 Base URL，确认可信后再改。`,
+      `The upstream answered ${status}, a redirect to another address, ${target}. ${why} That address does not look like an API endpoint — it may be the upstream’s own page or a new entry point: check the Base URL against the upstream’s documentation, and change it only once you trust it.`,
+    );
+  }
+  const suggestion = unreadable ? '' : t(`（也就是 ${base}）`, ` (that is, ${base})`);
   return t(
     `上游返回 ${status} 重定向，转到另一个地址 ${target}。${why}如果这是同一个服务的新地址（http 换成了 https，或换了域名），确认可信后，把 Base URL 改成这个地址去掉末尾 /v1/… 接口路径后的部分${suggestion}。`,
     `The upstream answered ${status}, a redirect to another address, ${target}. ${why} If this is the same service at a new address (http moved to https, or a new domain), once you trust it set the Base URL to that address without the trailing /v1/… endpoint path${suggestion}.`,

@@ -124,6 +124,13 @@ describe('lib/provider-form', () => {
       expect(said).toContain('重定向');
       expect(said).not.toContain('也就是');
     }
+    // UX acceptance of #1363: such a target is not offered as the Base URL by rule either.
+    const home = explainUpstreamError(
+      `GET /v1/models responded 302, a redirect to "https://new.example.org/home". ${advice}`,
+      zh,
+    );
+    expect(home).toContain('这个地址不像接口地址');
+    expect(home).not.toContain('去掉末尾');
     // A sign-in page is never offered as a Base URL.
     const signIn = explainUpstreamError(
       `POST /v1/chat/completions responded 302, a redirect to "https://login.relay.example/oauth/authorize". ${advice}`,
