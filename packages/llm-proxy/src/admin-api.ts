@@ -28,7 +28,7 @@ import {
   type UpstreamCallLimiter,
   createUpstreamCallLimiter,
 } from './admin-limits.js';
-import { fitAuditDetails, fitModelIds } from './audit-details.js';
+import { fitAuditDetails, fitModelIds, storableDetails } from './audit-details.js';
 import type { ProviderCatalog, ResolvedProvider } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
@@ -431,14 +431,17 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     await refreshProviderHealth();
   }
 
-  /** `kernelDetails` is a shorter copy for the kernel row where `details` can outgrow the
-   *  kernel's limit (legacy 151); this proxy's own line always has `details` whole. */
+  /** The kernel row is `details` made storable (legacy 825), then `shorten`ed where one list can
+   *  outgrow the kernel's limit, then fitted (legacy 151; audit-details.ts). This proxy's own line
+   *  always has `details` whole and as it was. */
   function audit(
     claims: LlmAdminTokenClaims,
     action: KernelAuditAction,
     providerId: string,
     details: Readonly<Record<string, unknown>>,
-    kernelDetails: Readonly<Record<string, unknown>> = details,
+    shorten: (row: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>> = (
+      row,
+    ) => row,
   ): void {
     log(
       JSON.stringify({
@@ -458,7 +461,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         providerId,
         actorUserId: claims.sub,
         tokenJti: claims.jti,
-        details: fitAuditDetails(kernelDetails),
+        details: fitAuditDetails(shorten(storableDetails(details))),
       })
       .catch((err: unknown) => {
         log(
@@ -844,7 +847,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           modelsJsonError,
           ...(secretCleared ? { secretCleared } : {}),
         };
-        audit(claims, 'provider_created', input.id, details, fitModelIds(details));
+        audit(claims, 'provider_created', input.id, details, fitModelIds);
         // A key cleared after the catalog rewrite changes the health that rewrite wrote.
         if (secretCleared) await refreshProviderHealth();
         if (secretCleared) {

@@ -1,6 +1,6 @@
 import { LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { fitAuditDetails, fitModelIds } from './audit-details.js';
+import { fitAuditDetails, fitModelIds, storableDetails } from './audit-details.js';
 
 const LIMIT = LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS;
 const jsonLength = (value: unknown) => JSON.stringify(value).length;
@@ -98,6 +98,11 @@ describe('fitModelIds (legacy 151)', () => {
     expect(jsonLength({ ...row, models: [a, b], modelsOmitted: 148 })).toBe(LIMIT + 1);
   });
 
+  it('a row over the limit without a model list is left to fitAuditDetails', () => {
+    const row = { error: 'e'.repeat(LIMIT) };
+    expect(fitModelIds(row)).toBe(row);
+  });
+
   it('counts what JSON escapes', () => {
     const id = '"'.repeat(150); // 302 characters as JSON
     const fitted = fitModelIds(createdRow(Array.from({ length: 20 }, () => id))) as {
@@ -180,5 +185,78 @@ describe('fitAuditDetails (legacy 151)', () => {
       Array.from({ length: 300 }, (_, i) => [`field-${String(i).padStart(9, '0')}`, 'v']),
     );
     expect(fitAuditDetails(details)).toEqual({ detailsOmitted: Object.keys(details) });
+  });
+});
+
+/** True when `JSON.stringify` had to escape U+0000 or an unpaired surrogate — what Postgres `jsonb`
+ *  refuses. A paired surrogate is written as itself, never escaped. */
+const hasUnstorableEscape = (value: unknown) =>
+  /\\u0000|\\ud[89a-f][0-9a-f]{2}/i.test(JSON.stringify(value));
+
+describe('storableDetails (legacy 825)', () => {
+  it('returns a row with nothing to replace unchanged, other control characters and emoji included', () => {
+    const details = {
+      model: 'model-😀',
+      error: 'tab\there, \u0001 and \u001f are stored as they are',
+      results: [{ model: 'a', completion: 'ok' }],
+      upstreamBaseUrl: { from: 'https://old.example.invalid', to: 'https://new.example.invalid' },
+      enabled: true,
+      modelsJsonError: null,
+    };
+    expect(storableDetails(details)).toBe(details);
+  });
+
+  it('replaces U+0000 and unpaired surrogates with U+FFFD and names the fields', () => {
+    const details = {
+      model: 'nul\u0000id',
+      // `String(err).slice(0, 200)` can end on the first half of a pair.
+      modelsJsonError: `${'e'.repeat(199)}😀`.slice(0, 200),
+      lowFirst: 'x\udc00y',
+      twoHigh: '\ud800\ud800😀',
+      enabled: true,
+    };
+    const stored = storableDetails(details);
+    expect(stored).toEqual({
+      model: 'nul\ufffdid',
+      modelsJsonError: `${'e'.repeat(199)}\ufffd`,
+      lowFirst: 'x\ufffdy',
+      twoHigh: '\ufffd\ufffd😀',
+      enabled: true,
+      detailsReplaced: ['model', 'modelsJsonError', 'lowFirst', 'twoHigh'],
+    });
+    expect(hasUnstorableEscape(details)).toBe(true);
+    expect(hasUnstorableEscape(stored)).toBe(false);
+  });
+
+  it('reaches text at any depth, keys included, and leaves the untouched parts as they were', () => {
+    const to = { url: 'https://new.example.invalid' };
+    const details = {
+      upstreamBaseUrl: { from: 'https://old.example.invalid/\u0000', to },
+      results: [
+        { model: 'ok', completion: 'ok' },
+        { model: 'lone\ud83d', completion: 'error' },
+      ],
+      nested: { 'k\u0000ey': 1 },
+      untouched: ['a', 'b'],
+    };
+    const stored = storableDetails(details) as typeof details & { detailsReplaced: string[] };
+    expect(stored.upstreamBaseUrl).toEqual({ from: 'https://old.example.invalid/\ufffd', to });
+    expect(stored.upstreamBaseUrl.to).toBe(to);
+    expect(stored.results).toEqual([
+      { model: 'ok', completion: 'ok' },
+      { model: 'lone\ufffd', completion: 'error' },
+    ]);
+    expect(stored.results[0]).toBe(details.results[0]);
+    expect(stored.nested).toEqual({ 'k\ufffdey': 1 });
+    expect(stored.untouched).toBe(details.untouched);
+    expect(stored.detailsReplaced).toEqual(['upstreamBaseUrl', 'results', 'nested']);
+    expect(hasUnstorableEscape(stored)).toBe(false);
+  });
+
+  it('a field whose name needs replacing is named as stored', () => {
+    expect(storableDetails({ 'bad\u0000name': 'v' })).toEqual({
+      'bad\ufffdname': 'v',
+      detailsReplaced: ['bad\ufffdname'],
+    });
   });
 });
