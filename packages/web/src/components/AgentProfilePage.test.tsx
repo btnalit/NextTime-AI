@@ -384,7 +384,7 @@ describe('AgentProfilePage', () => {
     expect(saved.excludedGatekeepers).toEqual(['gk-ragflow']);
   });
 
-  it('legacy 200 / 812: a system whose gate is not healthy — platform or self-connected — carries its health in the checklist and the effective panel; a healthy one and one with no health carry none', async () => {
+  it('legacy 200 / 812 / 816: each system — platform or self-connected — carries its health in the checklist and the effective panel, a healthy one 健康 too; one with no health carries none', async () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         profile({
@@ -414,7 +414,10 @@ describe('AgentProfilePage', () => {
     const self = within(gates).getByTestId('agent-profile-gatekeepers-health-gk-self');
     expect(self.textContent).toBe('凭据被拒');
     expect(self.closest('label')?.textContent).toContain('local');
-    expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-up')).toBeNull();
+    // #1429 UX P2-1: a healthy gate is marked too, so every row holds a mark's place.
+    expect(within(gates).getByTestId('agent-profile-gatekeepers-health-gk-up').textContent).toBe(
+      '健康',
+    );
     expect(within(gates).queryByTestId('agent-profile-gatekeepers-health-gk-none')).toBeNull();
 
     const effective = screen.getByTestId('agent-profile-effective');
@@ -424,7 +427,9 @@ describe('AgentProfilePage', () => {
     expect(
       within(effective).getByTestId('agent-profile-effective-health-gk-self').textContent,
     ).toBe('凭据被拒');
-    expect(within(effective).queryByTestId('agent-profile-effective-health-gk-up')).toBeNull();
+    expect(within(effective).getByTestId('agent-profile-effective-health-gk-up').textContent).toBe(
+      '健康',
+    );
     expect(within(effective).queryByTestId('agent-profile-effective-health-gk-none')).toBeNull();
 
     // Legacy 816: the form's read asks for no health; one more read asks for it, and nothing else
@@ -463,11 +468,21 @@ describe('AgentProfilePage', () => {
     await within(gatesField).findByText('local');
     expect(gatesField.textContent).toContain('正在检查各系统的连接状态');
     expect(within(gatesField).queryByTestId('agent-profile-gatekeepers-health-gk-self')).toBeNull();
+    // #1429 UX P2-1: the row holds the mark's place while the probe is out, in both columns.
+    expect(
+      within(gatesField).getByTestId('agent-profile-gatekeepers-health-gk-self-checking')
+        .textContent,
+    ).toBe('检查中');
+    expect(screen.getByTestId('agent-profile-effective-health-gk-self-checking').textContent).toBe(
+      '检查中',
+    );
 
     await act(async () => releaseHealth());
     const tag = await within(gatesField).findByTestId('agent-profile-gatekeepers-health-gk-self');
     expect(tag.textContent).toBe('不可达');
     expect(gatesField.textContent).not.toContain('正在检查各系统的连接状态');
+    expect(screen.queryByTestId('agent-profile-gatekeepers-health-gk-self-checking')).toBeNull();
+    expect(screen.queryByTestId('agent-profile-effective-health-gk-self-checking')).toBeNull();
     expect(
       within(screen.getByTestId('agent-profile-effective')).getByTestId(
         'agent-profile-effective-health-gk-self',
@@ -501,6 +516,7 @@ describe('AgentProfilePage', () => {
     const error = await within(gatesField).findByTestId('agent-profile-gate-health-error');
     expect(error.textContent).toContain('无法检查各系统的连接状态');
     expect(within(gatesField).queryByTestId('agent-profile-gate-health-pending')).toBeNull();
+    expect(screen.queryByTestId('agent-profile-gatekeepers-health-gk-self-checking')).toBeNull();
 
     fireEvent.click(within(gatesField).getByTestId('agent-profile-gate-health-retry'));
     const tag = await within(gatesField).findByTestId('agent-profile-gatekeepers-health-gk-self');

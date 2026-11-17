@@ -12,7 +12,7 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { type WorkerDefinitionSummary, distinctDefinitionName } from '../lib/tasks.js';
-import { AgentProfileForm, unhealthy } from './AgentProfileForm.js';
+import { AgentProfileForm, GateHealthChip, gateHealthMark } from './AgentProfileForm.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
@@ -270,7 +270,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 profile={profile.state.data}
                 skillNames={skillNames}
                 gatekeeperNames={gatekeeperNames}
-                gateHealth={gateHealth}
+                gateHealth={{ status: healthRead.state.status, byId: gateHealth }}
                 workerDefinitionNames={workerDefinitionNames}
                 models={models.state.status === 'ready' ? models.state.data.items : []}
               />
@@ -299,6 +299,23 @@ function nameMap<T extends { readonly id: string }>(
   return map;
 }
 
+/** Legacy 816: the gates' health from the separate health read, and where that read stands. */
+interface GateHealthView {
+  readonly status: 'loading' | 'error' | 'ready';
+  readonly byId: ReadonlyMap<string, GateHealthWire>;
+}
+
+/** Legacy 200 / 816: a system's health mark in the effective panel, as the checklist shows it. */
+function EffectiveGateHealth({
+  id,
+  health,
+}: { readonly id: string; readonly health: GateHealthView }) {
+  const mark = gateHealthMark(health.status, health.byId.get(id)).health;
+  return mark === undefined ? null : (
+    <GateHealthChip health={mark} testId={`agent-profile-effective-health-${id}`} />
+  );
+}
+
 /** Console redesign P3-3 (V4): an empty ref list reads "跟随授权" (this field tracks grants /
  *  publications automatically — §S3.13, `AgentProfileForm`'s own doc comment — there is simply
  *  nothing granted or published yet), never a bare "—". */
@@ -316,8 +333,8 @@ function EffectiveRefs({
   readonly href: (id: string) => string;
   /** Systems the agent reads without a Grant (leftover 98) — each chip gets a 只读 tag. */
   readonly readOnlyIds?: ReadonlySet<string>;
-  /** Legacy 200: a system whose gate is not healthy gets its health beside it. */
-  readonly health?: ReadonlyMap<string, GateHealthWire>;
+  /** Legacy 200 / 816: each system's health mark, and where the health read stands. */
+  readonly health?: GateHealthView;
 }) {
   const t = useT();
   if (ids.length === 0) {
@@ -333,10 +350,7 @@ function EffectiveRefs({
         <Fragment key={id}>
           <RefChip kind={kind} id={id} name={names.get(id) ?? null} href={href(id)} size="s" />
           {readOnlyIds?.has(id) ? <span className="tag">{t('只读', 'Read only')}</span> : null}
-          <GateHealthMark
-            health={health?.get(id)}
-            testId={`agent-profile-effective-health-${id}`}
-          />
+          {health !== undefined ? <EffectiveGateHealth id={id} health={health} /> : null}
         </Fragment>
       ))}
     </span>
@@ -369,7 +383,7 @@ function EffectivePanel({
   readonly profile: AgentProfile;
   readonly skillNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
-  readonly gateHealth: ReadonlyMap<string, GateHealthWire>;
+  readonly gateHealth: GateHealthView;
   readonly workerDefinitionNames: ReadonlyMap<string, string>;
   /** `list_models`, for the effective model's provider health (audit P0-2). */
   readonly models: readonly ModelRow[];
@@ -458,19 +472,5 @@ function EffectivePanel({
         ]}
       />
     </DashboardCard>
-  );
-}
-
-/** Legacy 200: a system's health beside it, only when its gate is not healthy. */
-function GateHealthMark({
-  health,
-  testId,
-}: {
-  readonly health: GateHealthWire | undefined;
-  readonly testId: string;
-}) {
-  const mark = unhealthy(health).health;
-  return mark === undefined ? null : (
-    <StatusChip machine="gateHealth" status={mark} size="s" testId={testId} />
   );
 }
