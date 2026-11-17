@@ -110,6 +110,29 @@ const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
 
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
 const REWRITTEN_BODY_STRIPPED_HEADERS: ReadonlySet<string> = new Set(['content-encoding']);
+/** A body fetch decoded no longer matches the upstream's `content-encoding`, nor its
+ *  `content-length`, which counted the compressed bytes (legacy 257). */
+const DECODED_BODY_STRIPPED_HEADERS: ReadonlySet<string> = new Set([
+  'content-encoding',
+  'content-length',
+]);
+
+/** Content codings fetch decodes on every runtime this proxy runs on (undici 6 in CI's Node 22,
+ *  undici 7 in the image's Node 24). `zstd` is left out: only some of them decode it. */
+const FETCH_DECODED_CODINGS: ReadonlySet<string> = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+
+/**
+ * Whether fetch handed this proxy the body already decoded (legacy 257). The proxy asks for
+ * `accept-encoding: identity`, but an upstream can compress anyway. fetch then decodes the body
+ * when it knows every coding in the list, and otherwise decodes none of it (undici's rule) — so a
+ * decoded body goes on without the upstream's `content-encoding` and `content-length`, and any
+ * other is passed on exactly as sent, labelled as sent.
+ */
+export function bodyDecodedByFetch(contentEncoding: string | null): boolean {
+  if (contentEncoding === null) return false;
+  const codings = contentEncoding.split(',').map((coding) => coding.trim().toLowerCase());
+  return codings.every((coding) => FETCH_DECODED_CODINGS.has(coding));
+}
 
 /** `response`'s body as text, read until it ends or passes `maxBytes` (then `tooLarge`, the rest
  *  cancelled unread). `onChunk` runs per chunk (the idle timeout); a read error ends it early. */
@@ -805,7 +828,15 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       res.writeHead(upstreamRes.status, headers);
       res.end(body);
     } else {
-      res.writeHead(upstreamRes.status, upstreamHeadersToNodeHeaders(upstreamRes.headers));
+      res.writeHead(
+        upstreamRes.status,
+        upstreamHeadersToNodeHeaders(
+          upstreamRes.headers,
+          bodyDecodedByFetch(upstreamRes.headers.get('content-encoding'))
+            ? DECODED_BODY_STRIPPED_HEADERS
+            : undefined,
+        ),
+      );
     }
     // Legacy 161: a successful answer goes to the client without the upstream read ever waiting
     // for it (client-delivery.ts); a client too far or too long behind is cut off.
