@@ -2577,3 +2577,148 @@ describe('createProxyServer — slow and departed clients (legacy 161)', () => {
     expect(proxy.logs.some((line) => line.includes('read to its end'))).toBe(false);
   });
 });
+
+// Legacy 829: an upstream (or a relay in front of it) decides what its usage figures are. One that
+// is not a token count used to go into the usage record as it was; the kernel refused the whole
+// batch carrying it, and every workspace's usage waited behind it.
+describe('createProxyServer — usage figures that are not token counts (legacy 829)', () => {
+  async function setup(options: {
+    jsonBody: string;
+    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  }): Promise<{
+    proxyPort: number;
+    token: string;
+    records: LlmUsageRecord[];
+    lines: Record<string, unknown>[];
+  }> {
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(options.jsonBody);
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const records: LlmUsageRecord[] = [];
+    const lines: Record<string, unknown>[] = [];
+    const proxy = createProxyServer({
+      providers: {
+        openai: {
+          ...openAiProvider(upstreamPort),
+          models: [{ id: 'gpt-example', ...(options.cost ? { cost: options.cost } : {}) }],
+        },
+      },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: (r) => records.push(r) },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: (line) => lines.push(JSON.parse(line) as Record<string, unknown>),
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    return { proxyPort, token: await signHandle(privateKey), records, lines };
+  }
+
+  function call(proxyPort: number, token: string): Promise<RawResponse> {
+    return rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', messages: [] }),
+    });
+  }
+
+  it('reads each figure that is not a count as missing, rounds fractions, and names the fields in one warn line', async () => {
+    // `1e400` is valid JSON that parses as Infinity — written into the body text, as a relay
+    // would send it.
+    const { proxyPort, token, records, lines } = await setup({
+      jsonBody:
+        '{"id":"c1","choices":[],"usage":{"prompt_tokens":100.4,"completion_tokens":"seven-thousand",' +
+        '"prompt_tokens_details":{"cached_tokens":-3,"cache_write_tokens":1e400}}}',
+      cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 },
+    });
+
+    const res = await call(proxyPort, token);
+
+    expect(res.status).toBe(200);
+    expect(records).toHaveLength(1);
+    const record = records[0];
+    expect(record).toMatchObject({ inputTokens: 100, outputTokens: 0, status: 'completed' });
+    expect(record).not.toHaveProperty('cacheReadTokens');
+    expect(record).not.toHaveProperty('cacheWriteTokens');
+    expect(record?.costUsd).toBeCloseTo((100 * 2) / 1_000_000, 12);
+    const warned = lines.filter((line) => line.level === 'warn');
+    expect(warned).toEqual([
+      expect.objectContaining({
+        msg: 'llm-proxy: the upstream answer reported usage figures that are not token counts; they were read as missing',
+        provider: 'openai',
+        model: 'gpt-example',
+        fields: [
+          'prompt_tokens_details.cached_tokens',
+          'prompt_tokens_details.cache_write_tokens',
+          'completion_tokens',
+        ],
+      }),
+    ]);
+    // The figures are named, never echoed.
+    expect(JSON.stringify(warned)).not.toContain('seven-thousand');
+  });
+
+  it('logs no warn line when every figure is a count', async () => {
+    const { proxyPort, token, records, lines } = await setup({
+      jsonBody: '{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}',
+      cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 },
+    });
+
+    await call(proxyPort, token);
+
+    expect(records[0]).toMatchObject({ inputTokens: 10, outputTokens: 3 });
+    expect(lines.filter((line) => line.level === 'warn')).toEqual([]);
+  });
+
+  it('records the largest count it reads, without a cost that would not fit the record', async () => {
+    const { proxyPort, token, records, lines } = await setup({
+      jsonBody: `{"id":"c1","choices":[],"usage":{"prompt_tokens":${Number.MAX_SAFE_INTEGER},"completion_tokens":1}}`,
+      // 2^53 - 1 tokens at $200 per million is about 1.8 × 10^12 USD.
+      cost: { input: 200, output: 8, cacheRead: 0.5, cacheWrite: 1 },
+    });
+
+    await call(proxyPort, token);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      inputTokens: Number.MAX_SAFE_INTEGER,
+      outputTokens: 1,
+      status: 'completed',
+    });
+    expect(records[0]).not.toHaveProperty('costUsd');
+    expect(lines.filter((line) => line.level === 'warn')).toEqual([
+      expect.objectContaining({
+        msg: 'llm-proxy: the cost computed for this call cannot be recorded (negative, not finite, or 10^12 USD or more); its usage is recorded without a cost',
+        provider: 'openai',
+        model: 'gpt-example',
+        costUsd: String((200 / 1_000_000) * Number.MAX_SAFE_INTEGER + (8 / 1_000_000) * 1 + 0 + 0),
+      }),
+    ]);
+  });
+
+  it('records a call without a cost when a negative configured rate makes it negative', async () => {
+    const { proxyPort, token, records, lines } = await setup({
+      jsonBody: '{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}',
+      cost: { input: -2, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    await call(proxyPort, token);
+
+    expect(records[0]).toMatchObject({ inputTokens: 10, outputTokens: 3 });
+    expect(records[0]).not.toHaveProperty('costUsd');
+    expect(lines.filter((line) => line.level === 'warn')).toHaveLength(1);
+  });
+});

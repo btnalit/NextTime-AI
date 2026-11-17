@@ -36,6 +36,7 @@ import {
   MAX_USAGE_SCAN_CHARS,
   computeCostUsd,
   createStreamUsageAccumulator,
+  isRecordableCostUsd,
   parseUsageFromJsonBody,
 } from './usage.js';
 
@@ -940,6 +941,20 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       }
     }
 
+    if (parsedUsage?.invalidFields) {
+      // Legacy 829: the figures are named, never echoed — the answer decides what is in them.
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: the upstream answer reported usage figures that are not token counts; they were read as missing',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+          fields: parsedUsage.invalidFields,
+        }),
+      );
+    }
+
     const upstreamOutcome = streamError || !upstreamRes.ok ? 'error' : 'completed';
     // Legacy 161: an upstream failure is `error` whether or not the client stayed; a full answer
     // the client left before receiving whole is `client_closed`, metered in full like `completed`.
@@ -969,6 +984,21 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       parsedUsage?.outputTokens ?? 0,
     );
     const modelConfig = modelId ? provider.models.find((m) => m.id === modelId) : undefined;
+    const costUsd =
+      parsedUsage && modelConfig?.cost ? computeCostUsd(modelConfig.cost, parsedUsage) : undefined;
+    const recordableCost = costUsd !== undefined && isRecordableCostUsd(costUsd);
+    if (costUsd !== undefined && !recordableCost) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: the cost computed for this call cannot be recorded (negative, not finite, or 10^12 USD or more); its usage is recorded without a cost',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+          costUsd: String(costUsd),
+        }),
+      );
+    }
     options.reporter.record(
       {
         workspaceId: claims.ws,
@@ -984,9 +1014,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         ...(parsedUsage?.cacheWriteTokens !== undefined
           ? { cacheWriteTokens: parsedUsage.cacheWriteTokens }
           : {}),
-        ...(parsedUsage && modelConfig?.cost
-          ? { costUsd: computeCostUsd(modelConfig.cost, parsedUsage) }
-          : {}),
+        ...(recordableCost ? { costUsd } : {}),
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         status: usageStatus,

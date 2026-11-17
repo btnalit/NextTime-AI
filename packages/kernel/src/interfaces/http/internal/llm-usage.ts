@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
+import { z } from 'zod';
 import type { PoolLike } from '../../../adapters/db/pool.js';
 import { withWorkspace } from '../../../adapters/db/pool.js';
 import { findAttributableTurnForSession } from '../../../application/host-bridge/index.js';
 import { recordWorkerRunUsage } from '../../../application/task/index.js';
 import {
-  LlmUsageBatchSchema,
   type LlmUsageRecord,
+  LlmUsageRecordSchema,
   REFUSED_USAGE_STATUS,
   type RecordUsageOptions,
   type RecordUsageResult,
@@ -70,6 +71,26 @@ import {
  * R-68 requeues the whole batch, which is safe because every recorded group replays as a no-op.
  * Otherwise the response is 200 with the same `groups` in `result`.
  *
+ * One record never stalls the batch (legacy 829). The body must be a JSON array (else 400
+ * `invalid_body`), but each element is checked against `LlmUsageRecordSchema` on its own: one that
+ * fails — a token count that is not a non-negative safe integer, a cost `llm_usage.cost_usd`
+ * cannot hold, a missing field — is dropped, never grouped, never retried, and counted as
+ * `invalid` next to `groups` (only when there are any). One warn line per request names the first
+ * few by their index in the body, with the failing fields and, where they are well-formed, the
+ * record's workspace and request id; never a field's value. Refusing the whole batch instead
+ * answered 400 without groups, so llm-proxy requeued all of it: one bad record held back every
+ * workspace's usage until the queue overflowed. Nothing can make such a record valid on a resend,
+ * so dropping it loses nothing a retry could recover.
+ *
+ * Except a record from a newer llm-proxy: one whose only faults are a field this kernel does not
+ * know (`unrecognized_keys`, the schema is strict) or a value outside a closed set it knows
+ * (`invalid_value`, today only `refusalScope`). It is not malformed, just ahead of this kernel —
+ * in the window of an upgrade where llm-proxy restarts first, or after a rollback of the kernel
+ * alone — and becomes valid once the kernel catches up. Dropping it would lose real usage, so it
+ * is held instead: its workspace's group is answered `retry` without being recorded (a 500, so
+ * llm-proxy resends that workspace), and a separate warn line says so. A record with any other
+ * fault besides is dropped: a missing or malformed field is wrong whichever version sent it.
+ *
  * Per-Task budget accounting (docs/development-tasks.md S2.7 "usage reports carry sessionId; a
  * Worker session's usage must count against its Task's budget ... same layer-legal shape as the
  * turn attribution added in PR #37"): same pattern as `resolveTurnId` above — this route builds an
@@ -131,6 +152,75 @@ async function workspaceExists(
   });
 }
 
+/** At most this many dropped records are described in the warn line (legacy 829); the line always
+ *  carries how many there were. */
+const INVALID_RECORDS_DESCRIBED = 10;
+
+/** Issue codes a newer llm-proxy's record fails on — see the module doc comment. A record held
+ *  for them must fail on nothing else. */
+const NEWER_RECORD_ISSUE_CODES: ReadonlySet<string> = new Set([
+  'unrecognized_keys',
+  'invalid_value',
+]);
+
+/** A record that failed validation as a warn line describes it — field paths and issue codes
+ *  only, never a value (such a record may carry anything). */
+interface InvalidUsageRecord {
+  readonly index: number;
+  readonly workspaceId?: string;
+  readonly requestId?: string;
+  readonly issues: readonly { readonly path: string; readonly code: string }[];
+}
+
+const GuidSchema = z.guid();
+
+/** `value` when it is a well-formed uuid, else `undefined` — so a dropped record's ids can be
+ *  logged without logging whatever else a malformed field holds. */
+function wellFormedGuid(value: unknown): string | undefined {
+  return GuidSchema.safeParse(value).success ? (value as string) : undefined;
+}
+
+/** Checks every element of the body on its own (legacy 829 — see the module doc comment): `valid`
+ *  records are grouped and recorded, `invalid` ones dropped, `held` ones (from a newer llm-proxy,
+ *  always with a `workspaceId`) keep their workspace's group for a resend. */
+function validateEach(items: readonly unknown[]): {
+  readonly valid: LlmUsageRecord[];
+  readonly invalid: InvalidUsageRecord[];
+  readonly held: (InvalidUsageRecord & { readonly workspaceId: string })[];
+} {
+  const valid: LlmUsageRecord[] = [];
+  const invalid: InvalidUsageRecord[] = [];
+  const held: (InvalidUsageRecord & { readonly workspaceId: string })[] = [];
+  items.forEach((item, index) => {
+    const parsed = LlmUsageRecordSchema.safeParse(item);
+    if (parsed.success) {
+      valid.push(parsed.data);
+      return;
+    }
+    const fields =
+      typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {};
+    const workspaceId = wellFormedGuid(fields.workspaceId);
+    const requestId = wellFormedGuid(fields.requestId);
+    const issues = parsed.error.issues.map((issue) => ({
+      path: issue.path.map(String).join('.'),
+      code: issue.code,
+    }));
+    // Faults only of these kinds imply a well-formed `workspaceId` (a bad one is a fault of its
+    // own); the check is for the type.
+    if (workspaceId && issues.every((issue) => NEWER_RECORD_ISSUE_CODES.has(issue.code))) {
+      held.push({ index, workspaceId, ...(requestId ? { requestId } : {}), issues });
+      return;
+    }
+    invalid.push({
+      index,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(requestId ? { requestId } : {}),
+      issues,
+    });
+  });
+  return { valid, invalid, held };
+}
+
 /** Groups a validated batch by `workspaceId` — `recordUsage` requires every record in one call to
  *  share a workspace (it does not open `withWorkspace` itself), and one POST body may legitimately
  *  span several workspaces (`llm-proxy` serves every workspace's requests through one process). */
@@ -154,16 +244,41 @@ export async function registerLlmUsageRoutes(
   const record = deps.recordUsage ?? recordUsage;
 
   app.post('/internal/llm-usage', async (request, reply) => {
-    const parsed = LlmUsageBatchSchema.safeParse(request.body);
-    if (!parsed.success) {
+    if (!Array.isArray(request.body)) {
       reply.code(400);
-      return { ok: false, error: { code: 'invalid_body', message: parsed.error.message } };
+      return {
+        ok: false,
+        error: { code: 'invalid_body', message: 'the body must be a JSON array of usage records' },
+      };
     }
+    const { valid, invalid, held } = validateEach(request.body);
+    if (invalid.length > 0) {
+      app.log?.warn?.(
+        { invalid: invalid.length, records: invalid.slice(0, INVALID_RECORDS_DESCRIBED) },
+        'llm-usage: dropped usage records that are not valid usage records; they are not retried',
+      );
+    }
+    if (held.length > 0) {
+      app.log?.warn?.(
+        { held: held.length, records: held.slice(0, INVALID_RECORDS_DESCRIBED) },
+        'llm-usage: held usage records with a field or value this kernel does not know (a newer llm-proxy?); their workspaces are answered retry until the kernel is upgraded',
+      );
+    }
+    const invalidCount = invalid.length > 0 ? { invalid: invalid.length } : {};
 
-    const groups = groupByWorkspace(parsed.data);
+    const groups = groupByWorkspace(valid);
+    const heldWorkspaces = new Set(held.map((heldRecord) => heldRecord.workspaceId));
+    for (const workspaceId of heldWorkspaces) {
+      if (!groups.has(workspaceId)) groups.set(workspaceId, []);
+    }
     const results: LlmUsageGroupResult[] = [];
 
     for (const [workspaceId, records] of groups) {
+      if (heldWorkspaces.has(workspaceId)) {
+        // Not recorded now: llm-proxy resends the whole workspace, its valid records included.
+        results.push({ workspaceId, outcome: 'retry' });
+        continue;
+      }
       const first = records[0];
       if (!first) continue;
       try {
@@ -251,10 +366,10 @@ export async function registerLlmUsageRoutes(
         error: {
           code: 'internal_error',
           message: 'failed to record usage for some workspaces — retry those groups',
-          details: { groups: results },
+          details: { groups: results, ...invalidCount },
         },
       };
     }
-    return { ok: true, result: { inserted, groups: results } };
+    return { ok: true, result: { inserted, groups: results, ...invalidCount } };
   });
 }

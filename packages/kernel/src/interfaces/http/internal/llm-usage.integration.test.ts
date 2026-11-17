@@ -233,6 +233,78 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await readTurnId(workspaceId, principalId, jti)).toBeNull();
     });
 
+    // Legacy 829: a record that passes the schema always fits its columns — the largest token
+    // count and cost it allows are stored as sent — and one that fails it is dropped alone.
+    it('records the valid records of a batch at the largest counts and cost the schema allows, and drops the invalid ones', async () => {
+      const workspaceId = await adminInsertWorkspace('llm-usage-route-829');
+      const principalId = await adminInsertPrincipal(workspaceId);
+      const sessionId = await insertSession(workspaceId, principalId);
+      const jti = await issueTestHandle(workspaceId, principalId, sessionId);
+
+      app = Fastify();
+      await registerLlmUsageRoutes(app, { pool });
+
+      const usage = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+        workspaceId,
+        sessionId,
+        jti,
+        provider: 'example-provider',
+        model: 'example-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        startedAt: new Date().toISOString(),
+        status: 'completed',
+        requestId: randomUUID(),
+        ...overrides,
+      });
+      const largest = usage({
+        inputTokens: Number.MAX_SAFE_INTEGER,
+        outputTokens: Number.MAX_SAFE_INTEGER,
+        cacheReadTokens: Number.MAX_SAFE_INTEGER,
+        cacheWriteTokens: Number.MAX_SAFE_INTEGER,
+        costUsd: 999_999_999_999.9998,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/llm-usage',
+        payload: [
+          usage({ inputTokens: -1 }),
+          largest,
+          usage({ costUsd: 1e12 }),
+          usage({ outputTokens: Number.MAX_SAFE_INTEGER + 1 }),
+        ],
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        ok: true,
+        result: {
+          inserted: 1,
+          groups: [{ workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 }],
+          invalid: 3,
+        },
+      });
+      const rows = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+        const result = await client.query<Record<string, string>>(
+          `select request_id::text, input_tokens::text, output_tokens::text,
+                  cache_read_tokens::text, cache_write_tokens::text, cost_usd::text
+             from llm_usage where workspace_id = $1`,
+          [workspaceId],
+        );
+        return result.rows;
+      });
+      expect(rows).toEqual([
+        {
+          request_id: largest.requestId,
+          input_tokens: '9007199254740991',
+          output_tokens: '9007199254740991',
+          cache_read_tokens: '9007199254740991',
+          cache_write_tokens: '9007199254740991',
+          cost_usd: '999999999999.999800',
+        },
+      ]);
+    });
+
     it('records turn_id = null (never rejects) when the session has no running or recent Turn', async () => {
       const workspaceId = await adminInsertWorkspace('llm-usage-route-no-turn-test');
       const principalId = await adminInsertPrincipal(workspaceId);

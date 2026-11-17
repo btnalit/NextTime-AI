@@ -1,3 +1,4 @@
+import { LLM_USAGE_COST_USD_LIMIT } from '@nexttime/shared';
 import type { ModelCost, ProviderApiKind } from './config.js';
 
 /**
@@ -17,6 +18,11 @@ import type { ModelCost, ProviderApiKind } from './config.js';
  * (proxy.ts's "one body mutation"). `openai-responses` (R-10) has its own usage shape and its own
  * streaming event, checked against both the official API reference and pi's own Responses client
  * (`parseOpenAiResponsesUsage` below).
+ *
+ * Every figure is checked as it is read (legacy 829, `readCount`): the provider's answer, or a
+ * relay in front of it, decides what is in it, so a figure may be negative, fractional, a string,
+ * or too large for a double. Each count that leaves this module is a non-negative safe integer,
+ * the only kind the kernel's usage record accepts.
  */
 
 export interface ParsedUsage {
@@ -24,6 +30,36 @@ export interface ParsedUsage {
   readonly outputTokens: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
+  /** The provider's usage fields, by its own names, that held something other than a token count
+   *  and were read as missing (legacy 829) — proxy.ts logs them. Only present when there are any. */
+  readonly invalidFields?: readonly string[];
+}
+
+/**
+ * One usage figure as the provider reported it (legacy 829). A count is a finite number ≥ 0; a
+ * fraction is rounded to the nearest integer. Anything else is not a count — a string, a boolean,
+ * an object, a negative number, a non-finite one (a JSON number too large for a double parses as
+ * `Infinity`), or one past `Number.MAX_SAFE_INTEGER` — and reads as missing, exactly like an
+ * absent field, with its name added to `invalid`. `undefined` and `null` are missing without a
+ * note. Before this, such a figure went into the usage record as it was; the kernel refused the
+ * whole batch carrying it, and every workspace's usage waited behind it.
+ */
+function readCount(value: unknown, field: string, invalid: string[]): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  // NaN fails `>= 0`; Infinity rounds to itself and fails the safe-integer bound.
+  if (typeof value === 'number' && value >= 0) {
+    const count = Math.round(value);
+    if (count <= Number.MAX_SAFE_INTEGER) return count;
+  }
+  invalid.push(field);
+  return undefined;
+}
+
+/** The `invalidFields` entry of a parsed usage — none when every figure was a count. */
+function invalidFieldsOf(invalid: readonly string[]): {
+  readonly invalidFields?: readonly string[];
+} {
+  return invalid.length > 0 ? { invalidFields: [...new Set(invalid)] } : {};
 }
 
 // -------------------------------------------------------------------------------------------
@@ -77,21 +113,32 @@ interface AnthropicRawUsage {
  * as-is for `output` (OpenAI already includes reasoning tokens in it, per the same source file).
  */
 export function parseOpenAiUsage(raw: OpenAiRawUsage): ParsedUsage {
-  const promptTokens = raw.prompt_tokens ?? 0;
+  const invalid: string[] = [];
+  const promptTokens = readCount(raw.prompt_tokens, 'prompt_tokens', invalid) ?? 0;
   const cacheReadTokens =
-    raw.prompt_tokens_details?.cached_tokens ??
-    raw.prompt_cache_hit_tokens ??
-    raw.cached_tokens ??
+    readCount(
+      raw.prompt_tokens_details?.cached_tokens,
+      'prompt_tokens_details.cached_tokens',
+      invalid,
+    ) ??
+    readCount(raw.prompt_cache_hit_tokens, 'prompt_cache_hit_tokens', invalid) ??
+    readCount(raw.cached_tokens, 'cached_tokens', invalid) ??
     0;
-  const cacheWriteTokens = raw.prompt_tokens_details?.cache_write_tokens ?? 0;
+  const cacheWriteTokens =
+    readCount(
+      raw.prompt_tokens_details?.cache_write_tokens,
+      'prompt_tokens_details.cache_write_tokens',
+      invalid,
+    ) ?? 0;
   const inputTokens = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
-  const outputTokens = raw.completion_tokens ?? 0;
+  const outputTokens = readCount(raw.completion_tokens, 'completion_tokens', invalid) ?? 0;
 
   return {
     inputTokens,
     outputTokens,
     ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
+    ...invalidFieldsOf(invalid),
   };
 }
 
@@ -107,16 +154,33 @@ export function parseOpenAiUsage(raw: OpenAiRawUsage): ParsedUsage {
  * as-is.
  */
 export function parseOpenAiResponsesUsage(raw: OpenAiResponsesRawUsage): ParsedUsage {
-  const cacheReadTokens = raw.input_tokens_details?.cached_tokens ?? 0;
-  const cacheWriteTokens = raw.input_tokens_details?.cache_write_tokens ?? 0;
-  const inputTokens = Math.max(0, (raw.input_tokens ?? 0) - cacheReadTokens - cacheWriteTokens);
-  const outputTokens = raw.output_tokens ?? 0;
+  const invalid: string[] = [];
+  const cacheReadTokens =
+    readCount(
+      raw.input_tokens_details?.cached_tokens,
+      'input_tokens_details.cached_tokens',
+      invalid,
+    ) ?? 0;
+  const cacheWriteTokens =
+    readCount(
+      raw.input_tokens_details?.cache_write_tokens,
+      'input_tokens_details.cache_write_tokens',
+      invalid,
+    ) ?? 0;
+  const inputTokens = Math.max(
+    0,
+    (readCount(raw.input_tokens, 'input_tokens', invalid) ?? 0) -
+      cacheReadTokens -
+      cacheWriteTokens,
+  );
+  const outputTokens = readCount(raw.output_tokens, 'output_tokens', invalid) ?? 0;
 
   return {
     inputTokens,
     outputTokens,
     ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
+    ...invalidFieldsOf(invalid),
   };
 }
 
@@ -128,16 +192,20 @@ export function parseOpenAiResponsesUsage(raw: OpenAiResponsesRawUsage): ParsedU
  * count, so no subtraction is applied here.
  */
 export function parseAnthropicUsage(raw: AnthropicRawUsage): ParsedUsage {
-  const inputTokens = raw.input_tokens ?? 0;
-  const outputTokens = raw.output_tokens ?? 0;
-  const cacheReadTokens = raw.cache_read_input_tokens ?? 0;
-  const cacheWriteTokens = raw.cache_creation_input_tokens ?? 0;
+  const invalid: string[] = [];
+  const inputTokens = readCount(raw.input_tokens, 'input_tokens', invalid) ?? 0;
+  const outputTokens = readCount(raw.output_tokens, 'output_tokens', invalid) ?? 0;
+  const cacheReadTokens =
+    readCount(raw.cache_read_input_tokens, 'cache_read_input_tokens', invalid) ?? 0;
+  const cacheWriteTokens =
+    readCount(raw.cache_creation_input_tokens, 'cache_creation_input_tokens', invalid) ?? 0;
 
   return {
     inputTokens,
     outputTokens,
     ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
+    ...invalidFieldsOf(invalid),
   };
 }
 
@@ -302,7 +370,8 @@ function createOpenAiResponsesStreamUsageAccumulator(): UsageAccumulator {
  * Anthropic streaming: `message_start`'s `message.usage` seeds the initial values;
  * `message_delta`'s `usage` only overwrites the fields it actually includes (pi 0.84.4's own
  * comment on this exact behavior: "Only update usage fields if present (not null). Preserves
- * input_tokens from message_start when proxies omit it in message_delta").
+ * input_tokens from message_start when proxies omit it in message_delta"). A delta figure that is
+ * not a count (legacy 829) is missing too, so the earlier figure stands.
  */
 function createAnthropicStreamUsageAccumulator(): UsageAccumulator {
   const parser = new SseEventParser();
@@ -311,6 +380,7 @@ function createAnthropicStreamUsageAccumulator(): UsageAccumulator {
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
   let seen = false;
+  const invalid: string[] = [];
 
   return {
     push(chunk: string): void {
@@ -323,22 +393,28 @@ function createAnthropicStreamUsageAccumulator(): UsageAccumulator {
             ?.usage;
           if (!messageUsage) continue;
           seen = true;
-          inputTokens = messageUsage.input_tokens ?? 0;
-          outputTokens = messageUsage.output_tokens ?? 0;
-          cacheReadTokens = messageUsage.cache_read_input_tokens ?? 0;
-          cacheWriteTokens = messageUsage.cache_creation_input_tokens ?? 0;
+          const start = parseAnthropicUsage(messageUsage);
+          inputTokens = start.inputTokens;
+          outputTokens = start.outputTokens;
+          cacheReadTokens = start.cacheReadTokens ?? 0;
+          cacheWriteTokens = start.cacheWriteTokens ?? 0;
+          invalid.push(...(start.invalidFields ?? []));
         } else if (event.event === 'message_delta') {
           const deltaUsage = (parsed as { usage?: AnthropicRawUsage }).usage;
           if (!deltaUsage) continue;
           seen = true;
-          if (deltaUsage.input_tokens != null) inputTokens = deltaUsage.input_tokens;
-          if (deltaUsage.output_tokens != null) outputTokens = deltaUsage.output_tokens;
-          if (deltaUsage.cache_read_input_tokens != null) {
-            cacheReadTokens = deltaUsage.cache_read_input_tokens;
-          }
-          if (deltaUsage.cache_creation_input_tokens != null) {
-            cacheWriteTokens = deltaUsage.cache_creation_input_tokens;
-          }
+          inputTokens = readCount(deltaUsage.input_tokens, 'input_tokens', invalid) ?? inputTokens;
+          outputTokens =
+            readCount(deltaUsage.output_tokens, 'output_tokens', invalid) ?? outputTokens;
+          cacheReadTokens =
+            readCount(deltaUsage.cache_read_input_tokens, 'cache_read_input_tokens', invalid) ??
+            cacheReadTokens;
+          cacheWriteTokens =
+            readCount(
+              deltaUsage.cache_creation_input_tokens,
+              'cache_creation_input_tokens',
+              invalid,
+            ) ?? cacheWriteTokens;
         }
       }
     },
@@ -349,6 +425,7 @@ function createAnthropicStreamUsageAccumulator(): UsageAccumulator {
             outputTokens,
             ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
             ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
+            ...invalidFieldsOf(invalid),
           }
         : undefined,
   };
@@ -400,4 +477,17 @@ export function computeCostUsd(cost: ModelCost, usage: ParsedUsage): number {
     perMillion(rates.cacheRead, cacheReadTokens) +
     perMillion(rates.cacheWrite, cacheWriteTokens)
   );
+}
+
+/**
+ * Whether a cost from `computeCostUsd` fits a usage record (legacy 829): finite, ≥ 0 and below
+ * `LLM_USAGE_COST_USD_LIMIT`, the most `llm_usage.cost_usd` holds. Counts are checked
+ * (`readCount`), but a count can still be any safe integer, and the configured rates are not
+ * bounded at all (a negative rate is a config error the schema lets through), so the product can
+ * fall outside. proxy.ts then sends the record without a cost, as for a model with no configured
+ * cost, so the kernel still meters its tokens, and logs why.
+ */
+export function isRecordableCostUsd(costUsd: number): boolean {
+  // NaN fails both comparisons and Infinity the second, so no separate finiteness check.
+  return costUsd >= 0 && costUsd < LLM_USAGE_COST_USD_LIMIT;
 }

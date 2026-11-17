@@ -413,6 +413,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stored.rows).toEqual([{ status: 'refused', refusal_scope: 'workspace_daily_tokens' }]);
     });
 
+    // Legacy 829: each such record is dropped on its own (the rest of a batch is still recorded).
     it('the ingest schema refuses a refused record with tokens, or without its scope, and a scope on any other status', async () => {
       const { claims } = await spawnWorkerRun();
       for (const bad of [
@@ -426,7 +427,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           url: '/internal/llm-usage',
           payload: [bad],
         });
-        expect(res.statusCode).toBe(400);
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true, result: { inserted: 0, groups: [], invalid: 1 } });
       }
     });
 

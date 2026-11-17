@@ -1,4 +1,9 @@
-import { type LlmRefusalScope, LlmRefusalScopeSchema, type LlmUsageStatus } from '@nexttime/shared';
+import {
+  LLM_USAGE_COST_USD_LIMIT,
+  type LlmRefusalScope,
+  LlmRefusalScopeSchema,
+  type LlmUsageStatus,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { enqueue } from '../../substrate/outbox/index.js';
@@ -47,13 +52,17 @@ export const LlmUsageRecordSchema = z
     jti: z.guid(),
     provider: z.string().min(1),
     model: z.string().min(1),
+    /** Token counts: non-negative safe integers (zod's `int()`), which every `bigint` column
+     *  holds. */
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     cacheReadTokens: z.number().int().nonnegative().optional(),
     cacheWriteTokens: z.number().int().nonnegative().optional(),
     /** USD, from the provider's configured `ModelCost` rates when present (design doc §7.7:
-     *  "成本元数据复用 pi-ai 的 ModelCost"). Omitted when the model has no configured cost. */
-    costUsd: z.number().nonnegative().optional(),
+     *  "成本元数据复用 pi-ai 的 ModelCost"). Omitted when the model has no configured cost. Below
+     *  `LLM_USAGE_COST_USD_LIMIT` (legacy 829): `cost_usd` is `numeric(18, 6)`, so a larger cost
+     *  is refused here, with its record alone, instead of failing the insert. */
+    costUsd: z.number().nonnegative().lt(LLM_USAGE_COST_USD_LIMIT).optional(),
     startedAt: z.string().datetime(),
     finishedAt: z.string().datetime().optional(),
     /** Free-text outcome, any non-empty value accepted (see the migration's own header comment
@@ -100,10 +109,6 @@ export const LlmUsageRecordSchema = z
     }
   });
 export type LlmUsageRecord = z.infer<typeof LlmUsageRecordSchema>;
-
-/** A batch POSTed to `/internal/llm-usage` — a bare JSON array (S1.7 task brief: "JSON array of
- *  records, batched"), not wrapped in an envelope object. */
-export const LlmUsageBatchSchema = z.array(LlmUsageRecordSchema);
 
 /** Thrown by `recordUsage` when called with records that do not all share one `workspaceId` —
  *  the caller (the internal HTTP route) is expected to have already grouped by workspace. */

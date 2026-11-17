@@ -450,6 +450,15 @@ export const LLM_USAGE_STATUS_VALUES = ['completed', 'error', 'refused', 'client
 export type LlmUsageStatus = (typeof LLM_USAGE_STATUS_VALUES)[number];
 
 /**
+ * Legacy 829: one usage record's `costUsd` is below this. `llm_usage.cost_usd` is
+ * `numeric(18, 6)`, which cannot hold 10^12 USD or more, so the kernel refuses such a record on
+ * its own rather than letting the insert fail its whole workspace group on every resend.
+ * llm-proxy sends a record whose computed cost does not fit without a cost, so the call's tokens
+ * are still metered.
+ */
+export const LLM_USAGE_COST_USD_LIMIT = 1e12;
+
+/**
  * Legacy 589: which platform budget llm-proxy refused a model call for (`llm_usage.refusal_scope`
  * on a `refused` usage record; the 402 `budget_exhausted` body's `scope`): the workspace's daily
  * token sum (`LLM_DAILY_TOKEN_BUDGET`) or its daily cost quota (`task.daily_cost_budget_usd`), both
