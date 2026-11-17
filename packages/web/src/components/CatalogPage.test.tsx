@@ -1275,6 +1275,10 @@ describe('CatalogPage', () => {
         .getAllByTestId('operation-revision-diff-line')
         .map((line) => line.textContent),
     ).toEqual(['说明变了']);
+    // #1432 UX P3-1: what the published version said, so the reviewer sees what was rewritten.
+    expect(
+      within(diff).getByTestId('operation-revision-diff-published-description').textContent,
+    ).toMatch(/^已发布版本的说明：Reads the stock level\.$/);
     expect(diff.textContent).not.toContain('相同');
     first.unmount();
 
@@ -1282,6 +1286,7 @@ describe('CatalogPage', () => {
     const same = await screen.findByTestId('operation-revision-diff');
     expect(same.textContent).toContain('治理字段、执行定义和说明都和已发布版本相同');
     expect(within(same).queryByTestId('operation-revision-diff-line')).toBeNull();
+    expect(within(same).queryByTestId('operation-revision-diff-published-description')).toBeNull();
   });
 
   it('legacy K (UX acceptance of #538): publishing a revision draft follows it to the version now in effect and says which version', async () => {

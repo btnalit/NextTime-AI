@@ -906,6 +906,9 @@ function RevisionDiff({
   const descriptionChanged =
     published !== undefined && (row.description ?? '') !== (published.description ?? '');
   if (descriptionChanged) lines.push(t('说明变了', 'Description changed'));
+  // #1432 UX P3-1: what it said before, so a reviewer sees what the draft rewrote (the draft's own
+  // description is on this page already).
+  const publishedDescription = descriptionChanged ? (published?.description ?? '') : null;
   return (
     <div className="stack-s" data-testid="operation-revision-diff">
       <span className="field-label">
@@ -936,6 +939,20 @@ function RevisionDiff({
               {line}
             </li>
           ))}
+          {publishedDescription !== null ? (
+            <li
+              className="text-small text-3"
+              style={{ listStyle: 'none', overflowWrap: 'anywhere' }}
+              data-testid="operation-revision-diff-published-description"
+            >
+              {publishedDescription === ''
+                ? t('已发布版本没有说明。', 'The published version has no description.')
+                : t(
+                    `已发布版本的说明：${publishedDescription}`,
+                    `Published description: ${publishedDescription}`,
+                  )}
+            </li>
+          ) : null}
         </ul>
       )}
     </div>
