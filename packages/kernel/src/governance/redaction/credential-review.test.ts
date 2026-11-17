@@ -14,6 +14,7 @@ import {
   namesASecretField,
   redactSecrets,
   redactSuspectedSecrets,
+  redactSuspectedSecretsUpTo,
   refuseCredentialText,
   refuseRedactedText,
   reviewObserveParams,
@@ -319,6 +320,42 @@ describe("redactSuspectedSecrets — the audit copy of a call's params", () => {
     expect(audited.count).toBe(3);
     expect(audited.paths).toEqual(['password', 'note', 'query.pageToken']);
     expect(params.password).toBe('hunter2'); // the original is never touched
+  });
+});
+
+describe('redactSuspectedSecretsUpTo — the same copy, read only up to a bound (legacy 237)', () => {
+  const value = {
+    user: 'ops',
+    password: 'hunter2',
+    note: `Authorization: Bearer ${FAKE}`,
+    rows: ['a'.repeat(40), 'b'.repeat(40), 'c'.repeat(40)],
+  };
+
+  it('within the bound, is exactly redactSuspectedSecrets’ copy', () => {
+    for (const secretFields of [true, false]) {
+      expect(redactSuspectedSecretsUpTo(value, 10_000, { secretFields })).toEqual({
+        value: redactSuspectedSecrets(value, { secretFields }).value,
+        omitted: false,
+      });
+    }
+  });
+
+  it('past the bound, cuts the string reading stopped in, leaves out the rest, and says so', () => {
+    // Every key and `ops` and the note are read whole; a secret-named field's value is replaced
+    // unread and charged what replaces it.
+    const read = ['user', 'ops', 'password', '[redacted]', 'note', value.note, 'rows'].join(
+      '',
+    ).length;
+    const bounded = redactSuspectedSecretsUpTo(value, read + 10, { secretFields: true });
+    expect(bounded).toEqual({
+      value: {
+        user: 'ops',
+        password: '[redacted]',
+        note: 'Authorization: [redacted]',
+        rows: [`${'a'.repeat(10)}…`, '[…]'],
+      },
+      omitted: true,
+    });
   });
 });
 
