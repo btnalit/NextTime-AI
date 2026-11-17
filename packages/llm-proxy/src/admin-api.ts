@@ -28,6 +28,7 @@ import {
   type UpstreamCallLimiter,
   createUpstreamCallLimiter,
 } from './admin-limits.js';
+import { fitAuditDetails, fitModelIds } from './audit-details.js';
 import type { ProviderCatalog, ResolvedProvider } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
@@ -430,11 +431,14 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     await refreshProviderHealth();
   }
 
+  /** `kernelDetails` is a shorter copy for the kernel row where `details` can outgrow the
+   *  kernel's limit (legacy 151); this proxy's own line always has `details` whole. */
   function audit(
     claims: LlmAdminTokenClaims,
     action: KernelAuditAction,
     providerId: string,
     details: Readonly<Record<string, unknown>>,
+    kernelDetails: Readonly<Record<string, unknown>> = details,
   ): void {
     log(
       JSON.stringify({
@@ -449,7 +453,13 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     );
     if (!options.kernelAudit) return;
     void options
-      .kernelAudit({ action, providerId, actorUserId: claims.sub, tokenJti: claims.jti, details })
+      .kernelAudit({
+        action,
+        providerId,
+        actorUserId: claims.sub,
+        tokenJti: claims.jti,
+        details: fitAuditDetails(kernelDetails),
+      })
       .catch((err: unknown) => {
         log(
           JSON.stringify({
@@ -825,7 +835,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         await options.store.upsert(input.id, entry, now());
         await rewriteModelsJson();
         const created = requireProvider(input.id);
-        audit(claims, 'provider_created', input.id, {
+        const details = {
           api: entry.api,
           upstreamBaseUrl: entry.upstream_base_url,
           apiKeyEnv: entry.api_key_env ?? null,
@@ -833,7 +843,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           enabled: entry.enabled,
           modelsJsonError,
           ...(secretCleared ? { secretCleared } : {}),
-        });
+        };
+        audit(claims, 'provider_created', input.id, details, fitModelIds(details));
         // A key cleared after the catalog rewrite changes the health that rewrite wrote.
         if (secretCleared) await refreshProviderHealth();
         if (secretCleared) {
