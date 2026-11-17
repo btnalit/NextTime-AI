@@ -171,6 +171,12 @@ describe('lib/provider-form', () => {
     );
     expect(masked).toContain('去掉末尾 /v1/… 接口路径后的部分');
     expect(masked).not.toContain('路径改成 /***');
+    expect(
+      explainUpstreamError(
+        `GET /v1/models responded 301, a redirect to "https://api.example.net/***/v1/models". ${advice}`,
+        zh,
+      ),
+    ).not.toContain('也就是');
     // A target llm-proxy shows with an escaped quote reads back as it was.
     expect(
       explainUpstreamError(`upstream responded 307, a redirect to "/a\\"b". ${advice}`, en),
