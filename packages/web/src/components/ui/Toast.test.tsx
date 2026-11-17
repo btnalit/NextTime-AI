@@ -1,8 +1,22 @@
 // @vitest-environment jsdom
-import { act, render } from '@testing-library/react';
-import { useEffect } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
 import { ToastProvider, useToast } from './Toast.js';
+
+function PushFailure() {
+  const toast = useToast();
+  useEffect(() => {
+    toast.push({
+      tone: 'danger',
+      title: 'Could not publish',
+      description: 'Refresh and try again.',
+      details: { code: 'conflict', raw: 'operation docker.restart is not a draft' },
+    });
+  }, [toast]);
+  return null;
+}
 
 function PushOnMount() {
   const toast = useToast();
@@ -14,7 +28,10 @@ function PushOnMount() {
 
 describe('ToastProvider', () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it('clears pending dismiss timers when it unmounts', () => {
     const { unmount, getAllByTestId } = render(
@@ -27,5 +44,139 @@ describe('ToastProvider', () => {
     unmount();
     expect(vi.getTimerCount()).toBe(0);
     act(() => vi.runAllTimers());
+  });
+
+  it('legacy 212: a failure folds its technical details; opening them keeps the toast', () => {
+    const view = render(
+      <ToastProvider>
+        <PushFailure />
+      </ToastProvider>,
+    );
+    const details = view.getByText('技术细节').closest('details');
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('code')?.textContent).toBe('conflict');
+    expect(view.getByTestId('toast-detail').textContent).toBe(
+      'operation docker.restart is not a draft',
+    );
+    if (!details) throw new Error('no details');
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+  });
+
+  it('legacy 212: a failure whose details stay closed is dismissed on time', () => {
+    const view = render(
+      <ToastProvider>
+        <PushFailure />
+      </ToastProvider>,
+    );
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
+
+  it('#1398 UX P3: pointed at, a toast pauses; the rest of its time runs once the pointer leaves', () => {
+    const view = render(
+      <ToastProvider>
+        <PushFailure />
+      </ToastProvider>,
+    );
+    act(() => vi.advanceTimersByTime(3_000));
+    const toast = view.getByTestId('toast');
+    fireEvent.pointerEnter(toast);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    fireEvent.pointerLeave(toast);
+    act(() => vi.advanceTimersByTime(1_900));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    act(() => vi.advanceTimersByTime(200));
+    expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
+
+  it('#1398 UX P3: focused, a toast pauses until the focus leaves it', async () => {
+    const view = render(
+      <>
+        <button type="button">elsewhere</button>
+        <ToastProvider>
+          <PushFailure />
+        </ToastProvider>
+      </>,
+    );
+    const close = view.getByRole('button', { name: 'Dismiss' });
+    act(() => close.focus());
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(view.getAllByTestId('toast')).toHaveLength(1);
+    await act(async () => view.getByRole('button', { name: 'elsewhere' }).focus());
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(view.queryAllByTestId('toast')).toHaveLength(0);
+  });
+});
+
+/** #1398 UX P2: a modal drawer sets pointer-events: none on <body> and closes on any outside
+ *  press; the toasts above it are not outside (`lib/toast-region`). Real timers: Radix attaches
+ *  its outside listeners on the next tick. */
+describe('ToastProvider over a modal sheet', () => {
+  afterEach(cleanup);
+
+  function Page() {
+    const [open, setOpen] = useState(true);
+    return (
+      <ToastProvider>
+        <PushFailure />
+        <span data-testid="state">{open ? 'open' : 'closed'}</span>
+        <button type="button" data-testid="elsewhere">
+          elsewhere
+        </button>
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetContent data-testid="sheet">
+            <SheetTitle>Edit</SheetTitle>
+            <form>
+              <input aria-label="name" />
+            </form>
+          </SheetContent>
+        </Sheet>
+      </ToastProvider>
+    );
+  }
+
+  // jsdom's pointer has no type, which Radix handles on the click that follows. In a browser the
+  // close has removed the toast by then (React flushes between listeners); here it is removed just
+  // after, so the detached-target case itself is covered in lib/toast-region.test and
+  // kit/confirm.test.
+  function press(element: HTMLElement): void {
+    fireEvent.pointerDown(element);
+    fireEvent.pointerUp(element);
+    fireEvent.click(element);
+  }
+
+  async function opened(): Promise<void> {
+    await screen.findByTestId('sheet');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it('opening the details or closing the toast keeps an untouched sheet open', async () => {
+    render(<Page />);
+    await opened();
+    press(screen.getByText('技术细节'));
+    expect(screen.getByTestId('state').textContent).toBe('open');
+    // The modal hides everything else from assistive tech, the toast included.
+    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(screen.getByTestId('state').textContent).toBe('open');
+  });
+
+  it('closing the toast over an edited sheet neither closes it nor asks to discard', async () => {
+    render(<Page />);
+    await opened();
+    fireEvent.change(screen.getByLabelText('name'), { target: { value: 'half' } });
+    press(screen.getByRole('button', { name: 'Dismiss', hidden: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId('state').textContent).toBe('open');
+    expect(screen.queryByTestId('discard-confirm')).toBeNull();
+    expect((screen.getByLabelText('name') as HTMLInputElement).value).toBe('half');
+    // Control: anywhere else outside still asks before dropping the edit.
+    press(screen.getByTestId('elsewhere'));
+    expect(await screen.findByTestId('discard-confirm')).toBeTruthy();
   });
 });

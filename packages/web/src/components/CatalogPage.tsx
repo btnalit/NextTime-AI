@@ -30,6 +30,7 @@ import {
 } from '../lib/definition-reference.js';
 import { entryCapabilitiesOf, entryPromptOf } from '../lib/entry-template.js';
 import {
+  errorToast,
   errorToastText,
   isDraftChangedError,
   isDraftSupersededError,
@@ -1705,7 +1706,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 `无法弃用 ${actionKindTagToastText(row.name)}`,
                 `Could not deprecate ${actionKindTagToastText(row.name)}`,
               ),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -1741,7 +1742,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -2648,7 +2649,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           action === 'publish_skill'
             ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
             : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
       return false;
     } finally {
@@ -2675,7 +2676,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -2710,7 +2711,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(`无法拒绝 ${row.name}`, `Could not reject ${row.name}`),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -3275,7 +3276,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           action === 'publish_procedure'
             ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
             : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -3301,7 +3302,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -3332,7 +3333,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(`无法拒绝 ${row.name}`, `Could not reject ${row.name}`),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -4279,7 +4280,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法发布该草稿', 'Could not publish this draft'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -4303,7 +4304,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法弃用该定义', 'Could not deprecate this definition'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);
@@ -4333,7 +4334,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: errorToastText(err, t),
+        ...errorToast(err, t),
       });
     } finally {
       setBusy(null);

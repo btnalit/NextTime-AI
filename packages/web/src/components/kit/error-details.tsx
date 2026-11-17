@@ -7,6 +7,8 @@ export interface ErrorDetailsProps {
   readonly raw: string | null;
   /** Put on the raw line as `<testId>-detail`. */
   readonly testId?: string;
+  /** Called when the reader opens the disclosure (a toast stops its dismiss timer). */
+  readonly onOpen?: () => void;
 }
 
 /**
@@ -15,10 +17,19 @@ export interface ErrorDetailsProps {
  * kernel's own text inside. Collapsed: the body above it already says what happened and what to
  * do next, in the viewer's language; this is for the report to a platform administrator.
  */
-export function ErrorDetails({ code, raw, testId }: ErrorDetailsProps) {
+export function ErrorDetails({ code, raw, testId, onOpen }: ErrorDetailsProps) {
   const t = useT();
   return (
-    <details className="error-details">
+    <details
+      className="error-details"
+      onToggle={
+        onOpen
+          ? (event) => {
+              if (event.currentTarget.open) onOpen();
+            }
+          : undefined
+      }
+    >
       <summary>
         {t('技术细节', 'Technical details')}
         <code className="error-banner-code">{code}</code>

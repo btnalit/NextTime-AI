@@ -6,7 +6,7 @@ import {
   unarchiveChat,
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { errorToastText } from '../../lib/errors.js';
+import { errorToast } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { useToast } from '../ui/Toast.js';
@@ -120,7 +120,7 @@ export function useRestoreChat(
         toast.push({
           tone: 'danger',
           title: t('恢复失败', 'Could not restore the chat'),
-          description: errorToastText(err, t),
+          ...errorToast(err, t),
           key: `chat-restore:${chat.id}`,
         });
       } finally {

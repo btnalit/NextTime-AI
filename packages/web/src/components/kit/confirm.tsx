@@ -2,8 +2,9 @@ import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/cn.js';
-import { type ErrorOverrides, errorToastText } from '../../lib/errors.js';
+import { type ErrorOverrides, type ErrorToastDetails, errorToast } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
+import { isInToasts } from '../../lib/toast-region.js';
 import { Button } from './button.js';
 import { useDiscardGuard, useGuardedElement } from './discard-guard.js';
 import { focusOrigin } from './focus-origin.js';
@@ -23,6 +24,8 @@ export interface ConfirmNotify {
   readonly tone: 'ok' | 'danger';
   readonly title: string;
   readonly description?: string;
+  /** Legacy 212: a failure's 「技术细节」 (`components/ui/Toast` `details`). */
+  readonly details?: ErrorToastDetails;
   readonly action?: { readonly label: string; readonly onClick: () => void };
   readonly key?: string;
 }
@@ -142,7 +145,7 @@ function LowTier({
         notify?.({
           tone: 'danger',
           title: `${title} — ${t('失败', 'failed')}`,
-          description: errorToastText(error, t, errorOverrides),
+          ...errorToast(error, t, errorOverrides),
         });
       }
       onOpenChange(false);
@@ -487,7 +490,8 @@ function MediumTier({
               if (busy) event.preventDefault();
             }}
             onInteractOutside={(event) => {
-              if (busy) event.preventDefault();
+              // #1398 UX P2: a click in a toast is not outside (`lib/toast-region`).
+              if (busy || isInToasts(event)) event.preventDefault();
               else if (discard.edited()) {
                 event.preventDefault();
                 discard.guard(close);

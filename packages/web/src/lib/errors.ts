@@ -1058,11 +1058,36 @@ function targetRefusedMessage(
   return plaintext ? plaintextPublicTargetStep(t) : null;
 }
 
-/** One line for a toast, which has no room for the 「技术细节」 disclosure: the readable body,
- *  else the kernel's own text, with the code in brackets so a report still names it. */
+/** One line for a toast: the readable body, else the kernel's own text, with the code in brackets
+ *  so a report still names it. A toast that can carry the 「技术细节」 disclosure uses
+ *  `errorToast` instead, which keeps the kernel's own text that this line drops. */
 export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOverrides): string {
   const shown = presentError(err, t, overrides);
   return `${shown.curated ? shown.message : (shown.raw ?? shown.message)} (${shown.code})`;
+}
+
+/** The 「技术细节」 a toast folds under its description: the stable code and the kernel's own text. */
+export interface ErrorToastDetails {
+  readonly code: string;
+  readonly raw: string;
+}
+
+/**
+ * Legacy 212: a failure toast's description and, when the console wrote that description, the
+ * kernel's own text under 「技术细节」 (`components/ui/Toast` `details`) — `errorToastText` dropped
+ * it, so a report from a toast could not say what the kernel answered. Nothing is hidden: with no
+ * console sentence (or no kernel text beyond it) the line is `errorToastText`'s, code included.
+ */
+export function errorToast(
+  err: unknown,
+  t: Translate,
+  overrides?: ErrorOverrides,
+): { readonly description: string; readonly details?: ErrorToastDetails } {
+  const shown = presentError(err, t, overrides);
+  if (!shown.curated || shown.raw === null) {
+    return { description: errorToastText(err, t, overrides) };
+  }
+  return { description: shown.message, details: { code: shown.code, raw: shown.raw } };
 }
 
 /** Gate refusals a tool call's result can name (`request_action`'s failure reason, an observe
