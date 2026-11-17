@@ -18,21 +18,85 @@
  *   saved before the write-time cap, an error whose characters JSON escapes) drops its largest
  *   fields first, one at a time, until it fits, and names them in `detailsOmitted`. The proxy's
  *   own log line still has every field.
+ *
+ * Before either, `storableDetails` makes the row's text storable at all (legacy 825): Postgres
+ * `jsonb` refuses U+0000 and an unpaired surrogate, and the kernel lost such a row with a 500.
+ * The write paths refuse both in the names they take (#1409), but text that never passed them
+ * still can carry one — an error cut at 200 UTF-16 units through a surrogate pair, a base URL or
+ * model id stored before that rule, a model id in an operator's `llm-providers.yaml`.
  */
 import { LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS } from '@nexttime/shared';
+
+/** `details` with every U+0000 and unpaired surrogate in its text, keys included and at any depth,
+ *  replaced by U+FFFD, and `detailsReplaced` naming the fields where that happened. The same
+ *  object when there is none. */
+export function storableDetails(
+  details: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const replaced = Object.keys(details).filter(
+    (key) => storableText(key) !== key || storableValue(details[key]) !== details[key],
+  );
+  if (replaced.length === 0) return details;
+  return {
+    ...(storableValue(details) as Record<string, unknown>),
+    detailsReplaced: replaced.map(storableText),
+  };
+}
+
+/** `value` with `storableText` applied to every string in it; the same value when none changed. */
+function storableValue(value: unknown): unknown {
+  if (typeof value === 'string') return storableText(value);
+  if (Array.isArray(value)) {
+    const items = value.map(storableValue);
+    return items.some((item, i) => item !== value[i]) ? items : value;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value);
+    const stored = entries.map(([key, item]) => [storableText(key), storableValue(item)] as const);
+    return stored.some(([key, item], i) => key !== entries[i]?.[0] || item !== entries[i]?.[1])
+      ? Object.fromEntries(stored)
+      : value;
+  }
+  return value;
+}
+
+/** `text` with U+0000 and every unpaired surrogate replaced by U+FFFD; the same string when it has
+ *  none. A char-code loop: biome refuses a control character in a regex. */
+function storableText(text: string): string {
+  let stored = '';
+  let changed = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        stored += text.slice(i, i + 2);
+        i += 1;
+        continue;
+      }
+    } else if (code !== 0 && (code < 0xdc00 || code > 0xdfff)) {
+      stored += text[i];
+      continue;
+    }
+    stored += '\ufffd';
+    changed = true;
+  }
+  return changed ? stored : text;
+}
 
 /** `details` as sent to the kernel for a row that lists model ids: whole when it fits; otherwise
  *  the first ids that fit beside the rest of the row, and `modelsOmitted` counting the others. */
 export function fitModelIds(
-  details: Readonly<Record<string, unknown>> & { readonly models: readonly string[] },
+  details: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   if (jsonLength(details) <= LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS) return details;
-  const ids = details.models;
+  if (!Array.isArray(details.models)) return details;
+  const ids: readonly unknown[] = details.models;
   // The rest of the row with no ids and the largest count it can carry; what is left is the ids'.
   let chars = jsonLength({ ...details, models: [], modelsOmitted: ids.length });
-  const kept: string[] = [];
+  const kept: unknown[] = [];
   for (const id of ids) {
-    chars += JSON.stringify(id).length + (kept.length > 0 ? 1 : 0);
+    chars += jsonLength(id) + (kept.length > 0 ? 1 : 0);
     // A prefix, so the row names "the first n" — not whichever later ids happen to be short.
     if (chars > LLM_ADMIN_AUDIT_DETAILS_MAX_CHARS) break;
     kept.push(id);
