@@ -159,8 +159,20 @@ deep. The document's budget is spent in path order, so a large Operation early i
 leaves less for those after it. An Operation past one of them gets `params_schema:
 {"$ref":"#/x-nexttime-inline-limit"}`: ajv cannot compile it and calls are refused (400
 `invalid_operation_schema`) — import a smaller document, or write the gate's manifest by hand. A
-`$ref`'s sibling that would replace one of the target's own constraints is kept beside it under
-`allOf`, never instead of it; an annotation (`description`, `example`, …) replaces. A request body
+`$ref`'s sibling that would replace one of the target's own constraints, or change what one of them
+means (`properties` beside a target's `additionalProperties: false`, anything beside the target's
+own `unevaluatedProperties`, a keyword not listed in `http.ts`), is kept beside it under `allOf`,
+never written into it. A sibling that only adds a constraint of its own (`pattern`, `required`, …)
+is written in, and so is `unevaluatedProperties` — OpenAPI 3.1's way to close what a `$ref` points
+at. An annotation (`description`, `example`, `discriminator`, an `x-` extension) replaces. Note that
+`additionalProperties: false` beside a target that has `properties` does not see them, so under
+`allOf` that use takes only `{}`, and a request body written that way is not read: write it into the
+referenced schema, or write the Operation's `params_schema` by hand. OpenAPI 3.0's `nullable: true`
+beside a `$ref` lets that use be null where the target has a `type`, and is left out where it has
+none (ajv refuses it there). The gate checks params against JSON Schema draft-07: `unevaluated*`,
+`dependentRequired`, `dependentSchemas`, `prefixItems`, `minContains`/`maxContains` and
+`discriminator` stay in the schema but are not checked.
+A request body
 that combines schemas at its top (`allOf`, `anyOf`, `oneOf`, `not`, also one such a sibling makes)
 or is nothing but a reference to itself is not read: the Operation takes only its parameters.
 Request bodies that are an array, or of another media type, still add nothing.
