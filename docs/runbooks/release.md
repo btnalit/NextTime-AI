@@ -3420,6 +3420,7 @@ select 'reconcile', count(*) from action_requests r
   - 用到 path 级参数或 `$ref` 的 http 门，升级后相关 Operation 的定义摘要会变，调用返回 409 `operation_definition_mismatch`，直到在控制台审阅采用、对齐并发布修订。往安全方向失败，不执行任何东西。
   - **会变严的一类**：请求体顶层是 `allOf` / `anyOf` / `oneOf` / `not` 的 Operation（包括 `$ref` 旁边写了与目标冲突的兄弟关键字），以前是接受一切的 `{}`，升级后只收参数、发不出请求体。
   - 引用很多、很深的文档，超出导入上限的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，调用 400 `invalid_operation_schema`。
+  - **`$ref` 旁边的兄弟关键字（#1365，遗留 799，同一版）**：兄弟会改变目标关键字含义时（例如目标有 `properties` 和 `additionalProperties: false`，`$ref` 旁边又写了 `properties`），不再合并进目标，而是写成 `allOf` 与目标同时生效，这类 Operation 的定义也会变，处置同上。目标有 `properties`、`$ref` 旁边写 `additionalProperties: false` 的，这一处升级后只收空对象 `{}`；写在请求体顶层的，请求体不再读入。处置是把 `additionalProperties` 写进被引用的 schema，或手写 `params_schema`。`$ref` 旁边的 `nullable` 在目标没有 `type` 时忽略，不再让整个 Operation 编译失败。
 - **升级前核对（可选，只读，结果记 `docs/private/`）**：对每个以 OpenAPI 文档为清单源的 http 门实例，取文档看是否用到 path 级参数或 `$ref`，两个数都是 0 的门不受影响：
 
     ```sh
