@@ -27,6 +27,7 @@ import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { principalShownName, transportKindLabel } from '../../lib/labels.js';
+import { launcherStepsText } from '../../lib/launcher-steps.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs, readCompleteConnectionRequest } from '../../lib/router.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
@@ -960,7 +961,7 @@ export function SystemsPage({
         <SheetContent size="wide" data-testid="connect-system-drawer">
           <SheetHeader>
             <SheetTitle>{t('接入一个系统', 'Connect a system')}</SheetTitle>
-            <SheetDescription>选类型 → 连接与凭证 → 能力与策略 → 握手验证</SheetDescription>
+            <SheetDescription>{launcherStepsText(t)}</SheetDescription>
           </SheetHeader>
           {drawer.kind === 'launcher' ? (
             <ConnectSystemLauncher

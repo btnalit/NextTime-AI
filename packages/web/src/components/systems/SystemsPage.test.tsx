@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { comboboxOptionTexts, openCombobox } from '../kit/combobox.test-helpers.js';
 import { SystemsPage } from './SystemsPage.js';
@@ -220,6 +221,31 @@ describe('SystemsPage', () => {
     fireEvent.click(screen.getByTestId('connect-system-button'));
     const drawer = await screen.findByTestId('connect-system-drawer');
     expect(within(drawer).getByTestId('connect-system-launcher')).toBeTruthy();
+  });
+
+  it('legacy 805: in English, the 「接入一个系统」 drawer’s subtitle names the steps in English', async () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      const http = scriptedHttp({
+        execution_readiness: () =>
+          readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
+      });
+      render(
+        <LangProvider>
+          <PermissionsProvider>
+            <SystemsPage http={http} platformAdmin={false} trialWorkspace={false} />
+          </PermissionsProvider>
+        </LangProvider>,
+      );
+      fireEvent.click(await screen.findByTestId('connect-system-button'));
+      const drawer = await screen.findByTestId('connect-system-drawer');
+      expect(drawer.textContent).toContain(
+        'Type → Connection & credentials → Capabilities & policy → Handshake',
+      );
+      expect(drawer.textContent).not.toMatch(/选类型|握手验证/);
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 
   it('P1-16: with instances waiting to be enabled, the empty state says so instead of "nothing connected"', async () => {
@@ -1344,6 +1370,36 @@ describe('SystemsPage', () => {
     fireEvent.click(item);
     await waitFor(() => expect(reads).toBe(2));
     expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
+  });
+
+  it('legacy 801: 「发布清单」 counts and confirms only what it publishes, not a draft held back for suspected credentials', async () => {
+    const draftRow = (name: string, extra: Record<string, unknown> = {}) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode: 'execute',
+      blastRadius: 'high',
+      autoApprovable: false,
+      status: 'draft',
+      origin: 'import',
+      draftDigest: `d-${name}`,
+      ...extra,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => ({
+        items: [draftRow('stock.adjust'), draftRow('stock.login', { suspectedSecretValues: 2 })],
+      }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    const item = await screen.findByTestId('gatekeeper-publish-manifest');
+    expect(item.textContent).toContain('(1)');
+    fireEvent.click(item);
+    const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
+    expect(confirm.textContent).toContain('将发布 1 个');
+    expect(confirm.textContent).toContain('stock.adjust');
+    expect(confirm.textContent).not.toContain('stock.login');
   });
 
   it('legacy 349: 「发布清单」 that would publish a first version which writes or is high impact confirms it first', async () => {

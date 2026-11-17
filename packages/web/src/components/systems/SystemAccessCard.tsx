@@ -99,8 +99,8 @@ export interface SystemAccessCardProps {
    *  (review #493 on #592: the kernel publishes nothing when one changed since). */
   readonly drafts: readonly DraftAsRead[];
   /** How many of them 「发布清单」 actually publishes — the gate's own drafts, not proposals or
-   *  ones held back for a gate-owned param (`lib/connections` `manifestPublishPlan`); defaults to
-   *  every draft. */
+   *  ones held back for a gate-owned param, suspected credentials or answers that mean "does not
+   *  exist" (`lib/connections` `manifestPublishPlan`); defaults to every draft. */
   readonly publishableCount?: number;
   /** Legacy 349: the first versions among them that write or are high impact — 「发布清单」
    *  confirms these before it publishes, as the catalog's own Publish does. */

@@ -17,7 +17,7 @@ import {
   reclassifiedOperationPayload,
   searchItems,
 } from '../lib/connections.js';
-import { usePublishCredentialReview } from '../lib/credential-review.js';
+import { reviewFieldNames, usePublishCredentialReview } from '../lib/credential-review.js';
 import { actionKindTagText, prettyJsonVisible } from '../lib/format.js';
 import {
   type OperationCatalogRow,
@@ -562,6 +562,7 @@ function OperationReviewRow({
               <CredentialReview
                 count={credentialReview.count}
                 paths={credentialReview.paths}
+                fieldNames={reviewFieldNames('operation', t)}
                 subject="publish"
                 where={
                   <a
