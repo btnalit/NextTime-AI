@@ -3421,6 +3421,7 @@ select 'reconcile', count(*) from action_requests r
   - **会变严的一类**：请求体顶层是 `allOf` / `anyOf` / `oneOf` / `not` 的 Operation（包括 `$ref` 旁边写了与目标冲突的兄弟关键字），以前是接受一切的 `{}`，升级后只收参数、发不出请求体。
   - 引用很多、很深的文档，超出导入上限的 Operation 的 `params_schema` 是 `{"$ref":"#/x-nexttime-inline-limit"}`，调用 400 `invalid_operation_schema`。
   - **`$ref` 旁边的兄弟关键字（#1365，遗留 799，同一版）**：兄弟会改变目标关键字含义时（例如目标有 `properties` 和 `additionalProperties: false`，`$ref` 旁边又写了 `properties`），不再合并进目标，而是写成 `allOf` 与目标同时生效，这类 Operation 的定义也会变，处置同上。目标有 `properties`、`$ref` 旁边写 `additionalProperties: false` 的，这一处升级后只收空对象 `{}`；写在请求体顶层的，请求体不再读入。处置是把 `additionalProperties` 写进被引用的 schema，或手写 `params_schema`。`$ref` 旁边的 `nullable` 在目标没有 `type` 时忽略，不再让整个 Operation 编译失败。
+  - **请求体的媒体类型与形状（#1368，遗留 798，同一版）**：请求体是其他媒体类型（multipart、`+json` 等）、数组或字符串的 Operation，以前接受任意参数，升级后只收自己声明的参数；要带这类请求体，就手写门清单的 `params_schema`。请求体写成 `application/json; charset=…` 或媒体类型大小写不同的 JSON，以前读不出（得到 `{}`），升级后**开始**按 JSON 读出请求体属性。这两类 Operation 的定义都会变，处置同上。
 - **升级前核对（可选，只读，结果记 `docs/private/`）**：对每个以 OpenAPI 文档为清单源的 http 门实例，取文档看是否用到 path 级参数或 `$ref`，两个数都是 0 的门不受影响：
 
     ```sh
