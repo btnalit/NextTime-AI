@@ -3,21 +3,24 @@ import { ResponseBodyTooLargeError, readBodyWithin } from './bounded-body.js';
 import { MAX_OPENAPI_DOCUMENT_BYTES, readOpenApiDocument } from './kinds/index.js';
 
 /** A body that sends `chunk` again on every read, for as long as it is read — and says whether it
- *  was cancelled and how many chunks it gave. */
+ *  was cancelled and how many chunks it gave. Nothing is pulled before the first read. */
 function endless(chunk: Uint8Array): {
   readonly response: Response;
   readonly state: { pulls: number; cancelled: boolean };
 } {
   const state = { pulls: 0, cancelled: false };
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      state.pulls += 1;
-      controller.enqueue(chunk);
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        state.pulls += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        state.cancelled = true;
+      },
     },
-    cancel() {
-      state.cancelled = true;
-    },
-  });
+    { highWaterMark: 0 },
+  );
   return { response: new Response(stream), state };
 }
 
@@ -26,6 +29,15 @@ describe('readBodyWithin (legacy 797)', () => {
     await expect(readBodyWithin(new Response('héllo'), 6, 'the body')).resolves.toBe('héllo');
     await expect(readBodyWithin(new Response(''), 6, 'the body')).resolves.toBe('');
     await expect(readBodyWithin(new Response(null), 6, 'the body')).resolves.toBe('');
+    const declaredAtLimit = new Response('héllo', { headers: { 'content-length': '6' } });
+    await expect(readBodyWithin(declaredAtLimit, 6, 'the body')).resolves.toBe('héllo');
+  });
+
+  it('drops a leading UTF-8 BOM, as response.text() does', async () => {
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+    const body = new Uint8Array([...bom, ...new TextEncoder().encode('{}')]);
+    await expect(readBodyWithin(new Response(body), 6, 'the body')).resolves.toBe('{}');
+    expect(await new Response(body).text()).toBe('{}');
   });
 
   it('refuses a body one byte past the limit, naming it and what to do', async () => {
@@ -43,6 +55,7 @@ describe('readBodyWithin (legacy 797)', () => {
       'the body is larger than 6 bytes',
     );
     expect(state.cancelled).toBe(true);
+    expect(state.pulls).toBe(0);
   });
 
   it('stops reading a body that never ends once it passes the limit, and cancels it', async () => {
@@ -77,6 +90,12 @@ describe('readOpenApiDocument (legacy 797)', () => {
       'the OpenAPI document is larger than 16 MiB: serve a document with only the paths this gate needs, or write its manifest by hand',
     );
     expect(state.cancelled).toBe(true);
+  });
+
+  it('reads a document saved with a UTF-8 BOM, as response.json() did', async () => {
+    const json = new TextEncoder().encode('{"openapi":"3.1.0"}');
+    const body = new Uint8Array([0xef, 0xbb, 0xbf, ...json]);
+    await expect(readOpenApiDocument(new Response(body))).resolves.toEqual({ openapi: '3.1.0' });
   });
 
   it('a body that is not JSON throws as JSON.parse does', async () => {

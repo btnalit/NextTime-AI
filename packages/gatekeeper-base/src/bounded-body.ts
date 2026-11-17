@@ -28,7 +28,8 @@ export class ResponseBodyTooLargeError extends Error {
 
 /** `response`'s body as UTF-8 text, at most `maxBytes` of it — `ResponseBodyTooLargeError`
  *  (naming the body `what`, with `options.fix`) past that, with the body cancelled. No body reads
- *  as `''`. */
+ *  as `''`. Decoded as `response.text()` / `.json()` decode it: a leading UTF-8 BOM is dropped
+ *  (`TextDecoder`'s default), so a document saved with one still parses. */
 export async function readBodyWithin(
   response: Response,
   maxBytes: number,
@@ -58,5 +59,5 @@ export async function readBodyWithin(
     await reader.cancel().catch(() => {});
     throw err;
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
