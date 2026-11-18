@@ -2180,14 +2180,21 @@ function heldWording(
  *  start (the requester's authority, a draft Skill, a model, its Worker; not a contract hint, which
  *  is advice). Its status alone reads 「可以开始」 while the pause says it did not start, so it says
  *  what the pause says: 「没有开始」 before its first attempt, 「没有再试」 before another, held back.
- *  `null` for any other step, and while the run is not paused (the hints are read for a paused run
- *  only). */
+ *  `null` for any other step, while the run is not paused (the hints are read for a paused run
+ *  only), and when it paused for another reason than those two, which name held steps. */
 export function stepHeldLabel(
-  goal: Partial<Pick<GoalDetailWire, 'status' | 'steps' | 'planRevision'>>,
+  goal: Partial<Pick<GoalDetailWire, 'status' | 'pauseReason' | 'steps' | 'planRevision'>>,
   stepKey: string,
   t: Translate,
 ): string | null {
-  if (goal.status !== 'paused') return null;
+  // UX P3-1 on #1473: only when the advancer itself stopped there — a run paused by a person (or
+  // for its budget) did not start the step because it was paused, whatever its hints say.
+  if (
+    goal.status !== 'paused' ||
+    (goal.pauseReason !== 'needs_decision' && goal.pauseReason !== 'authority_lost')
+  ) {
+    return null;
+  }
   const run = (goal.steps ?? []).find(
     (step) => step.stepKey === stepKey && step.supersededInRevision === null,
   );

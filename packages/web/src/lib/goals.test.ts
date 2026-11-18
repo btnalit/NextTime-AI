@@ -110,6 +110,17 @@ describe('lib/goals', () => {
     expect(
       stepHeldLabel(goal('paused', { status: 'ready', attemptCount: 0 }, [contract]), 'fetch', zh),
     ).toBeNull();
+    // UX P3-1 on #1473: paused by a person, the step did not start because of that.
+    const requested = {
+      ...goal('paused', { status: 'ready', attemptCount: 0 }),
+      pauseReason: 'requested' as const,
+    };
+    expect(stepHeldLabel(requested, 'fetch', zh)).toBeNull();
+    const authority = {
+      ...goal('paused', { status: 'ready', attemptCount: 0 }),
+      pauseReason: 'authority_lost' as const,
+    };
+    expect(stepHeldLabel(authority, 'fetch', zh)).toBe('没有开始（被拦下）');
   });
 
   it('S11 GO13: a contract hint is advice, never a step that would not start; places, not values', () => {
