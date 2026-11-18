@@ -529,7 +529,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, rows[0]?.resource_id],
         ),
       );
-      expect(task.rows[0]).toEqual({ status: 'failed', failure_reason: 'spawn_failed', runs: 0 });
+      expect(task.rows[0]).toEqual({
+        status: 'failed',
+        failure_reason: 'evaluation_withheld',
+        runs: 0,
+      });
     });
 
     it("a Worker whose definition's system prompt carries a holdout run is not started either", async () => {

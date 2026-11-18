@@ -407,8 +407,13 @@ export const WorkerRunStatusSchema = asEnum(WORKER_RUN_STATUS_VALUES);
  * out), `terminated` (the runtime ended its run), `model_refused` (legacy 589: llm-proxy refused
  * every model call of its run — a workspace budget ran out — and none succeeded, so whatever the
  * run handed back was not the Worker's work; decided from llm-proxy's own refusal records, never
- * from what the Worker reports). The column is free text, so a row an earlier release wrote may
- * carry something else; readers keep a fallback.
+ * from what the Worker reports), `evaluation_withheld` (legacy 515: its run never started — what
+ * it would start with, its input, its system prompt or its Skills, carries content the evaluation
+ * seal reserves for evaluation, `application/eval-seal`), `evaluation_paused` (legacy 515: its run
+ * never started — the evaluation seal has paused the agents acting for the Principal it runs for,
+ * until a workspace owner releases the pause). A retry of either is refused the same way until the
+ * input or the Worker changes, or the pause is released. The column is free text, so a row an
+ * earlier release wrote may carry something else; readers keep a fallback.
  */
 export const TASK_FAILURE_REASON_VALUES = [
   'timeout',
@@ -420,6 +425,8 @@ export const TASK_FAILURE_REASON_VALUES = [
   'budget_exhausted',
   'terminated',
   'model_refused',
+  'evaluation_withheld',
+  'evaluation_paused',
 ] as const;
 export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
@@ -489,9 +496,10 @@ export const LlmRefusalScopeSchema = asEnum(LLM_REFUSAL_SCOPE_VALUES);
  *     (`worker_failed`);
  *   - `limit_reached`: the run outlived its duration limit or ran out of token budget (`timeout`,
  *     `budget_exhausted`);
- *   - `platform`: the run never started, was lost, the runtime ended it, or the platform refused
- *     every model call it made (`spawn_failed`, `spawn_lost`, `run_lost`, `terminated`,
- *     `model_refused`) — the platform's side, not what the Worker did;
+ *   - `platform`: the run never started, was lost, the runtime ended it, the platform refused
+ *     every model call it made, or the evaluation seal kept it from starting (`spawn_failed`,
+ *     `spawn_lost`, `run_lost`, `terminated`, `model_refused`, `evaluation_withheld`,
+ *     `evaluation_paused`) — the platform's side, not what the Worker did;
  *   - `other`.
  */
 export const TASK_FAILURE_CATEGORY_VALUES = [

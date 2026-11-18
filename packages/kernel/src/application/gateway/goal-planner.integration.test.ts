@@ -1636,6 +1636,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('legacy 515: under apply_minor an attempt the evaluation seal kept from starting pauses the run for the requester; no autonomous round routes around it', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, 'apply_minor');
+      const step = await liveStep(goalRunId, 'renew');
+      await failTaskAndReapWorkerRuns(
+        { pool, privateKey, supervisorClient: supervisor },
+        workspaceId,
+        requester,
+        (await lastAttempt(step.id)).id,
+        'evaluation_withheld',
+      );
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      // What the pause offers the requester is a proposal, as under any pause — never a revision
+      // the platform applies on its own.
+      expect((await autonomyRounds(goalRunId)).map((round) => round.kind)).not.toContain(
+        'autonomous',
+      );
+      const [paused] = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and action = 'goal_run.pause' and resource_id = $2
+          order by created_at desc, id desc limit 1`,
+        [workspaceId, goalRunId],
+      );
+      expect(paused?.payload).toMatchObject({
+        reason: 'needs_decision',
+        detail: expect.stringContaining('(evaluation_withheld)'),
+      });
+    });
+
     it('a planner with no revision pauses the run; a person pausing the run drops the running round', async () => {
       const requester = await newPrincipal('member');
       const first = await failedRunning(requester);

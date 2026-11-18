@@ -65,6 +65,18 @@ describe('judgeFinishedAttempt', () => {
     }
   });
 
+  it('a start the evaluation seal refused pauses the goal for a person (legacy 515)', () => {
+    for (const failureReason of ['evaluation_withheld', 'evaluation_paused'] as const) {
+      for (const effect of [clear, notDelivered]) {
+        expect(judgeFinishedAttempt({ status: 'failed', failureReason }, effect)).toEqual({
+          kind: 'fail',
+          category: 'transient',
+          pause: 'needs_decision',
+        });
+      }
+    }
+  });
+
   it('every other failure is transient and left to the retry', () => {
     for (const failureReason of [
       'spawn_failed',

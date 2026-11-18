@@ -35,8 +35,8 @@ import { QuotaExceededError, TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
  * verifying GoalRun runs (`application/goal/review.ts`). Made like the goal planner's
  * (`planning-task.ts`), in two halves: {@link createReviewTask} inside the advance that reaches the
  * check (the Task, and the check's one attempt, commit together), then `startStepAttemptTask`
- * after that commit (a failed start fails the Task `spawn_failed`, which leaves the check
- * `unavailable`).
+ * after that commit (a failed start fails the Task `spawn_failed`, or the evaluation seal's own
+ * reason, which leaves the check `unavailable`).
  *
  * What it runs with:
  *   - the workspace's reviewer WorkerDefinition ({@link ensureReviewerDefinition}): the kernel's

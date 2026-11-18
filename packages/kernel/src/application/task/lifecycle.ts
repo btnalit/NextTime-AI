@@ -23,7 +23,7 @@ import { getWorkerDefinition } from '../worker/index.js';
 import { RetryAuthorityLostError, principalDisabled, retryScopeNow } from './acting-authority.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
-import { spawnWorkerRun } from './spawn.js';
+import { failedStartReason, spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition, recordWorkerRunTransition } from './transition-log.js';
 import {
   TASK_ROW_COLUMNS,
@@ -810,9 +810,16 @@ async function spawnWorkerRunForRetry(
       systemPrompt,
       image,
     });
-  } catch {
+  } catch (err) {
     // R-09: the same path as `invoke.ts`'s initial spawn failure — fail the Task and reap the
-    // retry's WorkerRun (Handle tree revoked, container best-effort stopped).
-    await failTaskAndReapWorkerRuns(deps, workspaceId, onBehalfOf, task.id, 'worker_failed');
+    // retry's WorkerRun (Handle tree revoked, container best-effort stopped). Legacy 515: a retry
+    // the evaluation seal refused fails with the seal's own reason.
+    await failTaskAndReapWorkerRuns(
+      deps,
+      workspaceId,
+      onBehalfOf,
+      task.id,
+      failedStartReason(err, 'worker_failed'),
+    );
   }
 }

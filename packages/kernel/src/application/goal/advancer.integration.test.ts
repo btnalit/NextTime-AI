@@ -1230,6 +1230,43 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await goalOf(goalRunId)).status).toBe('paused');
         expect(await attemptTasks(stepB.id)).toEqual([]);
       });
+
+      it('legacy 515: an attempt the evaluation seal kept from starting pauses the run for a person, saying why; nothing retries it on its own', async () => {
+        for (const reason of ['evaluation_withheld', 'evaluation_paused'] as const) {
+          const requester = await newPrincipal();
+          const goalRunId = await startGoal(requester, [{ key: 'only', maxAttempts: 3 }]);
+          await advance(goalRunId, requester);
+          const step = (await stepsOf(goalRunId)).only as StepRunRow;
+          await failStep(step.id, requester, reason);
+          const outcome = await advance(goalRunId, requester);
+          expect(outcome.status).toBe('paused');
+          expect(await goalOf(goalRunId)).toMatchObject({
+            status: 'paused',
+            pauseReason: 'needs_decision',
+          });
+          // Attempts are left, yet the platform does not try again: a retry is refused the same way.
+          expect((await stepsOf(goalRunId)).only).toMatchObject({
+            status: 'failed',
+            failureCategory: 'transient',
+            attemptCount: 1,
+          });
+          const paused = (await goalAudit(goalRunId))
+            .filter((row) => row.action === 'goal_run.pause')
+            .at(-1)?.payload;
+          expect(paused).toMatchObject({
+            reason: 'needs_decision',
+            detail:
+              reason === 'evaluation_paused'
+                ? `step only: attempt 1 did not start: ${STEP_ATTEMPT_PAUSED_DETAIL} (evaluation_paused)`
+                : expect.stringMatching(
+                    /^step only: attempt 1 did not start: .*reserved for evaluation \(evaluation_withheld\).*revise the step's input.*or cancel$/,
+                  ),
+          });
+          await advance(goalRunId, requester);
+          expect(await attemptTasks(step.id)).toHaveLength(1);
+          expect((await goalOf(goalRunId)).status).toBe('paused');
+        }
+      });
     });
 
     // -------------------------------------------------------------------------------------------

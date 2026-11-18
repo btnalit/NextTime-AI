@@ -24,7 +24,7 @@ import { TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
  * created by `application/eval`'s trial runner in two halves like a goal step's attempt
  * (`step-attempt.ts`): {@link createEvaluationTask} inside the runner's transaction (the Task and
  * its trial commit together), then `startStepAttemptTask` after that commit (spawn, `running`; a
- * failed start fails the Task `spawn_failed`).
+ * failed start fails the Task `spawn_failed`, or the evaluation seal's own reason).
  *
  * What it runs with:
  *   - the suite's pinned WorkerDefinition version, which must still be published (a draft

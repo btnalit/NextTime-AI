@@ -26,6 +26,7 @@ import {
   type PreparedStepAttempt,
   type ReworkOf,
   type RunConfigSnapshot,
+  STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
   type TaskRuntimeDeps,
   countStepAttemptsWithoutResult,
@@ -428,6 +429,7 @@ function failVerdict(category: StepRunFailureCategory): AttemptVerdict {
  * | failed `no_result` | otherwise | failed `contract_violation` — the step's first such attempt is reworked once (§4.7, legacy 358: phase B, no pause); after that, a person |
  * | failed `budget_exhausted` | otherwise | failed `transient`, GoalRun paused `budget_exhausted` — the attempt's budget is what was left of the goal's |
  * | failed `model_refused` | otherwise | failed `transient`, GoalRun paused `model_refused` — llm-proxy refused every model call for a spent workspace budget (legacy 589); a retry would spawn a Worker for nothing until it resets or is raised |
+ * | failed `evaluation_withheld` or `evaluation_paused` | otherwise | failed `transient`, GoalRun paused `needs_decision` for a person, not the goal planner's autonomous round — the evaluation seal refused the start (legacy 515); a retry is refused the same way, and each refusal of what a Worker starts with counts towards the seal's pause |
  * | failed, any other reason | otherwise | failed `transient` — spawn failed or lost, run lost, Worker crashed, timed out or terminated |
  * | cancelled | any | failed `transient`, GoalRun paused `needs_decision` — someone stopped the Task outside the goal |
  */
@@ -457,7 +459,29 @@ export function judgeFinishedAttempt(
   if (task.failureReason === 'model_refused') {
     return { kind: 'fail', category: 'transient', pause: 'model_refused' };
   }
+  if (sealRefusedStart(task.failureReason)) {
+    return { kind: 'fail', category: 'transient', pause: 'needs_decision' };
+  }
   return failVerdict('transient');
+}
+
+/** Legacy 515: whether an attempt Task failed because the evaluation seal refused its start. */
+function sealRefusedStart(
+  reason: string | null,
+): reason is 'evaluation_withheld' | 'evaluation_paused' {
+  return reason === 'evaluation_withheld' || reason === 'evaluation_paused';
+}
+
+/** Legacy 515: the pause's detail when the evaluation seal refused an attempt's start — what a
+ *  person can do about it, since retrying is refused the same way. */
+function sealRefusedStartDetail(
+  stepKey: string,
+  attempt: number,
+  reason: 'evaluation_withheld' | 'evaluation_paused',
+): string {
+  return reason === 'evaluation_paused'
+    ? `step ${stepKey}: attempt ${attempt} did not start: ${STEP_ATTEMPT_PAUSED_DETAIL} (evaluation_paused)`
+    : `step ${stepKey}: attempt ${attempt} did not start: what its Worker would start with (the step's input, the Worker's system prompt or a Skill it mounts) carries content reserved for evaluation (evaluation_withheld), and a retry is refused the same way — revise the step's input, have a workspace owner or builder change the Worker, or cancel`;
 }
 
 /** The pause a refused attempt start causes, or `null` for a quota that clears by itself. */
@@ -917,9 +941,15 @@ class Advance {
     });
     // GO9b: a failure the goal planner takes for the requester does not pause the run — but not
     // a Task someone cancelled (that was a person's doing).
+    // Legacy 515: nor a start the evaluation seal refused — content reserved for evaluation reached
+    // the step, or the requester's agents are paused: a person sees it, rather than the platform
+    // routing around it on its own. Under the pause the planner may still propose, as for any other
+    // pause, for the requester to decide.
+    const sealRefused = sealRefusedStart(task.failureReason) ? task.failureReason : null;
     if (
       verdict.pause === 'needs_decision' &&
       task.status !== 'cancelled' &&
+      sealRefused === null &&
       (await this.deferToPlanner(failed))
     ) {
       return;
@@ -929,7 +959,9 @@ class Advance {
         verdict.pause,
         verdict.category === 'contract_violation'
           ? `step ${step.stepKey}: attempt ${step.attemptCount} ended without an accepted result again (contract_violation), after the step was reworked once — retry it (the Worker is told what was refused), revise the plan or cancel`
-          : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${verdict.category})`,
+          : sealRefused !== null
+            ? sealRefusedStartDetail(step.stepKey, step.attemptCount, sealRefused)
+            : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${verdict.category})`,
       );
     }
   }

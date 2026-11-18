@@ -40,7 +40,7 @@ import { normalizeObserveScope } from './observe-scope.js';
 import type { ReworkOf } from './output-contract.js';
 import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
-import { type SpawnWorkerRunInput, spawnWorkerRun } from './spawn.js';
+import { type SpawnWorkerRunInput, failedStartReason, spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
   InvokeWorkerAttenuationError,
@@ -1001,9 +1001,11 @@ export async function createStepAttemptTask(
 
 /**
  * Half 2 — after the creating transaction committed. Spawns the WorkerRun and moves the Task
- * `queued → running`; a spawn failure fails the Task `spawn_failed` and reaps what the spawn left
+ * `queued → running`; a spawn failure fails the Task `spawn_failed` (or the evaluation seal's own
+ * reason, legacy 515 `failedStartReason`) and reaps what the spawn left
  * (the same path as `invokeWorkerCreate`). Never throws for a spawn failure: the Task's
- * `TaskUpdated` wakes the advancer, which treats it as a transient failure of the attempt. Returns
+ * `TaskUpdated` wakes the advancer, which treats it as a transient failure of the attempt (one the
+ * seal refused also pauses the run for a person, `judgeFinishedAttempt`). Returns
  * whether the Task is now running.
  */
 export async function startStepAttemptTask(
@@ -1014,8 +1016,14 @@ export async function startStepAttemptTask(
   const { task, spawn } = attempt;
   try {
     await spawnWorkerRun(deps, workspaceId, { ...spawn, task });
-  } catch {
-    await failTaskAndReapWorkerRuns(deps, workspaceId, spawn.onBehalfOf, task.id, 'spawn_failed');
+  } catch (err) {
+    await failTaskAndReapWorkerRuns(
+      deps,
+      workspaceId,
+      spawn.onBehalfOf,
+      task.id,
+      failedStartReason(err, 'spawn_failed'),
+    );
     return false;
   }
   return withWorkspace(

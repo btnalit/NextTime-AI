@@ -35,7 +35,7 @@ import { QuotaExceededError, TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
  * (`application/goal/planner.ts`). Created like a step's attempt, in two halves: {@link
  * createPlanningTask} inside the advance that opens the round (the Task and its round commit
  * together), then `startStepAttemptTask` after that commit (spawn, `running`; a failed start fails
- * the Task `spawn_failed`, which settles the round `failed`).
+ * the Task `spawn_failed`, or the evaluation seal's own reason, which settles the round `failed`).
  *
  * What it runs with:
  *   - the workspace's planner WorkerDefinition ({@link ensurePlannerDefinition}): the kernel's

@@ -17,6 +17,8 @@ const FAILURE_CATEGORY: Readonly<Record<TaskFailureReason, TaskFailureCategory>>
   run_lost: 'platform',
   terminated: 'platform',
   model_refused: 'platform',
+  evaluation_withheld: 'platform',
+  evaluation_paused: 'platform',
 };
 
 /** The category a failed Task's `failure_reason` names (`TASK_FAILURE_CATEGORY_VALUES`): every
