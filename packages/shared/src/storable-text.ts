@@ -18,13 +18,12 @@
  *     `\u{0}` — the form `echoed-text.ts` shows the same character in, so a reader sees one spelling
  *     everywhere; an unpaired surrogate as U+FFFD, what the same text stores as in a `text` column.
  *
- * `findUnstorableText` still looks for U+0000 only, so an unpaired surrogate in a parameter that is
- * compared or acted on is not refused. On the dispatch path every call writes its audit row
- * (`jsonb`, through `storableValue`) in the same transaction: before legacy 834 that row failed
- * (22P02) and the whole call with it; now a parameter that only goes to a `text` column is stored
- * as U+FFFD, and one a handler writes to `jsonb` itself still fails. `/api/auth/*` writes only
- * `text` columns, where it was always U+FFFD. Refusing it, as U+0000 is refused, is a separate
- * item.
+ * Legacy 837: `findUnstorableText` finds an unpaired surrogate as it finds U+0000, so a string that
+ * is compared or acted on is refused for either. Before, only U+0000 was refused: on the dispatch
+ * path a parameter that went only to a `text` column was stored as U+FFFD — a different name than
+ * the one asked for, as above — and one a handler wrote to `jsonb` itself failed the call (22P02) as
+ * a bare 500, its audit row with it. `UnstorableTextError` says which of the two it found
+ * (`details.character`).
  */
 
 import { boundedEcho, quotedName } from './echoed-text.js';
@@ -35,21 +34,45 @@ export const UNSTORABLE_CHAR = '\u0000';
 /** What U+0000 is stored as where it is escaped — `echoed-text.ts`'s visible form of it. */
 export const UNSTORABLE_CHAR_STAND_IN = '\\u{0}';
 
-/** Where the first unstorable character sits: the path of keys / indices down to the string, and
- *  whether it is in a key or in a value. */
+/** What an unpaired surrogate is stored as where it is replaced (legacy 834): U+FFFD, as UTF-8
+ *  stores it in a `text` column. */
+export const LONE_SURROGATE_STAND_IN = '\ufffd';
+
+/** A high surrogate not followed by a low one, or a low one not preceded by a high one. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** `LONE_SURROGATE` without the global flag, for a `test` that keeps no `lastIndex`. */
+const HAS_LONE_SURROGATE = new RegExp(LONE_SURROGATE.source);
+
+/** Which character Postgres cannot store a refusal found: U+0000, or half of a surrogate pair
+ *  (legacy 837). */
+export type UnstorableCharacter = 'nul' | 'lone_surrogate';
+
+/** Where the first unstorable character sits: the path of keys / indices down to the string,
+ *  whether it is in a key or in a value, and which character it is (U+0000 when a string holds
+ *  both). */
 export interface UnstorableTextLocation {
   readonly path: readonly (string | number)[];
   readonly in: 'key' | 'value';
+  readonly character: UnstorableCharacter;
 }
 
-/** The first U+0000 in `value` — in a string, or in an object key — walking objects and arrays
- *  depth first in property order; `undefined` when there is none. */
+/** The character of `text` Postgres cannot store, U+0000 first; `undefined` when there is none. */
+function unstorableCharacterIn(text: string): UnstorableCharacter | undefined {
+  if (text.includes(UNSTORABLE_CHAR)) return 'nul';
+  return HAS_LONE_SURROGATE.test(text) ? 'lone_surrogate' : undefined;
+}
+
+/** The first U+0000 or unpaired surrogate (legacy 837) in `value` — in a string, or in an object
+ *  key — walking objects and arrays depth first in property order; `undefined` when there is
+ *  none. */
 export function findUnstorableText(
   value: unknown,
   path: readonly (string | number)[] = [],
 ): UnstorableTextLocation | undefined {
   if (typeof value === 'string') {
-    return value.includes(UNSTORABLE_CHAR) ? { path, in: 'value' } : undefined;
+    const character = unstorableCharacterIn(value);
+    return character === undefined ? undefined : { path, in: 'value', character };
   }
   if (Array.isArray(value)) {
     for (const [index, item] of value.entries()) {
@@ -60,7 +83,8 @@ export function findUnstorableText(
   }
   if (value !== null && typeof value === 'object') {
     for (const [key, item] of Object.entries(value)) {
-      if (key.includes(UNSTORABLE_CHAR)) return { path: [...path, key], in: 'key' };
+      const character = unstorableCharacterIn(key);
+      if (character !== undefined) return { path: [...path, key], in: 'key', character };
       const found = findUnstorableText(item, [...path, key]);
       if (found) return found;
     }
@@ -68,12 +92,15 @@ export function findUnstorableText(
   return undefined;
 }
 
-/** What an unpaired surrogate is stored as where it is replaced (legacy 834): U+FFFD, as UTF-8
- *  stores it in a `text` column. */
-export const LONE_SURROGATE_STAND_IN = '\ufffd';
-
-/** A high surrogate not followed by a low one, or a low one not preceded by a high one. */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+/** How a refusal names `character` in running text: `UnstorableTextError`'s message, and a
+ *  refused proposal's detail (`report_task_result`). The place it names sits right before
+ *  `holds`, where the console reads it (`web/src/lib/errors.ts` `UNSTORABLE_TEXT_PLACE`, which so
+ *  far matches only the U+0000 wording — review #501 on #1457). */
+export function unstorableCharacterName(character: UnstorableCharacter): string {
+  return character === 'nul'
+    ? 'U+0000 (NUL)'
+    : 'an unpaired surrogate (half of a character such as an emoji)';
+}
 
 /** How many characters of `text` `storableText` replaces. */
 function unstorableCount(text: string): number {
@@ -146,9 +173,10 @@ export function storableValue<T>(value: T): { readonly value: T; readonly escape
 }
 
 /**
- * Legacy 320: input refused because a string or key that is compared or acted on holds U+0000.
- * Nothing was written. Code `unstorable_text` (HTTP 400); `details.path` is the keys and indices
- * down to the string, each key echoed visibly, `details.in` whether it sat in a key or a value.
+ * Legacy 320: input refused because a string or key that is compared or acted on holds U+0000 —
+ * or, legacy 837, an unpaired surrogate. Nothing was written. Code `unstorable_text` (HTTP 400);
+ * `details.path` is the keys and indices down to the string, each key echoed visibly,
+ * `details.in` whether it sat in a key or a value, `details.character` which of the two it holds.
  * `subject` says whose input it was, e.g. `capability "create_task"`.
  */
 export class UnstorableTextError extends Error {
@@ -156,15 +184,20 @@ export class UnstorableTextError extends Error {
   readonly details: {
     readonly path: readonly (string | number)[];
     readonly in: UnstorableTextLocation['in'];
+    readonly character: UnstorableCharacter;
   };
   constructor(subject: string, location: UnstorableTextLocation, noun = 'params') {
     const where =
       location.path.length === 0 ? `the ${noun}` : `${noun} ${quotedName(location.path.join('.'))}`;
     const path = location.path.map((step) => (typeof step === 'string' ? boundedEcho(step) : step));
+    const fix =
+      location.character === 'nul'
+        ? 'send it again without that character'
+        : 'send it again with the whole character, or without it';
     super(
-      `${subject}: the ${location.in === 'key' ? 'key' : 'text'} at ${where} holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character`,
+      `${subject}: the ${location.in === 'key' ? 'key' : 'text'} at ${where} holds ${unstorableCharacterName(location.character)}, which cannot be stored — nothing was written; ${fix}`,
     );
     this.name = 'UnstorableTextError';
-    this.details = { path, in: location.in };
+    this.details = { path, in: location.in, character: location.character };
   }
 }

@@ -142,6 +142,14 @@ describe('findSuspectedSecrets — where, by field path only', () => {
     }
   });
 
+  it('names a field whose name holds a lone surrogate with U+FFFD in its place (review #493 on #1452, legacy 837)', () => {
+    // jsonb refuses half a pair as it refuses one cut at 64 characters. Most calls' params never
+    // bring one here (dispatch refuses them first); other input can.
+    expect(findCredentialValues({ 'a\uD800b': `Bearer ${FAKE}` }).paths).toEqual(['a\uFFFDb']);
+    const passed = findSuspectedSecrets({ 'a\uD800Token': 'cursor-1' }, { secretFields: true });
+    expect(passed).toEqual({ count: 1, paths: ['a\uFFFDToken'] });
+  });
+
   it('a parent field whose name holds a credential-looking literal is named without it (review #501 on #1452)', () => {
     // Only the value is refused — `findCredentialValues` counts no key here — so the path's own
     // scrub (`segment`) is all that keeps the parent's literal out of a refused call's audit row.

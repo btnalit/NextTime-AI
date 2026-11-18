@@ -1105,8 +1105,11 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new RpcError(
         -32017,
-        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
-          .message,
+        new UnstorableTextError('capability "send_chat_message"', {
+          path: ['text'],
+          in: 'value',
+          character: 'nul',
+        }).message,
       ),
     );
     renderChat(fake.client, scriptedHttp({}));
@@ -1133,8 +1136,11 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new RpcError(
         -32017,
-        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
-          .message,
+        new UnstorableTextError('capability "send_chat_message"', {
+          path: ['text'],
+          in: 'value',
+          character: 'nul',
+        }).message,
       ),
     );
     renderChat(fake.client, scriptedHttp({}));
@@ -1161,8 +1167,11 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new RpcError(
         -32017,
-        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
-          .message,
+        new UnstorableTextError('capability "send_chat_message"', {
+          path: ['text'],
+          in: 'value',
+          character: 'nul',
+        }).message,
       ),
     );
     renderChat(fake.client, scriptedHttp({}));

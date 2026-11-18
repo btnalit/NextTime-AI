@@ -119,7 +119,8 @@ export async function registerGatesRoutes(
       ) {
         throw err;
       }
-      // Legacy 320: U+0000 in a field the kernel acts on — refused with where, nothing written.
+      // Legacy 320 / 837: U+0000 or half a surrogate pair in a field the kernel acts on — refused
+      // with where, nothing written.
       request.log?.warn?.(
         { gateId: parsed.data.gateId, caller: announcer, code: err.code },
         `gates/announce: ${err.message}`,

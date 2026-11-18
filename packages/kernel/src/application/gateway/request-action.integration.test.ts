@@ -707,6 +707,76 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(JSON.stringify(rows)).not.toContain(cursor);
       });
 
+      async function actionRequestCount(): Promise<number> {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ n: number }>(
+            'select count(*)::int as n from action_requests where workspace_id = $1',
+            [workspaceId],
+          );
+          return result.rows[0]?.n ?? 0;
+        });
+      }
+
+      it.each(ways)(
+        '%s (%s channel) refuses half of a surrogate pair in a param, value or key, before anything is written (legacy 837)',
+        async (capability, channel) => {
+          // Before, an observe call sent the half on to the gate, while its audit row — made
+          // storable — recorded U+FFFD there: the row did not hold what ran. Now it is refused as
+          // U+0000 is: 400 `unstorable_text`, where and which character, nothing sent.
+          const half = '\u{1F600}'[0] as string;
+          const cases = [
+            [{ warehouse: `north ${half}` }, ['params', 'warehouse'], 'value'],
+            [{ [`ware${half}house`]: 'north' }, ['params', 'ware\\u{D83D}house'], 'key'],
+          ] as const;
+          for (const [params, path, where] of cases) {
+            const callsBefore = transport.calls['observe.stock'] ?? 0;
+            const auditBefore = await auditIds(capability);
+            const activitiesBefore = await activityCount();
+            const requestsBefore = await actionRequestCount();
+
+            await expect(
+              dispatchCapability({ pool }, callerFor(channel), capability, {
+                gatekeeperId,
+                operation: 'observe.stock',
+                params,
+              }),
+            ).rejects.toMatchObject({
+              name: 'UnstorableTextError',
+              code: 'unstorable_text',
+              details: { path, in: where, character: 'lone_surrogate' },
+            });
+
+            expect(transport.calls['observe.stock'] ?? 0).toBe(callsBefore);
+            expect(await activityCount()).toBe(activitiesBefore);
+            expect(await actionRequestCount()).toBe(requestsBefore);
+            expect(await newAuditRows(capability, auditBefore)).toEqual([]);
+          }
+        },
+      );
+
+      it('refuses an execute request with half of a surrogate pair before its ActionRequest is written (legacy 837)', async () => {
+        // jsonb refuses half a pair: the ActionRequest's `params` write failed (22P02), and the
+        // call with it — a bare 500, and no audit row for the request.
+        const half = '\u{1F600}'[0] as string;
+        const auditBefore = await auditIds('request_action');
+        const requestsBefore = await actionRequestCount();
+
+        await expect(
+          dispatchCapability({ pool }, callerFor('human'), 'request_action', {
+            gatekeeperId,
+            operation: PENDING_OP.name,
+            params: { note: `restart after ${half}` },
+          }),
+        ).rejects.toMatchObject({
+          name: 'UnstorableTextError',
+          details: { path: ['params', 'note'], in: 'value', character: 'lone_surrogate' },
+          message: expect.stringContaining('holds an unpaired surrogate'),
+        });
+
+        expect(await actionRequestCount()).toBe(requestsBefore);
+        expect(await newAuditRows('request_action', auditBefore)).toEqual([]);
+      });
+
       it.each(ways)(
         '%s (%s channel) passes a value under a secret-named field to the gate as sent, and the audit row records it redacted',
         async (capability, channel) => {

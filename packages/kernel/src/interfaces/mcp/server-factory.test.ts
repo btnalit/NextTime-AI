@@ -160,7 +160,7 @@ describe('mapCapabilityErrorToToolResult', () => {
 
   it('prefixes params holding U+0000 with its code (legacy 320)', () => {
     const result = mapCapabilityErrorToToolResult(
-      new UnstorableTextError('capability "x"', { path: ['name'], in: 'value' }),
+      new UnstorableTextError('capability "x"', { path: ['name'], in: 'value', character: 'nul' }),
     );
     expect(result.isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toMatch(

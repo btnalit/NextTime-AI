@@ -1,9 +1,10 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
 import {
   MAX_OUTPUT_PROBLEMS,
-  UNSTORABLE_CHAR,
+  findUnstorableText,
   outputContractProblems,
   storableValue,
+  unstorableCharacterName,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { plannerReportProblems, reviewerReportProblems } from '../../application/goal/index.js';
@@ -209,13 +210,14 @@ async function validateContract(
   return { facts, proposals, evidenceDropped };
 }
 
-/** Legacy 320 / 326: the refusal of every `proposedOperations[]` entry that holds U+0000 where an
- *  import refuses it too (`unstorableActedText`, governance/gatekeepers/manifest.ts) — by index.
- *  These are the fields of the contract refused rather than escaped (see the handler): a name by
- *  the name rule (`invalid_operation_name`, the reason and problem `operationNameProblem` gives any
- *  other control character), any other field the kernel or the gate acts on — the binding, the
- *  params schema, the types read and written — as `unstorable_text`: an escaped one would be a
- *  different Operation than the one proposed. Only the description is stored with it escaped. */
+/** Legacy 320 / 326: the refusal of every `proposedOperations[]` entry that holds U+0000 — or,
+ *  legacy 837, an unpaired surrogate — where an import refuses it too (`unstorableActedText`,
+ *  governance/gatekeepers/manifest.ts) — by index. These are the fields of the contract refused
+ *  rather than escaped (see the handler): a name by the name rule (`invalid_operation_name`, the
+ *  reason and problem `operationNameProblem` gives any other control character), any other field the kernel or the gate acts on — the binding, the params
+ *  schema, the types read and written — as `unstorable_text`: an escaped one would be a different
+ *  Operation than the one proposed. Only the description is stored with it escaped (`\u{0}`, or
+ *  U+FFFD for half a pair). */
 function unstorableProposalRefusals(
   contract: WorkerResultCapabilityParams,
 ): ReadonlyMap<number, RejectedResultProposal> {
@@ -223,7 +225,7 @@ function unstorableProposalRefusals(
   for (const [index, { gatekeeperId, operation }] of (
     contract.proposedOperations ?? []
   ).entries()) {
-    if (operation.name.includes(UNSTORABLE_CHAR)) {
+    if (findUnstorableText(operation.name) !== undefined) {
       const problem = 'invisible_or_control_characters' as const;
       found.set(index, {
         index,
@@ -243,7 +245,7 @@ function unstorableProposalRefusals(
       detail: boundedEcho(
         // The place sits right before "holds", as `UnstorableTextError` words it: the console
         // reads the field from there (`unstorableTextNextStep`, web/src/lib/errors.ts).
-        `Operation ${quotedName(operation.name)}: the ${unstorable.in === 'key' ? 'key' : 'text'} at field ${quotedName(unstorable.path.join('.'))} holds U+0000 (NUL), which cannot be stored, so this proposal was not written; only a description may hold it (stored as \\u{0})`,
+        `Operation ${quotedName(operation.name)}: the ${unstorable.in === 'key' ? 'key' : 'text'} at field ${quotedName(unstorable.path.join('.'))} holds ${unstorableCharacterName(unstorable.character)}, which cannot be stored, so this proposal was not written; only a description may hold it (stored as ${unstorable.character === 'nul' ? '\\u{0}' : 'U+FFFD'})`,
         400,
       ),
     });
