@@ -293,6 +293,10 @@ describe('CompleteConnectionForm', () => {
     // A target that is not a host gives no suggestion either.
     fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: '://bad url' } });
     expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+    // Legacy 247 UX acceptance P3-2 (#1450): nor one naming a service (a single-label host), whose
+    // `/openapi.json` the kernel would refuse as a manifest source.
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp-gate:8080' } });
+    expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
     // Review of #549: never with the target's query, and never from a target carrying a credential
     // (one click would copy it into the manifest source).
     fireEvent.change(manifest, { target: { value: '' } });

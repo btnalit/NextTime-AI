@@ -90,6 +90,12 @@ describe('addressCarriesCredential / suggestedManifestSource (review of #549)', 
     expect(suggestedManifestSource('https://billing.example.com/api?version=3#top')).toBe(
       'https://billing.example.com/api/openapi.json',
     );
+    expect(suggestedManifestSource('http://203.0.113.7:8080')).toBe(
+      'http://203.0.113.7:8080/openapi.json',
+    );
+    expect(suggestedManifestSource('https://[2001:db8::7]/api')).toBe(
+      'https://[2001:db8::7]/api/openapi.json',
+    );
   });
 
   it.each([
@@ -97,6 +103,11 @@ describe('addressCarriesCredential / suggestedManifestSource (review of #549)', 
     ['carries a token', `https://grafana.example/?token=${FAKE}`],
     ['is empty', ''],
     ['is not http(s)', 'ssh://deploy@db-1'],
+    // Legacy 247 UX acceptance P3-2 (#1450): the kernel refuses a manifest at such a host.
+    ['is a service name', 'grafana'],
+    ['is a service name with a port', 'http://gate-host:8080/api'],
+    ['is localhost', 'localhost:3000'],
+    ['is under .localhost', 'https://api.localhost'],
   ])('offers nothing when the target %s', (_name, value) => {
     expect(suggestedManifestSource(value)).toBe('');
   });

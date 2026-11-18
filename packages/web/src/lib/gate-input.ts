@@ -151,16 +151,28 @@ export function addressCarriesCredential(value: string): boolean {
   return addressCredential(withScheme) !== null;
 }
 
+/** Legacy 247 UX acceptance P3-2 (#1450): a host the kernel would read a manifest from — a full
+ *  domain name or an IP literal. A single-label name (a service name such as `grafana`, or
+ *  `localhost`) and a `*.localhost` name are refused (`bare-hostname`, `loopback`), so a suggestion
+ *  built from one would only lead to a refused registration. */
+function namesReachableHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  if (host.startsWith('[')) return true;
+  if (!host.includes('.')) return false;
+  return host !== 'localhost' && !host.endsWith('.localhost');
+}
+
 /** The OpenAPI document an http target usually serves, `<target>/openapi.json`, offered as a
  *  one-click fill: built from the target's origin and path only (never its user name, password,
  *  query or fragment), and not offered at all while the target carries a credential — a
  *  suggestion must never copy one into the manifest source (review of #549). `''` when the target
- *  is not an http(s) URL or host. */
+ *  is not an http(s) URL or host, or names a host that is not a full domain name or an IP. */
 export function suggestedManifestSource(target: string): string {
   const value = withDefaultScheme(target, 'https');
   if (value === '' || !isAbsoluteUrl(value) || addressCarriesCredential(value)) return '';
   const url = new URL(value);
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+  if (!namesReachableHost(url.hostname)) return '';
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}/openapi.json`;
 }
 
