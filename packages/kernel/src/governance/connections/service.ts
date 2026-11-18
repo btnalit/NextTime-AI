@@ -9,7 +9,10 @@ import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js'
 import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
-import { assertConnectionParamsCarryNoCredentials } from './credentials.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from './credentials.js';
 import {
   CONNECTION_REQUEST_ROW_COLUMNS,
   type ConnectionRequestKind,
@@ -262,9 +265,11 @@ export async function cancelConnectionRequest(
     payload: {
       resultingStatus: cancelled.status,
       kind: cancelled.kind,
-      // The audit copy of an owner-supplied URL (a password in it is replaced), like the dispatch
-      // row's `params`.
-      ...redactedForAudit({ target: cancelled.target }),
+      // The audit copy of an owner-supplied URL, like the dispatch row's `params`: a request from
+      // before legacy 186 can carry a credential, which the value patterns alone can leave (a
+      // `?sig=`), so the address is first cut by the rule every read shows it by (legacy 247,
+      // review #501 on #1444) — an audit row is never rewritten.
+      ...redactedForAudit({ target: redactConnectionAddress('target', cancelled.target) }),
       requestedBy: cancelled.requestedBy,
     },
   });

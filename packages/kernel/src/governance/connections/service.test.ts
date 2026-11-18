@@ -225,10 +225,48 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         [workspaceId, row.id],
       ),
     );
-    expect(audit.rows[0]?.payload.target).toBe(
-      'https://ops:[redacted]@inventory.example.invalid/api',
-    );
+    // Legacy 247 (review #501 on #1444): by the connection address rule, as every read shows it.
+    expect(audit.rows[0]?.payload.target).toBe('https://inventory.example.invalid/api');
   });
+
+  it.each([
+    ['sig', 'https://inventory.example.invalid/api?sig=abcdefghijklmnopqrstuvwxyz0123'],
+    [
+      'X-Amz-Signature',
+      'https://inventory.example.invalid/api?X-Amz-Signature=abcdefghijklmnopqrstuvwxyz0123',
+    ],
+  ])(
+    'cancelConnectionRequest: the audit row of a request stored with a %s query never keeps it (legacy 247, review #501 on #1444)',
+    async (_name, target) => {
+      // A row from before legacy 186: the value patterns alone leave such a parameter, the
+      // connection address rule cuts it — and an audit row is never rewritten.
+      const row = await inTx(async (client) => {
+        const inserted = await client.query<{ id: string }>(
+          `insert into connection_requests (workspace_id, kind, target, requested_by)
+           values ($1, 'http', $2, $3) returning id`,
+          [workspaceId, target, memberId],
+        );
+        return { id: inserted.rows[0]?.id as string };
+      });
+      await inTx((client) =>
+        cancelConnectionRequest(client, workspaceId, {
+          connectionRequestId: row.id,
+          cancelledBy: memberId,
+        }),
+      );
+      const audit = await inTx((client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+           where workspace_id = $1 and action = 'connection.request_cancelled' and resource_id = $2`,
+          [workspaceId, row.id],
+        ),
+      );
+      expect(audit.rows[0]?.payload.target).toBe('https://inventory.example.invalid/api');
+      expect(JSON.stringify(audit.rows[0]?.payload)).not.toContain(
+        'abcdefghijklmnopqrstuvwxyz0123',
+      );
+    },
+  );
 
   it.each([
     ['a URL password', 'https://ops:abcdefghijklmnopqrstuvwxyz0123@refused.example.invalid/api'],
