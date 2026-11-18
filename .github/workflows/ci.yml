@@ -278,13 +278,11 @@ jobs:
         # unchanged — it still fails if any package does.
         #
         # TMPDIR on tmpfs (legacy 802): the tests' temp files (`mkdtemp(join(tmpdir(), …))`) go to
-        # memory, where `fsync` returns at once. On the runner's disk a write stall once held every
-        # file-writing test for about a minute — the atomic writes of gatekeeper-base, llm-proxy
-        # and worker-supervisor (temp file, fsync, rename) ran 20 to 35 times slower than on the
-        # re-run (idempotency-store 10.5 s against 0.5 s, task-service 18 s against 0.7 s) and
-        # twelve of them ran past Vitest's 5 s limit, while tests that write nothing ran as usual in
-        # the same processes. The tests check what the files hold, never that they reached a disk;
-        # the code still calls fsync, which tmpfs accepts.
+        # memory, where `fsync` returns at once. On the runner's disk a write stall can hold the
+        # atomic writes of gatekeeper-base, llm-proxy and worker-supervisor (temp file, fsync,
+        # rename) past Vitest's time limit, while tests that write nothing run as usual. The tests
+        # check what the files hold, never that they reached a disk; the code still calls fsync,
+        # which tmpfs accepts.
         env:
           TMPDIR: /dev/shm
         run: pnpm --no-bail -r test
