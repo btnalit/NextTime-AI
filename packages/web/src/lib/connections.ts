@@ -36,6 +36,10 @@ export interface ConnectionRequestRow {
   /** S11 AA5a-1 (I-A7): the admin agent session that asked for it in a trial workspace —
    *  `requestedBy` is then the administrator's own Principal. Absent for every other request. */
   readonly adminAgentSessionId?: string;
+  /** Legacy 247: `true` when `target` is not the address as stored — the kernel cut a credential
+   *  out of it (user info, query, fragment), which can leave no `[redacted]` behind
+   *  (`https://u:p@host/x` reads `https://host/x`). Absent otherwise. */
+  readonly targetRedacted?: true;
 }
 
 export interface CreateConnectionParams {
@@ -396,6 +400,34 @@ export function draftsLeftForAPerson(result: {
  *  instance detail. */
 export function addressMasked(address: string): boolean {
   return address.includes(SECRET_FIELD_MASK);
+}
+
+/** Legacy 247: a connection request's address is not the one asked for — masked in place
+ *  (`[redacted]`), or cut with nothing left to show it (`targetRedacted`). Either way it is not
+ *  offered back as the address to connect. */
+export function requestTargetCut(
+  request: Pick<ConnectionRequestRow, 'target' | 'targetRedacted'>,
+): boolean {
+  return request.targetRedacted === true || addressMasked(request.target);
+}
+
+/** Legacy 247: what the kernel's `targetRedacted` means, said next to an address that shows no
+ *  mask — the credential part (user info, query, fragment) was left out, so the address read is not
+ *  the whole one that was asked for. */
+export function targetCutNote(t: Translate): string {
+  return t('已去掉地址里的凭据部分', 'credential part of the address left out');
+}
+
+/** Legacy 247: a connection request's address as a person reads it — hidden when masked, and
+ *  marked when the kernel cut a credential out of it with nothing left to show for it. */
+export function requestTargetText(
+  request: Pick<ConnectionRequestRow, 'target' | 'targetRedacted'>,
+  t: Translate,
+): string {
+  if (addressMasked(request.target)) return addressText(request.target, t);
+  return request.targetRedacted === true
+    ? `${request.target}${t('（', ' (')}${targetCutNote(t)}${t('）', ')')}`
+    : request.target;
 }
 
 export function addressText(address: string, t: Translate): string {

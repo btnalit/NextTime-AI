@@ -9,7 +9,7 @@ import {
   type ConnectionRequestRow,
   type CreateConnectionParams,
   type CreateConnectionResult,
-  addressMasked,
+  requestTargetCut,
   supportsManifestSource,
 } from '../lib/connections.js';
 import { type ErrorOverrides, describeError, presentError } from '../lib/errors.js';
@@ -151,23 +151,8 @@ export function fieldErrorExplanation(
       'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name.',
     )}${credentialPlace(credentialKind, t)}`;
   }
-  if (code === 'connection_target_refused' && targetRefusal === 'plaintext-public') {
-    // Legacy 413: the kernel refuses http:// to an address on the public internet.
-    return field === 'manifestSource'
-      ? t(
-          '清单来源是公网地址，却用的是 http://，已拒绝，什么也没保存：明文传输时清单可能在路上被换掉。请改成 https:// 地址。',
-          'The manifest source is on the public internet but uses http:// — refused, nothing was saved: a manifest sent in clear text could be swapped on the way. Use its https:// address.',
-        )
-      : t(
-          '门端点是公网地址，却用的是 http://，已拒绝，什么也没保存：连接密钥和凭证会明文经过互联网。请改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
-          'The Gatekeeper endpoint is on the public internet but uses http:// — refused, nothing was saved: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
-        );
-  }
   if (code === 'connection_target_refused') {
-    return t(
-      '这个地址指向平台自身的服务，已被拒绝：请填写门在网络上可达的地址（带域名或 IP），不要用 localhost 或单段主机名。',
-      "This address points at one of the platform's own services and was refused — use the gate's network-reachable address (with a domain or IP), not localhost or a single-label host name.",
-    );
+    return targetRefusalExplanation(field, targetRefusal, t);
   }
   switch (field) {
     case 'credentials':
@@ -190,6 +175,84 @@ export function fieldErrorExplanation(
         '目标系统不被接受：请填一个 base URL、host 或服务名。',
         'The target system was not accepted — enter a base URL, host or service name.',
       );
+  }
+}
+
+/** Legacy 247 ③: a `connection_target_refused` said for the rule it names (`details.reason`, legacy
+ *  413), on the field it is about — only the endpoint and the manifest source are checked this way.
+ *  A kernel that sends no reason gets the sentence that covers every rule; before this, every rule
+ *  but plain http read 「指向平台自身的服务」, a host name that does not resolve included. */
+function targetRefusalExplanation(
+  field: keyof FieldErrors,
+  reason: string | undefined,
+  t: Translate,
+): string {
+  const manifest = field === 'manifestSource';
+  switch (reason) {
+    case 'plaintext-public':
+      // Legacy 413: the kernel refuses http:// to an address on the public internet.
+      return manifest
+        ? t(
+            '清单来源是公网地址，却用的是 http://，已拒绝，什么也没保存：明文传输时清单可能在路上被换掉。请改成 https:// 地址。',
+            'The manifest source is on the public internet but uses http:// — refused, nothing was saved: a manifest sent in clear text could be swapped on the way. Use its https:// address.',
+          )
+        : t(
+            '门端点是公网地址，却用的是 http://，已拒绝，什么也没保存：连接密钥和凭证会明文经过互联网。请改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
+            'The Gatekeeper endpoint is on the public internet but uses http:// — refused, nothing was saved: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
+          );
+    case 'dns-error':
+      return manifest
+        ? t(
+            '清单来源的主机名解析不出来，已拒绝，什么也没保存：检查拼写，或者填它的 IP 地址。',
+            'The manifest source’s host name does not resolve — refused, nothing was saved. Check the spelling, or use its IP address.',
+          )
+        : t(
+            '门端点的主机名解析不出来，已拒绝，什么也没保存：检查拼写，或者填门的 IP 地址。',
+            'The Gatekeeper endpoint’s host name does not resolve — refused, nothing was saved. Check the spelling, or enter the gate’s IP address.',
+          );
+    case 'bare-hostname':
+      return manifest
+        ? t(
+            '清单来源是单段主机名（平台的服务名或 localhost），平台从这里连不到，已拒绝，什么也没保存：填完整的域名或 IP 地址。',
+            'The manifest source is a single-label host name (a platform service name or localhost) the platform cannot reach from here — refused, nothing was saved. Use its full domain name or IP address.',
+          )
+        : t(
+            '门端点是单段主机名（平台的服务名或 localhost），平台从这里连不到，已拒绝，什么也没保存：填门完整的域名或 IP 地址。',
+            'The Gatekeeper endpoint is a single-label host name (a platform service name or localhost) the platform cannot reach from here — refused, nothing was saved. Enter the gate’s full domain name or IP address.',
+          );
+    case 'invalid-url':
+      return manifest
+        ? t(
+            '清单来源不是完整的 http:// 或 https:// 地址，已拒绝，什么也没保存。',
+            'The manifest source is not a full http:// or https:// address — refused, nothing was saved.',
+          )
+        : t(
+            '门端点不是完整的 http:// 或 https:// 地址，已拒绝，什么也没保存。',
+            'The Gatekeeper endpoint is not a full http:// or https:// address — refused, nothing was saved.',
+          );
+    case 'loopback':
+    case 'link-local':
+    case 'unspecified':
+    case 'platform-subnet':
+      return manifest
+        ? t(
+            '清单来源指向平台自己的网络或本机，平台不读这样的地址，已拒绝，什么也没保存：填文档在网络上可达的地址。',
+            'The manifest source points into the platform’s own networks or at the local host, which the platform does not read — refused, nothing was saved. Use the document’s network-reachable address.',
+          )
+        : t(
+            '门端点指向平台自己的网络或本机，平台不调用这样的地址，已拒绝，什么也没保存：填门在网络上可达的地址。',
+            'The Gatekeeper endpoint points into the platform’s own networks or at the local host, which the platform does not call — refused, nothing was saved. Enter the gate’s network-reachable address.',
+          );
+    default:
+      return manifest
+        ? t(
+            '清单来源不是平台允许读取的地址（指向平台自己的网络或本机、主机名解析不出来，或者用 http:// 连公网），已拒绝，什么也没保存：填文档在网络上可达的地址，公网地址用 https://。',
+            'The manifest source is not an address the platform reads (it points into the platform’s own networks or at the local host, its host name does not resolve, or it uses http:// to the public internet) — refused, nothing was saved. Use the document’s network-reachable address, and https:// for a public one.',
+          )
+        : t(
+            '门端点不是平台允许调用的地址（指向平台自己的网络或本机、主机名解析不出来，或者用 http:// 连公网），已拒绝，什么也没保存：填门在网络上可达的地址，公网地址用 https://。',
+            'The Gatekeeper endpoint is not an address the platform calls (it points into the platform’s own networks or at the local host, its host name does not resolve, or it uses http:// to the public internet) — refused, nothing was saved. Enter the gate’s network-reachable address, and https:// for a public one.',
+          );
   }
 }
 
@@ -286,7 +349,7 @@ export function CompleteConnectionForm({
         {request.requestedBy.slice(0, 8)}
       </span>
     ) : null;
-  const requestTargetMasked = !!request && addressMasked(request.target);
+  const requestTargetMasked = !!request && requestTargetCut(request);
   const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
@@ -546,8 +609,8 @@ export function CompleteConnectionForm({
               <span data-testid="cc-target-masked-note">
                 {sentenceGap(t)}
                 {t(
-                  '这个申请填的地址里带有凭据，已隐藏不显示；请填写不带凭据的地址，凭据放在下面的「凭据」里。',
-                  'The address in this request carried a credential and is hidden — enter the address without it, and put the credential in Credentials below.',
+                  '这个申请填的地址里带有凭据，平台显示时去掉了凭据，所以不替你预填；请填写不带凭据的地址，凭据放在下面的「凭据」里。',
+                  'The address in this request carried a credential, which the platform leaves out when showing it, so it is not filled in for you — enter the address without the credential, and put the credential in Credentials below.',
                 )}
               </span>
             ) : null}

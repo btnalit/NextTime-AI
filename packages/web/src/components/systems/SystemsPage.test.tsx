@@ -538,6 +538,37 @@ describe('SystemsPage', () => {
     expect(row.textContent).not.toContain('[redacted]');
   });
 
+  it('legacy 247: an address the kernel cut a credential out of (targetRedacted) is shown with a note, and so is its cancel confirm', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-3',
+            status: 'requested',
+            kind: 'http',
+            target: 'https://api.example.com/x',
+            targetRedacted: true,
+            requestedBy: 'p-self',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(row.textContent).toContain('https://api.example.com/x');
+    expect(within(row).getByTestId('request-target-cut').textContent).toBe(
+      '已去掉地址里的凭据部分',
+    );
+    expect(within(row).queryByTestId('request-target-masked')).toBeNull();
+    fireEvent.click(within(row).getByTestId('cancel-request-cr-3'));
+    const confirm = await screen.findByTestId('cancel-request-confirm');
+    expect(confirm.textContent).toContain('https://api.example.com/x（已去掉地址里的凭据部分）');
+  });
+
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
     const http = scriptedHttp({
       execution_readiness: (params) => {
