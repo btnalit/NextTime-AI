@@ -9164,6 +9164,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -9246,6 +9280,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -9326,6 +9394,98 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "after": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "before": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "before",
+                          "after"
+                        ],
+                        "type": "object"
+                      },
                       "after": {
                         "additionalProperties": false,
                         "properties": {
@@ -9588,6 +9748,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -11004,6 +11198,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -11086,6 +11314,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -11166,6 +11428,98 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "after": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "before": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "before",
+                          "after"
+                        ],
+                        "type": "object"
+                      },
                       "after": {
                         "additionalProperties": false,
                         "properties": {
@@ -11428,6 +11782,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -24478,6 +24866,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -24560,6 +24982,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -24640,6 +25096,98 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "after": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "before": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "before",
+                          "after"
+                        ],
+                        "type": "object"
+                      },
                       "after": {
                         "additionalProperties": false,
                         "properties": {
@@ -24902,6 +25450,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -41557,6 +42139,40 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "absentAnswers": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "statuses": {
+                              "items": {
+                                "type": "integer"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "statuses"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exitCodes": {
+                              "items": {
+                                "type": "integer"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "exitCodes"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
                     "autoApprovable": {
                       "type": "boolean"
                     },
@@ -43253,6 +43869,40 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "absentAnswers": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "statuses": {
+                              "items": {
+                                "type": "integer"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "statuses"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exitCodes": {
+                              "items": {
+                                "type": "integer"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "exitCodes"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
                     "autoApprovable": {
                       "type": "boolean"
                     },
@@ -43335,6 +43985,40 @@
                         "items": {
                           "additionalProperties": false,
                           "properties": {
+                            "absentAnswers": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "statuses": {
+                                      "items": {
+                                        "type": "integer"
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "statuses"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "exitCodes": {
+                                      "items": {
+                                        "type": "integer"
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "exitCodes"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
                             "autoApprovable": {
                               "type": "boolean"
                             },
@@ -43415,6 +44099,98 @@
                         "items": {
                           "additionalProperties": false,
                           "properties": {
+                            "absentAnswers": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "after": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "statuses": {
+                                              "items": {
+                                                "type": "integer"
+                                              },
+                                              "type": "array"
+                                            }
+                                          },
+                                          "required": [
+                                            "statuses"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "exitCodes": {
+                                              "items": {
+                                                "type": "integer"
+                                              },
+                                              "type": "array"
+                                            }
+                                          },
+                                          "required": [
+                                            "exitCodes"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "before": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "statuses": {
+                                              "items": {
+                                                "type": "integer"
+                                              },
+                                              "type": "array"
+                                            }
+                                          },
+                                          "required": [
+                                            "statuses"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "exitCodes": {
+                                              "items": {
+                                                "type": "integer"
+                                              },
+                                              "type": "array"
+                                            }
+                                          },
+                                          "required": [
+                                            "exitCodes"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "before",
+                                "after"
+                              ],
+                              "type": "object"
+                            },
                             "after": {
                               "additionalProperties": false,
                               "properties": {
@@ -43677,6 +44453,40 @@
                         "items": {
                           "additionalProperties": false,
                           "properties": {
+                            "absentAnswers": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "statuses": {
+                                      "items": {
+                                        "type": "integer"
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "statuses"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "exitCodes": {
+                                      "items": {
+                                        "type": "integer"
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "exitCodes"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
                             "autoApprovable": {
                               "type": "boolean"
                             },
@@ -81845,6 +82655,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -81927,6 +82771,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },
@@ -82007,6 +82885,98 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "after": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "before": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "statuses": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "statuses"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "exitCodes": {
+                                        "items": {
+                                          "type": "integer"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "exitCodes"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "before",
+                          "after"
+                        ],
+                        "type": "object"
+                      },
                       "after": {
                         "additionalProperties": false,
                         "properties": {
@@ -82269,6 +83239,40 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "absentAnswers": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "statuses": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "statuses"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "exitCodes": {
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "exitCodes"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "autoApprovable": {
                         "type": "boolean"
                       },

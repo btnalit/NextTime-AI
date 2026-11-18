@@ -576,6 +576,10 @@ export const GateOperationSummaryWireSchema = z
     /** Console G4: present when the entry declares a param only the gate sets — the bulk publish
      *  leaves it a draft and `publish_operation` refuses it until the gate's manifest drops it. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** Legacy 477: the answers the definition declares mean "does not exist"
+     *  (`operationAbsentAnswers`) — present only when it declares some, so a reviewer of an
+     *  announced manifest sees what an Operation would read as absent. */
+    absentAnswers: OperationAbsentAnswersWireSchema.optional(),
   })
   .strict();
 export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
@@ -700,6 +704,16 @@ export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWire
    *  once adopted, the revision each enabling workspace opens for this Operation is held back as
    *  an unpublished draft. */
   gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+  /** Legacy 477: the answers that mean "does not exist" before and after (`null`: none declared —
+   *  or no longer counted, an Operation that stops being observe-class). Present only when they
+   *  differ: `binding` in `otherChangedFields` says only that something in it changed. */
+  absentAnswers: z
+    .object({
+      before: OperationAbsentAnswersWireSchema.nullable(),
+      after: OperationAbsentAnswersWireSchema.nullable(),
+    })
+    .strict()
+    .optional(),
 }).strict();
 export type PendingGateManifestChangeWire = z.infer<typeof PendingGateManifestChangeWireSchema>;
 
