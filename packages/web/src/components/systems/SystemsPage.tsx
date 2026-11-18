@@ -21,6 +21,8 @@ import {
   cancelConnectionRequestOverrides,
   draftsAsRead,
   manifestPublishPlan,
+  requestTargetText,
+  targetCutNote,
 } from '../../lib/connections.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -815,6 +817,14 @@ export function SystemsPage({
                   ) : (
                     <span className="mono truncate">{row.target}</span>
                   )}
+                  {/* Legacy 247: the kernel cut a credential out of an old request's address
+                   *  (user info, query, fragment) and left no mask behind — the row says the
+                   *  address shown is not the whole one that was asked for. */}
+                  {row.targetRedacted === true && !addressMasked(row.target) ? (
+                    <span className="text-small text-warn" data-testid="request-target-cut">
+                      {targetCutNote(t)}
+                    </span>
+                  ) : null}
                   {/* Legacy 247 ②: the requester by name (the page already reads the members). */}
                   <span
                     className="text-3 text-small"
@@ -872,10 +882,7 @@ export function SystemsPage({
                           '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
-                        target={`${transportKindLabel(row.kind, t)} · ${addressText(
-                          row.target,
-                          t,
-                        )}`}
+                        target={`${transportKindLabel(row.kind, t)} · ${requestTargetText(row, t)}`}
                         confirmLabel={t('取消申请', 'Cancel request')}
                         cancelLabel={t('保留', 'Keep')}
                         danger
