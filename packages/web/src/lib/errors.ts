@@ -550,8 +550,11 @@ export function unstorableTextNextStep(text: string, t: Translate): string {
  *
  * Gate-side codes (`operation_refused`, `operation_definition_mismatch`, …) reach the console with
  * the gate's own code (the kernel passes a gate's refusal through instead of 502
- * `gatekeeper_error`). `operation_definition_unavailable` is never an error code — it is the
- * prefix of an ActionRequest's failure reason, read from a tool row by `gateReasonNextStep` below.
+ * `gatekeeper_error`). `operation_definition_unavailable` is both: since legacy 220 the kernel
+ * answers it as 409 when an Operation's stored definition does not parse (`observe_operation`,
+ * `request_action`) — what its entry below says — and it also starts an ActionRequest's failure
+ * reason, read from a tool row by `gateReasonNextStep` below, which tells that case from a request
+ * made while the Operation was not published (legacy 848).
  */
 export const ERROR_NEXT_STEPS: Readonly<
   Record<string, { readonly zh: string; readonly en: string }>
@@ -769,9 +772,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在「系统与授权」打开它，点「重新读取门的清单」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
     en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. For a gate you connected yourself: open it in Systems, choose “Re-read the gate’s manifest”, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
   },
+  // Legacy 848: the 409 (legacy 220) — the stored definition does not parse. A request made while
+  // the Operation was not published reads `OPERATION_NOT_PUBLISHED_STEP` instead.
   operation_definition_unavailable: {
-    zh: '发起请求时这个 Operation 还没有发布，也没有草稿，所以批准时没有对应的定义，调用没有执行。先在能力目录发布它，再重新发起。',
-    en: 'When this was requested the Operation was neither published nor drafted, so no definition was approved and nothing ran. Publish it in the catalog first, then request again.',
+    zh: '这个 Operation 存着的定义不是有效的 Operation，平台没有可以交给门核对的定义，调用没有发出。到「系统与授权」打开它所在的系统，点「重新读取门的清单」（平台提供的系统点「与门公告对齐」），按门现在运行的定义为它打开修订草稿；再到能力目录发布这份修订，然后重新发起。如果重新读取后没有为它打开修订（门的清单里没有它，或者门公告的这一条也不合格），要请门的维护者修门的清单。',
+    en: 'This Operation’s stored definition is not a valid Operation, so the platform has no definition to hold the gate to and nothing was sent. Open its system under Systems & access and choose “Re-read the gate’s manifest” (“Align with the gate’s announcement” for a platform-provided system) to open a revision draft carrying what the gate runs now; publish that revision in the catalog, then request again. If no revision is opened for it (the gate’s manifest does not describe it, or describes it invalidly too), the gate’s maintainer has to fix the gate’s manifest.',
   },
   // Console G4: a gate's own draft is fixed in the gate's manifest, not here — the old copy said
   // "remove them from the parameters and publish again", which no console form can do.
@@ -1033,6 +1038,20 @@ function isPlaintextPublicRefusal(text: string): boolean {
   return text.includes(PLAINTEXT_PUBLIC_TARGET);
 }
 
+/** Legacy 848: the kernel's wording for an Operation whose stored definition does not parse
+ *  (`OperationDefinitionUnreadableError`, kernel governance/gatekeepers/definition.ts — copied by
+ *  hand; if the kernel rewords it, this falls back to the not-published step); any other `operation_definition_unavailable` reason is a
+ *  request made while the Operation was neither published nor drafted. */
+const UNREADABLE_DEFINITION = 'stored definition is not a valid Operation';
+
+/** Legacy 848: a request made against no definition — the code's meaning before legacy 220 (made
+ *  while the Operation was neither published nor drafted, or before requests recorded a definition
+ *  and not published now). */
+const OPERATION_NOT_PUBLISHED_STEP = {
+  zh: '这个请求没有批准过的定义，调用没有执行：发起时这个 Operation 没有发布也没有草稿，或者请求是在平台开始记下定义之前发起的、它现在也没有发布。先在能力目录发布它，再重新发起。',
+  en: 'This request has no approved definition, so nothing ran: the Operation was neither published nor drafted when it was requested, or it was requested before the platform recorded definitions and is not published now. Publish it in the catalog first, then request again.',
+} as const;
+
 /** Legacy 700: what to do when the gate's endpoint is `http://` to the public internet. */
 function plaintextPublicTargetStep(t: Translate): string {
   return t(
@@ -1257,7 +1276,9 @@ export function gateReasonNextStep(
         ? unstorableTextNextStep(text, t)
         : code === 'target_refused' && isPlaintextPublicRefusal(text)
           ? plaintextPublicTargetStep(t)
-          : t(step.zh, step.en);
+          : code === 'operation_definition_unavailable' && !text.includes(UNREADABLE_DEFINITION)
+            ? t(OPERATION_NOT_PUBLISHED_STEP.zh, OPERATION_NOT_PUBLISHED_STEP.en)
+            : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
