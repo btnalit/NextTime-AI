@@ -409,6 +409,25 @@ export function operationFieldLabel(field: string, t: Translate): string {
   return entry ? label(entry, t) : field;
 }
 
+/** Legacy 477: the keys of a binding (`OPERATION_BINDING_KEYS`) a manifest review names as changed
+ *  (`PendingGateManifestChangeWire.bindingChangedFields`) — said inside 「调用目标（…）」, so the
+ *  English stays lower-case. A key this table does not know keeps its own name. */
+export const BINDING_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  kind: { zh: '调用方式', en: 'kind' },
+  method: { zh: '请求方法', en: 'method' },
+  path: { zh: '路径', en: 'path' },
+  tool_name: { zh: '工具名', en: 'tool name' },
+  command_template: { zh: '命令模板', en: 'command template' },
+  command_pattern: { zh: '命令模式', en: 'command pattern' },
+  absent_statuses: { zh: '表示不存在的回答', en: 'answers that mean absent' },
+  absent_exit_codes: { zh: '表示不存在的退出码', en: 'exit codes that mean absent' },
+};
+
+export function bindingFieldLabel(field: string, t: Translate): string {
+  const entry = ownEntry(BINDING_FIELD_LABELS, field);
+  return entry ? label(entry, t) : field;
+}
+
 // -------------------------------------------------------------------------------------------
 // Task failure reason (`@nexttime/shared` `TASK_FAILURE_REASON_VALUES`, legacy 324) — the task
 // list row, TaskDetail's overview, and the chat status line of a failed Task.
