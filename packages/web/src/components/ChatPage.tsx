@@ -9,9 +9,11 @@ import { draftScope } from '../lib/drafts.js';
 import {
   composerEvaluationContentStep,
   composerProbeHoldStep,
+  composerRemoveUnstorableLabel,
   composerUncertainSendStep,
   composerUnstorableTextStep,
   describeError,
+  unstorableCharacterOf,
 } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
@@ -356,7 +358,14 @@ export function ChatPage({
                           connection_closed: composerUncertainSendStep(t, composer.resendable),
                         }
                       : {}),
-                    unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
+                    // Legacy 849: what the draft still holds, else what the refusal named.
+                    unstorable_text: composerUnstorableTextStep(
+                      t,
+                      composer.hasUnstorableChar,
+                      composer.unstorableCharacter ??
+                        unstorableCharacterOf(describeError(sendError).message) ??
+                        'nul',
+                    ),
                     evaluation_content_withheld: composerEvaluationContentStep(t),
                     evaluation_probe_hold: composerProbeHoldStep(t),
                   }}
@@ -384,13 +393,19 @@ export function ChatPage({
                         size="s"
                         data-testid="composer-remove-unstorable"
                         onClick={() => {
+                          const nul = composer.unstorableCharacter === 'nul';
                           const removed = composer.removeUnstorableChars();
                           toast.push({
                             tone: 'ok',
-                            title: t(
-                              `已移除 ${removed} 个看不见的字符`,
-                              `Removed ${removed} invisible character${removed === 1 ? '' : 's'}`,
-                            ),
+                            title: nul
+                              ? t(
+                                  `已移除 ${removed} 个看不见的字符`,
+                                  `Removed ${removed} invisible character${removed === 1 ? '' : 's'}`,
+                                )
+                              : t(
+                                  `已移除 ${removed} 个存不了的字符`,
+                                  `Removed ${removed} character${removed === 1 ? '' : 's'} that could not be stored`,
+                                ),
                             description: t(
                               '消息还没有发出，检查一遍后再发送。',
                               'The message has not been sent; check it, then send it.',
@@ -398,7 +413,7 @@ export function ChatPage({
                           });
                         }}
                       >
-                        {t('移除看不见的字符', 'Remove invisible characters')}
+                        {composerRemoveUnstorableLabel(t, composer.unstorableCharacter ?? 'nul')}
                       </Button>
                     ) : describeError(sendError).code === 'evaluation_probe_hold' &&
                       can('list_eval_seal_holds') === true ? (
