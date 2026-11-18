@@ -281,6 +281,23 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(step?.zh).toContain('修订草稿');
   });
 
+  it('legacy 848: an unreadable stored definition says publish a corrected revision; a request made unpublished says publish it', () => {
+    const unreadable = gateReasonNextStep(
+      'operation_definition_unavailable: Operation "list_items" on gatekeeper gk-1: its stored definition is not a valid Operation, so there is no approved definition to hold the gate to — refused, nothing was sent. Publish a corrected revision of it.',
+      zh,
+    );
+    expect(unreadable?.message).toContain('改正后的修订');
+    expect(unreadable?.message).toBe(ERROR_NEXT_STEPS.operation_definition_unavailable?.zh);
+    const unpublished = gateReasonNextStep(
+      '{"status":"failed","reason":"operation_definition_unavailable: \\"k.op\\" was requested while it was not published and had no draft, so it was approved without a definition — nothing was sent."}',
+      zh,
+    );
+    expect(unpublished?.message).toContain('还没有发布，也没有草稿');
+    expect(unpublished?.message).not.toContain('改正后的修订');
+    // The 409 itself (`observe_operation`, `request_action`) is only ever the unreadable case.
+    expect(ERROR_NEXT_STEPS.operation_definition_unavailable?.en).toContain('corrected revision');
+  });
+
   it('reads a failure reason’s gate code out of a tool result, and nothing out of one without', () => {
     expect(
       gateReasonNextStep('{"status":"failed","reason":"operation_definition_unavailable: …"}', zh),
