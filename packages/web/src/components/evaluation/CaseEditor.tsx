@@ -1122,6 +1122,7 @@ function AssertionEditor({
               'Worker 结果 output 里的顶层字段名。',
               'A top-level field of the Worker’s result output.',
             )}
+            error={errors[`${assertion.uid}.field`] ?? null}
           >
             <input
               id={`${id}-field`}
@@ -1129,7 +1130,12 @@ function AssertionEditor({
               value={assertion.field}
               onChange={(event) => onChange({ field: event.target.value })}
               disabled={busy}
-              aria-describedby={describedBy(`${id}-field`, true, false)}
+              aria-invalid={errors[`${assertion.uid}.field`] !== undefined || undefined}
+              aria-describedby={describedBy(
+                `${id}-field`,
+                true,
+                errors[`${assertion.uid}.field`] !== undefined,
+              )}
               data-testid="eval-case-assertion-field"
             />
           </Field>

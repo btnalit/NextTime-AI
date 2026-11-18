@@ -248,7 +248,7 @@ describe('lib/eval-cases (S10 E3-1b)', () => {
     expect(check.missing).toEqual([]);
   });
 
-  it('says an output field the schema refuses in the console words, not the Zod message', () => {
+  it('legacy 528: says an output field name past the path cap on the field itself, in the console words', () => {
     const tooLong = {
       ...emptyAssertion('output_equals'),
       field: 'f'.repeat(PREDICATE_PATH_MAX),
@@ -260,7 +260,11 @@ describe('lib/eval-cases (S10 E3-1b)', () => {
       false,
       en,
     );
-    expect(check.errors[`${tooLong.uid}.value`]).toMatch(/^At most \d+ characters$/);
+    // `result.output.` counts toward the 512 too: 498 of the field's own characters fit.
+    expect(check.errors[`${tooLong.uid}.field`]).toBe(
+      'A field name holds at most 498 characters; this is 14 over.',
+    );
+    expect(check.errors[`${tooLong.uid}.value`]).toBeUndefined();
   });
 
   it('writes the templates as the shared paths, and reads anything else back as a custom condition', () => {
