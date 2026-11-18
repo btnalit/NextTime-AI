@@ -525,10 +525,13 @@ describe('legacy 528: validation messages say what is wrong, in the viewer’s w
       'op: Must be one of: eq, ne, gt, gte, lt, lte, contains',
     );
     expect(said({ all: [{ path: 'a', op: 'eqq', value: 1 }] })).toBe(
-      `「all.0.op」只能是：${comparisons}`,
+      `all 第 1 项的「op」只能是：${comparisons}`,
+    );
+    expect(said({ all: [{ path: 'a', op: 'eqq', value: 1 }] }, enT)).toBe(
+      'op in all item 1: Must be one of: eq, ne, gt, gte, lt, lte, contains',
     );
     // Only `value` missing: the comparison is the shape meant, not `exists`.
-    expect(said({ not: { path: 'a', op: 'gt' } })).toBe('「not.value」要填一个值');
+    expect(said({ not: { path: 'a', op: 'gt' } })).toBe('not 的「value」要填一个值');
     expect(said({ path: 'a', op: 'exists', value: 1 })).toMatch(/^不能有这些字段：value$/);
     // Nothing to go by: still the plain sentence.
     expect(said({})).toBe('这一项的值不被接受');

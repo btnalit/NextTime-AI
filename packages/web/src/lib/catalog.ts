@@ -214,13 +214,32 @@ export function issueMessage(issue: IssueLike, t: Translate): string {
     case 'invalid_union': {
       const closest = closestUnionIssue(issue);
       if (closest === null) return t('这一项的值不被接受', 'This value is not accepted');
-      const message = issueMessage(closest, t);
-      const where = closest.path.map(String).join('.');
-      return where === '' ? message : t(`「${where}」${message}`, `${where}: ${message}`);
+      return issueAtText(closest.path, issueMessage(closest, t), t);
     }
     default:
       return t('这一项的值不被接受', 'This value is not accepted');
   }
+}
+
+/** Where inside a value an issue is, counted from 1 as the editor's own notes count items
+ *  (UX acceptance of #1488 P3): `all.0.op` → 「all 第 1 项的「op」」, "op in all item 1". */
+function issueAtText(path: readonly PropertyKey[], message: string, t: Translate): string {
+  if (path.length === 0) return message;
+  const step = (segment: PropertyKey) =>
+    typeof segment === 'number'
+      ? t(`第 ${segment + 1} 项`, `item ${segment + 1}`)
+      : String(segment);
+  const leaf = path[path.length - 1] as PropertyKey;
+  const outer = path.slice(0, -1).map(step).join(' ');
+  if (typeof leaf === 'number') {
+    const place = path.map(step).join(' ');
+    return t(`${place}：${message}`, `${place}: ${message}`);
+  }
+  const name = String(leaf);
+  if (outer === '') return t(`「${name}」${message}`, `${name}: ${message}`);
+  // 「all 第 1 项的」 runs on; a bare field name keeps a space before 的 (「not 的」).
+  const gap = typeof path[path.length - 2] === 'number' ? '' : ' ';
+  return t(`${outer}${gap}的「${name}」${message}`, `${name} in ${outer}: ${message}`);
 }
 
 export function fieldErrorsFromIssues(issues: readonly IssueLike[], t: Translate): FieldErrors {
