@@ -1368,9 +1368,10 @@ const connectionCapabilities = [
     // `request_action` call that happens to resolve to an observe-mode Operation audits under
     // `action = 'request_action'`, not `'observe_operation'`, and is not attributed here).
     //
-    // Legacy 222: a call refused before it ran (its AuditRecord carries `outcome: 'refused'` — the
-    // gate refused it, or the dispatcher did) is not counted as an observe call, as a refused
-    // execute call never becomes an `action_requests` row; the audit log keeps every refusal.
+    // Legacy 222: an observe call refused before it ran (its AuditRecord carries `outcome:
+    // 'refused'` — the gate refused it, or the dispatcher did) is not counted; the audit log keeps
+    // every refusal. Execute-class `calls` count ActionRequests instead, so a request the gate
+    // refuses at apply is still counted, under `failed` (review #493 on #1448; `reads.ts` has why).
     name: 'get_operation_stats',
     group: 'connection',
     mode: 'observe',
@@ -1395,7 +1396,7 @@ const connectionCapabilities = [
         .strict(),
     ),
     description:
-      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls`; a call refused before it ran (by the gate, or the dispatcher) is not a call on either side, and is read in the audit log instead — see this entry’s own doc comment for the merge rule and remaining known gap.',
+      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls`, counting only observe calls that ran — one the gate or the dispatcher refused is not counted (the audit log has it), while an execute request the gate refuses at apply is still a call, counted under `failed` — see this entry’s own doc comment for the merge rule and remaining known gap.',
   },
 ] as const satisfies readonly Capability[];
 

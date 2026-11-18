@@ -360,9 +360,9 @@ function resolveSinceDays(days: number): number {
  *  (`auditGateRefusal`: a definition mismatch, params its schema refuses, no credential, …) or by
  *  the dispatcher (an admin agent's call outside its ceiling) — leaves a row with
  *  `payload.outcome = 'refused'` so the audit log keeps it, and that row is not a call here: it
- *  adds nothing to `calls` nor moves `lastCalledAt`, as a refused execute call creates no
- *  `action_requests` row for its side of `get_operation_stats` to count. The audit log
- *  (`queryAudit`) still shows every refusal. */
+ *  adds nothing to `calls` nor moves `lastCalledAt`. The audit log (`queryAudit`) still shows
+ *  every refusal. `get_operation_stats` counts its execute side differently, on purpose — see
+ *  `governance/approval/reads.ts`'s `OperationStatsRow`. */
 export async function queryAuditActionOperationStats(
   client: PoolClient,
   workspaceId: string,

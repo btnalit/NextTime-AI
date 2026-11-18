@@ -463,8 +463,17 @@ export async function getActionRequestForUpdateOrThrow(
  *     `autoApproved`/`failed` are always `0` for a row sourced this way; `observeCalls` carries
  *     the count instead, and `calls` includes it (see the merge note below). Legacy 222: only
  *     calls that ran — a call the gate (or the dispatcher) refused leaves an AuditRecord with
- *     `outcome: 'refused'`, which is not counted, as a refused execute call leaves no
- *     `action_requests` row; an Operation whose only calls in the window were refused has no row.
+ *     `outcome: 'refused'`, which is not counted; an Operation whose only calls in the window
+ *     were refused has no row.
+ *
+ *  The two sides count a gate's refusal differently, on purpose (legacy 222, review #493 on
+ *  #1448). An execute-class call is its ActionRequest — made, decided on, then run — so a request
+ *  the gate refuses at apply (`REFUSED_BEFORE_RUNNING_FAILURE_CODES`, `failureKind: 'refused'`)
+ *  is still one of `calls`, under `failed`; one the dispatcher refuses rolls back before the
+ *  request exists and is not counted. An observe-class call has no request: the gate call is the
+ *  call, so one the gate refused did not run. Nor could an observe `failed` mean what execute's
+ *  does: an observe call that fails any other way leaves no AuditRecord (its transaction rolls
+ *  back), so it would count refusals only.
  *
  *  A `{gatekeeperId, operationName}` key present in *both* sources (not expected in practice — a
  *  published Operation has exactly one `mode`, design doc §5.5 — but not something this read
