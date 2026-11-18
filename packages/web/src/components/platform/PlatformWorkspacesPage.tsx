@@ -6,6 +6,7 @@ import type {
 } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import { NARROW_TABLE_QUERY, useMediaQuery } from '../../hooks/useMediaQuery.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
@@ -133,6 +134,7 @@ export function PlatformWorkspacesPage({
   currentUserId,
 }: PlatformWorkspacesPageProps) {
   const t = useT();
+  const narrow = useMediaQuery(NARROW_TABLE_QUERY);
   const toast = useToast();
   // S11 AA4c-3: `?create=admin_trial` (the 管理员智能体 page's 新建试验工作区) opens 新建工作区 on
   // 试验 — at mount, or on a `hashchange` while the page is already open.
@@ -384,6 +386,7 @@ export function PlatformWorkspacesPage({
             (workspaceId) => setPanel({ kind: 'workspace', workspaceId }),
             (workspaceId) => setPanel({ kind: 'purge', workspaceId }),
             t,
+            narrow,
           )}
           data={rows}
           getRowId={(row) => row.id}
@@ -478,13 +481,31 @@ function workspaceColumns(
   onOpen: (workspaceId: string) => void,
   onPurge: (workspaceId: string) => void,
   t: Translate,
+  narrow: boolean,
 ): readonly DataTableColumn<PlatformWorkspaceWire>[] {
   return [
     {
       id: 'name',
       header: t('名称', 'Name'),
       priority: 'primary',
-      cell: (workspace) => <span className="truncate">{workspace.name}</span>,
+      // Legacy 599: at ≤ 768px only this column stays pinned, and at a phone's width the purpose
+      // column sits past status and the actions — out of view until the table is scrolled
+      // sideways. Purpose is how residue and trial workspaces are told apart, so the pinned name
+      // carries it under the name there; the purpose column itself stays for wider screens.
+      cell: (workspace) =>
+        narrow ? (
+          <span className="workspace-name-cell">
+            <span className="truncate">{workspace.name}</span>
+            <StatusChip
+              machine="workspacePurpose"
+              status={workspace.purpose}
+              size="s"
+              testId="workspace-purpose-pinned"
+            />
+          </span>
+        ) : (
+          <span className="truncate">{workspace.name}</span>
+        ),
     },
     {
       id: 'status',
@@ -566,7 +587,7 @@ function workspaceColumns(
         workspace.allowedModels.length === 0 ? (
           <span className="text-3">{t('全部', 'All')}</span>
         ) : (
-          `${workspace.allowedModels.length} 个`
+          t(`${workspace.allowedModels.length} 个`, `${workspace.allowedModels.length}`)
         ),
     },
     {

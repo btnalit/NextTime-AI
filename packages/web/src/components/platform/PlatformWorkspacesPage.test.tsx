@@ -10,7 +10,10 @@ import { pickComboboxOption } from '../kit/combobox.test-helpers.js';
 import { ToastProvider } from '../ui/Toast.js';
 import { PlatformWorkspacesPage } from './PlatformWorkspacesPage.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 /** A `CapabilityCaller` whose named answers are scripted; unscripted names throw loudly instead
  *  of silently resolving `undefined` (the convention every page test in this package uses). */
@@ -111,6 +114,33 @@ function baseHandlers(workspaces: readonly PlatformWorkspaceWire[]) {
 }
 
 describe('PlatformWorkspacesPage', () => {
+  it('legacy 599: at a narrow width the pinned name carries the purpose; wide it stays its own column only', async () => {
+    const narrow = (matches: boolean) =>
+      vi.stubGlobal(
+        'matchMedia',
+        vi.fn(() => ({
+          matches,
+          media: '',
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+
+    narrow(true);
+    renderPage(scriptedHttp(baseHandlers([workspace({ purpose: 'admin_trial' })])));
+    const pinned = await screen.findByTestId('workspace-purpose-pinned');
+    expect(pinned.getAttribute('data-status')).toBe('admin_trial');
+    // In the name cell (the first cell of the row), right under the name.
+    expect(pinned.closest('td')).toBe(screen.getByTestId('workspace-row-ws-1').querySelector('td'));
+    cleanup();
+
+    narrow(false);
+    renderPage(scriptedHttp(baseHandlers([workspace({ purpose: 'admin_trial' })])));
+    await screen.findByTestId('workspace-row-ws-1');
+    expect(screen.queryByTestId('workspace-purpose-pinned')).toBeNull();
+    expect(screen.getByTestId('workspace-purpose').getAttribute('data-status')).toBe('admin_trial');
+  });
+
   it('lists workspaces with the default badge, entry-model fallback and owner logins', async () => {
     const http = scriptedHttp(
       baseHandlers([
