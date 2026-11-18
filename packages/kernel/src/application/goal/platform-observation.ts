@@ -6,6 +6,7 @@ import {
   type Role,
   getCapability,
   operationAbsentAnswers,
+  sliceKeepingPairs,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
@@ -283,8 +284,9 @@ export async function callPlatformObservation(
 }
 
 /** A redacted result as the evidence keeps it: whole, or cut at
- *  {@link PLATFORM_OBSERVATION_RESULT_MAX_CHARS} of its JSON. */
-function keptResult(redacted: unknown): {
+ *  {@link PLATFORM_OBSERVATION_RESULT_MAX_CHARS} of its JSON — never through a surrogate pair
+ *  (legacy 834). */
+export function keptObservationResult(redacted: unknown): {
   readonly result: unknown;
   readonly truncated: boolean;
 } {
@@ -292,8 +294,10 @@ function keptResult(redacted: unknown): {
   if (serialized.length <= PLATFORM_OBSERVATION_RESULT_MAX_CHARS) {
     return { result: redacted, truncated: false };
   }
+  // Half of a surrogate pair is no text `jsonb` stores: the evidence would be refused (22P02).
+  const kept = sliceKeepingPairs(serialized, PLATFORM_OBSERVATION_RESULT_MAX_CHARS);
   return {
-    result: `${serialized.slice(0, PLATFORM_OBSERVATION_RESULT_MAX_CHARS)}… [${serialized.length - PLATFORM_OBSERVATION_RESULT_MAX_CHARS} more characters omitted]`,
+    result: `${kept}… [${serialized.length - kept.length} more characters omitted]`,
     truncated: true,
   };
 }
@@ -338,7 +342,7 @@ export async function recordPlatformObservation(
     predicate === undefined
       ? { outcome: input.absent ? 'satisfied' : 'unsatisfied', undetermined: [] }
       : evaluatePredicate(predicate, redacted);
-  const { result, truncated } = keptResult(redacted);
+  const { result, truncated } = keptObservationResult(redacted);
   const activity = await startActivity(client, ws, {
     kind: input.activityKind,
     principalId: input.requesterId,

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type ChatMessageWire, ToolCallMessageContentSchema } from '@nexttime/shared';
+import {
+  type ChatMessageWire,
+  LONE_SURROGATE_STAND_IN,
+  ToolCallMessageContentSchema,
+} from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -15,6 +19,7 @@ import {
   _resetChatPushEventsForTests,
   subscribeToChatPushEvents,
 } from './push.js';
+import { MESSAGE_TEXT_MAX_CHARS, TOOL_CALL_RESULT_PREVIEW_CHARS } from './tool-call-record.js';
 
 /**
  * application/chat/tool-call-record.integration.test: DB-gated (auto-skip without DATABASE_URL).
@@ -26,7 +31,9 @@ import {
  *      repeated in the reply, is neither in the history nor in the live tool stream;
  *   2. a replayed frame does not add a second record, and a call still open when the Turn ends is
  *      recorded `not_finished` without failing the Turn;
- *   3. the records follow the Chat's own visibility — another member cannot page them.
+ *   3. the records follow the Chat's own visibility — another member cannot page them;
+ *   4. half of an emoji — where a cut falls inside one, or straight from the tool or the model —
+ *      never makes a record or a reply one `jsonb` refuses (legacy 834).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -263,6 +270,64 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect((await history(chatId)).some((message) => message.role === 'tool')).toBe(true);
       await expect(history(chatId, otherId)).rejects.toThrow();
+    });
+
+    it('legacy 834: a record or a reply cut through an emoji, or holding half of one, is stored; the Turn completes', async () => {
+      const { chatId, turnId } = await startTurn();
+      const at = { workspaceId, chatId, turnId, principalId: ownerId };
+      const logged: string[] = [];
+      const sink = createChatEventSink({ pool, log: (line) => logged.push(line) });
+      const EMOJI = '\u{1F600}';
+      const [HIGH, LOW] = [EMOJI[0] as string, EMOJI[1] as string];
+      // Each cut falls between the two halves of the emoji.
+      const cutResult = `${'x'.repeat(TOOL_CALL_RESULT_PREVIEW_CHARS - 1)}${EMOJI} past the preview`;
+      const cutReply = `${'a'.repeat(MESSAGE_TEXT_MAX_CHARS - 1)}${EMOJI} past the cut`;
+      const events: AgentRuntimeEvent[] = [
+        {
+          ...at,
+          type: 'toolCallStarted',
+          toolCallId: 'c1',
+          name: 'bash',
+          args: { command: 'cat' },
+        },
+        {
+          ...at,
+          type: 'toolCallEnded',
+          toolCallId: 'c1',
+          result: { content: [{ type: 'text', text: cutResult }] },
+        },
+        { ...at, type: 'toolCallStarted', toolCallId: 'c2', name: 'bash', args: { command: 'od' } },
+        {
+          ...at,
+          type: 'toolCallEnded',
+          toolCallId: 'c2',
+          result: { content: [{ type: 'text', text: `half ${HIGH} of an emoji` }] },
+        },
+        { ...at, type: 'message', role: 'assistant', content: { text: cutReply } },
+        { ...at, type: 'message', role: 'assistant', content: { text: `the other half ${LOW}` } },
+        { ...at, type: 'turnEnded', status: 'completed' },
+      ];
+      for (const event of events) await sink.handle(event);
+
+      // Before: `JSON.stringify` wrote each half as `\udXXX`, `jsonb` refused it (22P02) — both
+      // records were skipped, both replies lost, and the Turn ended `failed`.
+      const messages = await history(chatId);
+      const tools = messages
+        .filter((message) => message.role === 'tool')
+        .map((message) => ToolCallMessageContentSchema.parse(message.content));
+      expect(tools.map((tool) => tool.toolCallId)).toEqual(['c1', 'c2']);
+      // A cut keeps the pair whole: it ends before the emoji, with no stand-in.
+      expect(tools[0]?.result?.text).toBe('x'.repeat(TOOL_CALL_RESULT_PREVIEW_CHARS - 1));
+      expect(tools[0]?.result?.truncated).toBe(true);
+      // Half of one from the tool itself is stored as U+FFFD.
+      expect(tools[1]?.result?.text).toBe(`half ${LONE_SURROGATE_STAND_IN} of an emoji`);
+      const replies = messages.filter((message) => message.role === 'assistant');
+      expect(replies.map((reply) => reply.text)).toEqual([
+        `${'a'.repeat(MESSAGE_TEXT_MAX_CHARS - 1)}…`,
+        `the other half ${LONE_SURROGATE_STAND_IN}`,
+      ]);
+      expect(await turnStatus(turnId)).toBe('completed');
+      expect(logged.join('\n')).not.toContain('could not store');
     });
   },
 );
