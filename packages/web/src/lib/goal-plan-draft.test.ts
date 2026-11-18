@@ -12,6 +12,7 @@ import {
   draftFromDetail,
   draftProblems,
   emptyStep,
+  endedKeptSteps,
   fieldOfProblem,
   fieldOfRefusal,
   hasRequesterConfirm,
@@ -121,6 +122,52 @@ describe('lib/goal-plan-draft', () => {
       adopted: ['fetch'],
       unused: [],
       inputMismatch: [],
+    });
+  });
+
+  it('legacy 571: a kept step that ended is left out of the contract notes; one changed starts again and is in them', () => {
+    const detail = paused({
+      steps: [
+        stepRun({ status: 'succeeded' }),
+        stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'pending', attempts: [] }),
+      ],
+    });
+    const definitions = [
+      {
+        id: WORKER_ID,
+        version: 2,
+        kind: 'worker',
+        status: 'published',
+        definition: {
+          name: 'w',
+          outputSchema: { type: 'object' as const },
+          inputSchema: {
+            type: 'object' as const,
+            properties: { hosts: { type: 'array' as const } },
+            required: ['hosts'],
+          },
+        },
+      },
+    ];
+    // Kept as it is: fetch succeeded and never starts again, so only apply is hinted.
+    let draft = draftFromDetail(detail);
+    let plan = planOf(draft);
+    if (plan === null) throw new Error('no plan');
+    expect([...endedKeptSteps(draft, detail)]).toEqual(['fetch']);
+    expect(planContractNotes(draft, plan, definitions, endedKeptSteps(draft, detail))).toEqual({
+      adopted: [],
+      unused: ['apply'],
+      inputMismatch: ['apply'],
+    });
+    // Changed: fetch starts again on its new definition, so its hints are back.
+    draft = withStep(draft, 'fetch', { inputText: '{"hosts": 4}' });
+    plan = planOf(draft);
+    if (plan === null) throw new Error('no plan');
+    expect(endedKeptSteps(draft, detail).size).toBe(0);
+    expect(planContractNotes(draft, plan, definitions, endedKeptSteps(draft, detail))).toEqual({
+      adopted: [],
+      unused: ['fetch', 'apply'],
+      inputMismatch: ['fetch', 'apply'],
     });
   });
 

@@ -531,12 +531,14 @@ export interface PlanContractNotes {
  * Read from the listed Worker versions (`definitions`); a step whose version is not among them
  * is left out (its own hint, `step_worker_unavailable`, is the kernel's). A step whose input shows
  * the read's mask is left out of the input check: the kernel puts back what the read masked, so
- * the text here is not the input it checks.
+ * the text here is not the input it checks. Steps in `ended` (`endedKeptSteps`) are left out of
+ * both hints, as the kernel leaves them out.
  */
 export function planContractNotes(
   draft: PlanDraft,
   plan: GoalPlan,
   definitions: readonly WorkerDefinitionSummary[] | undefined,
+  ended: ReadonlySet<string> = new Set(),
 ): PlanContractNotes {
   const adopted = draft.steps
     .filter((step) => !step.removed && step.adoptedOutputSchema !== null)
@@ -544,6 +546,10 @@ export function planContractNotes(
   const unused: string[] = [];
   const inputMismatch: string[] = [];
   for (const step of plan.steps) {
+    // Legacy 571: a kept step that ended never starts again, so its contract is no longer advice
+    // for anything — the kernel leaves it out of the revision's hints the same way (`revise.ts`,
+    // `endedKeys`), and the goal page's read hints only steps still to start.
+    if (ended.has(step.key)) continue;
     const row = definitions?.find(
       (definition) =>
         definition.kind === 'worker' &&
@@ -696,6 +702,22 @@ export function supersededLiveSteps(draft: PlanDraft, detail: GoalDetailWire): r
   const diff = planDiff(detail.planRevision.plan, plan);
   const runs = liveRuns(detail);
   return [...diff.removed, ...diff.changed].filter((key) => taskLive(runs.get(key)));
+}
+
+/** Legacy 571: the steps of the plan in force that ended and that this revision keeps as they are
+ *  — they never start again (the kernel's `endedKeys`, `revise.ts`). A step this revision changes
+ *  starts again on its new definition, so it is not one of them. */
+export function endedKeptSteps(draft: PlanDraft, detail: GoalDetailWire): ReadonlySet<string> {
+  const plan = planOf(draft);
+  if (plan === null) return new Set();
+  const diff = planDiff(detail.planRevision.plan, plan);
+  const changed = new Set([...diff.added, ...diff.changed]);
+  const runs = liveRuns(detail);
+  return new Set(
+    plan.steps
+      .map((step) => step.key)
+      .filter((key) => !changed.has(key) && stepEnded(runs.get(key))),
+  );
 }
 
 /** The removals to send: only the steps let to finish (terminate is the default), and only
