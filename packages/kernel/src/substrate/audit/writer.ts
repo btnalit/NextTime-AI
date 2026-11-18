@@ -354,7 +354,15 @@ function resolveSinceDays(days: number): number {
  *  `payload->'params'->>'gatekeeperId'`/`...->>'operation'`; a row missing either (defensive —
  *  every real caller's `paramsSchema` requires both) is excluded rather than surfaced as a
  *  `null`-keyed group. Empty `filter.actions` short-circuits to `[]` without a round trip — an
- *  `= any('{}')` would already return nothing, but this avoids the query entirely. */
+ *  `= any('{}')` would already return nothing, but this avoids the query entirely.
+ *
+ *  Legacy 222: only calls that ran are counted. A call refused before it ran — by the gate
+ *  (`auditGateRefusal`: a definition mismatch, params its schema refuses, no credential, …) or by
+ *  the dispatcher (an admin agent's call outside its ceiling) — leaves a row with
+ *  `payload.outcome = 'refused'` so the audit log keeps it, and that row is not a call here: it
+ *  adds nothing to `calls` nor moves `lastCalledAt`. The audit log (`queryAudit`) still shows
+ *  every refusal. `get_operation_stats` counts its execute side differently, on purpose — see
+ *  `governance/approval/reads.ts`'s `OperationStatsRow`. */
 export async function queryAuditActionOperationStats(
   client: PoolClient,
   workspaceId: string,
@@ -374,6 +382,7 @@ export async function queryAuditActionOperationStats(
        and created_at >= now() - make_interval(days => $3::int)
        and payload->'params'->>'gatekeeperId' is not null
        and payload->'params'->>'operation' is not null
+       and payload->>'outcome' is distinct from 'refused'
        and ($4::uuid is null or payload->'params'->>'gatekeeperId' = $4::text)
      group by action, gatekeeper_id, operation_name
      order by action, gatekeeper_id, operation_name`,
