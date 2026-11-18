@@ -357,10 +357,30 @@ describe('GraphPage browse by relationship', () => {
     ).toContain('node-a');
     expect(http.callsTo('list_facts')).toEqual([{ linkType: 'runs_on', limit: 50 }]);
     // An endpoint links to that Object, keeping the relationship so Back returns to the list.
-    const link = within(rows[0] as HTMLElement)
-      .getByTestId('graph-relation-source')
-      .querySelector('a');
-    expect(link?.getAttribute('href')).toBe('#/work/graph?objectId=c-1&relation=runs_on');
+    // UX #1455 M2: the whole endpoint (name, then type) is the link; no 「对象」 label.
+    const link = within(rows[0] as HTMLElement).getByTestId('graph-relation-source');
+    expect(link.tagName).toBe('A');
+    expect(link.getAttribute('href')).toBe('#/work/graph?objectId=c-1&relation=runs_on');
+    expect(link.textContent).not.toContain('对象');
+    // UX #1455 M1: the opened list takes focus (its pane), so it is never left off-screen.
+    expect(document.activeElement).toBe(screen.getByTestId('graph-object-pane'));
+  });
+
+  it('names an endpoint the page could not name by a short id, never a bare one', async () => {
+    window.location.hash = '#/work/graph?relation=runs_on';
+    renderPage(
+      scriptedHttp({
+        list_facts: () => ({
+          items: FACTS.filter((f) => f.linkType === 'runs_on').slice(0, 1),
+          nodeDetails: [],
+        }),
+      }),
+    );
+    const source = await screen.findByTestId('graph-relation-source');
+    expect(source.tagName).not.toBe('A');
+    expect(screen.getByTestId('graph-relation-source-fallback')).toBeTruthy();
+    // A deep link does not take focus on first load.
+    expect(document.activeElement).not.toBe(screen.getByTestId('graph-object-pane'));
   });
 
   it('comes back to the relationship list from an Object opened from it', async () => {

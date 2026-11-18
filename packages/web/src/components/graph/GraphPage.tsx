@@ -1,5 +1,5 @@
 import type { ConflictWire, FactWire, OntologyTypeWire } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -110,6 +110,22 @@ export function GraphPage({ http }: GraphPageProps) {
   }, [objectId]);
 
   const [provenanceFact, setProvenanceFact] = useState<FactWire | null>(null);
+  // UX #1455 M1: opening an Object or a relationship type — from far down the search pane's list,
+  // from a relationship row or a neighbour deep in the pane, or above the pane on a narrow screen —
+  // brings the object pane's top into view and moves focus there, so the result never opens
+  // off-screen and focus never drops to the page body with the unmounted row. Not on first load.
+  const objectPaneRef = useRef<HTMLElement>(null);
+  const shownPane = `${objectId ?? ''}|${relation ?? ''}`;
+  const lastShownPane = useRef(shownPane);
+  useEffect(() => {
+    if (lastShownPane.current === shownPane) return;
+    lastShownPane.current = shownPane;
+    const pane = objectPaneRef.current;
+    if (pane === null) return;
+    const { top } = pane.getBoundingClientRect();
+    if (top < 0 || top > window.innerHeight * 0.5) pane.scrollIntoView?.({ block: 'start' });
+    pane.focus({ preventScroll: true });
+  }, [shownPane]);
   const closeProvenance = useCallback(() => setProvenanceFact(null), []);
 
   const focus = useCallback(
@@ -176,7 +192,13 @@ export function GraphPage({ http }: GraphPageProps) {
             />
             <FreshnessLegend />
           </aside>
-          <section className="graph-object-pane" aria-label="Object">
+          <section
+            className="graph-object-pane"
+            aria-label={t('对象', 'Object')}
+            ref={objectPaneRef}
+            tabIndex={-1}
+            data-testid="graph-object-pane"
+          >
             {objectId === undefined && relation !== undefined ? (
               <RelationFactsView
                 http={http}

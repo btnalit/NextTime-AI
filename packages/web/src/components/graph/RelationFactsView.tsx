@@ -43,7 +43,7 @@ export interface RelationFactsViewProps {
  * components/graph/RelationFactsView (legacy 147): the object pane while a relationship type is
  * browsed (`?relation=`) — every active Fact of that type across the workspace (`list_facts`,
  * newest first), each as source → link type → target with the endpoints named from the page's
- * own `nodeDetails` (never a bare id), their type, the Fact's freshness and 「溯源」. An endpoint
+ * own `nodeDetails` (never a bare id) and typed, the Fact's freshness and 「溯源」. An endpoint
  * links to that Object (the hash keeps `relation`, so leaving the Object comes back here).
  * 「加载更多」 follows `nextCursor`; every page brings its own endpoint names.
  */
@@ -104,18 +104,26 @@ export function RelationFactsView({
     }
   }, [http, params, nextCursor, loadingMore]);
 
+  // UX #1455 M2: an endpoint is always an Object, so it reads as its name then its type — one
+  // link, the whole of it a tap target — with no 「对象」 label or copy button to crowd the name on
+  // a narrow screen. An endpoint the page did not name degrades to the kit chip (short id +
+  // 「未知 / 已删除」), never a bare id.
   const endpoint = (id: string, testId: string) => {
     const node = nodes.get(id);
+    if (node?.name === undefined || node.name === '') {
+      return <RefChip kind="object" id={id} typeName={node?.typeName} size="s" testId={testId} />;
+    }
     return (
-      <RefChip
-        kind="object"
-        id={id}
-        name={node?.name}
-        typeName={node?.typeName}
+      <a
+        className="graph-relation-end"
         href={hrefFor(id)}
-        size="s"
-        testId={testId}
-      />
+        title={`${node.name} (${node.typeName}) · ${id}`}
+        data-ref-id={id}
+        data-testid={testId}
+      >
+        <span className="graph-relation-end-name">{node.name}</span>
+        <span className="graph-relation-end-type">{node.typeName}</span>
+      </a>
     );
   };
 
@@ -132,7 +140,8 @@ export function RelationFactsView({
       </nav>
       <header className="section-header">
         <h2 className="section-title">
-          {t('关系', 'Relationship')} <span className="mono">{linkType}</span>
+          {t('关系', 'Relationship')}{' '}
+          <span className="mono graph-relation-title-type">{linkType}</span>
         </h2>
         {total !== undefined ? (
           <span className="text-3 text-small" data-testid="graph-relation-total">
@@ -192,17 +201,16 @@ export function RelationFactsView({
                     <span className="tag" title={t('认知状态', 'Epistemic status')}>
                       {epistemicStatusLabel(fact.epistemicStatus, t)}
                     </span>
+                    {/* UX #1455 M2: on the meta line, not a column that squeezes the endpoints. */}
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => onProvenance(fact)}
+                      data-testid="graph-relation-provenance"
+                    >
+                      {t('溯源', 'Provenance')}
+                    </Button>
                   </div>
-                </div>
-                <div className="data-row-trailing">
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    onClick={() => onProvenance(fact)}
-                    data-testid="graph-relation-provenance"
-                  >
-                    {t('溯源', 'Provenance')}
-                  </Button>
                 </div>
               </li>
             ))}
