@@ -381,7 +381,11 @@ describe('buildListFactsQuery', () => {
     expect(q.text).toContain('superseded_at is null');
     expect(q.text).toContain('invalidated_at is null');
     expect(q.text).toContain('link_visible_to_caller(l.workspace_id, l.activity_id)');
-    expect(q.text).toContain("order by date_trunc('milliseconds', recorded_at) desc, id desc");
+    // The key is the UTC millisecond, the expression of links_workspace_type_active_idx (core/0063,
+    // legacy 146; links-active-read-indexes.integration.test.ts checks the plan).
+    expect(q.text).toContain(
+      "order by date_trunc('milliseconds', recorded_at at time zone 'UTC') desc, id desc",
+    );
     expect(q.text).not.toContain('source_object_id = ');
   });
 
@@ -394,8 +398,8 @@ describe('buildListFactsQuery', () => {
       cursor: encodeFactsCursor(recordedAt, id),
     });
     expect(q.values).toEqual(['ws1', 'runs_on', 7, recordedAt.toISOString(), id]);
-    expect(q.text).toContain(
-      "(date_trunc('milliseconds', recorded_at), id) < ($4::timestamptz, $5::uuid)",
+    expect(q.text).toMatch(
+      /\(date_trunc\('milliseconds', recorded_at at time zone 'UTC'\), id\)\s+< \(\$4::timestamptz at time zone 'UTC', \$5::uuid\)/,
     );
 
     const malformed = buildListFactsQuery('ws1', { linkType: 'runs_on', cursor: 'nope' });
