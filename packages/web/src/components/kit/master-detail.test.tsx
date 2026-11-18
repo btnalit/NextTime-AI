@@ -110,6 +110,16 @@ describe('kit/MasterDetail', () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
+    it('reaches 44px for a finger without looking any bigger (legacy 814)', () => {
+      renderNarrow(<div>detail</div>);
+      const close = screen.getByTestId('md-detail-close');
+      // The 28px button keeps its size; an invisible ::after 8px past each edge takes the tap.
+      expect(close.className).toContain('h-7');
+      expect(close.className).toContain('relative');
+      expect(close.className).toContain('after:absolute');
+      expect(close.className).toContain('after:-inset-2');
+    });
+
     it('asks first when a form in the detail was edited', () => {
       const onClose = renderNarrow(
         <form>
