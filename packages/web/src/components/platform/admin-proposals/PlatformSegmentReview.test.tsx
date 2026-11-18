@@ -242,7 +242,7 @@ describe('PlatformSegmentReview (平台部分审阅, S11 AA4b)', () => {
     );
   });
 
-  it('legacy 634: in English the missing step says the same as the Chinese — the parts above that do not fit', async () => {
+  it('legacy 634: in English the missing step says the same as the Chinese — the items above that do not fit', async () => {
     const blockers = (count: number) =>
       scriptedHttp({
         list_admin_proposals: () => ({ items: [summary()] }),
@@ -260,12 +260,12 @@ describe('PlatformSegmentReview (平台部分审阅, S11 AA4b)', () => {
       });
     renderDetail(blockers(1), true);
     expect((await screen.findByTestId('platform-segment-missing-steps')).textContent).toMatch(
-      /deal with the 1 part above that does not fit$/,
+      /deal with the 1 item above that does not fit$/,
     );
     cleanup();
     renderDetail(blockers(2), true);
     const missing = (await screen.findByTestId('platform-segment-missing-steps')).textContent;
-    expect(missing).toMatch(/deal with the 2 parts above that do not fit$/);
+    expect(missing).toMatch(/deal with the 2 items above that do not fit$/);
     expect(missing).not.toContain('problem');
   });
 

@@ -937,10 +937,10 @@ function SegmentReview({
       ? [
           t(
             `处理 ${data.blockers.length} 处对不上的地方`,
-            // Legacy 634: the same words as the Chinese — the parts above that do not fit.
+            // Legacy 634: the same words as the Chinese — the items above that do not fit ("part" would read as the proposal's platform part).
             data.blockers.length === 1
-              ? 'deal with the 1 part above that does not fit'
-              : `deal with the ${data.blockers.length} parts above that do not fit`,
+              ? 'deal with the 1 item above that does not fit'
+              : `deal with the ${data.blockers.length} items above that do not fit`,
           ),
         ]
       : []),
