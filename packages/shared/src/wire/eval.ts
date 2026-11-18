@@ -304,7 +304,9 @@ export type EvalTrialVerdict = z.infer<typeof EvalTrialVerdictSchema>;
 
 /** How an `errored` trial ended: its Task's failure reason, `cancelled`, `withheld`, or `paused` —
  *  the evaluation seal paused the evaluation's agents while the trial ran (S10 E3-2c), so what it
- *  ended with says nothing about the arm. */
+ *  ended with says nothing about the arm. The Task reasons `evaluation_withheld` and
+ *  `evaluation_paused` (legacy 515) are in the list only because it spreads the Task's: a trial
+ *  records them as `withheld` and `paused`. */
 export const EVAL_TRIAL_ERROR_VALUES = [
   ...TASK_FAILURE_REASON_VALUES,
   'cancelled',

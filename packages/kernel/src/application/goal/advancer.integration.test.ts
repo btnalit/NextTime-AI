@@ -1259,7 +1259,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               reason === 'evaluation_paused'
                 ? `step only: attempt 1 did not start: ${STEP_ATTEMPT_PAUSED_DETAIL} (evaluation_paused)`
                 : expect.stringMatching(
-                    /^step only: attempt 1 did not start: .*reserved for evaluation \(evaluation_withheld\).*revise the step's input.*or cancel$/,
+                    /^step only: attempt 1 did not start: .*reserved for evaluation \(evaluation_withheld\).*keeps this attempt's Worker version and Skills — revise the plan.*publishes one\), or cancel$/,
                   ),
           });
           await advance(goalRunId, requester);

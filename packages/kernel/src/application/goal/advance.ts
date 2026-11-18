@@ -473,7 +473,8 @@ function sealRefusedStart(
 }
 
 /** Legacy 515: the pause's detail when the evaluation seal refused an attempt's start — what a
- *  person can do about it, since retrying is refused the same way. */
+ *  person can do about it, since retrying is refused the same way: a retry keeps the attempt's
+ *  Worker version and Skills (`step-attempt.ts`), so only a revised step starts afresh. */
 function sealRefusedStartDetail(
   stepKey: string,
   attempt: number,
@@ -481,7 +482,7 @@ function sealRefusedStartDetail(
 ): string {
   return reason === 'evaluation_paused'
     ? `step ${stepKey}: attempt ${attempt} did not start: ${STEP_ATTEMPT_PAUSED_DETAIL} (evaluation_paused)`
-    : `step ${stepKey}: attempt ${attempt} did not start: what its Worker would start with (the step's input, the Worker's system prompt or a Skill it mounts) carries content reserved for evaluation (evaluation_withheld), and a retry is refused the same way — revise the step's input, have a workspace owner or builder change the Worker, or cancel`;
+    : `step ${stepKey}: attempt ${attempt} did not start: what its Worker would start with (the step's input, the Worker's system prompt or a Skill it mounts) carries content reserved for evaluation (evaluation_withheld), and a retry is refused the same way, since it keeps this attempt's Worker version and Skills — revise the plan so the step's input leaves it out or the step uses a Worker version without it (a workspace owner or builder publishes one), or cancel`;
 }
 
 /** The pause a refused attempt start causes, or `null` for a quota that clears by itself. */
