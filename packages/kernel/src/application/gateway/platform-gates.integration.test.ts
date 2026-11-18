@@ -11,6 +11,7 @@ import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base
 import type {
   AgentProfileWire,
   AvailableGateInstanceWire,
+  ConnectionRequestWire,
   ConnectorWire,
   EnableGateInstanceResultWire,
   ExecutionReadinessWire,
@@ -3174,10 +3175,17 @@ describe.runIf(DATABASE_URL !== undefined)(
               where workspace_id = $1 and id = $2`,
             [other.workspaceId, gatekeeperId, carrying],
           );
+          const carryingRequest = await pool.query<{ id: string }>(
+            `insert into connection_requests (workspace_id, kind, target, requested_by)
+             values ($1, 'http', $2, $3) returning id`,
+            [other.workspaceId, carrying, other.ownerPrincipalId],
+          );
+          // Legacy 247: one that carries nothing is shown as stored and not marked.
+          const clean = `https://${host}/clean`;
           await pool.query(
             `insert into connection_requests (workspace_id, kind, target, requested_by)
              values ($1, 'http', $2, $3)`,
-            [other.workspaceId, carrying, other.ownerPrincipalId],
+            [other.workspaceId, clean, other.ownerPrincipalId],
           );
           const gateId = `p0b-old-${randomUUID().slice(0, 8)}`;
           expect(
@@ -3203,8 +3211,31 @@ describe.runIf(DATABASE_URL !== undefined)(
               ownerCaller,
               'list_connection_requests',
               {},
-            )) as ListEnvelope<{ target: string }>;
-            expect(requests.items.map((request) => request.target)).toEqual([shown]);
+            )) as ListEnvelope<ConnectionRequestWire>;
+            // Legacy 247: the cut address carries no `[redacted]`, so it is marked.
+            expect(shown).not.toContain('[redacted]');
+            expect(
+              requests.items
+                .map(({ target, targetRedacted }) => ({ target, marked: targetRedacted ?? null }))
+                .sort((a, b) => a.target.localeCompare(b.target)),
+            ).toEqual([
+              { target: shown, marked: true },
+              { target: clean, marked: null },
+            ]);
+            expect(requests.items.find((request) => request.target === clean)).not.toHaveProperty(
+              'targetRedacted',
+            );
+            const cancelled = (await dispatchCapability(
+              { pool },
+              ownerCaller,
+              'cancel_connection_request',
+              { connectionRequestId: carryingRequest.rows[0]?.id },
+            )) as ConnectionRequestWire;
+            expect(cancelled).toMatchObject({
+              status: 'cancelled',
+              target: shown,
+              targetRedacted: true,
+            });
 
             const available = (await dispatchCapability(
               { pool },
@@ -3226,7 +3257,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               endpoint: shown,
             });
 
-            for (const result of [gatekeeper, requests, available, instance, listed]) {
+            for (const result of [gatekeeper, requests, cancelled, available, instance, listed]) {
               expect(JSON.stringify(result)).not.toContain(fake);
             }
             // Shown redacted, kept as stored: the gate is called at the stored value.

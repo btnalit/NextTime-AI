@@ -254,13 +254,16 @@ export function toWireSource(row: SourceRow) {
 }
 
 export function toWireConnectionRequest(row: ConnectionRequestRow) {
+  // Shown as every gate address is (`redactConnectionAddress`): a request from before legacy 186
+  // can still carry a credential (`scrub-raw-secrets` counts it, `connectionTargets`).
+  const target = redactConnectionAddress('target', row.target);
   return {
     id: row.id,
     status: row.status,
     kind: row.kind,
-    // Shown as every gate address is (`redactConnectionAddress`): a request from before legacy 186
-    // can still carry a credential (`scrub-raw-secrets` counts it, `connectionTargets`).
-    target: redactConnectionAddress('target', row.target),
+    target,
+    // Legacy 247: a cut can leave no `[redacted]` in the address, so the reader is told.
+    ...(target !== row.target ? { targetRedacted: true as const } : {}),
     requestedBy: row.requestedBy,
     gatekeeperId: row.gatekeeperId,
     completedBy: row.completedBy,

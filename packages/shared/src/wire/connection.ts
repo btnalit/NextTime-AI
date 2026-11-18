@@ -37,7 +37,16 @@ export const ConnectionRequestWireSchema = z
     id: z.string(),
     status: ConnectionRequestStatusSchema,
     kind: ConnectionKindSchema,
+    /** As every gate address is shown (kernel `redactConnectionAddress`): one that could carry a
+     *  credential loses its user info, query and fragment, what still looks like a secret in it
+     *  reads `[redacted]`, and one the rule would still refuse reads `[redacted]` whole. */
     target: z.string(),
+    /** Legacy 247 (review #501 on #661): `true` when `target` is not the address as stored — it
+     *  was cut by that rule. A cut can leave no `[redacted]` in it (`https://u:p@host/x` reads
+     *  `https://host/x`), so this is how a reader tells a cut address from one asked for as
+     *  shown. A new request whose target carries a credential is refused (legacy 186), so only one
+     *  stored before the rule refused it is cut. Absent otherwise. */
+    targetRedacted: z.literal(true).optional(),
     requestedBy: z.string(),
     gatekeeperId: z.string().nullable(),
     completedBy: z.string().nullable(),
@@ -54,7 +63,8 @@ export type ConnectionRequestWire = z.infer<typeof ConnectionRequestWireSchema>;
 
 /** `request_connection`'s own result shape (connection-handlers.ts's `requestConnectionHandler` —
  *  already hand-projects a subset of `ConnectionRequestWireSchema`'s own fields, no `gatekeeperId`/
- *  `completedBy`/`completedAt` yet since the request has not been resolved). */
+ *  `completedBy`/`completedAt` yet since the request has not been resolved). No `targetRedacted`:
+ *  a target that carries a credential is refused (legacy 186), so a new request's is never cut. */
 export const ConnectionRequestCreatedWireSchema = ConnectionRequestWireSchema.pick({
   id: true,
   status: true,
