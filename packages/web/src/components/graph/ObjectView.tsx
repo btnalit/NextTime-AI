@@ -30,6 +30,9 @@ export interface ObjectViewProps {
   readonly trail: readonly string[];
   readonly onFocus: (objectId: string) => void;
   readonly onBack: () => void;
+  /** Legacy 147: the relationship type this Object was opened from (`?relation=`) — the first
+   *  Back returns to that list rather than to the search. */
+  readonly backToRelation?: string;
   readonly onProvenance: (fact: FactWire) => void;
   readonly onRefresh: () => void;
   readonly onAsOfChange: (atIso: string | undefined) => void;
@@ -64,6 +67,7 @@ export function ObjectView({
   trail,
   onFocus,
   onBack,
+  backToRelation,
   onProvenance,
   onRefresh,
   onAsOfChange,
@@ -109,7 +113,11 @@ export function ObjectView({
           onClick={onBack}
           data-testid="graph-back"
         >
-          {trail.length > 1 ? t('返回', 'Back') : t('返回搜索', 'Back to search')}
+          {trail.length > 1
+            ? t('返回', 'Back')
+            : backToRelation !== undefined
+              ? t(`返回关系 ${backToRelation}`, `Back to ${backToRelation}`)
+              : t('返回搜索', 'Back to search')}
         </Button>
         <ol className="graph-trail-list">
           {trail.map((id, index) => {

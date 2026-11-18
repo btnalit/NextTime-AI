@@ -19,7 +19,7 @@
 #           "unclear: <legacy no.>"  not decided / not exercised yet (counted by ratchet.repeat_unclear)
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
-  console_unexplained: 10
+  console_unexplained: 9
   kernel_test_missing: 1
   e2e_waived: 59
   repeat_unclear: 0
@@ -379,7 +379,7 @@ capabilities:
     console: required
     agents: [admin]
   graph_overview:
-    console: "none: 待说明（2026-11-06 盘点）"
+    console: required
     agents: [admin]
   install_module:
     console: "none: 待说明（2026-11-06 盘点）"

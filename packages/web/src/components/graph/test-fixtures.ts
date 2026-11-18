@@ -217,6 +217,31 @@ export function scriptedHttp(overrides: Record<string, Handler> = {}): ScriptedH
       const { objectId } = params as { objectId: string };
       return OBJECTS.find((candidate) => candidate.id === objectId) ?? null;
     },
+    // Legacy 147: browse by relationship type.
+    graph_overview: () => ({
+      factCountsByLinkType: [
+        { linkType: 'depends_on', count: 1 },
+        { linkType: 'runs_on', count: 2 },
+      ],
+    }),
+    list_facts: (params) => {
+      const { linkType } = params as { linkType: string };
+      const items = facts.filter((f) => f.linkType === linkType);
+      const ids = [...new Set(items.flatMap((f) => [f.sourceObjectId, f.targetObjectId]))];
+      return {
+        items,
+        nodeDetails: ids.map((id) => {
+          const row = OBJECTS.find((candidate) => candidate.id === id);
+          return {
+            id,
+            typeName: row?.objectType ?? 'Object',
+            ...(row?.identityKey
+              ? { name: String(row.identityKey.hostname ?? row.identityKey.serviceName) }
+              : {}),
+          };
+        }),
+      };
+    },
     explain: (params) => {
       const { nodeId } = params as { nodeId: string };
       if (nodeId !== 'f-1') throw new Error(`unscripted explain ${nodeId}`);
