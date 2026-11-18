@@ -3455,6 +3455,48 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：只回退代码即可。
 - 下一次主机升级的提示要带上本节。
 
+### 3.203 活跃 Fact 按类型、按时间读走索引（#1471，遗留 146，core 0063，0.69.2 之后的下一版）
+
+**迁移 core 0063**：`links` 加两个只含活跃 Fact（`superseded_at is null and invalidated_at is null`）的部分索引，只加索引，不改数据、约束和授权；建之前先删掉同名的失效索引（0044 的写法）：
+
+- `links_workspace_type_active_idx`，键为 `(workspace_id, link_type, date_trunc('milliseconds', recorded_at at time zone 'UTC') desc, id desc)`；
+- `links_workspace_recorded_active_idx`，键为 `(workspace_id, recorded_at desc, id desc)`。
+
+- **行为变化**：
+  - `list_facts` 和 `get_entry_context` 的最近 Fact 直接读索引，不再每次扫整个工作区再排序。本地 120 万活跃 Fact 时，`list_facts` 首页 1.7 s → 0.9 ms，最近 Fact 15.8 s → 0.5 ms。
+  - `list_facts` 的行、顺序、分页与原来相同，升级前拿到的游标照样能翻页。
+  - `countFactsByLinkType`（图谱概况、入口上下文的类型计数）不变，见遗留 854。
+- **升级影响**：迁移在一个事务里用普通 `create index`，建索引期间 `links` 被 SHARE 锁住：读照常，所有 Fact 写入（采集提交、Worker 上报、核对、作废）排队等两个索引建完。本地 160 万行（活跃 120 万，表 284 MB）共用 2.4 s，两个索引 78 MB 和 67 MB，约每百万活跃 Fact 2.5 s；主机磁盘慢的话可能要几倍。
+- **升级前只读预检**（结果记 `docs/private/`）：先看活跃 Fact 有多少，据此估计锁要拿多久。
+
+  ```sql
+  select count(*) from links where superseded_at is null and invalidated_at is null;
+  ```
+
+  嫌排队时间太长，可以在上一版还在跑的时候，事务外提前建好（不阻塞写入）。迁移发现已有有效索引就什么都不建：
+
+  ```sql
+  create index concurrently if not exists links_workspace_type_active_idx
+    on links (workspace_id, link_type, (date_trunc('milliseconds', recorded_at at time zone 'UTC')) desc, id desc)
+    where superseded_at is null and invalidated_at is null;
+  create index concurrently if not exists links_workspace_recorded_active_idx
+    on links (workspace_id, recorded_at desc, id desc)
+    where superseded_at is null and invalidated_at is null;
+  ```
+
+  `concurrently` 中途失败或被取消，会留下同名的失效索引，迁移会先删掉再建。
+- **升级后只读核对**：
+  - 下面两行的 `indisvalid` 都为 `t`：
+
+    ```sql
+    select c.relname, i.indisvalid from pg_index i join pg_class c on c.oid = i.indexrelid
+     where c.relname in ('links_workspace_type_active_idx', 'links_workspace_recorded_active_idx');
+    ```
+
+  - core 迁移版本为 63。
+- **回滚**：上一版本的代码不认这两个索引，直接跑在新 schema 上（见 §6 那一行），回退代码即可。要删索引：`drop index links_workspace_type_active_idx; drop index links_workspace_recorded_active_idx;`，再 `delete from schema_migrations where module = 'core' and version = 63`。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3651,6 +3693,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | core `0062_fact_identity_lookup_tiebreaker`（#1283，遗留 143）：只替换 `find_active_fact_for_identity` 与 `latest_fact_invalidated_for_identity` 两个函数体，给并列的行定顺序 | 可逆 | 上一版内核调同样的函数，不依赖并列时的顺序，直接跑在新函数上；#493 在 v0.69.2 的用例上验证过，#1283 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：按 0042 的定义重建两个函数，再删 `schema_migrations` 里 core 62 那一行 |
 | 0.69.2 之后的下一版 | goal `0020_absence_version_confirmed`（#1289，遗留 496）：新函数 `goal_absence_version_confirmed`，两张验收检查表各加一个触发器，确认不存在的检查通过时回查 Operation 版本记着的确认；不动数据 | 可逆 | 上一版内核照常写同样的 Observation，直接跑在新 schema 上；上一版在探针里失败的用例已在 `reversibility-deltas.json` 声明；#1289 的 CI rehearsal 与可逆性探针通过 | 只需回退代码，不需要删触发器。要撤 schema：删两个触发器与三个函数，再删 `schema_migrations` 里 goal 20 那一行 |
 | 0.69.2 之后的下一版 | governance `0046_reconcile_absence_version_confirmed`（#1289，遗留 496）：reconcile 在「不存在」回答上记 `effect_seen` 前同样回查 Operation 版本的确认；只建函数与触发器，不动数据 | 可逆 | 同上一行 | 只需回退代码。要撤 schema：删该触发器与函数，再删 `schema_migrations` 里 governance 46 那一行 |
+| 0.69.2 之后的下一版 | core `0063_links_active_read_indexes`（#1471，遗留 146）：`links` 加两个只含活跃 Fact 的部分索引 `links_workspace_type_active_idx`（类型 + UTC 毫秒键 + id，降序）与 `links_workspace_recorded_active_idx`（`recorded_at` + id，降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它们，照常运行（`list_facts` 照旧排序）；#1471 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index links_workspace_type_active_idx; drop index links_workspace_recorded_active_idx;`，再删 `schema_migrations` 里 core 63 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
