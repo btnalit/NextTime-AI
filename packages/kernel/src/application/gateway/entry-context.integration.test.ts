@@ -199,7 +199,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(taskIds(await getEntryContext(entry, { turnId: nextTurnId }))).toEqual([]);
     });
 
-    it('stores what the agent reports — Turn summary, decisions, a recorded Decision — with secret-looking values scrubbed (legacy 183)', async () => {
+    it('stores what the agent reports — Turn summary and a recorded Decision with secret-looking values scrubbed (legacy 183), the Decisions it names by id (legacy 783)', async () => {
       // Synthetic, Handle-shaped (`.gitleaks.toml` allows this signature segment).
       const handle =
         'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
@@ -215,7 +215,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await dispatchCapability({ pool }, entry, 'report_turn', {
         turnId,
         summary: `ran env: CAPABILITY_HANDLE=${handle}`,
-        decisions: [`call it with Authorization: Bearer ${handle}`, 'keep the plain one'],
+        decisions: [decision.id],
       });
 
       const stored = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
@@ -235,7 +235,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(JSON.stringify(stored)).not.toContain(fake);
       expect(stored.turn).toMatchObject({
         summary: 'ran env: CAPABILITY_HANDLE=[redacted]',
-        decisions: ['call it with Authorization: [redacted]', 'keep the plain one'],
+        decisions: [decision.id],
       });
       expect(stored.decision).toBe('rotate the key; old one was PGPASSWORD=[redacted]');
     });

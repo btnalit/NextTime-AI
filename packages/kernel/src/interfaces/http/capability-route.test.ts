@@ -300,7 +300,9 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
       { length: 12 },
       (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
     );
-    const mapped = mapCapabilityError(new DecisionReferenceError(ids));
+    const mapped = mapCapabilityError(
+      new DecisionReferenceError('record_decision', { relatedFactIds: ids }),
+    );
     expect(mapped).toEqual({
       status: 400,
       code: 'unresolved_references',
@@ -310,9 +312,44 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
     // The message names the first ten and counts the rest; `details` carries all twelve.
     expect(mapped.message).toContain(`"${ids[9]}", and 2 more), so nothing was recorded`);
     expect(mapped.message).not.toContain(ids[10] as string);
-    expect(new DecisionReferenceError([ids[0] as string]).message).toContain(
+    expect(
+      new DecisionReferenceError('record_decision', { relatedFactIds: [ids[0] as string] }).message,
+    ).toContain(
       `names 1 Fact that is not there or not readable to you ("${ids[0]}"), so nothing was recorded`,
     );
+  });
+
+  it('DecisionReferenceError (legacy 783) names a Task or Decisions too, and only the fields that refuse', () => {
+    const factId = '00000000-0000-4000-8000-000000000001';
+    const taskId = '00000000-0000-4000-8000-000000000002';
+    const both = mapCapabilityError(
+      new DecisionReferenceError('record_decision', {
+        relatedFactIds: [factId],
+        relatedTaskId: [taskId],
+      }),
+    );
+    expect(both).toEqual({
+      status: 400,
+      code: 'unresolved_references',
+      message: `record_decision: relatedFactIds names 1 Fact that is not there or not readable to you ("${factId}"); relatedTaskId names 1 Task that is not there or not readable to you ("${taskId}"), so nothing was recorded. Pass only ids of Facts the graph tools returned (list_facts, traverse, state_at); the id of a Task you can read (get_task, list_tasks), or leave them out.`,
+      details: { unresolved: { relatedFactIds: [factId], relatedTaskId: [taskId] } },
+    });
+    const taskOnly = mapCapabilityError(
+      new DecisionReferenceError('record_decision', { relatedTaskId: [taskId] }),
+    );
+    expect(taskOnly.details).toEqual({ unresolved: { relatedTaskId: [taskId] } });
+    expect(taskOnly.message).toBe(
+      `record_decision: relatedTaskId names 1 Task that is not there or not readable to you ("${taskId}"), so nothing was recorded. Pass only the id of a Task you can read (get_task, list_tasks), or leave it out.`,
+    );
+    const decisions = mapCapabilityError(
+      new DecisionReferenceError('report_turn', { decisions: [factId, taskId] }),
+    );
+    expect(decisions).toEqual({
+      status: 400,
+      code: 'unresolved_references',
+      message: `report_turn: decisions names 2 Decisions that are not there or not readable to you ("${factId}", "${taskId}"), so nothing was recorded. Pass only ids of Decisions you can read (record_decision returned them), or leave them out.`,
+      details: { unresolved: { decisions: [factId, taskId] } },
+    });
   });
 
   it('OperationNameInvalidError maps to 400 invalid_operation_name with its details', () => {

@@ -107,6 +107,7 @@ export {
   decisionImpact,
   findPrecedents,
   queryDecisions,
+  readableDecisionIds,
 } from './decisions.js';
 export type {
   ActionRequestRef,

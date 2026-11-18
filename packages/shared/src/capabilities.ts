@@ -1871,9 +1871,10 @@ const epistemicCapabilities = [
       'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
       'why), optional `relatedFactIds` (the ids of the Facts it rests on) and `relatedTaskId` — ' +
       'both uuids as returned by the graph and task tools, else 400 invalid_params. Each ' +
-      'relatedFactIds entry must be a Fact you can read (explain finds it), else 400 ' +
-      'unresolved_references (details: unresolved.relatedFactIds, the ids that do not resolve) and ' +
-      'nothing is recorded. Automatically ' +
+      'relatedFactIds entry must be a Fact you can read (explain finds it), and relatedTaskId a ' +
+      'Task you can read (get_task finds it), else 400 unresolved_references (details: ' +
+      'unresolved.relatedFactIds / unresolved.relatedTaskId, the ids that do not resolve, only ' +
+      'the fields that have any) and nothing is recorded. Automatically ' +
       'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
       'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
       'Not for routine observations — only for real choices worth tracing.',
@@ -2569,12 +2570,18 @@ const taskCapabilities = [
       .object({
         turnId: id,
         summary: z.string(),
-        decisions: z.array(id).optional(),
+        // Legacy 783: Decision ids, uuids as record_decision returns them (R-62's rule for
+        // relatedFactIds) — each checked to name a Decision the caller can read.
+        decisions: z.array(z.guid()).optional(),
       })
       .strict(),
     resultSchema: z.object({ turnId: id, status: z.string() }).strict(),
     description:
-      'Record the outcome of a finished Turn (`turnId`, `summary`, optional `decisions`), and ' +
+      'Record the outcome of a finished Turn (`turnId`, `summary`, optional `decisions`: the ' +
+      'uuids of Decisions you can read, as record_decision returned them — else 400 ' +
+      'invalid_params for one that is not a uuid, 400 unresolved_references (details: ' +
+      'unresolved.decisions) for one that names no Decision you can read, and nothing is ' +
+      'recorded, the Turn not ended), and ' +
       'acknowledge the context items `get_entry_context` showed it. The entry runtime calls this ' +
       'once per Turn on its own; interactive sessions have no Turn to report.',
   },
