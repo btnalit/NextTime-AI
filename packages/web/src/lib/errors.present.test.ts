@@ -296,8 +296,12 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(unpublished?.message).toContain('没有发布也没有草稿');
     expect(unpublished?.message).not.toContain('重新读取门的清单');
     // The 409 itself (`observe_operation`, `request_action`) is only ever the unreadable case.
-    expect(ERROR_NEXT_STEPS.operation_definition_unavailable?.en).toContain('Re-read the gate’s manifest');
-    expect(ERROR_NEXT_STEPS.operation_definition_unavailable?.en).not.toContain('corrected revision');
+    expect(ERROR_NEXT_STEPS.operation_definition_unavailable?.en).toContain(
+      'Re-read the gate’s manifest',
+    );
+    expect(ERROR_NEXT_STEPS.operation_definition_unavailable?.en).not.toContain(
+      'corrected revision',
+    );
   });
 
   it('reads a failure reason’s gate code out of a tool result, and nothing out of one without', () => {
