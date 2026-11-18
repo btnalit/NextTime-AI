@@ -928,8 +928,10 @@ function RevisionDiff({
                   'Governance fields and the definition the gate runs match the published version.',
                 )
             : t(
-                '读不出这一版的定义，没法和已发布版本比较。',
-                'This version’s definition could not be read, so it cannot be compared.',
+                // Legacy 848 (#501's review of #1459): `definitionChange` is absent when either side
+                // does not parse — after an unreadable published version, the corrected revision.
+                '读不出这一版或已发布版本的定义，没法比较执行定义。',
+                'This version’s or the published version’s definition could not be read, so the definitions cannot be compared.',
               )}
         </span>
       ) : (

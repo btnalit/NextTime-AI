@@ -1228,6 +1228,29 @@ describe('CatalogPage', () => {
     expect(diff.textContent).not.toContain('没有差异');
   });
 
+  it('legacy 848: a revision with no definition comparison does not blame this version alone', async () => {
+    const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.get',
+            status: 'draft',
+            version: 2,
+            // The kernel leaves `definitionChange` out when either side does not parse — after an
+            // unreadable published version, the corrected revision.
+            governanceChange: { before: fields, after: fields, direction: 'neutral' },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.get@draft');
+    const diff = await screen.findByTestId('operation-revision-diff');
+    expect(diff.textContent).toContain('读不出这一版或已发布版本的定义');
+  });
+
   it('legacy 614: a revision draft that only rewrites its description says so; one that keeps it says all three match', async () => {
     const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
     const rowsWith = (draftDescription: string) => [
