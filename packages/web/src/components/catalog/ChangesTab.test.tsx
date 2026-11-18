@@ -509,6 +509,51 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     await waitFor(() => expect(screen.queryByTestId('catalog-change-verify')).toBeNull());
   });
 
+  it('legacy 603: a rolled-back record shows its last verification as from before the roll-back, and what it wrote as taken back by it', async () => {
+    const rolledBack = {
+      status: 'rolled_back' as const,
+      rolledBackBy: { id: 'p-owner', kind: 'human' as const, displayName: 'Owner' },
+      rolledBackAt: '2026-10-21T08:00:00.000Z',
+    };
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST, rolledBack)] }),
+      get_change_segment: () => ({
+        ...detail(FIRST, { state: 'replaced', replacedBy: { segmentId: LATER } }, rolledBack),
+        verification: verification(),
+      }),
+    });
+    renderTab(http, FIRST);
+
+    const result = await screen.findByTestId('catalog-change-verification-result');
+    expect(
+      within(result).getByTestId('catalog-change-verification-before-rollback').textContent,
+    ).toBe('撤销前');
+    expect(within(result).getByTestId('catalog-change-verification-rolled-back').textContent).toBe(
+      '这是撤销前最后一次核验的结论。撤销已经把这次写入的改动退回，之后不再核验。',
+    );
+    expect(result.textContent).toContain('当时这次写入的改动项都还在生效。');
+    // UX P3-2 on #1478: what the run checked, in the past.
+    expect(screen.getByTestId('catalog-change-verification').textContent).toContain(
+      '核验当时检查的是这次安装写入的内容是否还在生效',
+    );
+    // The item: taken back by the roll-back, not 「replaced since」 by another change.
+    const item = screen.getByTestId('catalog-change-item-1');
+    expect(within(item).getByTestId('catalog-change-item-1-took-back').textContent).toBe(
+      '已随撤销退回',
+    );
+    expect(item.textContent).not.toContain('已被后来的改动替换');
+    expect(item.textContent).not.toContain('之后被另一条安装记录改过');
+    const now = within(item).getByTestId('catalog-change-item-1-replaced');
+    expect(now.textContent).toBe('现在生效的是另一条安装记录写入的版本：查看那条记录');
+    expect(within(now).getByRole('link').getAttribute('href')).toBe(
+      `#/govern/catalog/changes/${LATER}`,
+    );
+    // Not verified again.
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(screen.queryByTestId('catalog-change-verify')).toBeNull();
+  });
+
   it('legacy 630: an admin proposal’s record lists the gates what it wrote runs through, each of which must answer; with none, says only the changes were checked', async () => {
     const proposalSource: Partial<ChangeSegmentWire> = {
       source: { kind: 'admin_proposal', name: 'ops-tuning', version: '1', digest: 'sha256:p' },
@@ -545,6 +590,8 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     expect(within(result).getByTestId('catalog-change-requirements').textContent).toMatch(
       /^写入的改动项经过的系统和门（每个门都要能连通）：/,
     );
+    // UX on #1478: a proposal's record was applied, not installed.
+    expect(result.textContent).toContain('应用后自动核验（记在 Owner 名下）');
     const tickets = within(result).getByTestId('catalog-change-requirement-tickets');
     expect(tickets.textContent).toMatch(/tickets已接入但有门连不通/);
     expect(tickets.textContent).toMatch(/tickets-a健康/);
@@ -587,7 +634,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
     const result = await screen.findByTestId('catalog-change-verification-result');
     expect(result.textContent).toMatch(/Owner 手动核验/);
-    expect(result.textContent).toMatch(/这次写入的改动项都还在生效。/);
+    expect(result.textContent).toContain('核验时，这次写入的改动项都还在生效。');
     expect(result.textContent).toMatch(/这个能力包没有写明要用到的系统。/);
     const again = screen.getByTestId('catalog-change-verify') as HTMLButtonElement;
     expect(again.textContent).toBe('再核验一次');

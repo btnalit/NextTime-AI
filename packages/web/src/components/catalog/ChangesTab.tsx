@@ -734,11 +734,23 @@ function ChangeItemView({
   readonly segment: ChangeSegmentWire;
 }) {
   const t = useT();
+  // Legacy 603: what a rolled-back record wrote and is no longer there went with the roll-back —
+  // not 「replaced since」 by some other change.
+  const tookBack = segment.status === 'rolled_back' && item.state !== 'in_effect';
   return (
     <div className="card card-padded stack-s" data-testid={`catalog-change-item-${item.ordinal}`}>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <span>{changeSubjectText(item, t)}</span>
-        <StatusChip machine="changeItemState" status={item.state} size="s" />
+        {tookBack ? (
+          <span
+            className="chip chip-s"
+            data-testid={`catalog-change-item-${item.ordinal}-took-back`}
+          >
+            {t('已随撤销退回', 'Taken back by the roll-back')}
+          </span>
+        ) : (
+          <StatusChip machine="changeItemState" status={item.state} size="s" />
+        )}
       </div>
       <span className="text-3 text-small">
         {segment.source.kind === 'admin_proposal'
@@ -784,7 +796,19 @@ function ChangeItemView({
             : null}
         </span>
       ) : null}
-      {item.state === 'replaced' ? (
+      {tookBack ? (
+        item.replacedBy ? (
+          <span className="text-small" data-testid={`catalog-change-item-${item.ordinal}-replaced`}>
+            {t(
+              '现在生效的是另一条安装记录写入的版本：',
+              'What is in effect now was written by another install record: ',
+            )}
+            <RouteLink href={hrefs.catalog('changes', item.replacedBy.segmentId)}>
+              {t('查看那条记录', 'Open that record')}
+            </RouteLink>
+          </span>
+        ) : null
+      ) : item.state === 'replaced' ? (
         <span className="text-small" data-testid={`catalog-change-item-${item.ordinal}-replaced`}>
           {item.replacedBy ? (
             <>
