@@ -156,13 +156,31 @@ describe('assertParamsValid', () => {
       refused(atLeast, { ids: [1, 'a'] });
     });
 
-    it('a later-dialect keyword inside an allOf / anyOf / oneOf list counts', () => {
+    it.each(['allOf', 'anyOf', 'oneOf'])(
+      'a later-dialect keyword inside an %s list counts',
+      (list) => {
+        const schema = {
+          type: 'object',
+          [list]: [{ dependentRequired: { card: ['cvc'] } }],
+        };
+        ok(schema, { card: '1', cvc: '2' });
+        refused(schema, { card: '1' });
+      },
+    );
+
+    it('a 2020-12 keyword inside a dependentSchemas entry checks in 2020-12, not 2019-09 (legacy 811)', () => {
+      // `dependentSchemas` alone would pick 2019-09, where `prefixItems` means nothing and the
+      // tuple below would go unchecked; the walk has to reach the keyword inside the entry.
       const schema = {
         type: 'object',
-        anyOf: [{ dependentRequired: { card: ['cvc'] } }],
+        properties: { card: { type: 'string' }, codes: { type: 'array' } },
+        dependentSchemas: {
+          card: { properties: { codes: { prefixItems: [{ type: 'string' }] } } },
+        },
       };
-      ok(schema, { card: '1', cvc: '2' });
-      refused(schema, { card: '1' });
+      ok(schema, { card: '1', codes: ['a'] });
+      refused(schema, { card: '1', codes: [5] });
+      ok(schema, { codes: [5, 6] });
     });
 
     it('2019-09 keywords beside draft-07 array-form items are checked in 2019-09, which keeps that form', () => {
