@@ -6,9 +6,10 @@ import type { PoolClient } from 'pg';
  * ChangePlan segment, `application/change-plan`). The rows stay (S10 I-P4); a person deciding on
  * the change reads these counts first.
  *
- * Counts stop at `cap` (a dry run must stay cheap on a large graph — neither column is indexed);
- * `capped` says one of them reached it. Links are active Facts only (not superseded or
- * invalidated), the ones a reader still sees.
+ * Counts stop at `cap` (a dry run must stay cheap on a large graph — `objects.object_type` is not
+ * indexed; active `links` are by type since core/0063, legacy 146); `capped` says one of them
+ * reached it. Links are active Facts only (not superseded or invalidated), the ones a reader still
+ * sees.
  */
 export interface GraphTypeUsage {
   readonly objects: number;

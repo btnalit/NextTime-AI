@@ -639,6 +639,10 @@ export function buildTraverseQuery(
  * of Facts with one shared `recorded_at`. Ordered by that alone, which of them fit under `limit`
  * was Postgres's choice and could change from one call to the next (the entry agent's injected
  * context changed with it — dependency_chat 0/10 in real-model round 4).
+ *
+ * The order is `links_workspace_recorded_active_idx` (core/0063, legacy 146): the page is the
+ * index's first visible rows, not a sort of every active Fact of the workspace — keep the two in
+ * step (links-active-read-indexes.integration.test.ts checks the plan).
  */
 export function buildRecentFactsQuery(
   workspaceId: string,
@@ -694,6 +698,15 @@ export function decodeFactsCursor(
  * keyset comparison as `buildSearchQuery` (a JS `Date` cursor carries milliseconds, Postgres
  * stores microseconds), with `id` breaking the ties every Fact of one call has. `limit` is bound
  * as given — the store clamps it and over-fetches by one.
+ *
+ * The key is truncated in UTC (`recorded_at at time zone 'UTC'`), the expression of
+ * `links_workspace_type_active_idx` (core/0063, legacy 146): `date_trunc` on a `timestamptz`
+ * depends on the session's TimeZone and cannot be indexed, on a `timestamp` it is immutable. Same
+ * instants, same order, same pages as the session-zone truncation before it (zone offsets are
+ * whole seconds), and the first page now reads the newest rows of the index instead of sorting
+ * every active Fact of the type. Row-level security keeps the cursor bound a filter, not an index
+ * condition (`date_trunc` and `at time zone` are not LEAKPROOF; core/0061 has the same note), so a
+ * later page walks the type's rows newer than the cursor — still within the one type, no sort.
  */
 export function buildListFactsQuery(
   workspaceId: string,
@@ -712,11 +725,12 @@ export function buildListFactsQuery(
         and invalidated_at is null
         and (
           $4::timestamptz is null
-          or (date_trunc('milliseconds', recorded_at), id) < ($4::timestamptz, $5::uuid)
+          or (date_trunc('milliseconds', recorded_at at time zone 'UTC'), id)
+            < ($4::timestamptz at time zone 'UTC', $5::uuid)
         )
         and ${LINK_VISIBLE_PREDICATE}
         ${filter.sql}
-      order by date_trunc('milliseconds', recorded_at) desc, id desc
+      order by date_trunc('milliseconds', recorded_at at time zone 'UTC') desc, id desc
       limit $3
     `,
     values: [
