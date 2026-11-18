@@ -308,10 +308,16 @@ function VerificationResult({
         />
         <span className="text-small">
           {verification.trigger === 'system'
-            ? t(
-                `安装后自动核验（记在 ${who} 名下）`,
-                `Verified after the install (recorded under ${who})`,
-              )
+            ? segment.source.kind === 'admin_proposal'
+              ? // UX on #1478: an admin proposal's record was applied, not installed.
+                t(
+                  `应用后自动核验（记在 ${who} 名下）`,
+                  `Verified after the apply (recorded under ${who})`,
+                )
+              : t(
+                  `安装后自动核验（记在 ${who} 名下）`,
+                  `Verified after the install (recorded under ${who})`,
+                )
             : t(`${who} 手动核验`, `Verified by ${who}`)}
           {' · '}
           <span data-volatile="">{formatDateTime(verification.verifiedAt)}</span>
@@ -332,9 +338,11 @@ function VerificationResult({
                 '当时这次写入的改动项都还在生效。',
                 'Every change this wrote was still in effect then.',
               )
-            : t(
-                '这次写入的改动项都还在生效。',
-                'Every change this install wrote is still in effect.',
+            : // UX P3-1 on #1478: what the run found then — a change replaced since does not make
+              // this sentence untrue.
+              t(
+                '核验时，这次写入的改动项都还在生效。',
+                'When verified, every change this wrote was still in effect.',
               )}
         </span>
       ) : (
@@ -496,15 +504,26 @@ export function ChangeVerificationSection({
     <div className="stack-s" data-testid="catalog-change-verification">
       <span className="section-title">{t('核验', 'Verification')}</span>
       <p className="text-3 text-small">
-        {segment.source.kind === 'admin_proposal'
-          ? t(
-              '核验会检查这次应用写入的内容是否还在生效。它只读，不会执行任何操作。',
-              'Verification checks that what this apply wrote is still in effect. It only reads; it runs nothing.',
-            )
-          : t(
-              '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
-              'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
-            )}
+        {segment.status === 'rolled_back'
+          ? // UX P3-2 on #1478: a rolled-back record is not verified again — what a run checked.
+            segment.source.kind === 'admin_proposal'
+            ? t(
+                '核验当时检查的是这次应用写入的内容是否还在生效。它只读，不执行任何操作。',
+                'Verification checked whether what this apply wrote was still in effect. It only read; it ran nothing.',
+              )
+            : t(
+                '核验当时检查的是这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不执行任何操作。',
+                'Verification checked whether what this install wrote was still in effect, and whether the systems the pack needs were connected and answering. It only asked whether each system was up; it ran nothing.',
+              )
+          : segment.source.kind === 'admin_proposal'
+            ? t(
+                '核验会检查这次应用写入的内容是否还在生效。它只读，不会执行任何操作。',
+                'Verification checks that what this apply wrote is still in effect. It only reads; it runs nothing.',
+              )
+            : t(
+                '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
+                'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
+              )}
       </p>
       {/* The cooldown describes the result the focus lands on — not a live region, which would
        *  read every second of the countdown out. */}

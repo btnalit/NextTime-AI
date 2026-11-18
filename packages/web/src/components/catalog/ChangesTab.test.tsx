@@ -533,6 +533,10 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
       '这是撤销前最后一次核验的结论。撤销已经把这次写入的改动退回，之后不再核验。',
     );
     expect(result.textContent).toContain('当时这次写入的改动项都还在生效。');
+    // UX P3-2 on #1478: what the run checked, in the past.
+    expect(screen.getByTestId('catalog-change-verification').textContent).toContain(
+      '核验当时检查的是这次安装写入的内容是否还在生效',
+    );
     // The item: taken back by the roll-back, not 「replaced since」 by another change.
     const item = screen.getByTestId('catalog-change-item-1');
     expect(within(item).getByTestId('catalog-change-item-1-took-back').textContent).toBe(
@@ -586,6 +590,8 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     expect(within(result).getByTestId('catalog-change-requirements').textContent).toMatch(
       /^写入的改动项经过的系统和门（每个门都要能连通）：/,
     );
+    // UX on #1478: a proposal's record was applied, not installed.
+    expect(result.textContent).toContain('应用后自动核验（记在 Owner 名下）');
     const tickets = within(result).getByTestId('catalog-change-requirement-tickets');
     expect(tickets.textContent).toMatch(/tickets已接入但有门连不通/);
     expect(tickets.textContent).toMatch(/tickets-a健康/);
@@ -628,7 +634,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
     const result = await screen.findByTestId('catalog-change-verification-result');
     expect(result.textContent).toMatch(/Owner 手动核验/);
-    expect(result.textContent).toMatch(/这次写入的改动项都还在生效。/);
+    expect(result.textContent).toContain('核验时，这次写入的改动项都还在生效。');
     expect(result.textContent).toMatch(/这个能力包没有写明要用到的系统。/);
     const again = screen.getByTestId('catalog-change-verify') as HTMLButtonElement;
     expect(again.textContent).toBe('再核验一次');
