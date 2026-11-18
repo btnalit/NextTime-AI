@@ -21,6 +21,17 @@
   min-width: 0;
 }
 
+/* UX #1455 M1: GraphPage scrolls the object pane into view and focuses it when an Object or a
+ * relationship type is opened from the search pane; the margin clears the narrow screen's sticky
+ * top bar (52px, styles/shell.css `.mobile-topbar`). */
+.graph-object-pane {
+  scroll-margin-top: calc(52px + var(--space-3));
+}
+
+.graph-object-pane:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .graph-search-pane {
   display: flex;
   flex-direction: column;
@@ -52,6 +63,91 @@
   align-items: center;
   gap: var(--space-2);
   padding: 2px var(--space-1);
+}
+
+/* Legacy 147: 「按关系浏览」 — relationship types with counts in the search pane
+ * (`components/graph/RelationTypes`), one type's Facts in the object pane (`RelationFactsView`). */
+.graph-relation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.graph-relation-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-m);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-relation-button:hover {
+  background: var(--surface-2);
+}
+
+.graph-relation-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.data-row-title.graph-relation-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+/* An endpoint is one link (name, then its type), so a tap anywhere on it opens the Object; the
+ * name keeps its room and the type gives way first on a narrow screen (UX #1455 M2). */
+.graph-relation-end {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accent);
+}
+
+.graph-relation-end:hover .graph-relation-end-name {
+  text-decoration: underline;
+}
+
+.graph-relation-end-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-relation-end-type {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+/* A relationship type is a case-sensitive identifier: the title keeps it as written. */
+.graph-relation-title-type {
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* Focused object header */

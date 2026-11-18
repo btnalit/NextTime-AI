@@ -212,6 +212,15 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
           'Only for clients outside the platform: issue a Handle for Claude Code, pi or another tool on your own machine — the same result the connection guide’s hand-written curl call produces. Agents running inside the platform get their credentials from the platform; nothing to issue here.',
         )}
       </p>
+      {/* Legacy 147: the scope is fixed when the Handle is issued (`issue_handle` intersects the
+       *  entry ceiling and the caller's gates at that moment), so what is added later never
+       *  reaches a Handle already handed out. */}
+      <p className="text-3 text-small" data-testid="ioh-reissue-note">
+        {t(
+          '能力范围和可用的门在签发时就定下了：之后才授权给你的门、平台升级后新增的能力，已签发的 Handle 都用不上，要用就重新签发一个。',
+          'The capability scope and the gates are fixed when the Handle is issued: a gate granted to you later, or a capability a platform upgrade adds, is not available to a Handle already issued — issue a new one to use it.',
+        )}
+      </p>
 
       <Field
         id="ioh-ttl"
