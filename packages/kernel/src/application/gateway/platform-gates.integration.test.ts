@@ -2611,6 +2611,53 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(http?.suspendedSelfConnectionCount).toBe(0);
         });
 
+        // Legacy 813: My Agent offering both kinds of gate at once — the catalog gate (granted)
+        // keeps its instance's stored health and is never called; the self-connected one (an
+        // Operation anyone may observe) carries its probe, made once, with its own connection
+        // credential.
+        it('legacy 813: with includeGateHealth the catalog gate keeps its stored health and only the self-connected gate is probed, once', async () => {
+          const probed: Parameters<GatekeeperClient['health']>[0][] = [];
+          setGatekeeperReadHandlerDeps({
+            gatekeeperClient: {
+              health: async (target: Parameters<GatekeeperClient['health']>[0]) => {
+                probed.push(target);
+                return { status: 'ok' };
+              },
+            } as unknown as GatekeeperClient,
+          });
+          await withPlatform(pool, { userId: admin.id }, (client) =>
+            recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'unauthorized'),
+          );
+          try {
+            const profile = (await dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+              'get_agent_profile',
+              { includeGateHealth: true },
+            )) as AgentProfileWire;
+            const healthOf = (gatekeeperId: string) =>
+              profile.availableGatekeepers.find((g) => g.gatekeeperId === gatekeeperId)?.health;
+            expect(healthOf(cGatekeeperId)).toBe('unauthorized');
+            expect(healthOf(selfGatekeeperId)).toBe('ok');
+            expect(probed).toEqual([
+              {
+                endpoint: selfEndpoint,
+                endpointKey: expect.any(String),
+                credential: {
+                  kind: 'connection',
+                  workspaceId: cWorkspaceId,
+                  salt: expect.any(String),
+                },
+              },
+            ]);
+          } finally {
+            setGatekeeperReadHandlerDeps({});
+            await withPlatform(pool, { userId: admin.id }, (client) =>
+              recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'ok'),
+            );
+          }
+        });
+
         it('suspended: every path refuses it as disabled by the platform, the workspace cannot lift it, and resuming restores it', async () => {
           await expect(observeSelf()).resolves.toBeDefined();
           const before = await reachForMember();
