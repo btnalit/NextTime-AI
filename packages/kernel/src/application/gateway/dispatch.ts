@@ -19,7 +19,9 @@ import {
   isAdminAgentCeilingCapability,
 } from '../../governance/capability/index.js';
 import { redactConnectionAddressesIn } from '../../governance/connections/index.js';
+import { OperationDefinitionUnreadableError } from '../../governance/gatekeepers/index.js';
 import {
+  ObserveParamsCarryCredentialsError,
   quotedName,
   redactSuspectedSecrets,
   redactedForAudit,
@@ -53,6 +55,7 @@ import { auditedHandlerPayload } from './audit-copy.js';
 import {
   CapabilityCallRefusedError,
   ForbiddenError,
+  OperationDisabledError,
   assertActsForPerson,
   authorizeCapabilityCall,
 } from './authorize.js';
@@ -475,6 +478,145 @@ async function auditGateRefusal(
     // One log line whatever the values carry: a line break would let them forge entries.
     console.error(
       `[kernel] audit of a gate refusal failed (capability=${call.name}, code=${refusal.code}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/** The capabilities that call a gate's Operation (`observe_operation`, and `request_action` on
+ *  either mode) — the calls `auditPlatformGateRefusal` records the platform's own refusals of. */
+const GATE_CALL_CAPABILITIES: ReadonlySet<string> = new Set([
+  'observe_operation',
+  'request_action',
+]);
+
+/** What `auditPlatformGateRefusal` records of a refusal: the code and status the caller was
+ *  answered with and the Operation (`refusal`), and whether the row may keep the call's params. */
+interface PlatformGateRefusal {
+  readonly refusal: Record<string, unknown>;
+  readonly keepsParams: boolean;
+}
+
+function platformGateRefusalOf(err: unknown): PlatformGateRefusal | undefined {
+  if (err instanceof OperationDisabledError) {
+    return {
+      refusal: {
+        code: err.refusalCode,
+        status: 403,
+        operation: err.operationName,
+        ...(err.cutoff !== undefined ? { cutoff: err.cutoff } : {}),
+      },
+      keepsParams: true,
+    };
+  }
+  if (err instanceof OperationDefinitionUnreadableError) {
+    return {
+      refusal: { code: err.code, status: 409, operation: err.operationName },
+      keepsParams: true,
+    };
+  }
+  if (err instanceof ObserveParamsCarryCredentialsError) {
+    // How many values were refused and where — the detector's paths: field names only, a name
+    // that itself looks like a secret scrubbed (`credential-review.ts`'s `segment`), the same as
+    // an observe row's `credentialReview`. Never a value, nor a piece of one.
+    return {
+      refusal: {
+        code: err.code,
+        status: 400,
+        operation: err.operationName,
+        suspectedSecretValues: err.details.suspectedSecretValues,
+        suspectedSecretPaths: err.details.suspectedSecretPaths,
+      },
+      keepsParams: false,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Legacy 220 (coordinator 2026-11-18, option A): a call to a gate's Operation the platform refuses
+ * itself, for the Operation's state, before anything is sent — the platform disabled the Operation
+ * (`OperationDisabledError`, P-B1), its stored definition does not parse so there is no approved
+ * definition to hold the gate to (`OperationDefinitionUnreadableError`), or an observe call's
+ * params carry a literal credential (`ObserveParamsCarryCredentialsError`, legacy 175) — leaves the
+ * same audit row a call the gate refuses does (`auditGateRefusal`), in a transaction of its own
+ * since the call's rolled back with the refusal: the call's action, `outcome: 'refused'`, and
+ * `refusal` with the code and status the caller was answered with and the Operation. An execute
+ * call these stop at its run is already recorded alike (`action_request.fail`, `failureKind:
+ * 'refused'`). Refusals of the caller (a role, the AgentPolicy, the member's AgentProfile, a Task's
+ * observation scope) and names that are not there are not this kind, and are not recorded here.
+ *
+ * The credential refusal's row holds no value of the call's Operation params, nor any piece of
+ * one: its `params` copy keeps only `gatekeeperId` and `operation`, and its `refusal` says how many
+ * values were refused (`suspectedSecretValues`) and where (`suspectedSecretPaths`, within the
+ * Operation params). Failing to write a row is logged and never replaces the refusal itself.
+ */
+async function auditPlatformGateRefusal(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+    /** An evaluation session's call is recorded under its own action, naming the capability, as
+     *  `auditUnknownOperation`'s (its fixture calls raise none of these refusals today). */
+    readonly auditAction?: string;
+    readonly actingSession?: ActingSession;
+  },
+): Promise<void> {
+  if (!GATE_CALL_CAPABILITIES.has(call.name)) return;
+  const refused = platformGateRefusalOf(call.err);
+  if (refused === undefined) return;
+  const gatekeeperId =
+    typeof call.params.gatekeeperId === 'string' ? call.params.gatekeeperId : undefined;
+  const resourceRef = auditResourceRef(gatekeeperId);
+  // The credential refusal keeps no Operation params: only the gate and the Operation named.
+  const audited = auditParams(
+    call.capability,
+    refused.keepsParams
+      ? call.params
+      : {
+          ...(gatekeeperId !== undefined ? { gatekeeperId } : {}),
+          ...(call.params.operation !== undefined ? { operation: call.params.operation } : {}),
+        },
+  );
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.auditAction ?? call.name,
+          resourceType: gatekeeperId !== undefined ? 'gatekeeper' : undefined,
+          resourceId: resourceRef.resourceId,
+          payload: {
+            ...(call.auditAction !== undefined && call.auditAction !== call.name
+              ? { capability: call.name }
+              : {}),
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
+            ...audited,
+            ...(resourceRef.resourceRef !== undefined
+              ? { resourceRef: resourceRef.resourceRef }
+              : {}),
+            outcome: 'refused',
+            refusal: refused.refusal,
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    // One log line whatever the values carry: a line break would let them forge entries.
+    console.error(
+      `[kernel] audit of a platform refusal of a gate call failed (capability=${call.name}, code=${String(refused.refusal.code)}): ${detail}`.replace(
         /\n|\r/g,
         '',
       ),
@@ -1290,6 +1432,7 @@ async function dispatchInActingContext(
     }
     await auditAdminAgentRefusal(deps, refused);
     await auditGateRefusal(deps, refused);
+    await auditPlatformGateRefusal(deps, refused);
     await auditEvaluationWithheld(deps, refused);
     await auditProbeHold(deps, refused);
     await auditUnknownOperation(deps, refused);

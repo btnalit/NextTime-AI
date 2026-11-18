@@ -56,6 +56,32 @@ export class ForbiddenError extends Error {
   }
 }
 
+/** Why the platform cut an Operation off (`operationPlatformStatus`, application/gates/store.ts):
+ *  a catalog gate's connector deny list, or a self-connected gate's suspension (P0b). */
+export type OperationDisabledCutoff = 'connector_deny_list' | 'self_connection_suspended';
+
+/** Legacy 220: a call to an Operation the platform has disabled (P-B1) — still a `ForbiddenError`
+ *  everywhere it is answered (403 `forbidden`, the message starting `operation_disabled:`), and
+ *  named, so the dispatcher can audit it as a refused gate call (`auditPlatformGateRefusal`). */
+export class OperationDisabledError extends ForbiddenError {
+  readonly refusalCode = 'operation_disabled' as const;
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+  readonly cutoff: OperationDisabledCutoff | undefined;
+  constructor(
+    message: string,
+    gatekeeperId: string,
+    operationName: string,
+    cutoff: OperationDisabledCutoff | undefined,
+  ) {
+    super(message);
+    this.name = 'OperationDisabledError';
+    this.gatekeeperId = gatekeeperId;
+    this.operationName = operationName;
+    this.cutoff = cutoff;
+  }
+}
+
 /**
  * Batch D3: why {@link authorizeCapabilityCall} (or {@link assertActsForPerson}) refused a call — a
  * fixed set, so it can name a refusal in an audit row and label a counter (never free text). The

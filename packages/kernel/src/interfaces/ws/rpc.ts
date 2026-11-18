@@ -200,6 +200,7 @@ import {
 import {
   AbsentAnswersReviewRequiredError,
   OperationDeclaresGateOwnedParamsError,
+  OperationDefinitionUnreadableError,
   OperationDraftChangedError,
   OperationIdentityConflictError,
   OperationNameInvalidError,
@@ -488,6 +489,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // Suspected credentials not confirmed (see capability-route.ts's own mapping).
   if (err instanceof CredentialReviewRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 220: mirrors HTTP 409 `operation_definition_unavailable` (capability-route.ts); WS has
+  // no string code, so the message carries it in front, as a passed-through gate refusal's does.
+  if (err instanceof OperationDefinitionUnreadableError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: `${err.code}: ${err.message}` };
   }
   // Credential-looking observe params, refused (see capability-route.ts's own mapping).
   if (err instanceof ObserveParamsCarryCredentialsError) {
