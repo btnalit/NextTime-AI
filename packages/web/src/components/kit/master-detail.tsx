@@ -182,9 +182,13 @@ export function MasterDetail({
               {/* Legacy 613: below 448px the sheet covers the whole screen, so a phone has no
                *  overlay to tap and no Esc — this is the only way back to the list. It asks first
                *  when a form in the detail was edited, as Esc and an outside click do. */}
+              {/* Legacy 814: the button is 28px tall, enough for WCAG 2.5.8, but it is a phone's only
+               *  way out, so an invisible ::after widens what a finger can hit to 44px without
+               *  changing how it looks. */}
               <Button
                 variant="ghost"
                 size="s"
+                className="relative after:absolute after:-inset-2"
                 onClick={() => discard.guard(onClose)}
                 data-testid={`${detailTestId}-close`}
               >
