@@ -21,7 +21,9 @@ import { countGraphTypeUsage } from './type-usage.js';
  * The workspace gets {@link FACTS} Facts of its own first — {@link MAIN_TYPE} most of them, three
  * to a millisecond (rows one transaction writes share one), a quarter superseded — and the table
  * is analyzed: with an empty workspace a sort costs as little as the index, and which the planner
- * picks then depends on whatever else the shared test database holds.
+ * picks then depends on whatever else the shared test database holds. A few Facts of
+ * {@link SPARSE_TYPE} join them, for the read the type index exists for: a type that is a small
+ * part of the workspace.
  * Integration (real Postgres; auto-skip without DATABASE_URL).
  */
 
@@ -35,6 +37,8 @@ const RECENT_INDEX = 'links_workspace_recorded_active_idx';
 const FACTS = 6000;
 const MAIN_TYPE = 'list_facts_index_main';
 const OTHER_TYPE = 'list_facts_index_other';
+const SPARSE_TYPE = 'list_facts_index_sparse';
+const SPARSE_FACTS = 30;
 
 describe.runIf(DATABASE_URL !== undefined)(
   'core/0063 active-Fact read indexes (legacy 146)',
@@ -92,6 +96,17 @@ describe.runIf(DATABASE_URL !== undefined)(
                   case when n % 4 = 0 then timestamptz '2026-11-02 00:00:00+00' end
              from objs, generate_series(1, $6::int) as n`,
             [workspaceId, activity.rows[0]?.id, ownerId, MAIN_TYPE, OTHER_TYPE, FACTS],
+          );
+          // Active, and older than every Fact above: no page or recent read of them changes.
+          await client.query(
+            `with objs as (select array_agg(id order by id) as ids from objects where workspace_id = $1)
+           insert into links (workspace_id, link_type, source_object_id, target_object_id,
+                              epistemic_status, activity_id, asserted_by, recorded_at)
+           select $1, $4, objs.ids[1 + (n % 50)], objs.ids[1 + ((n * 3) % 50)],
+                  'asserted', $2, $3,
+                  timestamptz '2026-10-31 00:00:00+00' + make_interval(secs => n)
+             from objs, generate_series(1, $5::int) as n`,
+            [workspaceId, activity.rows[0]?.id, ownerId, SPARSE_TYPE, SPARSE_FACTS],
           );
         },
         { skipRoleSwitch: true },
@@ -214,12 +229,34 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
+    // The count stops at its cap, so for a type that is most of the workspace (MAIN_TYPE) any index
+    // that starts at workspace_id ends after about cap rows, and which one the planner takes there
+    // turns on table-wide statistics the shared test database collects run after run (the smaller
+    // links_source_object_active_idx once enough of the table is MAIN_TYPE and not yet vacuumed).
+    // The type index is what keeps the count of a small type from reading every active Fact of the
+    // workspace, so that is the count asserted here.
     it('serves the type-usage count of a rollback dry run', async () => {
       const plans = await plansOf((client) =>
-        countGraphTypeUsage(client, workspaceId, { objectTypes: [], linkTypes: [MAIN_TYPE] }, 100),
+        countGraphTypeUsage(
+          client,
+          workspaceId,
+          { objectTypes: [], linkTypes: [SPARSE_TYPE] },
+          100,
+        ),
       );
       expect(plans).toHaveLength(1);
-      expect(plans[0]).toContain(TYPE_INDEX);
+      expect(indexCondOf(plans[0] ?? '', TYPE_INDEX)).toContain(
+        `link_type = ANY ('{${SPARSE_TYPE}}'::text[])`,
+      );
+      const usage = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        countGraphTypeUsage(
+          client,
+          workspaceId,
+          { objectTypes: [], linkTypes: [SPARSE_TYPE] },
+          100,
+        ),
+      );
+      expect(usage).toEqual({ objects: 0, links: SPARSE_FACTS, capped: false });
     });
 
     it("serves get_entry_context's recent Facts (and the Explorer's, read without a viewer) in the index order", async () => {
