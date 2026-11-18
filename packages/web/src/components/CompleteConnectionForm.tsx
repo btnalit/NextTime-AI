@@ -546,7 +546,10 @@ export function CompleteConnectionForm({
   // offered as a one-click fill (never set silently), the same pattern as the platform's
   // `CreateGateInstanceForm`. A target that is not a URL or host yields no suggestion, and one that
   // carries a credential yields none either (review of #549: never copied into another field).
-  const suggestedManifest = kind === 'http' ? suggestedManifestSource(target) : '';
+  // The kernel reads this manifest, so a host it refuses (a service name, loopback) gets none
+  // either (legacy 844).
+  const suggestedManifest =
+    kind === 'http' ? suggestedManifestSource(target, { kernelReads: true }) : '';
 
   return (
     <form
