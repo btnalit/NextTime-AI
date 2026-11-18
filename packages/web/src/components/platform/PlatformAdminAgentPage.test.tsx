@@ -372,12 +372,22 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     fireEvent.click(within(dialog).getByTestId('admin-agent-targets-save'));
 
     expect(text(await within(dialog).findByTestId('admin-agent-targets-moved'))).toBe(
-      'Not saved yet: since this dialog opened, the targets here were changed (Ops added), perhaps on another page. The changes you made are all in there already; there is nothing to save.',
+      'Nothing to save: since this dialog opened, the targets here were changed (Ops added), perhaps on another page; the changes you made are all in there already.',
     );
+    // UX P3-1 on #1474: not a warning, and the one button left closes the dialog.
+    expect(within(dialog).getByTestId('admin-agent-targets-moved').getAttribute('data-tone')).toBe(
+      'info',
+    );
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull();
     expect(within(dialog).queryByTestId('admin-agent-targets-diff')).toBeNull();
     expect(
       (within(dialog).getByTestId('admin-agent-targets-save') as HTMLButtonElement).disabled,
     ).toBe(true);
+    // A new change of the reader's own takes the note away and Cancel comes back.
+    fireEvent.click(within(options[0] as HTMLElement).getByRole('checkbox'));
+    expect(within(dialog).queryByTestId('admin-agent-targets-moved')).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeTruthy();
   });
 
   it('says a configuration-only administrator cannot choose targets yet', async () => {

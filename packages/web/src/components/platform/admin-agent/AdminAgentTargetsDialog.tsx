@@ -134,6 +134,8 @@ export function AdminAgentTargetsDialog({
   const full = selected.size >= ADMIN_AGENT_TARGETS_MAX;
 
   function toggle(id: string, on: boolean): void {
+    // A new change of the reader's own: 「不用保存了」 no longer holds.
+    if (moved?.settled) setMoved(null);
     setSelected((current) => {
       const next = new Set(current);
       if (on) next.add(id);
@@ -273,11 +275,16 @@ export function AdminAgentTargetsDialog({
             </>
           )}
           {moved !== null ? (
-            <Notice tone="warn" testId="admin-agent-targets-moved">
-              {t(
-                '还没有保存：打开这个对话框之后，这里的目标已经被改过',
-                'Not saved yet: since this dialog opened, the targets here were changed',
-              )}
+            <Notice tone={moved.settled ? 'info' : 'warn'} testId="admin-agent-targets-moved">
+              {moved.settled
+                ? t(
+                    '不用保存了：打开这个对话框之后，这里的目标已经被改过',
+                    'Nothing to save: since this dialog opened, the targets here were changed',
+                  )
+                : t(
+                    '还没有保存：打开这个对话框之后，这里的目标已经被改过',
+                    'Not saved yet: since this dialog opened, the targets here were changed',
+                  )}
               {moved.added.length > 0
                 ? t(`（加上了 ${moved.added.join('、')}）`, ` (${moved.added.join(', ')} added)`)
                 : null}
@@ -289,8 +296,8 @@ export function AdminAgentTargetsDialog({
                 : null}
               {moved.settled
                 ? t(
-                    '，可能是在另一个页面里。你要做的改动已经都在里面了，不用再保存。',
-                    ', perhaps on another page. The changes you made are all in there already; there is nothing to save.',
+                    '，可能是在另一个页面里；你要做的改动已经都在里面了。',
+                    ', perhaps on another page; the changes you made are all in there already.',
                   )
                 : t(
                     '，可能是在另一个页面里。你的改动已经放到现在的目标上，核对下面的勾选后再保存。',
@@ -355,7 +362,8 @@ export function AdminAgentTargetsDialog({
           </Button>
           <DialogClose asChild>
             <Button variant="ghost" size="s" disabled={busy}>
-              {t('取消', 'Cancel')}
+              {/* UX P3-1 on #1474: with nothing left to save, the only button closes the dialog. */}
+              {moved?.settled ? t('关闭', 'Close') : t('取消', 'Cancel')}
             </Button>
           </DialogClose>
         </DialogFooter>
