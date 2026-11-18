@@ -1,4 +1,9 @@
-import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
+import {
+  NAME_MAX_LENGTH,
+  ProposeProcedureContentSchema,
+  ProposeSkillContentSchema,
+  SKILL_NAME_MAX_LENGTH,
+} from '@nexttime/shared';
 import type { ProcedureRow, SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
@@ -24,6 +29,7 @@ import { procedureTemplateProblems } from '../goal/index.js';
 import { readProcedureStats, readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftOriginOf, draftViewerOf } from './draft-viewer.js';
+import { assertNameWithin, assertVersionNameWithin } from './name-length.js';
 
 /**
  * application/gateway/skill-procedure-handlers: `propose_skill` / `publish_skill` /
@@ -53,6 +59,12 @@ import { draftOriginOf, draftViewerOf } from './draft-viewer.js';
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skill: rawSkill, skillId } = params as { skill: unknown; skillId?: string };
   const content = ProposeSkillContentSchema.parse(rawSkill);
+  // Legacy 309: a new family's name, at the length publishing holds it to (pi's rule; its
+  // characters are still checked there). A next version keeps its family's name
+  // (`SkillFamilyNameChangedError`), so it brings no new one.
+  if (skillId === undefined) {
+    assertNameWithin(content.name, 'skill.name', SKILL_NAME_MAX_LENGTH);
+  }
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const record = await proposeSkill(client, workspaceId, principalId, {
@@ -221,6 +233,15 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
     procedureId?: string;
   };
   const content = ProposeProcedureContentSchema.parse(rawProcedure);
+  // Legacy 309: a version may rename its Procedure, so a name the Procedure has not had yet.
+  await assertVersionNameWithin(client, {
+    table: 'procedures',
+    workspaceId,
+    recordId: procedureId,
+    name: content.name,
+    path: 'procedure.name',
+    maxLength: NAME_MAX_LENGTH,
+  });
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const record = await proposeProcedure(client, workspaceId, principalId, {

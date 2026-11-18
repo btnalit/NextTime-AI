@@ -88,6 +88,7 @@ export {
   findOntologyLinkEndpointProblems,
   findOntologyLinkEndpointsOutsideScope,
   findOntologyNamespaceConflicts,
+  findNewOntologyNamesOver,
   lockOntologyNamespace,
 } from './namespace.js';
 export type {

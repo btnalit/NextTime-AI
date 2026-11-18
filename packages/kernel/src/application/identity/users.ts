@@ -1,4 +1,4 @@
-import type { Role, WorkspacePurposeWire } from '@nexttime/shared';
+import { DISPLAY_NAME_MAX_LENGTH, type Role, type WorkspacePurposeWire } from '@nexttime/shared';
 /**
  * Platform users and their workspace memberships (S4.1, design doc §7.11 "身份模型：用户在平台，
  * 成员资格在工作区").
@@ -306,8 +306,11 @@ export async function claimIdentityOnClient(
   const login = normalizeLogin(input.login);
   assertPasswordStrength(input.password);
   const displayName = input.displayName.trim();
-  if (displayName.length === 0 || displayName.length > 128) {
-    throw new IdentityError('invalid_display_name', 'display name must be 1–128 characters');
+  if (displayName.length === 0 || displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+    throw new IdentityError(
+      'invalid_display_name',
+      `display name must be 1–${DISPLAY_NAME_MAX_LENGTH} characters`,
+    );
   }
   const principal = await client.query<{ display_name: string | null }>(
     `select display_name from principals
@@ -532,8 +535,11 @@ export async function updateUserDisplayName(
   displayName: string,
 ): Promise<UserRow> {
   const trimmed = displayName.trim();
-  if (trimmed.length === 0 || trimmed.length > 128) {
-    throw new IdentityError('invalid_display_name', 'display name must be 1–128 characters');
+  if (trimmed.length === 0 || trimmed.length > DISPLAY_NAME_MAX_LENGTH) {
+    throw new IdentityError(
+      'invalid_display_name',
+      `display name must be 1–${DISPLAY_NAME_MAX_LENGTH} characters`,
+    );
   }
   return withAdminClient(pool, async (client) => {
     const result = await client.query<UserDbRow>(

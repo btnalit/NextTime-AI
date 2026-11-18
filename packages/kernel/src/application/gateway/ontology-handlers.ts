@@ -1,7 +1,9 @@
+import { NAME_MAX_LENGTH, OntologyDefinitionSchema } from '@nexttime/shared';
 import {
   type OntologyTypeEntry,
   type OntologyVersionListItem,
   type OntologyVersionRow,
+  findNewOntologyNamesOver,
   getType,
   listOntologyVersions,
   listTypes,
@@ -12,6 +14,7 @@ import {
 import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { draftOriginOf } from './draft-viewer.js';
+import { NameTooLongError } from './name-length.js';
 
 /**
  * application/gateway/ontology-handlers: the six `ontology`-group capabilities (docs/development-
@@ -114,6 +117,23 @@ export const proposeOntologyChangeHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { id, change } = rawParams as { id?: string; change: unknown };
+  // Legacy 309: a new type name's cap. One the workspace has published already keeps working.
+  const parsed = OntologyDefinitionSchema.safeParse(change);
+  if (parsed.success) {
+    const [first] = await findNewOntologyNamesOver(
+      client,
+      workspaceId,
+      parsed.data,
+      NAME_MAX_LENGTH,
+    );
+    if (first !== undefined) {
+      throw new NameTooLongError(
+        `change.${first}`,
+        NAME_MAX_LENGTH,
+        'a name the published ontology already declares keeps working',
+      );
+    }
+  }
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   const row = await proposeOntologyChange(client, workspaceId, {
     id,

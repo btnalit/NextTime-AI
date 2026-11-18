@@ -51,6 +51,13 @@ import {
   GOAL_PRECEDENT_WINDOW_DAYS,
 } from './goal-precedents.js';
 import { CapabilityScopeSchema } from './handle-token.js';
+import {
+  CHAT_TITLE_MAX_LENGTH,
+  DISPLAY_NAME_MAX_LENGTH,
+  LOGIN_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  WORKER_DEFINITION_NAME_MAX_LENGTH,
+} from './name-limits.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
 import { GoalFromProcedureSchema } from './procedure.js';
 import * as wire from './wire/index.js';
@@ -331,7 +338,11 @@ const chatCapabilities = [
     // S11 AA4c: `agentKind: 'admin_agent'` starts a platform administrator's admin agent Chat in a
     // trial workspace (migrations/core/0053); the kernel checks the administrator's authority.
     paramsSchema: z
-      .object({ title: z.string().optional(), agentKind: ChatAgentKindSchema.optional() })
+      .object({
+        // Legacy 309: the cap `rename_chat` already had.
+        title: z.string().max(CHAT_TITLE_MAX_LENGTH).optional(),
+        agentKind: ChatAgentKindSchema.optional(),
+      })
       .strict(),
     resultSchema: wire.ChatWireSchema,
     description:
@@ -448,7 +459,9 @@ const chatCapabilities = [
     minRole: 'member',
     // At least one non-whitespace character; the handler trims and collapses inner whitespace to
     // one line before writing, so the stored title is never blank.
-    paramsSchema: z.object({ chatId: id, title: z.string().min(1).max(200).regex(/\S/) }).strict(),
+    paramsSchema: z
+      .object({ chatId: id, title: z.string().min(1).max(CHAT_TITLE_MAX_LENGTH).regex(/\S/) })
+      .strict(),
     resultSchema: wire.ChatWireSchema,
     description:
       'Set a Chat’s title (trimmed, single line, at most 200 characters). Own Chat only; 403 otherwise. A renamed title is never overwritten by the auto-title later messages would produce. Audit: chat.rename.',
@@ -3060,7 +3073,7 @@ const workerCapabilities = [
         definitionId: id,
         version: z.number().int().positive(),
         specDigest: z.string().regex(/^[0-9a-f]{64}$/),
-        name: z.string().trim().min(1).max(200),
+        name: z.string().trim().min(1).max(WORKER_DEFINITION_NAME_MAX_LENGTH),
       })
       .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
@@ -3113,6 +3126,8 @@ const ingestCapabilities = [
     paramsSchema: z
       .object({
         kind: z.string().min(1),
+        // Legacy 309: a new Source's name is capped (`NAME_MAX_LENGTH`) by the handler, which
+        // knows whether the name is already registered (collectors re-register every run).
         name: z.string().min(1),
         visibility: z.enum(['workspace', 'private']),
         uri: z.string().optional(),
@@ -3120,8 +3135,7 @@ const ingestCapabilities = [
       })
       .strict(),
     resultSchema: wire.RegisterSourceResultWireSchema,
-    description:
-      'Register a Source (document/DB/API/person/agent session). Idempotent on (kind, name): registering a name you already own with the same visibility returns the existing Source with created: false; a name held by another owner, or registered with the other visibility, is 409 source_identity_conflict.',
+    description: `Register a Source (document/DB/API/person/agent session). Idempotent on (kind, name): registering a name you already own with the same visibility returns the existing Source with created: false; a name held by another owner, or registered with the other visibility, is 409 source_identity_conflict. A new Source’s name is at most ${NAME_MAX_LENGTH} characters (400 invalid_params); one already registered is not checked again.`,
   },
   {
     // S3.3: real handler (`submitObservationsHandler`). `activityId` optional — see this file's
@@ -3297,7 +3311,10 @@ const membersCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ role: RoleSchema, displayName: z.string().min(1) }).strict(),
+    // Legacy 309: the cap a user's display name already had.
+    paramsSchema: z
+      .object({ role: RoleSchema, displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH) })
+      .strict(),
     resultSchema: wire.CreatePrincipalResultWireSchema,
     description:
       'Create a kind=service Principal (an automation credential — scripts, acceptance harnesses) and its API key; the plaintext key is returned once and never stored or readable again. People join a workspace through add_member / add_membership (P-A1), never through this.',
@@ -3579,8 +3596,8 @@ const platformCapabilities = [
     scope: 'platform',
     paramsSchema: z
       .object({
-        login: z.string().min(3).max(64),
-        displayName: z.string().min(1).max(200),
+        login: z.string().min(3).max(LOGIN_MAX_LENGTH),
+        displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH),
         platformRole: wire.PlatformRoleWireSchema.optional(),
         /** Omit to have a temporary password generated. Either way it is returned once and must be changed on first login. */
         password: z.string().min(1).optional(),
@@ -3603,7 +3620,7 @@ const platformCapabilities = [
     paramsSchema: z
       .object({
         userId: platformUserId,
-        displayName: z.string().min(1).max(200).optional(),
+        displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH).optional(),
         platformRole: wire.PlatformRoleWireSchema.optional(),
       })
       .strict(),

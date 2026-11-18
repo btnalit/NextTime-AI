@@ -66,6 +66,7 @@ import {
   hashApiKey,
 } from '../../application/gateway/index.js';
 import { OperationDisabledError, UnknownOperationError } from '../../application/gateway/index.js';
+import { NameTooLongError } from '../../application/gateway/name-length.js';
 import {
   GoalPlanValidationError,
   GoalRunForbiddenError,
@@ -362,6 +363,16 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
       code: 'invalid_operation_name',
       details: { problem: 'invisible_or_control_characters', maxLength: 128 },
       message: expect.stringContaining('"a\\u{202E}b"'),
+    });
+  });
+
+  it('NameTooLongError (legacy 309) maps to 400 invalid_params with where and the cap', () => {
+    expect(mapCapabilityError(new NameTooLongError('skill.name', 128))).toEqual({
+      status: 400,
+      code: 'invalid_params',
+      message:
+        'skill.name is longer than 128 characters — nothing was written. Use a name of at most 128 characters.',
+      details: { path: 'skill.name', maxLength: 128 },
     });
   });
 

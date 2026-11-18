@@ -7,7 +7,12 @@ import type {
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { GOAL_PRECEDENT_CONTEXT_LIMIT, getCapability, storableValue } from '@nexttime/shared';
+import {
+  GOAL_PRECEDENT_CONTEXT_LIMIT,
+  WORKER_DEFINITION_NAME_MAX_LENGTH,
+  getCapability,
+  storableValue,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   adminAgentRefusal,
@@ -354,6 +359,7 @@ import {
   setPrincipalRoleHandler,
 } from './members-handlers.js';
 import { listModelsHandler, readModelCatalog } from './models-catalog-handler.js';
+import { assertVersionNameWithin } from './name-length.js';
 import {
   getTypeHandler,
   listOntologyVersionsHandler,
@@ -1445,6 +1451,19 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (
     kind: WorkerDefinitionKind;
     definition: Record<string, unknown>;
   };
+  // Legacy 309: the cap `propose_definition_from_combination`'s name has, on a name the
+  // definition has not had yet (a version may rename it; `name` only ranks it in a text search).
+  const { name } = definition;
+  if (typeof name === 'string') {
+    await assertVersionNameWithin(client, {
+      table: 'worker_definitions',
+      workspaceId,
+      recordId: definitionId,
+      name,
+      path: 'definition.name',
+      maxLength: WORKER_DEFINITION_NAME_MAX_LENGTH,
+    });
+  }
   const principalId = await currentPrincipalId(client);
   const row = await proposeWorkerDefinition(client, workspaceId, principalId, {
     definitionId,

@@ -114,6 +114,7 @@ import {
   MetaOntologyObjectWriteError,
   MetaOntologyWriteForbiddenError,
   ModelsCatalogUnavailableError,
+  NameTooLongError,
   ObservationIdentityError,
   OntologyBaseMovedError,
   OntologyChangeValidationError,
@@ -778,6 +779,11 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // Legacy 232 (review #493): a new Operation name that is empty, too long, or carries an
   // invisible / reordering character — 400 with its own code and `details` (problem, maxLength).
   if (err instanceof OperationNameInvalidError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // Legacy 309: a name inside an opaque payload (a Skill's, a Procedure's, a WorkerDefinition's, a
+  // new ontology type's) longer than its cap — 400 with `details` (path, maxLength).
+  if (err instanceof NameTooLongError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // S11 GO12 (I-Q4): an imported or announced target declaration refused — 400 with its own code
