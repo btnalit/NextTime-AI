@@ -29,6 +29,7 @@ import { procedureTemplateProblems } from '../goal/index.js';
 import { readProcedureStats, readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftOriginOf, draftViewerOf } from './draft-viewer.js';
+import { parseOpaqueParam } from './invalid-params.js';
 import { assertNameWithin, assertVersionNameWithin } from './name-length.js';
 
 /**
@@ -44,7 +45,8 @@ import { assertNameWithin, assertVersionNameWithin } from './name-length.js';
  * opaque record (mirroring `propose_operation`'s own `operation: jsonRecord` — the shared registry
  * cannot express a nested Zod object per capability without duplicating `@nexttime/shared`'s own
  * content schemas into the registry file) — these handlers are where that opaque payload is
- * actually parsed against `ProposeSkillContentSchema`/`ProposeProcedureContentSchema`.
+ * actually parsed against `ProposeSkillContentSchema`/`ProposeProcedureContentSchema`, a payload
+ * that does not fit refused as any params problem is (`parseOpaqueParam`, invalid-params.ts).
  *
  * `get_skill_stats` (S11 W1a E2-1) counts a family's use and outcomes; its builder floor sees every
  * draft already, so it does not narrow.
@@ -58,7 +60,7 @@ import { assertNameWithin, assertVersionNameWithin } from './name-length.js';
 // new family as before (application/worker/family-version.ts).
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skill: rawSkill, skillId } = params as { skill: unknown; skillId?: string };
-  const content = ProposeSkillContentSchema.parse(rawSkill);
+  const content = parseOpaqueParam('propose_skill', 'skill', ProposeSkillContentSchema, rawSkill);
   // Legacy 309: a new family's name, at the length publishing holds it to (pi's rule; its
   // characters are still checked there). A next version keeps its family's name
   // (`SkillFamilyNameChangedError`), so it brings no new one.
@@ -232,7 +234,12 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
     procedure: unknown;
     procedureId?: string;
   };
-  const content = ProposeProcedureContentSchema.parse(rawProcedure);
+  const content = parseOpaqueParam(
+    'propose_procedure',
+    'procedure',
+    ProposeProcedureContentSchema,
+    rawProcedure,
+  );
   // Legacy 309: a version may rename its Procedure, so a name the Procedure has not had yet.
   await assertVersionNameWithin(client, {
     table: 'procedures',
