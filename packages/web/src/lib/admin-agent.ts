@@ -96,3 +96,16 @@ export function adminAgentTargetsErrorOverrides(t: Translate): ErrorOverrides {
     ),
   };
 }
+
+/** Legacy 648: the target ids `ids` (as saved now) with the reader's own `added` put in and
+ *  `removed` taken out — kept ones first in their order, then the added ones. */
+export function rebaseTargets(
+  ids: readonly string[],
+  added: readonly string[],
+  removed: readonly string[],
+): string[] {
+  const gone = new Set(removed);
+  const next = ids.filter((id) => !gone.has(id));
+  for (const id of added) if (!next.includes(id)) next.push(id);
+  return next;
+}
