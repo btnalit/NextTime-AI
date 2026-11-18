@@ -1089,7 +1089,11 @@ SQL 列出的自连门清单就是要逐个确认的范围。
   剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。0.69.2 之后的下一版起改写 7 类（#1322，遗留 375）：加 `connectionActivities`，即遗留 186 之前写入的自接门落地活动（`governance.create_connection`）的 `metadata.target`，按读侧的显示规则（`target` 规则）改写：整段查询和片段去掉，带密码时连用户名也去掉，主机和路径保留；只改 `target` 一个键，不需要单独处置，清洗报告的类别行里多出这一类。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
-  备份里。
+  备份里。0.69.2 之后的下一版起只计数 8 类（#1442，遗留 817）：加 `gateCallObservations`，即遗留 237 之前写入、门结果原样存着的
+  Worker 门调用观察记录（`observations.content`）。没有读口返回这一列，原文只在库里和备份里。遗留 237（#1396）之后新写入的行带
+  `payloadRedacted: true`，不计；这个标记只在与 #1396 同一版发出时成立，两者必须进同一个 release。整段存的行判定精确；切成文本的旧行按文本判，
+  是上界：字段名像秘密时，`null`、`""`、`true` / `false`、`[]`、不含秘密值的对象，以及 `"credentials":{` 这类标点也会被计入，不会漏计
+  （注释措辞见遗留 839）。
 - 只列、不改 1 类（v0.50.0 起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
   运行）；报告里这一类的标签是 `listed, nothing to fix`，与只计数的类别分开看。dry run 只列以往运行留下的：剪后是否撞名，要等前面的名字改写之后才知道。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
@@ -1122,7 +1126,7 @@ begin transaction read only;
 select relname, n_live_tup, pg_size_pretty(pg_total_relation_size(relid)) as size
   from pg_stat_user_tables
  where relname in ('audit_records', 'activities', 'decisions', 'chat_messages', 'tasks', 'links', 'objects',
-                   'connection_requests', 'gate_instances')
+                   'connection_requests', 'gate_instances', 'observations')
  order by relname;
 rollback;
 SQL
@@ -1137,6 +1141,7 @@ SQL
 - `gateInstanceAddresses` 或 `gatekeeperAddresses` > 0：这些门实例与 Gatekeeper 的地址带凭据，它们的门公告照旧放行，但这些实例不能再
   启用到新的工作区。由平台管理员用不带凭据的地址重建实例（凭据经门宿主的凭据录入），旧实例的停用或删除是写操作，victor 决定。
 - `connectedSystemDuplicates` > 0 不需要处置，记数到 `docs/private/` 即可。
+- `gateCallObservations` > 0 不需要处置，记数到 `docs/private/` 即可；要删掉原文属破坏性操作，另行决定。
 - apply 日志最后一行是 `RESULT degraded=…raw-secret-scrub…`，且 `-raw-secret-scrub.log` 末行含 `objects_identity_key_uidx`：清洗期间有门以同样的
   显示名落地，按上面「补跑」先备份、再跑 `--yes`，那一行会被写成重复件。
 - 其余只计数的类别不需要处置；要真正删掉库里与备份里的原文，属破坏性操作，另行决定。
