@@ -311,6 +311,20 @@ describe('CreateGateInstanceForm', () => {
     expect(manifest.placeholder).toBe('https://billing.example.com/openapi.json');
   });
 
+  // Legacy 844 (UX acceptance on #1454): a platform gate instance's manifest is read by its gate
+  // host, which reaches a service name on the platform's network — the suggestion stays for one.
+  it('suggests the manifest for a target that names a service', async () => {
+    const http = scriptedHttp({});
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = await screen.findByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'http://erp-gate:8080' },
+    });
+    expect(within(form).getByTestId('cgi-manifest-suggest').textContent).toBe(
+      '使用 http://erp-gate:8080/openapi.json',
+    );
+  });
+
   it('drops the target query from the manifest suggestion', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);

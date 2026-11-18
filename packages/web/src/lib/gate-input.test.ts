@@ -90,6 +90,15 @@ describe('addressCarriesCredential / suggestedManifestSource (review of #549)', 
     expect(suggestedManifestSource('https://billing.example.com/api?version=3#top')).toBe(
       'https://billing.example.com/api/openapi.json',
     );
+    expect(suggestedManifestSource('http://203.0.113.7:8080', { kernelReads: true })).toBe(
+      'http://203.0.113.7:8080/openapi.json',
+    );
+    expect(suggestedManifestSource('https://[2001:db8::7]/api', { kernelReads: true })).toBe(
+      'https://[2001:db8::7]/api/openapi.json',
+    );
+    expect(suggestedManifestSource('billing.example.com', { kernelReads: true })).toBe(
+      'https://billing.example.com/openapi.json',
+    );
   });
 
   it.each([
@@ -99,7 +108,31 @@ describe('addressCarriesCredential / suggestedManifestSource (review of #549)', 
     ['is not http(s)', 'ssh://deploy@db-1'],
   ])('offers nothing when the target %s', (_name, value) => {
     expect(suggestedManifestSource(value)).toBe('');
+    expect(suggestedManifestSource(value, { kernelReads: true })).toBe('');
   });
+
+  // Legacy 844: where the kernel reads the manifest (a workspace connecting a gate), a host it
+  // refuses gets no suggestion; a platform gate instance's manifest is read by its gate host,
+  // which reaches service names, so there the suggestion stays.
+  it.each([
+    ['a service name', 'grafana', 'https://grafana/openapi.json'],
+    [
+      'a service name with a port',
+      'http://gate-host:8080/api',
+      'http://gate-host:8080/api/openapi.json',
+    ],
+    ['localhost', 'localhost:3000', 'https://localhost:3000/openapi.json'],
+    ['a .localhost name', 'https://api.localhost', 'https://api.localhost/openapi.json'],
+    ['a loopback IPv4', 'http://127.0.0.1:8080', 'http://127.0.0.1:8080/openapi.json'],
+    ['the unspecified IPv4', 'http://0.0.0.0:8080', 'http://0.0.0.0:8080/openapi.json'],
+    ['the loopback IPv6', 'http://[::1]:8080', 'http://[::1]:8080/openapi.json'],
+  ])(
+    'suggests nothing for %s only where the kernel reads the manifest',
+    (_name, value, platform) => {
+      expect(suggestedManifestSource(value, { kernelReads: true })).toBe('');
+      expect(suggestedManifestSource(value)).toBe(platform);
+    },
+  );
 });
 
 describe('suggestedGateId (field-inventory #9)', () => {
