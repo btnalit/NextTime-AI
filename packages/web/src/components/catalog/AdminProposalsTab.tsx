@@ -12,6 +12,7 @@ import {
   type AdminProposalWorkspaceItemWire,
   type AvailableGateInstanceWire,
   type ChangePrincipalRefWire,
+  type ChangeSegmentDetailWire,
   type ChangeVerificationWire,
   type GateInstanceDriftField,
   type PackWire,
@@ -548,6 +549,21 @@ function AdminProposalSegmentDetail({
     appliedHere !== null && appliedHere.segmentId === segment.id && segment.status === 'applied'
       ? appliedHere
       : null;
+  // Legacy 636: reopened later, the apply's own check is gone — the install record's latest
+  // verification, read from the record, stands in for it.
+  const can = useRoleCan(http);
+  const recordId =
+    segment.status === 'applied' && verification === null ? segment.appliedSegmentId : null;
+  const record = useCapability<ChangeSegmentDetailWire>(
+    http,
+    'get_change_segment',
+    { segmentId: recordId ?? '' },
+    { enabled: recordId !== null && can('get_change_segment') !== false },
+  );
+  const recorded =
+    recordId !== null && record.state.status === 'ready'
+      ? record.state.data.verification
+      : undefined;
   const hasOperations = segment.items.some((item) => item.kind === 'operation_version');
   const offered = useCapabilityList<AvailableGateInstanceWire>(
     http,
@@ -745,6 +761,30 @@ function AdminProposalSegmentDetail({
                       '应用后已核验：没有通过，原因见安装记录。',
                       'Verified right after applying: it did not pass; the install record says why.',
                     )}
+            </span>
+          ) : recorded !== undefined ? (
+            <span className="text-small" data-testid="catalog-proposal-record-verification">
+              {recorded === null ? (
+                t(
+                  '安装记录还没有核验过，可以在安装记录里核验。',
+                  'The install record has not been verified yet; verify it from the record.',
+                )
+              ) : (
+                <>
+                  {recorded.passed
+                    ? t(
+                        '安装记录最近一次核验：通过',
+                        'The install record’s last verification: passed',
+                      )
+                    : t(
+                        '安装记录最近一次核验：没有通过，原因见安装记录',
+                        'The install record’s last verification: it did not pass; the record says why',
+                      )}
+                  {t('（', ' (')}
+                  <span data-volatile="">{formatDateTime(recorded.verifiedAt)}</span>
+                  {t('）。', ').')}
+                </>
+              )}
             </span>
           ) : null}
         </>

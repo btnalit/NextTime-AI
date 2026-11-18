@@ -1334,6 +1334,53 @@ describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3
     expect(named(http.calls, 'apply_admin_proposal_segment')).toEqual([]);
   });
 
+  it('legacy 636: an applied proposal reopened later says its install record’s last verification', async () => {
+    const applied = received({ status: 'applied', appliedSegmentId: RECORD });
+    const run = {
+      trigger: 'system',
+      verifiedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+      verifiedAt: '2026-11-01T08:00:05.000Z',
+      passed: true,
+      sourceFound: true,
+      items: [],
+      requirements: [],
+      dependencies: [],
+    };
+    for (const [verification, text] of [
+      [run, /^安装记录最近一次核验：通过（.+）。$/],
+      [{ ...run, passed: false }, /^安装记录最近一次核验：没有通过，原因见安装记录（.+）。$/],
+      [null, /^安装记录还没有核验过，可以在安装记录里核验。$/],
+    ] as const) {
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_admin_proposal_segments: () => ({ items: [applied] }),
+        get_change_segment: () => ({ segment: {}, items: [], verification }),
+      });
+      renderTab(http, SEGMENT);
+      expect(
+        (await screen.findByTestId('catalog-proposal-record-verification')).textContent,
+      ).toMatch(text);
+      expect(named(http.calls, 'get_change_segment').map((call) => call.params)).toEqual([
+        { segmentId: RECORD },
+      ]);
+      expect(screen.getByTestId('catalog-proposal-record').textContent).toMatch(/安装历史/);
+      cleanup();
+    }
+    // Rolled back: the record says what that means; nothing is read here.
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({
+        items: [received({ status: 'rolled_back', appliedSegmentId: RECORD })],
+      }),
+    });
+    renderTab(http, SEGMENT);
+    expect((await screen.findByTestId('catalog-proposal-record')).textContent).toMatch(
+      /应用后又撤销了/,
+    );
+    expect(screen.queryByTestId('catalog-proposal-record-verification')).toBeNull();
+    expect(named(http.calls, 'get_change_segment')).toEqual([]);
+  });
+
   it('a pack with a newer version since says only the latest installs, offers no install and leaves rejecting', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
