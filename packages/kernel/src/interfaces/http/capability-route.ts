@@ -233,6 +233,7 @@ import {
 import {
   AbsentAnswersReviewRequiredError,
   OperationDeclaresGateOwnedParamsError,
+  OperationDefinitionUnreadableError,
   OperationDraftChangedError,
   OperationIdentityConflictError,
   OperationNameInvalidError,
@@ -711,6 +712,12 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // have known was needed.
   if (err instanceof CredentialReviewRequiredError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // Legacy 220: an Operation whose stored definition does not parse has no approved definition to
+  // hold the gate to — refused before anything is sent, as an execute call's run is
+  // (`operation_definition_unavailable`), not a 500. Publishing a corrected revision is the fix.
+  if (err instanceof OperationDefinitionUnreadableError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // Legacy 175 (governance/redaction/credential-review.ts `reviewObserveParams`): an observe-class
   // Operation's params carrying a literal credential — refused before the gate is called;

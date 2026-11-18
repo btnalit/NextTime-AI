@@ -1958,6 +1958,48 @@ describe.runIf(DATABASE_URL !== undefined)(
           await expect(observeAsMember(OP_B.name)).rejects.toMatchObject({
             message: expect.stringContaining('operation_disabled'),
           });
+          // `request_action` checks the same cut-off for every mode (`assertOperationEnabled`).
+          const viaRequest = { gatekeeperId: cGatekeeperId, operation: OP_B.name, params: {} };
+          await expect(
+            dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+              'request_action',
+              viaRequest,
+            ),
+          ).rejects.toMatchObject({ message: expect.stringContaining('operation_disabled') });
+
+          // Legacy 220: each refusal is in the audit log as a gate's would be — the call, its
+          // params copy, the code and status the member got, and which platform cut-off applied.
+          for (const capability of ['observe_operation', 'request_action']) {
+            const rows = await withWorkspace(
+              pool,
+              { workspaceId: cWorkspaceId, principalId: cOwnerId },
+              (client) =>
+                queryAudit(client, cWorkspaceId, {
+                  actorPrincipalId: cMemberId,
+                  action: capability,
+                  resourceType: 'gatekeeper',
+                  resourceId: cGatekeeperId,
+                }),
+            );
+            const refused = rows.filter(
+              (row) => (row.payload as { outcome?: string }).outcome === 'refused',
+            );
+            expect(refused).toHaveLength(1);
+            expect(refused[0]?.payload).toMatchObject({
+              channel: 'human',
+              onBehalfOf: cMemberId,
+              params: viaRequest,
+              outcome: 'refused',
+              refusal: {
+                code: 'operation_disabled',
+                status: 403,
+                operation: OP_B.name,
+                cutoff: 'connector_deny_list',
+              },
+            });
+          }
 
           // The owner's gate view leaves the denied one out and counts what it lists; a deny list
           // is not a suspension, so there is no platformSuspension (legacy 674, review #493).

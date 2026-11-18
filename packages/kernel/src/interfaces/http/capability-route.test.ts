@@ -65,7 +65,7 @@ import {
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
-import { UnknownOperationError } from '../../application/gateway/index.js';
+import { OperationDisabledError, UnknownOperationError } from '../../application/gateway/index.js';
 import {
   GoalPlanValidationError,
   GoalRunForbiddenError,
@@ -100,7 +100,10 @@ import {
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
-import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDefinitionUnreadableError,
+  OperationNameInvalidError,
+} from '../../governance/gatekeepers/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -352,6 +355,31 @@ describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
       status: 400,
       code: 'credentials_in_observe_params',
       details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy 220 platform refusals of a gate call (unit)', () => {
+  it('OperationDefinitionUnreadableError maps to 409 operation_definition_unavailable (it was a 500)', () => {
+    const err = new OperationDefinitionUnreadableError('gk-1', 'list_items', new Error('bad'));
+    expect(mapCapabilityError(err)).toEqual({
+      status: 409,
+      code: 'operation_definition_unavailable',
+      message: err.message,
+    });
+  });
+
+  it('OperationDisabledError keeps the 403 forbidden it always answered, its text unchanged', () => {
+    const err = new OperationDisabledError(
+      'operation_disabled: "list_items" on gatekeeper gk-1 is disabled by the platform for connector "c"',
+      'gk-1',
+      'list_items',
+      'connector_deny_list',
+    );
+    expect(mapCapabilityError(err)).toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      message: err.message,
     });
   });
 });

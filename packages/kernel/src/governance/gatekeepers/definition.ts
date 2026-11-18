@@ -25,7 +25,12 @@ export interface OperationDefinitionRecord {
   readonly operation: unknown;
 }
 
+/** Legacy 220: refused, readably, wherever a call meets it — HTTP 409 `operation_definition_unavailable`
+ *  (WS illegal-transition, MCP text with the code in front), the code an execute call's failure
+ *  reason already starts with (`approvedOperationDigest`, action-executor.ts). It was a 500 on the
+ *  observe path and on `request_action` before the request existed. */
 export class OperationDefinitionUnreadableError extends Error {
+  readonly code = 'operation_definition_unavailable' as const;
   readonly gatekeeperId: string;
   readonly operationName: string;
   constructor(gatekeeperId: string, operationName: string, cause: unknown) {

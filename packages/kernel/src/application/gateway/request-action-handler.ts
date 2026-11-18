@@ -89,7 +89,11 @@ import {
   scopeExplicitIdempotencyKey,
 } from './action-executor.js';
 import { reconciliationOf, toWireActionRequest } from './action-request-wire.js';
-import { ForbiddenError } from './authorize.js';
+import {
+  ForbiddenError,
+  type OperationDisabledCutoff,
+  OperationDisabledError,
+} from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerResult } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
 import { writeObservedFacts } from './observed-facts.js';
@@ -1736,20 +1740,27 @@ function observeRefusalError(
 }
 
 /** Same `operation_disabled:` prefix for both platform cut-offs (callers and the console key on it);
- *  the text says which one applies, since only the suspension is lifted per connection. */
+ *  the text says which one applies, since only the suspension is lifted per connection. Legacy 220:
+ *  an `OperationDisabledError`, which the dispatcher audits as a refused gate call. */
 function operationDisabledError(
   gatekeeperId: string,
   operationName: string,
   connector: string | undefined,
-  cutoff: 'connector_deny_list' | 'self_connection_suspended' | undefined,
-): ForbiddenError {
+  cutoff: OperationDisabledCutoff | undefined,
+): OperationDisabledError {
   if (cutoff === 'self_connection_suspended') {
-    return new ForbiddenError(
+    return new OperationDisabledError(
       `operation_disabled: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is disabled by the platform: this workspace's own "${connector}" connection to it is suspended`,
+      gatekeeperId,
+      operationName,
+      cutoff,
     );
   }
-  return new ForbiddenError(
+  return new OperationDisabledError(
     `operation_disabled: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${connector}"`,
+    gatekeeperId,
+    operationName,
+    cutoff,
   );
 }
 

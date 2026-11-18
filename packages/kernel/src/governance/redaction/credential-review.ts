@@ -1,4 +1,4 @@
-import { SECRET_FIELD_MASK } from '@nexttime/shared';
+import { SECRET_FIELD_MASK, sliceKeepingPairs } from '@nexttime/shared';
 import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   type RedactSecretsOptions,
@@ -56,11 +56,14 @@ const MAX_PATHS = 20;
 const MAX_SEGMENT_CHARS = 64;
 
 /** A path segment as the console shows it. Field names come from the content (an agent's call
- *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut. */
+ *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut — never
+ *  through a surrogate pair (review #501 on #1452): half an emoji left at the cut is text Postgres
+ *  will not store in jsonb, which lost the audit row a refused call leaves and failed an observe
+ *  call whose row records the paths (`credentialReview`). */
 function segment(key: string): string {
   const scrubbed = scrubSecretValues(key).value;
   return scrubbed.length > MAX_SEGMENT_CHARS
-    ? `${scrubbed.slice(0, MAX_SEGMENT_CHARS)}…`
+    ? `${sliceKeepingPairs(scrubbed, MAX_SEGMENT_CHARS)}…`
     : scrubbed;
 }
 
@@ -359,6 +362,9 @@ export function redactedPathsIn(value: unknown): readonly string[] {
  */
 export class ObserveParamsCarryCredentialsError extends Error {
   readonly code = 'credentials_in_observe_params' as const;
+  /** The Operation called — its refused-call audit row names it (`dispatch.ts`'s
+   *  `auditPlatformGateRefusal`). */
+  readonly operationName: string;
   readonly details: {
     readonly suspectedSecretValues: number;
     readonly suspectedSecretPaths: readonly string[];
@@ -369,6 +375,7 @@ export class ObserveParamsCarryCredentialsError extends Error {
       `${gateName}.${operation}: the params carry ${found.count} credential value(s)${where} (a JWT, a vendor API key, a private key, a literal Bearer or Authorization token, a Basic user:password or a URL's password) — refused, nothing was sent to the gate. Do not pass credentials as Operation params: the gate authenticates with the credentials configured on it. Text that only mentions one is fine (an Authorization header name, token=expired, a $VAR placeholder).`,
     );
     this.name = 'ObserveParamsCarryCredentialsError';
+    this.operationName = operation;
     this.details = { suspectedSecretValues: found.count, suspectedSecretPaths: found.paths };
   }
 }

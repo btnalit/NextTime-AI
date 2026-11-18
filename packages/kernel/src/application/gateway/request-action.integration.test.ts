@@ -501,6 +501,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     describe('observe params credential review (legacy 175)', () => {
       /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
       const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+      /** A Handle-shaped compact JWT; `.gitleaks.toml` allows its signature segment. */
+      const JWT_KEY =
+        'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 
       function handleCaller(): ResolvedCaller {
         const now = Math.floor(Date.now() / 1000);
@@ -555,17 +558,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       }
 
+      /** The audit rows `capability` left since `before` (the ids an earlier read returned). */
+      async function newAuditRows(capability: string, before: ReadonlySet<string>) {
+        return (await auditRows(capability)).filter((row) => !before.has(row.id));
+      }
+
+      async function auditIds(capability: string): Promise<ReadonlySet<string>> {
+        return new Set((await auditRows(capability)).map((row) => row.id));
+      }
+
       it.each(ways)(
-        '%s (%s channel) refuses a literal credential: nothing reaches the gate, nothing is written',
+        '%s (%s channel) refuses a literal credential: nothing reaches the gate, and the refusal is audited without the params (legacy 220)',
         async (capability, channel) => {
           const callsBefore = transport.calls['observe.stock'] ?? 0;
-          const auditBefore = (await auditRows(capability)).length;
+          const auditBefore = await auditIds(capability);
           const activitiesBefore = await activityCount();
+          const marker = `north-${randomUUID()}`;
 
           const thrown = await dispatchCapability({ pool }, callerFor(channel), capability, {
             gatekeeperId,
             operation: 'observe.stock',
-            params: { warehouse: 'north', filter: `Authorization: Bearer ${FAKE}` },
+            params: { warehouse: marker, filter: `Authorization: Bearer ${FAKE}` },
           }).catch((err: unknown) => err);
 
           expect(thrown).toBeInstanceOf(ObserveParamsCarryCredentialsError);
@@ -575,10 +588,124 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           expect((thrown as Error).message).not.toContain(FAKE);
           expect(transport.calls['observe.stock'] ?? 0).toBe(callsBefore);
-          expect((await auditRows(capability)).length).toBe(auditBefore);
           expect(await activityCount()).toBe(activitiesBefore);
+
+          // Legacy 220 (coordinator: the row never holds the params or a piece of a credential —
+          // the code, the field names and the Operation only): one refused row, in its own
+          // transaction, whose `params` copy names the gate and the Operation and nothing else.
+          const added = await newAuditRows(capability, auditBefore);
+          expect(added).toHaveLength(1);
+          const row = added[0];
+          expect(row?.actorPrincipalId).toBe(ownerId);
+          expect(row?.payload).toMatchObject({
+            channel,
+            onBehalfOf: ownerId,
+            outcome: 'refused',
+            refusal: {
+              code: 'credentials_in_observe_params',
+              status: 400,
+              operation: 'observe.stock',
+              suspectedSecretValues: 1,
+              suspectedSecretPaths: ['filter'],
+            },
+          });
+          expect((row?.payload as { params?: unknown }).params).toEqual({
+            gatekeeperId,
+            operation: 'observe.stock',
+          });
+          const stored = JSON.stringify(row);
+          for (const piece of [FAKE, FAKE.slice(0, 8), 'Bearer', 'Authorization', marker]) {
+            expect(stored).not.toContain(piece);
+          }
         },
       );
+
+      it.each(ways)(
+        '%s (%s channel) refuses a key that is itself a credential, and audits where it was without the key (legacy 220)',
+        async (capability, channel) => {
+          const auditBefore = await auditIds(capability);
+          const marker = `plain-${randomUUID()}`;
+          const [header, , signature] = JWT_KEY.split('.') as [string, string, string];
+
+          await expect(
+            dispatchCapability({ pool }, callerFor(channel), capability, {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: { nested: { [JWT_KEY]: marker } },
+            }),
+          ).rejects.toBeInstanceOf(ObserveParamsCarryCredentialsError);
+
+          const added = await newAuditRows(capability, auditBefore);
+          expect(added).toHaveLength(1);
+          expect(added[0]?.payload).toMatchObject({
+            channel,
+            params: { gatekeeperId, operation: 'observe.stock' },
+            refusal: {
+              code: 'credentials_in_observe_params',
+              suspectedSecretValues: 1,
+              // Where it was, the key that is the credential scrubbed (`segment`).
+              suspectedSecretPaths: ['nested.[redacted]'],
+            },
+          });
+          const stored = JSON.stringify(added[0]);
+          for (const piece of [JWT_KEY, header, signature, marker]) {
+            expect(stored).not.toContain(piece);
+          }
+        },
+      );
+
+      it.each(ways)(
+        '%s (%s channel) audits a refused credential whose path is cut at an emoji (review #501 on #1452)',
+        async (capability, channel) => {
+          // A field name past 64 characters is cut; one with half an emoji at the cut was text
+          // jsonb refuses, and the refused call's row was lost.
+          const atTheCut = `${'x'.repeat(63)}😀`;
+          const auditBefore = await auditIds(capability);
+
+          await expect(
+            dispatchCapability({ pool }, callerFor(channel), capability, {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: { [`${atTheCut}tail`]: `Bearer ${FAKE}` },
+            }),
+          ).rejects.toBeInstanceOf(ObserveParamsCarryCredentialsError);
+
+          const added = await newAuditRows(capability, auditBefore);
+          expect(added).toHaveLength(1);
+          expect(added[0]?.payload).toMatchObject({
+            channel,
+            refusal: {
+              code: 'credentials_in_observe_params',
+              suspectedSecretValues: 1,
+              suspectedSecretPaths: [`${'x'.repeat(63)}…`],
+            },
+          });
+          expect(JSON.stringify(added[0])).not.toContain(FAKE);
+        },
+      );
+
+      it('records a passed call whose secret-named field is cut at an emoji (review #501 on #1452)', async () => {
+        // The same cut in the row of a call that passed the review: it failed the whole call.
+        const atTheCut = `${'x'.repeat(63)}😀`;
+        const cursor = `cursor-${randomUUID()}`;
+        const result = (await dispatchCapability(
+          { pool },
+          callerFor('human'),
+          'observe_operation',
+          { gatekeeperId, operation: 'observe.stock', params: { [`${atTheCut}Token`]: cursor } },
+        )) as { status: string };
+        expect(result.status).toBe('ok');
+
+        const rows = await auditRows('observe_operation');
+        const row = rows.find((r) => JSON.stringify(r.payload).includes(`${'x'.repeat(63)}…`));
+        expect(row?.payload).toMatchObject({
+          credentialReview: {
+            suspectedSecretValues: 1,
+            suspectedSecretPaths: [`${'x'.repeat(63)}…`],
+          },
+        });
+        expect(JSON.stringify(rows)).not.toContain(cursor);
+      });
 
       it.each(ways)(
         '%s (%s channel) passes a value under a secret-named field to the gate as sent, and the audit row records it redacted',
@@ -2778,6 +2905,137 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         });
         expect(JSON.stringify(row?.payload)).not.toContain('refused, nothing ran');
+      });
+
+      it('legacy 220: refuses a call to an Operation whose stored definition does not parse — 409 operation_definition_unavailable on both ways in, before any request exists, audited, nothing sent', async () => {
+        const unreadableRead: Operation = {
+          ...OBSERVE_OP,
+          name: 'k.unreadable.read',
+          binding: { kind: 'http', method: 'GET', path: '/k/unreadable/read' },
+        };
+        const unreadable: Operation = {
+          ...AUTO_OP,
+          name: 'k.unreadable',
+          binding: { kind: 'http', method: 'POST', path: '/k/unreadable' },
+        };
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: kGatekeeperId,
+            operations: [unreadableRead, unreadable],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          // A draft is the one version whose definition may still change (core 0047): made one
+          // no governed path writes — `reversibility` is not a boolean — then published as is.
+          await client.query(
+            `update objects
+             set properties = jsonb_set(properties, '{reversibility}', '"sometimes"')
+             where workspace_id = $1 and object_type = 'Operation'
+               and identity_key ->> 'gatekeeperId' = $2
+               and identity_key ->> 'name' = any($3::text[])
+               and properties ->> 'status' = 'draft'`,
+            [workspaceId, kGatekeeperId, [unreadableRead.name, unreadable.name]],
+          );
+          for (const op of [unreadableRead, unreadable]) {
+            await publishOperation(client, workspaceId, {
+              gatekeeperId: kGatekeeperId,
+              name: op.name,
+            });
+          }
+        });
+        const requestsBefore = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ n: number }>(
+                `select count(*)::int as n from action_requests
+                 where workspace_id = $1 and gatekeeper_id = $2`,
+                [workspaceId, kGatekeeperId],
+              )
+            ).rows[0]?.n,
+        );
+
+        const calls = [
+          ['observe_operation', unreadableRead.name],
+          ['request_action', unreadableRead.name],
+          ['request_action', unreadable.name],
+        ] as const;
+        for (const [capability, operation] of calls) {
+          await expect(
+            dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), capability, {
+              gatekeeperId: kGatekeeperId,
+              operation,
+              params: {},
+            }),
+          ).rejects.toMatchObject({ code: 'operation_definition_unavailable' });
+        }
+        expect(kTransport.calls[unreadableRead.name]).toBeUndefined();
+        expect(kTransport.calls[unreadable.name]).toBeUndefined();
+        expect(
+          await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            async (client) =>
+              (
+                await client.query<{ n: number }>(
+                  `select count(*)::int as n from action_requests
+                   where workspace_id = $1 and gatekeeper_id = $2`,
+                  [workspaceId, kGatekeeperId],
+                )
+              ).rows[0]?.n,
+          ),
+        ).toBe(requestsBefore);
+
+        // Each refusal is in the audit log, as a gate's would be: the call, its params copy, and
+        // the code and status the caller got.
+        for (const [capability, operation] of calls) {
+          const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            queryAudit(client, workspaceId, {
+              action: capability,
+              resourceType: 'gatekeeper',
+              resourceId: kGatekeeperId,
+            }),
+          );
+          const row = rows.find(
+            (entry) =>
+              (entry.payload as { refusal?: { code?: string; operation?: string } }).refusal
+                ?.operation === operation,
+          );
+          expect(row?.actorPrincipalId).toBe(ownerId);
+          expect(row?.payload).toMatchObject({
+            channel: 'human',
+            onBehalfOf: ownerId,
+            params: { gatekeeperId: kGatekeeperId, operation, params: {} },
+            outcome: 'refused',
+            refusal: { code: 'operation_definition_unavailable', status: 409, operation },
+          });
+        }
+
+        // The same 409 from a capability that is not a gate call (review #493 on #1452): no
+        // refused row — it is not a call the gate or the platform refused to run.
+        await expect(
+          dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), 'set_policy', {
+            policy: {
+              gatekeeperId: kGatekeeperId,
+              actionKindTag: unreadable.name,
+              autoApprove: true,
+              operationVersion: 1,
+            },
+          }),
+        ).rejects.toMatchObject({ code: 'operation_definition_unavailable' });
+        const policyRows = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) => queryAudit(client, workspaceId, { action: 'set_policy', limit: 1000 }),
+        );
+        expect(
+          policyRows.filter((row) => (row.payload as { outcome?: string }).outcome === 'refused'),
+        ).toEqual([]);
       });
 
       it('legacy 700: refuses a call to a gate connected at http:// on the public internet — 424 target_refused with the rule, audited without the address, nothing sent', async () => {
