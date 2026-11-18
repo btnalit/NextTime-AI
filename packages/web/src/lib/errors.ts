@@ -653,8 +653,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The gate refused this call: headers, credential query parameters and cookies are set by the gate, not passed as parameters. Remove the parameter from the manifest and import it again.',
   },
   connection_target_refused: {
-    zh: '这个地址不能接入：它指向平台内部网络，或是用 http:// 连公网地址。换成外部系统的最终地址（不经过跳转），公网地址用 https://。',
-    en: 'This address cannot be connected: it points into the platform network, or uses http:// to a public internet address. Use the external system’s final address (no redirect), and https:// for a public one.',
+    zh: '这个地址不能接入：它指向平台内部网络、主机名解析不出来，或是用 http:// 连公网地址。换成外部系统的最终地址（不经过跳转），公网地址用 https://。',
+    en: 'This address cannot be connected: it points into the platform network, its host name does not resolve, or it uses http:// to a public internet address. Use the external system’s final address (no redirect), and https:// for a public one.',
   },
   // Legacy 701: moving a self-connected gate to a new address (`*_gate_address_change`), and a
   // request refused because its gate moved since it was made (`gate_address_changed`, I-A3).

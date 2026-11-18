@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describeOutboundTargetRefusal } from '@nexttime/shared';
+import { type OutboundTargetRefusalReason, describeOutboundTargetRefusal } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -173,6 +173,33 @@ describe('CompleteConnectionForm', () => {
     await secretShown();
     expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
     expect(screen.getByTestId('cc-target-masked-note')).toBeTruthy();
+  });
+
+  it('legacy 247: a request whose address the kernel cut (targetRedacted) is not prefilled, and says why', async () => {
+    const http = httpWith(async () => ({}));
+    render(
+      <CompleteConnectionForm
+        http={http}
+        request={{
+          id: 'cr-3',
+          status: 'requested',
+          kind: 'http',
+          // `https://u:p@api.example.com/x` as the kernel shows it: no mask left behind.
+          target: 'https://api.example.com/x',
+          targetRedacted: true,
+          requestedBy: 'p-2',
+          gatekeeperId: null,
+          completedBy: null,
+          requestedAt: '2026-09-01T00:00:00.000Z',
+          completedAt: null,
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('cc-target-masked-note').textContent).toContain('不替你预填');
   });
 
   it('legacy 152: a public address without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
@@ -519,6 +546,7 @@ describe('CompleteConnectionForm', () => {
         'capability_error',
         'create_connection: endpoint "worker-supervisor" is refused: a single-label host name (a platform service name, localhost) is not reachable from here',
         'connection_target_refused',
+        { reason: 'bare-hostname', field: 'endpoint' },
       );
     });
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
@@ -531,9 +559,57 @@ describe('CompleteConnectionForm', () => {
     const raw = await screen.findByTestId('cc-endpoint-error-detail');
     expect(raw.textContent).toContain('is refused');
     const fieldError = document.getElementById('cc-endpoint-error');
-    expect(fieldError?.textContent).toContain('指向平台自身的服务');
+    expect(fieldError?.textContent).toContain('门端点是单段主机名');
     expect(fieldError?.textContent).not.toContain('is refused');
   });
+
+  // Legacy 247 ③: each rule the kernel names (`details.reason`) is said for what it is, on the
+  // field it names — a host name that does not resolve no longer reads 「指向平台自身的服务」.
+  /** What the kernel answers when `field`'s URL breaks `reason` (`OutboundTargetRefusedError`). */
+  const refusal = (field: string, reason?: OutboundTargetRefusalReason) =>
+    new HttpError(
+      'capability_error',
+      `create_connection: ${field} "x.example.com" is refused: ${describeOutboundTargetRefusal(reason ?? 'dns-error')}`,
+      'connection_target_refused',
+      { field, ...(reason !== undefined ? { reason } : {}) },
+    );
+  it.each([
+    ['endpoint', 'dns-error', 'cc-endpoint-error', '门端点的主机名解析不出来'],
+    ['manifestSource', 'dns-error', 'cc-manifest-error', '清单来源的主机名解析不出来'],
+    ['endpoint', 'bare-hostname', 'cc-endpoint-error', '门端点是单段主机名'],
+    ['manifestSource', 'bare-hostname', 'cc-manifest-error', '清单来源是单段主机名'],
+    ['endpoint', 'invalid-url', 'cc-endpoint-error', '门端点不是完整的'],
+    ['manifestSource', 'invalid-url', 'cc-manifest-error', '清单来源不是完整的'],
+    ['endpoint', 'loopback', 'cc-endpoint-error', '门端点指向平台自己的网络或本机'],
+    ['endpoint', 'link-local', 'cc-endpoint-error', '门端点指向平台自己的网络或本机'],
+    ['endpoint', 'unspecified', 'cc-endpoint-error', '门端点指向平台自己的网络或本机'],
+    ['endpoint', 'platform-subnet', 'cc-endpoint-error', '门端点指向平台自己的网络或本机'],
+    ['manifestSource', 'platform-subnet', 'cc-manifest-error', '清单来源指向平台自己的网络或本机'],
+    ['endpoint', undefined, 'cc-endpoint-error', '门端点不是平台允许调用的地址'],
+    ['manifestSource', undefined, 'cc-manifest-error', '清单来源不是平台允许读取的地址'],
+  ] as const)(
+    'says a connection_target_refused on the %s field for its rule (%s)',
+    async (field, reason, errorId, explanation) => {
+      const http = httpWith(async () => {
+        throw refusal(field, reason);
+      });
+      render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText(/门端点/), {
+        target: { value: 'https://gate.example.com' },
+      });
+      fireEvent.change(screen.getByLabelText(/清单来源/), {
+        target: { value: 'https://grafana.example.com/openapi.json' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      await screen.findByTestId(`${errorId}-detail`);
+      const fieldError = document.getElementById(errorId);
+      expect(fieldError?.textContent).toContain(explanation);
+      expect(fieldError?.textContent).toContain('什么也没保存');
+      expect(fieldError?.textContent).not.toContain('指向平台自身的服务');
+    },
+  );
 
   // Legacy 413: http:// to a public internet address is refused (`details.reason`
   // 'plaintext-public'); the field says to use https://, not that it points at the platform. The
