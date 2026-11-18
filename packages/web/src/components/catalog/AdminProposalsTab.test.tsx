@@ -1347,8 +1347,8 @@ describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3
       dependencies: [],
     };
     for (const [verification, text] of [
-      [run, /^安装记录最近一次核验：通过（.+）。$/],
-      [{ ...run, passed: false }, /^安装记录最近一次核验：没有通过，原因见安装记录（.+）。$/],
+      [run, /^安装记录最近一次核验在 .+：通过。$/],
+      [{ ...run, passed: false }, /^安装记录最近一次核验在 .+：没有通过，原因见安装记录。$/],
       [null, /^安装记录还没有核验过，可以在安装记录里核验。$/],
     ] as const) {
       const http = scriptedHttp({

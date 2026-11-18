@@ -771,18 +771,11 @@ function AdminProposalSegmentDetail({
                 )
               ) : (
                 <>
-                  {recorded.passed
-                    ? t(
-                        '安装记录最近一次核验：通过',
-                        'The install record’s last verification: passed',
-                      )
-                    : t(
-                        '安装记录最近一次核验：没有通过，原因见安装记录',
-                        'The install record’s last verification: it did not pass; the record says why',
-                      )}
-                  {t('（', ' (')}
+                  {t('安装记录最近一次核验在 ', 'The install record was last verified at ')}
                   <span data-volatile="">{formatDateTime(recorded.verifiedAt)}</span>
-                  {t('）。', ').')}
+                  {recorded.passed
+                    ? t('：通过。', ': passed.')
+                    : t('：没有通过，原因见安装记录。', ': it did not pass; the record says why.')}
                 </>
               )}
             </span>
