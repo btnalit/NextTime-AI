@@ -308,6 +308,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(written.rowCount).toBe(0);
       });
 
+      it('legacy 837: register_source with half of a surrogate pair in its name is refused the same way — no longer stored as a different name', async () => {
+        // Before, the handler's own `jsonb` write refused the half (22P02): the call came back a
+        // bare 500, and nothing said where.
+        const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        const name = `half-source-${randomUUID().slice(0, 8)}`;
+        await expect(
+          dispatchCapability({ pool }, caller, 'register_source', {
+            kind: 'host-inventory-collector',
+            name: `${name}${'\u{1F600}'[0]}`,
+            visibility: 'workspace',
+          }),
+        ).rejects.toMatchObject({
+          name: 'UnstorableTextError',
+          code: 'unstorable_text',
+          details: { path: ['name'], in: 'value', character: 'lone_surrogate' },
+          message: expect.stringContaining('params "name" holds an unpaired surrogate'),
+        });
+        const written = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `select 1 from audit_records where workspace_id = $1 and action = 'register_source'
+               and payload -> 'params' ->> 'name' like $2`,
+            [workspaceId, `${name}%`],
+          ),
+        );
+        expect(written.rowCount).toBe(0);
+      });
+
       it('submit_observations (observed data) is stored with it as \\u{0}, and the audit row counts it', async () => {
         const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
         const source = (await dispatchCapability({ pool }, caller, 'register_source', {

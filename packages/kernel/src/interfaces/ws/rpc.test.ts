@@ -193,7 +193,11 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
   });
 
   it('UnstorableTextError (legacy 320) maps to its own UNSTORABLE_TEXT (-32017) with its message', () => {
-    const err = new UnstorableTextError('capability "x"', { path: ['a', 0], in: 'key' });
+    const err = new UnstorableTextError('capability "x"', {
+      path: ['a', 0],
+      in: 'key',
+      character: 'nul',
+    });
     expect(WS_ERROR_CODES.UNSTORABLE_TEXT).toBe(-32017);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.UNSTORABLE_TEXT,
