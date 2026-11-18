@@ -146,6 +146,48 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await rows('procedures')).toBe(0);
     });
 
+    it('names the place as the caller can read it: a key clipped, characters it cannot see shown', async () => {
+      const procedure = (properties: Record<string, unknown>) => ({
+        procedure: {
+          name: 'rotate',
+          description: 'Rotate keys',
+          steps: [],
+          parameters: { type: 'object', properties },
+        },
+      });
+      // A record's keys sit in the place: one key of a thousand characters, cut at 64.
+      const long = await refusal(
+        'propose_procedure',
+        procedure({ ['k'.repeat(1000)]: { type: 'string' } }),
+      );
+      expect(long.message).toContain(`procedure.parameters.properties.${'k'.repeat(64)}…: `);
+      expect(long.message.length).toBeLessThan(400);
+
+      // A bidi override and a line break in a key, shown as `\u{XXXX}`.
+      const unseen = await refusal(
+        'propose_procedure',
+        procedure({ 'a\u202Eb\nc': { type: 'bogus' } }),
+      );
+      expect(unseen.message).toContain('procedure.parameters.properties.a\\u{202E}b\\u{A}c.type: ');
+      expect(unseen.message).not.toMatch(/[\u202E\n]/);
+
+      // Zod names a key it does not take in its message, after the place: clipped and shown the same way.
+      const extra = await refusal('propose_skill', {
+        skill: {
+          name: 'triage',
+          description: 'd',
+          markdown: '# m',
+          [`x\u202E${'y'.repeat(1000)}`]: 1,
+        },
+      });
+      expect(extra.message).toContain('Unrecognized key: "x\\u{202E}yyy');
+      expect(extra.message).not.toContain('\u202E');
+      expect(extra.message.length).toBeLessThan(400);
+
+      expect(await rows('procedures')).toBe(0);
+      expect(await rows('skills')).toBe(0);
+    });
+
     it('propose_operation: an Operation missing what it needs, before any gate is looked up', async () => {
       const err = await refusal('propose_operation', {
         gatekeeperId: randomUUID(),

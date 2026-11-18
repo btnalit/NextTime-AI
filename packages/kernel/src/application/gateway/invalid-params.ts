@@ -17,6 +17,22 @@ export class InvalidCapabilityParamsError extends Error {
   }
 }
 
+/** The most code points of one key in the place a refusal names: a payload's keys are the
+ *  caller's own text (a record's keys sit in the path), cut as `outputPath` cuts an output's
+ *  (`@nexttime/shared` output-schema.ts). */
+const PLACE_KEY_MAX = 64;
+
+/** `path` as the refusal names it: each key clipped and made visible (`boundedEcho`), so a long
+ *  key cannot fill the message and an unseen one (a bidi override, a line break) shows as
+ *  `\u{XXXX}`, as the message after it does. */
+function placeOf(path: readonly PropertyKey[]): string {
+  return path
+    .map((step) =>
+      typeof step === 'number' ? String(step) : boundedEcho(String(step), PLACE_KEY_MAX),
+    )
+    .join('.');
+}
+
 /**
  * The {@link InvalidCapabilityParamsError} for a payload a capability's `paramsSchema` leaves
  * opaque (`propose_skill`'s `skill`, `propose_procedure`'s `procedure`, `propose_operation`'s
@@ -34,7 +50,7 @@ export function invalidOpaqueParamError(
   const reason =
     first === undefined
       ? undefined
-      : `${first.path.map(String).join('.')}: ${boundedEcho(first.message, 300)}${
+      : `${placeOf(first.path)}: ${boundedEcho(first.message, 300)}${
           placed.length > 1 ? ` (and ${placed.length - 1} more)` : ''
         }`;
   return new InvalidCapabilityParamsError(capability, placed, reason);
