@@ -237,7 +237,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
         </Select>
       </Field>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset className="field">
         <legend className="field-label">{t('能力范围', 'Capability scope')}</legend>
         <label className="checkbox">
           <input
@@ -267,7 +267,6 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
                 <fieldset
                   key={kind}
                   className="stack-s"
-                  style={{ border: 0, padding: 0, margin: 0 }}
                   data-testid={`ioh-capability-group-${kind}`}
                 >
                   <legend className="text-2 text-small">{ceilingKindLabel(kind, t)}</legend>
@@ -298,7 +297,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
         ) : null}
       </fieldset>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset className="field">
         <legend className="field-label">{t('可用的门', 'Gatekeepers')}</legend>
         <p className="text-3 text-small">
           {t(

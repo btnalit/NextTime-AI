@@ -175,7 +175,7 @@ export function CreateGateInstanceForm({
   return (
     <div className="stack" data-testid="create-gate-instance">
       {presets.length > 0 ? (
-        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+        <fieldset className="field">
           <legend className="field-label">{t('接入什么', 'What to connect')}</legend>
           <div
             className="radio-group"
@@ -562,7 +562,7 @@ function CustomGateInstanceForm({
         />
       </Field>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset className="field">
         <legend className="field-label">{t('种类', 'Transport')}</legend>
         <div className="radio-group" role="radiogroup" aria-label={t('种类', 'Transport kind')}>
           <label className="radio-option">
@@ -639,7 +639,7 @@ function CustomGateInstanceForm({
         />
       </Field>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset className="field">
         <legend className="field-label">{t('凭证模式', 'Credential mode')}</legend>
         <div
           className="radio-group"
@@ -744,7 +744,7 @@ function CustomGateInstanceForm({
         </Field>
       ) : null}
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset className="field">
         <legend className="field-label">{t('接入包', 'Connector')}</legend>
         <div className="radio-group" role="radiogroup" aria-label={t('接入包', 'Connector')}>
           <label className="radio-option">

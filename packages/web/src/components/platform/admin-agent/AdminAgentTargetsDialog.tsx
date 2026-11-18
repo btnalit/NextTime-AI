@@ -192,7 +192,7 @@ export function AdminAgentTargetsDialog({
                   data-testid="admin-agent-targets-search"
                 />
               ) : null}
-              <fieldset className="stack-s" data-testid="admin-agent-targets-options">
+              <fieldset className="stack-s fieldset-box" data-testid="admin-agent-targets-options">
                 <legend className="text-3">
                   {t(
                     `已选 ${selected.size} 个，最多 ${ADMIN_AGENT_TARGETS_MAX} 个`,

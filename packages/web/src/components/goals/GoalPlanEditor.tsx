@@ -1028,7 +1028,7 @@ function StepEditor({
             errorOf={errorOf}
             onChange={(spec) => onChange({ spec })}
           />
-          <fieldset className="stack-s" data-testid="goal-plan-step-depends">
+          <fieldset className="stack-s fieldset-box" data-testid="goal-plan-step-depends">
             <legend className="text-small">{t('在这些步骤之后', 'After these steps')}</legend>
             {others.length === 0 ? (
               <span className="text-3 text-small">
@@ -1067,7 +1067,7 @@ function StepEditor({
               </p>
             ) : null}
           </fieldset>
-          <fieldset className="stack-s" data-testid="goal-plan-step-files-from">
+          <fieldset className="stack-s fieldset-box" data-testid="goal-plan-step-files-from">
             <legend className="text-small">
               {t('读取这些步骤留下的文件', 'Read the files left by these steps')}
             </legend>
@@ -1614,7 +1614,7 @@ function RemovalEditor({
         return (
           <fieldset
             key={key}
-            className="stack-s"
+            className="stack-s fieldset-box"
             data-testid="goal-plan-removal"
             data-step-key={key}
           >

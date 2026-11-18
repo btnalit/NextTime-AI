@@ -766,7 +766,11 @@ function PlannerChoice({
     },
   ];
   return (
-    <fieldset className="stack-s" data-testid="goal-op-confirm-planner" aria-describedby={hintId}>
+    <fieldset
+      className="stack-s fieldset-box"
+      data-testid="goal-op-confirm-planner"
+      aria-describedby={hintId}
+    >
       <legend className="text-small">{t('目标规划器', 'Goal planner')}</legend>
       {/* UX P3-6 on #864: each choice on one line with its control at phone width, wrapping. */}
       {options.map((option) => (
@@ -926,7 +930,7 @@ function ResumeConfirm({
       onConfirm={() => onResume(failed.filter((key) => retry.has(key)))}
     >
       {failed.length > 0 ? (
-        <fieldset className="stack-s" data-testid="goal-op-resume-retry">
+        <fieldset className="stack-s fieldset-box" data-testid="goal-op-resume-retry">
           <legend className="text-small">
             {t(
               '同时重试这些失败的步骤（不选的保持失败）',

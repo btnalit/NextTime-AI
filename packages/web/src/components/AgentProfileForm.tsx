@@ -540,11 +540,7 @@ function ChecklistField({
       {options.length === 0 ? (
         <EmptyState variant="inline" title={emptyTitle} body={empty} testId={`${testId}-empty`} />
       ) : (
-        <fieldset
-          className="stack-s checklist-options"
-          aria-label={title}
-          style={{ border: 0, padding: 0, margin: 0 }}
-        >
+        <fieldset className="stack-s checklist-options" aria-label={title}>
           {options.map((option) => (
             <label className="checkbox" key={option.id}>
               <input

@@ -120,7 +120,7 @@ export function AllowedModelsChecklist({
   }
 
   return (
-    <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+    <fieldset className="field">
       <legend className="field-label">
         {t('允许的模型', 'Allowed models')}
         <span className="field-hint" style={{ margin: 0 }}>

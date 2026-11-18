@@ -212,7 +212,7 @@ export function OperationParamsField({
   const errorId = `${id}-error`;
   return (
     <fieldset
-      className="stack-s"
+      className="stack-s fieldset-box"
       data-testid={`${testPrefix}-fields`}
       aria-describedby={
         [hint !== undefined ? hintId : null, error ? errorId : null].filter(Boolean).join(' ') ||

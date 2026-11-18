@@ -426,11 +426,7 @@ export function SkillEditor({
           <span className="field-label" id="skill-gate-kinds-label">
             {t('适用的门类型', 'Applicable gate kinds')}
           </span>
-          <fieldset
-            className="row-wrap"
-            aria-labelledby="skill-gate-kinds-label"
-            style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
-          >
+          <fieldset className="row-wrap" aria-labelledby="skill-gate-kinds-label">
             {gateKindOptions.map((kind) => (
               <label className="checkbox" key={kind}>
                 <input
