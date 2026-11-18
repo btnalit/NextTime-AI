@@ -56,6 +56,7 @@ import {
   planCheckSentence,
   planDiff,
   planHintText,
+  stepHeldLabel,
   stepRemovalText,
 } from '../../lib/goals.js';
 import type { SkillRow } from '../../lib/governance.js';
@@ -388,6 +389,7 @@ export function GoalPlanEditor({
               step={step}
               draft={draft}
               run={step.original ? runs.get(step.original.key) : undefined}
+              held={step.original ? stepHeldLabel(goal, step.original.key, t) : null}
               definitions={published}
               allDefinitions={defs}
               http={http}
@@ -856,6 +858,7 @@ function StepEditor({
   step,
   draft,
   run,
+  held,
   definitions,
   allDefinitions,
   http,
@@ -869,6 +872,8 @@ function StepEditor({
   readonly step: StepDraft;
   readonly draft: PlanDraft;
   readonly run: StepRunWire | undefined;
+  /** Legacy 582: how the step reads when the pause held it back (`stepHeldLabel`), else `null`. */
+  readonly held: string | null;
   /** The published Worker definitions (`undefined` until read, or when they could not be). */
   readonly definitions: readonly WorkerDefinitionSummary[] | undefined;
   readonly allDefinitions: readonly WorkerDefinitionSummary[] | undefined;
@@ -944,7 +949,13 @@ function StepEditor({
         ) : (
           <span className="mono">{step.key}</span>
         )}
-        {run ? <StatusChip machine="stepRun" status={run.status} size="s" /> : null}
+        {held ? (
+          <span className="chip chip-warn chip-s" data-testid="goal-plan-step-held">
+            {held}
+          </span>
+        ) : run ? (
+          <StatusChip machine="stepRun" status={run.status} size="s" />
+        ) : null}
         <Button variant="ghost" size="s" onClick={onRemove} data-testid="goal-plan-step-remove">
           {t('移除', 'Remove')}
         </Button>

@@ -44,6 +44,7 @@ import {
   retriedStepKeys,
   skillRefShown,
   skillVersionShown,
+  stepHeldLabel,
   stepHintChipLabel,
   unresolvedActionText,
   unresolvedCheckErrorText,
@@ -72,6 +73,56 @@ function unresolved(overrides: Partial<UnresolvedGoalActionWire> = {}): Unresolv
 const en: Translate = (_zhText, enText) => enText;
 
 describe('lib/goals', () => {
+  it('legacy 582: a ready step a paused run held back reads as the pause says, never 「可以开始」', () => {
+    const hint = { code: 'step_skill_draft' as const, message: '…', stepKey: 'fetch' };
+    const contract = {
+      code: 'step_output_contract_unused' as const,
+      message: '…',
+      stepKey: 'fetch',
+    };
+    const goal = (
+      status: 'paused' | 'running',
+      fetch: { status: 'ready' | 'pending' | 'running'; attemptCount: number },
+      hints: readonly (typeof hint | typeof contract)[] = [hint],
+    ) =>
+      goalDetail({
+        status,
+        pauseReason: status === 'paused' ? 'needs_decision' : null,
+        steps: [stepRun({ ...fetch, attempts: [] })],
+        planRevision: { ...goalDetail().planRevision, hints: [...hints] },
+      });
+    expect(stepHeldLabel(goal('paused', { status: 'ready', attemptCount: 0 }), 'fetch', zh)).toBe(
+      '没有开始（被拦下）',
+    );
+    expect(stepHeldLabel(goal('paused', { status: 'ready', attemptCount: 1 }), 'fetch', zh)).toBe(
+      '没有再试（被拦下）',
+    );
+    // Not held back: another step, a step not ready, a running goal, or only contract advice.
+    expect(
+      stepHeldLabel(goal('paused', { status: 'ready', attemptCount: 0 }), 'apply', zh),
+    ).toBeNull();
+    expect(
+      stepHeldLabel(goal('paused', { status: 'pending', attemptCount: 0 }), 'fetch', zh),
+    ).toBeNull();
+    expect(
+      stepHeldLabel(goal('running', { status: 'ready', attemptCount: 0 }), 'fetch', zh),
+    ).toBeNull();
+    expect(
+      stepHeldLabel(goal('paused', { status: 'ready', attemptCount: 0 }, [contract]), 'fetch', zh),
+    ).toBeNull();
+    // UX P3-1 on #1473: paused by a person, the step did not start because of that.
+    const requested = {
+      ...goal('paused', { status: 'ready', attemptCount: 0 }),
+      pauseReason: 'requested' as const,
+    };
+    expect(stepHeldLabel(requested, 'fetch', zh)).toBeNull();
+    const authority = {
+      ...goal('paused', { status: 'ready', attemptCount: 0 }),
+      pauseReason: 'authority_lost' as const,
+    };
+    expect(stepHeldLabel(authority, 'fetch', zh)).toBe('没有开始（被拦下）');
+  });
+
   it('S11 GO13: a contract hint is advice, never a step that would not start; places, not values', () => {
     const unused = {
       code: 'step_output_contract_unused' as const,

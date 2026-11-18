@@ -829,6 +829,17 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
     expect(hint?.textContent).not.toContain('驳回');
     expect(hint?.textContent).toContain('这一步不会开始，');
+    // Legacy 582: its status says what the pause says, not 「可以开始」.
+    const fetch = screen
+      .getAllByTestId('goal-step')
+      .find((row) => row.dataset.stepKey === 'fetch') as HTMLElement;
+    expect(within(fetch).getByTestId('goal-step-held').textContent).toBe('没有开始（被拦下）');
+    expect(fetch.textContent).not.toContain('可以开始');
+    // A step still waiting for another is not held back: its status stays.
+    const apply = screen
+      .getAllByTestId('goal-step')
+      .find((row) => row.dataset.stepKey === 'apply') as HTMLElement;
+    expect(within(apply).queryByTestId('goal-step-held')).toBeNull();
   });
 
   it('S11 GO8a: a step waiting to be tried again is said, in the pause and in its note, not to be tried again (UX on #853)', async () => {
@@ -857,6 +868,8 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       '已经不在模型目录里：这一步不会再试，目标会停在这里等人处理。',
     );
     expect(hint?.textContent).not.toContain('不会开始');
+    // Legacy 582: tried before, so it was not tried again.
+    expect(screen.getByTestId('goal-step-held').textContent).toBe('没有再试（被拦下）');
   });
 
   it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {
