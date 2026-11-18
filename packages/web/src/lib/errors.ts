@@ -449,38 +449,89 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   unknown: '出错了',
 };
 
+/** Which character an `unstorable_text` refusal is about (`@nexttime/shared`
+ *  `UnstorableCharacter`): U+0000, or — legacy 837 — half of a surrogate pair. */
+export type UnstorableCharacterKind = 'nul' | 'lone_surrogate';
+
 /** Legacy 320 (UX acceptance of #602): the shared part of the `unstorable_text` note, after the
  *  place it names. U+0000 cannot be seen, so "remove the character" alone cannot be followed: the
- *  note says where it usually comes from and two ways to get rid of it. */
-const UNSTORABLE_TEXT_WHAT = {
-  zh: '有看不见的 U+0000（空字符），系统存不了它',
-  en: 'holds invisible U+0000 (null) characters, which the system cannot store',
-} as const;
-const UNSTORABLE_TEXT_FIX = {
-  zh: '它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来',
-  en: 'It usually comes from pasted logs, terminal output or binary content: delete the pasted part and type it again, or paste it into a plain-text editor first and copy it from there',
-} as const;
-const UNSTORABLE_TEXT_STEP = {
-  zh: `${UNSTORABLE_TEXT_WHAT.zh}，所以这次什么也没有写入。${UNSTORABLE_TEXT_FIX.zh}，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。`,
-  en: `${UNSTORABLE_TEXT_WHAT.en}, so nothing was written. ${UNSTORABLE_TEXT_FIX.en}, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.`,
+ *  note says where it usually comes from and two ways to get rid of it. Legacy 849: half of a
+ *  surrogate pair (an emoji cut in two) reads as what it is, with its own way out. */
+const UNSTORABLE_TEXT_WHAT: Readonly<
+  Record<UnstorableCharacterKind, { readonly zh: string; readonly en: string }>
+> = {
+  nul: {
+    zh: '有看不见的 U+0000（空字符），系统存不了它',
+    en: 'holds invisible U+0000 (null) characters, which the system cannot store',
+  },
+  lone_surrogate: {
+    zh: '有半个字符（比如被切开的 emoji），系统存不了它',
+    en: 'holds half a character (such as an emoji cut in two), which the system cannot store',
+  },
+};
+const UNSTORABLE_TEXT_FIX: Readonly<
+  Record<UnstorableCharacterKind, { readonly zh: string; readonly en: string }>
+> = {
+  nul: {
+    zh: '它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来',
+    en: 'It usually comes from pasted logs, terminal output or binary content: delete the pasted part and type it again, or paste it into a plain-text editor first and copy it from there',
+  },
+  lone_surrogate: {
+    zh: '它通常来自在 emoji 中间截断的文字：把这个残缺的字符删掉，或换成完整的字符',
+    en: 'It usually comes from text cut in the middle of an emoji: delete the broken character, or put the whole character back',
+  },
+};
+function unstorableTextStep(character: UnstorableCharacterKind): {
+  readonly zh: string;
+  readonly en: string;
+} {
+  const what = UNSTORABLE_TEXT_WHAT[character];
+  const fix = UNSTORABLE_TEXT_FIX[character];
+  return {
+    zh: `${what.zh}，所以这次什么也没有写入。${fix.zh}，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。`,
+    en: `${what.en}, so nothing was written. ${fix.en}, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.`,
+  };
+}
+/** Legacy 849: the note when nothing says which character — the error-code fallback. */
+const UNSTORABLE_TEXT_ANY_STEP = {
+  zh: '有系统存不了的字符（看不见的 U+0000 空字符，或被切开的半个 emoji），所以这次什么也没有写入。删掉粘贴或截断出来的那一段重新输入，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。',
+  en: 'holds a character the system cannot store (an invisible U+0000 null, or half of an emoji cut in two), so nothing was written. Delete the pasted or cut-off part and type it again, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.',
 } as const;
 
 /** Legacy 334 (UX review of #605, P3-2): the note as the chat composer shows it. The person typed
  *  the message themselves, so it names the message, not the wire param `text`, and drops the
  *  sentence about an agent's call — nobody but them sent it. */
-export function composerUnstorableTextStep(t: Translate, canStrip = false): string {
+export function composerUnstorableTextStep(
+  t: Translate,
+  canStrip = false,
+  character: UnstorableCharacterKind = 'nul',
+): string {
+  const what = UNSTORABLE_TEXT_WHAT[character];
   // Legacy 335 (UX review of #605, P3-3): while the draft still holds the character, the banner
-  // offers 「移除看不见的字符」, so the note points at it instead of the manual workarounds.
+  // offers to remove it (`composerRemoveUnstorableLabel`), so the note points at that instead of
+  // the manual workarounds.
   if (canStrip) {
+    const label = composerRemoveUnstorableLabel(t, character);
     return t(
-      `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。点「移除看不见的字符」把它去掉，检查一遍后重新发送。`,
-      `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. Choose “Remove invisible characters” to take it out, check the message, then send it again.`,
+      `消息内容里${what.zh}，所以这条消息没有发出。点「${label}」把它去掉，检查一遍后重新发送。`,
+      `The message ${what.en}, so it was not sent. Choose “${label}” to take it out, check the message, then send it again.`,
     );
   }
+  const fix = UNSTORABLE_TEXT_FIX[character];
   return t(
-    `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。${UNSTORABLE_TEXT_FIX.zh}，然后重新发送。`,
-    `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. ${UNSTORABLE_TEXT_FIX.en}, then send it again.`,
+    `消息内容里${what.zh}，所以这条消息没有发出。${fix.zh}，然后重新发送。`,
+    `The message ${what.en}, so it was not sent. ${fix.en}, then send it again.`,
   );
+}
+
+/** Legacy 849: the composer's remove button, by what it takes out. */
+export function composerRemoveUnstorableLabel(
+  t: Translate,
+  character: UnstorableCharacterKind,
+): string {
+  return character === 'nul'
+    ? t('移除看不见的字符', 'Remove invisible characters')
+    : t('移除残缺的字符', 'Remove broken characters');
 }
 
 /** Legacy 673: a send that got no answer (timed out, or its connection closed while it was out),
@@ -521,25 +572,30 @@ export function composerProbeHoldStep(t: Translate): string {
 /** Where the kernel's `unstorable_text` message (`@nexttime/shared` `UnstorableTextError`) says
  *  the character is: `the text at params "title" holds U+0000` names a value, `the key at …` a key.
  *  The quotes may arrive escaped (`\"`), when the message sits inside a tool result shown as
- *  JSON. A message naming no field (the whole params were one string) matches nothing. */
-const UNSTORABLE_TEXT_PLACE = /\bthe (key|text) at [^"\\]*\\?"(.+?)\\?" holds U\+0000/;
+ *  JSON. A message naming no field (the whole params were one string) matches nothing. Legacy 849:
+ *  the character is U+0000 or `an unpaired surrogate` (`unstorableCharacterName`). */
+const UNSTORABLE_TEXT_PLACE =
+  /\bthe (key|text) at [^"\\]*\\?"(.+?)\\?" holds (?:U\+0000|an unpaired surrogate)/;
+
+/** Legacy 849: which character the message names — `undefined` when it names neither. */
+export function unstorableCharacterOf(text: string): UnstorableCharacterKind | undefined {
+  if (/\bholds U\+0000/.test(text)) return 'nul';
+  if (/\bholds an unpaired surrogate\b/.test(text)) return 'lone_surrogate';
+  return undefined;
+}
 
 /** The `unstorable_text` note for `text` (the kernel's message, or a tool result carrying it),
- *  naming the field or key it is in when the message says. */
+ *  naming the field or key it is in when the message says, and what the character is (both kinds
+ *  in one sentence when it names neither). */
 export function unstorableTextNextStep(text: string, t: Translate): string {
+  const character = unstorableCharacterOf(text);
+  const step = character === undefined ? UNSTORABLE_TEXT_ANY_STEP : unstorableTextStep(character);
   const place = UNSTORABLE_TEXT_PLACE.exec(text);
-  if (!place)
-    return t(`提交的文字里${UNSTORABLE_TEXT_STEP.zh}`, `The text sent ${UNSTORABLE_TEXT_STEP.en}`);
+  if (!place) return t(`提交的文字里${step.zh}`, `The text sent ${step.en}`);
   const [, kind, path] = place;
   return kind === 'key'
-    ? t(
-        `键名「${path}」里${UNSTORABLE_TEXT_STEP.zh}`,
-        `The key "${path}" ${UNSTORABLE_TEXT_STEP.en}`,
-      )
-    : t(
-        `字段「${path}」里${UNSTORABLE_TEXT_STEP.zh}`,
-        `The field "${path}" ${UNSTORABLE_TEXT_STEP.en}`,
-      );
+    ? t(`键名「${path}」里${step.zh}`, `The key "${path}" ${step.en}`)
+    : t(`字段「${path}」里${step.zh}`, `The field "${path}" ${step.en}`);
 }
 
 /**
@@ -762,10 +818,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   },
   // Legacy 320: U+0000 in a name, an id or a setting — refused before anything was written. The
   // same note serves a form the person sent and an agent's call shown in the chat. This is the
-  // wording when the error names no field; `unstorableTextNextStep` says which one when it does.
+  // wording when nothing names the field or the character (legacy 849: U+0000 or half of an
+  // emoji); `unstorableTextNextStep` says which when the kernel's message does.
   unstorable_text: {
-    zh: `提交的文字里${UNSTORABLE_TEXT_STEP.zh}`,
-    en: `The text sent ${UNSTORABLE_TEXT_STEP.en}`,
+    zh: `提交的文字里${UNSTORABLE_TEXT_ANY_STEP.zh}`,
+    en: `The text sent ${UNSTORABLE_TEXT_ANY_STEP.en}`,
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {

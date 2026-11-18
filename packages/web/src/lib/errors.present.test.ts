@@ -133,6 +133,45 @@ describe('presentError', () => {
     ).toMatch(/^提交的文字里有看不见的 U\+0000/);
   });
 
+  it('legacy 849: half of a surrogate pair reads as half a character, with the field or key it is in', () => {
+    const at = (path: readonly (string | number)[], where: 'key' | 'value') =>
+      new UnstorableTextError('capability "x"', { path, in: where, character: 'lone_surrogate' })
+        .message;
+    const field = presentError(
+      new HttpError('capability_error', at(['title'], 'value'), 'unstorable_text'),
+      zh,
+    ).message;
+    expect(field).toMatch(/^字段「title」里有半个字符（比如被切开的 emoji）/);
+    expect(field).not.toContain('U+0000');
+    expect(field).not.toContain('粘贴的日志');
+    expect(
+      presentError(new HttpError('capability_error', at(['title'], 'value'), 'unstorable_text'), en)
+        .message,
+    ).toMatch(/^The field "title" holds half a character/);
+    expect(
+      presentError(
+        new HttpError('capability_error', at(['labels', 'k'], 'key'), 'unstorable_text'),
+        zh,
+      ).message,
+    ).toMatch(/^键名「labels\.k」里有半个字符/);
+    expect(
+      presentError(new HttpError('capability_error', at([], 'value'), 'unstorable_text'), zh)
+        .message,
+    ).toMatch(/^提交的文字里有半个字符/);
+    // A tool row: the agent's call refused with the same message.
+    expect(
+      gateReasonNextStep(`unstorable_text: ${at(['operation', 'name'], 'value')}`, zh)?.message,
+    ).toMatch(/^字段「operation\.name」里有半个字符/);
+    // A message that names neither character: both, in one sentence.
+    const neither = presentError(
+      new HttpError('capability_error', 'refused', 'unstorable_text'),
+      zh,
+    ).message;
+    expect(neither).toContain('U+0000');
+    expect(neither).toContain('被切开的半个');
+    expect(ERROR_NEXT_STEPS.unstorable_text?.zh).toContain('被切开的半个');
+  });
+
   it('a known code reads as its next step in the viewer’s language; the kernel text is kept raw', () => {
     const err = new HttpError(
       'capability_error',
@@ -507,6 +546,21 @@ describe('legacy 334: unstorable_text in the chat composer', () => {
     expect(shown.message).not.toContain('agent');
     expect(composerUnstorableTextStep(en)).toMatch(/^The message holds invisible U\+0000/);
     expect(composerUnstorableTextStep(en)).not.toContain('agent');
+  });
+});
+
+describe('legacy 849: half a character in the chat composer', () => {
+  it('names half a character and its own remove button', () => {
+    expect(composerUnstorableTextStep(zh, false, 'lone_surrogate')).toMatch(
+      /^消息内容里有半个字符（比如被切开的 emoji）/,
+    );
+    expect(composerUnstorableTextStep(zh, true, 'lone_surrogate')).toContain(
+      '点「移除残缺的字符」',
+    );
+    expect(composerUnstorableTextStep(en, true, 'lone_surrogate')).toContain(
+      '“Remove broken characters”',
+    );
+    expect(composerUnstorableTextStep(zh, true)).toContain('点「移除看不见的字符」');
   });
 });
 
