@@ -2175,6 +2175,32 @@ function heldWording(
   return { zh: '没有往下做', en: () => 'did not go on' };
 }
 
+/** Legacy 582: the status a step of a paused run shows when the advancer tried to start it and
+ *  something held it back — `ready` in the revision in force, with a hint about whether it may
+ *  start (the requester's authority, a draft Skill, a model, its Worker; not a contract hint, which
+ *  is advice). Its status alone reads 「可以开始」 while the pause says it did not start, so it says
+ *  what the pause says: 「没有开始」 before its first attempt, 「没有再试」 before another, held back.
+ *  `null` for any other step, and while the run is not paused (the hints are read for a paused run
+ *  only). */
+export function stepHeldLabel(
+  goal: Partial<Pick<GoalDetailWire, 'status' | 'steps' | 'planRevision'>>,
+  stepKey: string,
+  t: Translate,
+): string | null {
+  if (goal.status !== 'paused') return null;
+  const run = (goal.steps ?? []).find(
+    (step) => step.stepKey === stepKey && step.supersededInRevision === null,
+  );
+  if (run?.status !== 'ready') return null;
+  const held = (goal.planRevision?.hints ?? []).some(
+    (hint) => hint.stepKey === stepKey && isStepAuthorityHint(hint),
+  );
+  if (!held) return null;
+  return run.attemptCount > 0
+    ? t('没有再试（被拦下）', 'Not tried again (held back)')
+    : t('没有开始（被拦下）', 'Not started (held back)');
+}
+
 /** S11 GO14: the first step of the plan in force that reads earlier steps' files (`filesFrom`)
  *  and that the advancer tried to start (`ready`, not superseded) — where a run paused
  *  `needs_decision` with no step failed stopped for those files. */

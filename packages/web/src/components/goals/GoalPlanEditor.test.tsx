@@ -243,6 +243,39 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(screen.queryByTestId('goal-op-revise')).toBeNull();
   });
 
+  it('legacy 582: a ready step the pause held back reads as the pause says, not 「可以开始」', async () => {
+    const detail = paused({
+      pauseReason: 'needs_decision',
+      steps: [
+        stepRun({ status: 'ready', attemptCount: 0, attempts: [] }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+      planRevision: {
+        ...goalDetail().planRevision,
+        hints: [
+          {
+            code: 'step_model_not_allowed',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            model: 'big-model',
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    await openEditor();
+    const [fetch, apply] = screen.getAllByTestId('goal-plan-step') as [HTMLElement, HTMLElement];
+    expect(within(fetch).getByTestId('goal-plan-step-held').textContent).toBe('没有开始（被拦下）');
+    expect(fetch.textContent).not.toContain('可以开始');
+    expect(within(apply).queryByTestId('goal-plan-step-held')).toBeNull();
+  });
+
   it('starts from the plan in force, chosen fields chosen, and sends only what changed', async () => {
     const http = scriptedHttp(
       handlers(paused(), workspace('p-alice', 'member'), {
