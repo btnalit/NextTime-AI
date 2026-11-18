@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { gateObservationContent } from '../task/gate-observation.js';
 import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secrets.js';
 
 /**
@@ -14,7 +15,8 @@ import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secr
  * connection target, a Gatekeeper endpoint and the platform's copy of it (core 0045's
  * `workspace_self_connections`), a Gatekeeper's name and the ConnectedSystems beside gates (legacy
  * 384: two whose names differ only in a credential, one whose cut name another already holds), two
- * audit rows — plus their clean or out-of-scope neighbours,
+ * audit rows, Worker gate call Observations kept as the gate sent the result (legacy 817) — plus
+ * their clean or out-of-scope neighbours,
  * then: a dry run writes nothing; an executing run rewrites exactly the copies people read,
  * leaves the counted rows (and every neighbour) as they were, and writes one unattributed audit row
  * that names no value; a second run rewrites nothing of this workspace.
@@ -71,6 +73,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Platform catalog rows, keyed on a gate id rather than a uuid.
       gateWithTarget: `scrub-target-${randomUUID().slice(0, 8)}`,
       gateWithManifest: `scrub-manifest-${randomUUID().slice(0, 8)}`,
+      // Legacy 817: Worker gate call Observations, from one WorkerRun Source.
+      workerRunSource: randomUUID(),
+      gateCallRaw: randomUUID(),
+      gateCallRawCut: randomUUID(),
+      gateCallKept: randomUUID(),
+      gateCallKeptCut: randomUUID(),
+      gateCallClean: randomUUID(),
+      // The same raw content on an Activity of another kind: not a Worker's gate call.
+      otherObservation: randomUUID(),
     };
     const turnMetadata = {
       summary: `ran env: CAPABILITY_HANDLE=${HANDLE}`,
@@ -102,6 +113,37 @@ describe.runIf(DATABASE_URL !== undefined)(
     const landingMetadata = {
       kind: 'http',
       target: `https://grafana.example.invalid/d?sig=${FAKE}`,
+    };
+    // Legacy 817: as a row written before legacy 237 kept a gate's result — whole, or its JSON cut
+    // to text — and as one written now keeps it.
+    const gateRows = Array.from({ length: 200 }, (_, index) => ({
+      host: `h-${index}`,
+      note: 'an ordinary inventory row with nothing secret in it',
+    }));
+    const gateCall = {
+      gatekeeperId: randomUUID(),
+      gateName: 'g',
+      operation: 'op',
+      mode: 'observe' as const,
+    };
+    const rawResult = { hosts: ['h1'], database: { user: 'app', password: PLAIN } };
+    const rawCutText = JSON.stringify({ secrets: { user: 'svc', value: PLAIN }, rows: gateRows });
+    const gateContents = {
+      gateCallRaw: { ...gateCall, status: 'ok', payload: rawResult, truncated: false },
+      gateCallRawCut: {
+        ...gateCall,
+        status: 'ok',
+        payload: `${rawCutText.slice(0, 8_000)}… [${rawCutText.length - 8_000} more characters omitted]`,
+        truncated: true,
+      },
+      gateCallKept: gateObservationContent({ ...gateCall, status: 'ok', payload: rawResult }),
+      gateCallKeptCut: gateObservationContent({
+        ...gateCall,
+        status: 'ok',
+        payload: { credentials: { value: PLAIN }, rows: gateRows },
+      }),
+      gateCallClean: { ...gateCall, status: 'ok', payload: { hosts: ['h1'] }, truncated: false },
+      otherObservation: { ...gateCall, status: 'ok', payload: rawResult, truncated: false },
     };
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -205,6 +247,12 @@ describe.runIf(DATABASE_URL !== undefined)(
             await client.query(
               'select id, payload from audit_records where workspace_id = $1 and id = any($2::uuid[]) order by id',
               [workspaceId, [ids.completeAudit, ids.failAudit, ids.scrubbedAudit]],
+            )
+          ).rows,
+          observations: (
+            await client.query(
+              'select id, content from observations where workspace_id = $1 order by id',
+              [workspaceId],
             )
           ).rows,
         };
@@ -428,6 +476,30 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           ],
         );
+        await client.query(
+          `insert into sources (workspace_id, id, kind, owner_principal_id, visibility)
+           values ($1, $2, 'worker_run', $3, 'workspace')`,
+          [workspaceId, ids.workerRunSource, ownerId],
+        );
+        for (const [name, content] of Object.entries(gateContents)) {
+          const id = ids[name as keyof typeof gateContents];
+          const activityId = randomUUID();
+          await client.query(
+            `insert into activities (workspace_id, id, kind, status, started_by)
+             values ($1, $2, $3, 'completed', $4)`,
+            [
+              workspaceId,
+              activityId,
+              name === 'otherObservation' ? 'gatekeeper_observe' : 'worker_gate_call',
+              ownerId,
+            ],
+          );
+          await client.query(
+            `insert into observations (workspace_id, id, source_id, activity_id, content)
+             values ($1, $2, $3, $4, $5::jsonb)`,
+            [workspaceId, id, ids.workerRunSource, activityId, JSON.stringify(content)],
+          );
+        }
       });
     });
 
@@ -475,6 +547,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['gateInstanceAddresses', ids.gateWithManifest],
         ['factProperties', ids.fact],
         ['objectProperties', ids.observed],
+        ['gateCallObservations', ids.gateCallRaw],
+        ['gateCallObservations', ids.gateCallRawCut],
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         if (result.categories[name].affected <= 20) expect(listed(name)).toContain(id);
@@ -489,6 +563,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         'factProperties',
         'objectProperties',
         'auditResults',
+        'gateCallObservations',
         'connectedSystemDuplicates',
       ] as const) {
         expect(counted.filter((row) => row.category === name)).toHaveLength(
@@ -496,6 +571,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
+      // Legacy 817: a row kept as the rule keeps it — marked, whole or cut — a clean one, and an
+      // Observation of another Activity kind are not counted.
+      for (const id of [
+        ids.gateCallKept,
+        ids.gateCallKeptCut,
+        ids.gateCallClean,
+        ids.otherObservation,
+      ]) {
+        expect(counted).not.toContainEqual({ category: 'gateCallObservations', id });
+      }
       // Whether a cut name collides is known only once the ones before it are rewritten.
       for (const id of [ids.systemA, ids.systemB, ids.systemHeld]) {
         expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id });
@@ -602,6 +687,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(JSON.stringify(after.audits)).toContain('issued-plain-value');
       expect(after.observed).toMatchObject({ env: { DB_PASSWORD: PLAIN } });
       expect(after.fact).toMatchObject({ note: `login with token=${FAKE}` });
+      // Legacy 817: Observations are insert-only; every one is left as it was.
+      expect(after.observations).toEqual(
+        Object.entries(gateContents)
+          .map(([name, content]) => ({ id: ids[name as keyof typeof gateContents], content }))
+          .sort((a, b) => (a.id < b.id ? -1 : 1)),
+      );
+      for (const id of [ids.gateCallRaw, ids.gateCallRawCut]) {
+        expect(counted).toContainEqual({ category: 'gateCallObservations', id });
+      }
 
       const audit = await admin(
         async (client) =>

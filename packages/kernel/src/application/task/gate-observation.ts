@@ -1,5 +1,12 @@
+import { sliceKeepingPairs } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { redactSuspectedSecretsUpTo } from '../../governance/redaction/index.js';
+import {
+  namesASecretField,
+  redactSecretFieldsInJsonText,
+  redactSuspectedSecrets,
+  redactSuspectedSecretsUpTo,
+  scrubSecretValues,
+} from '../../governance/redaction/index.js';
 import {
   endActivity,
   recordSourceObservation,
@@ -54,9 +61,14 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  * the one string or key reading stopped in; that one is cut by `scrubbedCut` (legacy 819), so it
  * never ends in the start of a secret, and `truncated` is set though the copy is shorter than the
  * cut.
+ *
+ * **Marked as kept (legacy 817).** `content.payloadRedacted: true` says the payload is that copy.
+ * Legacy 237 and the marker reach a release together, so on a deployment a row without it was
+ * written before legacy 237, with the result as the gate sent it; `gatePayloadKeptRaw` tells the
+ * scrub which of those to count.
  */
 
-const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
+export const GATE_OBSERVATION_ACTIVITY_KIND = 'worker_gate_call';
 const GATE_OBSERVATION_PAYLOAD_MAX_CHARS = 8_000;
 /** Characters of a result read (keys and values): what is kept plus a margin longer than any secret
  *  replaced whole (a PEM RSA-4096 private key is ~3.3k characters) — the margin
@@ -98,9 +110,11 @@ function truncatePayload(payload: unknown): {
   if (serialized.length <= GATE_OBSERVATION_PAYLOAD_MAX_CHARS) {
     return { value: payload ?? null, truncated: false };
   }
-  const omitted = serialized.length - GATE_OBSERVATION_PAYLOAD_MAX_CHARS;
+  // Never through a surrogate pair: half of one is no text `jsonb` stores (legacy 834).
+  const kept = sliceKeepingPairs(serialized, GATE_OBSERVATION_PAYLOAD_MAX_CHARS);
+  const omitted = serialized.length - kept.length;
   return {
-    value: `${serialized.slice(0, GATE_OBSERVATION_PAYLOAD_MAX_CHARS)}… [${omitted} more characters omitted]`,
+    value: `${kept}… [${omitted} more characters omitted]`,
     truncated: true,
   };
 }
@@ -117,6 +131,52 @@ export function keptGatePayload(payload: unknown): {
   });
   const kept = truncatePayload(redacted.value);
   return { value: kept.value, truncated: kept.truncated || redacted.omitted };
+}
+
+/**
+ * Whether a stored Observation's `content` keeps something of the gate's result that the rule it
+ * is now kept by would hide. `cli/scrub-raw-secrets.ts` counts these (`gateCallObservations`,
+ * legacy 817). A row marked `payloadRedacted` holds that rule's copy and is never counted. Any
+ * other row was written before legacy 237: a payload kept whole is judged by the rule itself
+ * (`redactSuspectedSecrets` with `secretFields`); one stored cut, as text (`truncated`: the
+ * serialized result cut at `GATE_OBSERVATION_PAYLOAD_MAX_CHARS`), by the same field rule over its
+ * JSON text and then the value patterns over all of it — as a stored tool call's result is
+ * (application/chat/tool-call-record.ts `rescrubStoredToolCallResult`). Over text the patterns
+ * also read the JSON's punctuation (`"credentials":{` reads as a value given to `credentials`), so
+ * a cut row can be counted that the rule would leave as it is: an upper bound, which is why a row
+ * written now carries the marker rather than being judged again. Copies are compared, not counts:
+ * the field rule replaces a `[redacted]` under a secret-named field again and counts it.
+ */
+export function gatePayloadKeptRaw(content: Record<string, unknown>): boolean {
+  if (content.payloadRedacted === true) return false;
+  const payload = content.payload ?? null;
+  if (content.truncated === true && typeof payload === 'string') {
+    const fields = redactSecretFieldsInJsonText(payload, namesASecretField);
+    return scrubSecretValues(fields.value).value !== payload;
+  }
+  const redacted = redactSuspectedSecrets(payload, { secretFields: true });
+  return JSON.stringify(redacted.value) !== JSON.stringify(payload);
+}
+
+/** The Observation's `content`: the call, and what is kept of its result (`keptGatePayload`),
+ *  marked as that copy (`payloadRedacted`, module doc). */
+export function gateObservationContent(
+  input: Pick<
+    RecordWorkerGateObservationInput,
+    'gatekeeperId' | 'gateName' | 'operation' | 'mode' | 'status' | 'payload'
+  >,
+): Record<string, unknown> {
+  const { value: payload, truncated } = keptGatePayload(input.payload);
+  return {
+    gatekeeperId: input.gatekeeperId,
+    gateName: input.gateName,
+    operation: input.operation,
+    mode: input.mode,
+    status: input.status,
+    payload,
+    truncated,
+    payloadRedacted: true,
+  };
 }
 
 async function countExistingGateObservations(
@@ -146,7 +206,7 @@ export async function recordWorkerGateObservation(
     ownerPrincipalId: input.ownerPrincipalId,
   });
 
-  const { value: payload, truncated } = keptGatePayload(input.payload);
+  const content = gateObservationContent(input);
   const activity = await startActivity(client, workspaceId, {
     kind: GATE_OBSERVATION_ACTIVITY_KIND,
     principalId: input.agentPrincipalId,
@@ -163,15 +223,7 @@ export async function recordWorkerGateObservation(
   await recordSourceObservation(client, workspaceId, {
     sourceId,
     activityId: activity.id,
-    content: {
-      gatekeeperId: input.gatekeeperId,
-      gateName: input.gateName,
-      operation: input.operation,
-      mode: input.mode,
-      status: input.status,
-      payload,
-      truncated,
-    },
+    content,
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
 }

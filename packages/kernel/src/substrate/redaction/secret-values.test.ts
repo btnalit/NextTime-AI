@@ -725,6 +725,20 @@ describe('a cut never ends in the start of a secret (legacy 819)', () => {
     // A read that reaches the end of the text keeps up to the cut.
     expect(scrubbedCut('secret secret', 4, scrub)).toBe('secr');
   });
+
+  it('a cut never leaves half of an emoji: it ends before the pair instead (legacy 834)', () => {
+    const EMOJI = '\u{1F600}';
+    const text = `${'a'.repeat(999)}${EMOJI}${'b'.repeat(10_000)}`;
+    // Read to the end, and short of it.
+    expect(scrubbedCut(`${'a'.repeat(999)}${EMOJI}`, 1_000, (read) => read)).toBe('a'.repeat(999));
+    expect(scrubbedCut(text, 1_000, (read) => read)).toBe('a'.repeat(999));
+    expect(scrubbedCut(text, 1_001, (read) => read)).toBe(`${'a'.repeat(999)}${EMOJI}`);
+    // The walk's cut of a string, and of a key.
+    const [value] = redactSecrets([text], { maxChars: 1_000 }).value as string[];
+    expect(value).toBe(`${'a'.repeat(999)}…`);
+    const keys = Object.keys(redactSecrets({ [text]: 1 }, { maxChars: 1_000 }).value as object);
+    expect(keys[0]).toBe(`${'a'.repeat(999)}…`);
+  });
 });
 
 describe('redactSecrets — jsonTextFields: the key rule over strings that are JSON text', () => {
