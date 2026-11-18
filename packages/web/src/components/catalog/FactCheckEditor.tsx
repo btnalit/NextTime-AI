@@ -142,7 +142,7 @@ export function FactCheckEditor({
   }
 
   return (
-    <fieldset className="stack-s fact-check-editor" data-testid={testId}>
+    <fieldset className="stack-s fact-check-editor fieldset-box" data-testid={testId}>
       <legend className="text-small">{t('要判定的事实', 'The Fact judged')}</legend>
       {form ? (
         <>
@@ -445,7 +445,7 @@ function FactEndFields({
     objectType !== '' && typesKnown && !objectTypes.some((type) => type.name === objectType);
 
   return (
-    <fieldset className="stack-s fact-end" data-testid={testId}>
+    <fieldset className="stack-s fact-end fieldset-box" data-testid={testId}>
       <legend className="text-small">{legend}</legend>
       <div className="row-wrap">
         <label className="choice-line text-small">
@@ -686,7 +686,7 @@ function IdentityRows({
   }
 
   return (
-    <fieldset className="stack-s fact-identity" data-testid={testId}>
+    <fieldset className="stack-s fact-identity fieldset-box" data-testid={testId}>
       <legend className="text-small">{t('身份', 'Identity')}</legend>
       {!typeChosen && rows.length === 0 ? (
         <span className="text-small text-3" data-testid={`${testId}-pick-type`}>

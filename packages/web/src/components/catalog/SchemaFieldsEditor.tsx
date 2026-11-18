@@ -84,7 +84,7 @@ export function SchemaFieldsEditor({
   }
 
   return (
-    <fieldset ref={root} className="stack-s schema-fields" data-testid={testId}>
+    <fieldset ref={root} className="stack-s schema-fields fieldset-box" data-testid={testId}>
       <legend className="text-small">{legend}</legend>
       {explanation ? <span className="text-small text-3">{explanation}</span> : null}
       {draft.mode === 'fields' ? (

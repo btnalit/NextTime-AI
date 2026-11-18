@@ -163,6 +163,23 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Legacy 637: a bare <fieldset> drew the user agent's dark 2px groove border with uneven padding,
+ * which matched nothing else on the page, and each page that did not want it wrote its own inline
+ * `border: 0; padding: 0; margin: 0`. A fieldset is now plain by default; a group that should read
+ * as a box takes `.fieldset-box` (ui.css), the card's light rounded border. `min-inline-size: 0`
+ * lets a fieldset shrink in a narrow column (its default is min-content, so its widest row used to
+ * widen the whole column at 390px). */
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+legend {
+  padding: 0;
+}
+
 :focus {
   outline: none;
 }

@@ -349,7 +349,7 @@ export function IssueServiceHandleSection({
           </Select>
         </Field>
 
-        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+        <fieldset className="field">
           {/* S8 W2-U1 (audit AX1 "标签与星号分离"): the label and its required asterisk are one
            *  unit now — the flex gap on `.field-label` used to sit *between* them because they
            *  were two separate flex children. */}

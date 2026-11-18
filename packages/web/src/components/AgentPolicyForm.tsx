@@ -107,7 +107,7 @@ function AllowListField({
   }
 
   return (
-    <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+    <fieldset className="field">
       <legend className="field-label">{legend}</legend>
       <label className="checkbox">
         <input

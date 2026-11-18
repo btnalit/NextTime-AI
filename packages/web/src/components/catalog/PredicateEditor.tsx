@@ -249,7 +249,7 @@ export function PredicateEditor({
   }
 
   return (
-    <fieldset ref={root} className="stack-s predicate-editor" data-testid={testId}>
+    <fieldset ref={root} className="stack-s predicate-editor fieldset-box" data-testid={testId}>
       <legend className="text-small">{legend}</legend>
       {draft.mode === 'form' ? (
         <>
