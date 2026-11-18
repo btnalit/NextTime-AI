@@ -242,6 +242,33 @@ describe('PlatformSegmentReview (平台部分审阅, S11 AA4b)', () => {
     );
   });
 
+  it('legacy 634: in English the missing step says the same as the Chinese — the items above that do not fit', async () => {
+    const blockers = (count: number) =>
+      scriptedHttp({
+        list_admin_proposals: () => ({ items: [summary()] }),
+        get_admin_proposal: () => proposal(),
+        preview_platform_segment: () =>
+          platformPreview({
+            digest: null,
+            items: [],
+            blockers: Array.from({ length: count }, (_, index) => ({
+              ordinal: index + 1,
+              kind: 'gate_instance' as const,
+              reason: 'connector_not_offerable' as const,
+            })),
+          }),
+      });
+    renderDetail(blockers(1), true);
+    expect((await screen.findByTestId('platform-segment-missing-steps')).textContent).toMatch(
+      /deal with the 1 item above that does not fit$/,
+    );
+    cleanup();
+    renderDetail(blockers(2), true);
+    const missing = (await screen.findByTestId('platform-segment-missing-steps')).textContent;
+    expect(missing).toMatch(/deal with the 2 items above that do not fit$/);
+    expect(missing).not.toContain('problem');
+  });
+
   it('a refusal because the platform changed after the review applies nothing, reads the review again and clears the ticks', async () => {
     const http = scriptedHttp({
       list_admin_proposals: () => ({ items: [summary()] }),
