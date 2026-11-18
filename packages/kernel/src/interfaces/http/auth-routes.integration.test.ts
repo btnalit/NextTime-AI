@@ -157,6 +157,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(response.json()).toMatchObject({ ok: false, error: { code: 'bad_credentials' } });
       });
 
+      it('legacy 837: a login holding half of a surrogate pair → 400 unstorable_text, not looked up as U+FFFD', async () => {
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          headers: CSRF_HEADERS,
+          payload: { login: `${login}${'\u{1F600}'[0]}`, password },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({
+          ok: false,
+          error: {
+            code: 'unstorable_text',
+            message: expect.stringContaining('holds an unpaired surrogate'),
+          },
+        });
+      });
+
       it('5 bad passwords lock the account; even the right password then → 423 locked', async () => {
         const app = appWithKeys();
         for (let i = 0; i < 4; i++) {

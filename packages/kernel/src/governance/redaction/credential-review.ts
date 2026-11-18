@@ -1,4 +1,4 @@
-import { SECRET_FIELD_MASK, sliceKeepingPairs } from '@nexttime/shared';
+import { SECRET_FIELD_MASK, sliceKeepingPairs, storableText } from '@nexttime/shared';
 import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   type RedactSecretsOptions,
@@ -56,12 +56,16 @@ const MAX_PATHS = 20;
 const MAX_SEGMENT_CHARS = 64;
 
 /** A path segment as the console shows it. Field names come from the content (an agent's call
- *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut — never
- *  through a surrogate pair (review #501 on #1452): half an emoji left at the cut is text Postgres
- *  will not store in jsonb, which lost the audit row a refused call leaves and failed an observe
- *  call whose row records the paths (`credentialReview`). */
+ *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut. A path
+ *  goes into jsonb, which stores no U+0000 and no half of a surrogate pair, so the cut never
+ *  splits a pair (review #501 on #1452: half an emoji there lost the audit row a refused call
+ *  leaves, and failed an observe call whose row records the paths, `credentialReview`). A name
+ *  holding either is made storable too (`storableText`, review #493 on #1452): most calls' params
+ *  are refused for them before the review runs (legacy 837, `findUnstorableText` in dispatch.ts),
+ *  but not a report whose content is kept (`HANDLERS_SETTLING_UNSTORABLE_TEXT`), and not every
+ *  caller's input came through a call. */
 function segment(key: string): string {
-  const scrubbed = scrubSecretValues(key).value;
+  const scrubbed = storableText(scrubSecretValues(key).value);
   return scrubbed.length > MAX_SEGMENT_CHARS
     ? `${sliceKeepingPairs(scrubbed, MAX_SEGMENT_CHARS)}…`
     : scrubbed;

@@ -144,13 +144,15 @@ function targetRefusalReason(
 }
 
 /**
- * Legacy 320: params holding U+0000, which Postgres `text` / `jsonb` cannot store
- * (`@nexttime/shared` `storable-text.ts`), are refused with `UnstorableTextError` — before the
- * call's transaction opens — for every capability whose handler does not settle it itself
- * (`HANDLERS_SETTLING_UNSTORABLE_TEXT`): the field may be a name, an id or a setting, and storing a
- * stand-in would act on something other than what was asked; the caller is told where and can send
- * it again. Before this, the call reached its first write (at the latest its own audit row) and
- * failed as a bare 500 after doing nothing. Re-exported here for the interfaces' error mapping.
+ * Legacy 320: params holding U+0000, which Postgres `text` / `jsonb` cannot store — or, legacy 837,
+ * half of a surrogate pair, which `jsonb` cannot (`@nexttime/shared` `storable-text.ts`) — are
+ * refused with `UnstorableTextError`, before the call's transaction opens, for every capability
+ * whose handler does not settle it itself (`HANDLERS_SETTLING_UNSTORABLE_TEXT`): the field may be
+ * a name, an id or a setting, and storing a stand-in would act on something other than what was
+ * asked; the caller is told where and can send it again. Before this, the call reached its first
+ * write (at the latest its own audit row) and failed as a bare 500 after doing nothing — or, for
+ * half a pair in a field written only to a `text` column, stored it as U+FFFD. Re-exported here
+ * for the interfaces' error mapping.
  */
 export { UnstorableTextError } from '@nexttime/shared';
 
@@ -391,9 +393,10 @@ function auditParams(
     audited = { ...audited };
     for (const key of withheld) audited[key] = AUDIT_WITHHELD_VALUE;
   }
-  // Legacy 320: only a capability in `HANDLERS_SETTLING_UNSTORABLE_TEXT` gets here with U+0000 in
-  // its params (every other one was refused); the audit copy stores it as `\u{0}` and says how
-  // many, so the row records the call instead of failing it.
+  // Legacy 320 / 837: only a capability in `HANDLERS_SETTLING_UNSTORABLE_TEXT` gets here with
+  // U+0000 or half a surrogate pair in its params (every other one was refused); the audit copy
+  // stores them as `\u{0}` / U+FFFD and says how many, so the row records the call instead of
+  // failing it.
   const storable = storableValue(audited);
   audited = storable.value;
   return {

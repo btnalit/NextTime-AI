@@ -123,7 +123,9 @@ function fail(reply: FastifyReply, status: number, code: string, message: string
 }
 
 /** Legacy 320: a login or display name holding U+0000 cannot be stored or looked up — refused
- *  400 `unstorable_text` before any query, instead of failing inside one as a 500. */
+ *  400 `unstorable_text` before any query, instead of failing inside one as a 500. Legacy 837:
+ *  half of a surrogate pair too — a `text` column stores it as U+FFFD, so the account would be
+ *  claimed or renamed under a name nobody sent. */
 function unstorableField(
   reply: FastifyReply,
   route: string,

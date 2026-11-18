@@ -1716,6 +1716,74 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(description).toBe('reads \\u{0} bytes');
         });
 
+        it('legacy 837: half of a surrogate pair in a proposed Operation is refused where U+0000 is, and stored as U+FFFD in its description', async () => {
+          // Before, the whole report was made storable first, so a binding or a name holding half
+          // an emoji was proposed as a different Operation — the half replaced by U+FFFD.
+          const half = '\u{1F600}'[0] as string;
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const inBinding = `demo.binding.${marker}`;
+          const inDescription = `demo.described.${marker}`;
+          const goodName = `demo.good.${marker}`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'proposed four Operations',
+            proposedOperations: [
+              {
+                gatekeeperId,
+                operation: {
+                  ...proposalOperation(inBinding),
+                  binding: { kind: 'http' as const, method: 'GET' as const, path: `/up${half}` },
+                },
+              },
+              { gatekeeperId, operation: proposalOperation(`demo.name.${marker}${half}`) },
+              {
+                gatekeeperId,
+                operation: { ...proposalOperation(inDescription), description: `cut ${half}` },
+              },
+              { gatekeeperId, operation: proposalOperation(goodName) },
+            ],
+          })) as {
+            status: string;
+            proposedOperationsRejected: { index: number; reason: string; detail?: string }[];
+          };
+          expect(result.status).toBe('completed');
+          expect(result.proposedOperationsRejected).toEqual([
+            {
+              index: 0,
+              gatekeeperId,
+              reason: 'unstorable_text',
+              detail: expect.stringContaining(
+                'the text at field "binding.path" holds an unpaired surrogate (half of a character such as an emoji)',
+              ),
+            },
+            expect.objectContaining({
+              index: 1,
+              gatekeeperId,
+              reason: 'invalid_operation_name',
+              problem: 'invisible_or_control_characters',
+            }),
+          ]);
+          expect(result.proposedOperationsRejected[0]?.detail).toContain('(stored as U+FFFD)');
+
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.operations).toEqual([
+            { name: inDescription, proposed_by: ownerId },
+            { name: goodName, proposed_by: ownerId },
+          ]);
+          const description = await inTx(ownerId, async (client) => {
+            const { rows } = await client.query<{ description: string }>(
+              `select properties ->> 'description' as description from objects
+               where workspace_id = $1 and object_type = 'Operation'
+                 and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3`,
+              [workspaceId, gatekeeperId, inDescription],
+            );
+            return rows[0]?.description;
+          });
+          expect(description).toBe('cut �');
+        });
+
         it('legacy 780: an entry refused for two reasons is refused once, for its unknown Gatekeeper', async () => {
           const marker = randomUUID().slice(0, 8);
           const gatekeeperId = await registerTestGate(marker);

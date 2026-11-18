@@ -18,6 +18,7 @@ describe('findUnstorableText (legacy 320)', () => {
     expect(findUnstorableText({ a: [{ b: 'x' }, { c: 'y\u0000' }] })).toEqual({
       path: ['a', 1, 'c'],
       in: 'value',
+      character: 'nul',
     });
   });
 
@@ -25,11 +26,61 @@ describe('findUnstorableText (legacy 320)', () => {
     expect(findUnstorableText({ props: { 'k\u0000': 1 } })).toEqual({
       path: ['props', 'k\u0000'],
       in: 'key',
+      character: 'nul',
     });
   });
 
   it('a top-level string', () => {
-    expect(findUnstorableText('\u0000')).toEqual({ path: [], in: 'value' });
+    expect(findUnstorableText('\u0000')).toEqual({ path: [], in: 'value', character: 'nul' });
+  });
+});
+
+describe('findUnstorableText — unpaired surrogates (legacy 837)', () => {
+  const EMOJI = '\u{1F600}';
+  const HIGH = EMOJI[0] as string;
+  const LOW = EMOJI[1] as string;
+
+  it('names the path of a value holding a high or a low surrogate on its own', () => {
+    expect(findUnstorableText({ a: ['ok', `cut ${HIGH}`] })).toEqual({
+      path: ['a', 1],
+      in: 'value',
+      character: 'lone_surrogate',
+    });
+    expect(findUnstorableText({ b: `${LOW} starts` })).toEqual({
+      path: ['b'],
+      in: 'value',
+      character: 'lone_surrogate',
+    });
+    expect(findUnstorableText(`${LOW}${HIGH}`)).toEqual({
+      path: [],
+      in: 'value',
+      character: 'lone_surrogate',
+    });
+  });
+
+  it('names a key holding one', () => {
+    expect(findUnstorableText({ props: { [`k${HIGH}`]: 'v' } })).toEqual({
+      path: ['props', `k${HIGH}`],
+      in: 'key',
+      character: 'lone_surrogate',
+    });
+  });
+
+  it('finds nothing in whole pairs, and says U+0000 when a string holds both', () => {
+    expect(findUnstorableText({ [EMOJI]: `${EMOJI} ok ${EMOJI}` })).toBe(undefined);
+    expect(findUnstorableText(`${HIGH}\u0000`)).toEqual({
+      path: [],
+      in: 'value',
+      character: 'nul',
+    });
+  });
+
+  it('finds nothing in what storableValue made of it, and keeps no state between calls', () => {
+    const sent = { a: `x${HIGH}`, [`k${LOW}`]: 1 };
+    expect(findUnstorableText(storableValue(sent).value)).toBe(undefined);
+    // Not a `/g` regex reused across calls: a second look at the same text still finds it.
+    expect(findUnstorableText(sent)?.path).toEqual(['a']);
+    expect(findUnstorableText(sent)?.path).toEqual(['a']);
   });
 });
 
@@ -134,9 +185,10 @@ describe('UnstorableTextError (legacy 320)', () => {
     const err = new UnstorableTextError('capability "x"', {
       path: ['props', 'k\u0000', 2],
       in: 'key',
+      character: 'nul',
     });
     expect(err.code).toBe('unstorable_text');
-    expect(err.details).toEqual({ path: ['props', 'k\\u{0}', 2], in: 'key' });
+    expect(err.details).toEqual({ path: ['props', 'k\\u{0}', 2], in: 'key', character: 'nul' });
     expect(err.message).toBe(
       'capability "x": the key at params "props.k\\u0000.2" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
     );
@@ -144,8 +196,26 @@ describe('UnstorableTextError (legacy 320)', () => {
   });
 
   it('a top-level value', () => {
-    expect(new UnstorableTextError('s', { path: [], in: 'value' }).message).toContain(
-      'the text at the params holds',
+    expect(
+      new UnstorableTextError('s', { path: [], in: 'value', character: 'nul' }).message,
+    ).toContain('the text at the params holds');
+  });
+
+  it('names an unpaired surrogate (legacy 837): which character, where, and the key shown visibly', () => {
+    const err = new UnstorableTextError('capability "x"', {
+      path: ['props', 'k\uD800'],
+      in: 'key',
+      character: 'lone_surrogate',
+    });
+    expect(err.details).toEqual({
+      path: ['props', 'k\\u{D800}'],
+      in: 'key',
+      character: 'lone_surrogate',
+    });
+    expect(err.message).toBe(
+      'capability "x": the key at params "props.k\\ud800" holds an unpaired surrogate (half of a character such as an emoji), which cannot be stored — nothing was written; send it again with the whole character, or without it',
     );
+    expect(err.message).not.toMatch(/[\uD800-\uDFFF]/);
+    expect(err.message).not.toContain('U+0000');
   });
 });

@@ -331,7 +331,11 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
   it('UnstorableTextError (legacy 320) maps to 400 unstorable_text with where', () => {
     expect(
       mapCapabilityError(
-        new UnstorableTextError('capability "create_chat"', { path: ['title'], in: 'value' }),
+        new UnstorableTextError('capability "create_chat"', {
+          path: ['title'],
+          in: 'value',
+          character: 'nul',
+        }),
       ),
     ).toMatchObject({
       status: 400,

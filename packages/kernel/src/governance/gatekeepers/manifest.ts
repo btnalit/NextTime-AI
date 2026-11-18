@@ -12,7 +12,6 @@ import {
   OPERATION_TRANSITIONS,
   type OperationNameProblem,
   type OperationTargetProblem,
-  UNSTORABLE_CHAR,
   UnstorableTextError,
   findUnstorableText,
   manifestTargetProblems,
@@ -431,15 +430,16 @@ export interface ImportManifestResult {
 /**
  * Legacy 320: one manifest entry made storable, or refused. A manifest comes from outside the
  * kernel (a gate's `describe_operations`, an OpenAPI document, an MCP `tools/list`, a hand-written
- * 接入包), and Postgres cannot store U+0000. Its `description` is prose for a reader, so U+0000
- * there is stored as the visible `\u{0}`; every other field — the name, the binding the gate runs,
- * the params schema's keys, the ObjectTypes it reads and writes — is something the kernel or the
- * gate acts on, so U+0000 there refuses the import before any write: a name by the name rule
+ * 接入包), and Postgres cannot store U+0000 — nor, in `jsonb`, half of a surrogate pair (legacy
+ * 837). Its `description` is prose for a reader, so U+0000 there is stored as the visible `\u{0}`
+ * and half a pair as U+FFFD; every other field — the name, the binding the gate runs, the params
+ * schema's keys, the ObjectTypes it reads and writes — is something the kernel or the gate acts
+ * on, so either there refuses the import before any write: a name by the name rule
  * (`OperationNameInvalidError`, as any other control character — and without the lookup that
  * would itself fail on it), anything else by `UnstorableTextError`.
  */
 export function storableManifestOperation(operation: Operation): Operation {
-  if (operation.name.includes(UNSTORABLE_CHAR)) {
+  if (findUnstorableText(operation.name) !== undefined) {
     throw new OperationNameInvalidError(operation.name, 'invisible_or_control_characters');
   }
   const unstorable = unstorableActedText(operation);
@@ -451,16 +451,17 @@ export function storableManifestOperation(operation: Operation): Operation {
     );
   }
   const description = operation.description;
-  return description?.includes(UNSTORABLE_CHAR)
+  return description !== undefined && findUnstorableText(description) !== undefined
     ? { ...operation, description: storableText(description) }
     : operation;
 }
 
-/** Legacy 320 / 326: the first U+0000 in a field of `operation` that the kernel or its gate acts on
- *  — every field but `description`, the one written for a reader — or `undefined`. The one split
- *  for every path an Operation comes in by from outside the kernel: an import
- *  ({@link storableManifestOperation}) and a Worker's proposal (`report_task_result`) refuse such
- *  an Operation, and store U+0000 in its description as `\u{0}`. */
+/** Legacy 320 / 326: the first U+0000 — or, legacy 837, unpaired surrogate — in a field of
+ *  `operation` that the kernel or its gate acts on — every field but `description`, the one
+ *  written for a reader — or `undefined`. The one split for every path an Operation comes in by
+ *  from outside the kernel: an import ({@link storableManifestOperation}) and a Worker's proposal
+ *  (`report_task_result`) refuse such an Operation, and store either in its description as its
+ *  stand-in (`storableText`). */
 export function unstorableActedText(operation: Operation): UnstorableTextLocation | undefined {
   const { description: _description, ...acted } = operation;
   return findUnstorableText(acted);

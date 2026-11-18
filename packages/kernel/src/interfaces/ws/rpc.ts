@@ -329,7 +329,8 @@ export const WS_ERROR_CODES = {
    *  403 reasons are unrelated and an entry agent relaying this verbatim should not conflate them. */
   WORKER_DEFINITION_NOT_ENABLED: -32016,
   /** Legacy 320 (UX acceptance of #602) — mirrors HTTP 400 `unstorable_text`: text holding U+0000
-   *  where it is compared or acted on, refused before anything was written. A code of its own,
+   *  (or, legacy 837, half of a surrogate pair) where it is compared or acted on, refused before
+   *  anything was written. A code of its own,
    *  not INVALID_PARAMS: the console's chat composer sends over WS, and a person who pasted it
    *  needs to be told what the invisible character is, not "the request is invalid". */
   UNSTORABLE_TEXT: -32017,

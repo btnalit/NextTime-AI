@@ -102,6 +102,7 @@ describe('presentError', () => {
     const message = new UnstorableTextError('capability "send_chat_message"', {
       path: ['text'],
       in: 'value',
+      character: 'nul',
     }).message;
     for (const err of [
       new HttpError('capability_error', message, 'unstorable_text'),
@@ -117,11 +118,16 @@ describe('presentError', () => {
     const key = new UnstorableTextError('capability "x"', {
       path: ['labels', 'a\u0000b'],
       in: 'key',
+      character: 'nul',
     });
     expect(
       presentError(new HttpError('capability_error', key.message, 'unstorable_text'), zh).message,
     ).toMatch(/^键名「labels\.a\\u0000b」里有看不见的 U\+0000/);
-    const whole = new UnstorableTextError('capability "x"', { path: [], in: 'value' });
+    const whole = new UnstorableTextError('capability "x"', {
+      path: [],
+      in: 'value',
+      character: 'nul',
+    });
     expect(
       presentError(new HttpError('capability_error', whole.message, 'unstorable_text'), zh).message,
     ).toMatch(/^提交的文字里有看不见的 U\+0000/);
@@ -467,6 +473,7 @@ describe('legacy 334: unstorable_text in the chat composer', () => {
     const message = new UnstorableTextError('capability "send_chat_message"', {
       path: ['text'],
       in: 'value',
+      character: 'nul',
     }).message;
     const shown = presentError(new RpcError(-32017, message), zh, {
       unstorable_text: composerUnstorableTextStep(zh),
