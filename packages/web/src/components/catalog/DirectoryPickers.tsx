@@ -68,7 +68,10 @@ export function CheckboxListField({
       {rendered.length === 0 ? (
         <p className="text-3 text-small">{emptyHint}</p>
       ) : (
-        <fieldset className="stack-s" aria-label={typeof legend === 'string' ? legend : testId}>
+        <fieldset
+          className="stack-s fieldset-box"
+          aria-label={typeof legend === 'string' ? legend : testId}
+        >
           {rendered.map((option) => (
             <label className="checkbox" key={option.id}>
               <input
@@ -201,7 +204,7 @@ export function CapabilityPickerField({
             return (
               <fieldset
                 key={group.mode}
-                className="stack-s"
+                className="stack-s fieldset-box"
                 aria-label={groupLabel}
                 data-testid={`${testId}-group-${group.mode}`}
               >

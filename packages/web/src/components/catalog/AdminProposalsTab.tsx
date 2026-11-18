@@ -1840,7 +1840,7 @@ function WorkerGateChoiceField({
   const t = useT();
   const keptSet = new Set(kept);
   return (
-    <fieldset className="stack-s" data-testid={`${prefix}-choice`}>
+    <fieldset className="stack-s fieldset-box" data-testid={`${prefix}-choice`}>
       <legend className="text-small">
         {t(
           '应用时把它绑到这些门（默认全部绑上，可以取消勾选）：',

@@ -329,7 +329,7 @@ export function CaseEditor({ gates, editing, onSave, onCancel }: CaseEditorProps
           </Notice>
         ) : null}
 
-        <fieldset className="stack-s" data-testid="eval-case-input-section">
+        <fieldset className="stack-s fieldset-box" data-testid="eval-case-input-section">
           <legend className="section-title">{t('输入', 'Input')}</legend>
           <div className="row-wrap">
             {(['text', 'json'] as const).map((mode) => (
@@ -797,7 +797,7 @@ function RuleEditor({
   const absentOffered = op?.answersAbsent === true || rule.answer === 'absent';
   return (
     <fieldset
-      className="stack-s rounded-m border border-border p-3"
+      className="stack-s fieldset-box"
       data-testid="eval-case-rule"
       data-uid={rule.uid}
       tabIndex={-1}
@@ -1063,7 +1063,7 @@ function AssertionEditor({
   const template = assertion.template;
   return (
     <fieldset
-      className="stack-s rounded-m border border-border p-3"
+      className="stack-s fieldset-box"
       data-testid="eval-case-assertion"
       data-uid={assertion.uid}
       tabIndex={-1}

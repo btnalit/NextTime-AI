@@ -255,7 +255,7 @@ export function WorkerPlanFields({
           </Field>
         </div>
 
-        <fieldset className="stack-s" data-testid="procedure-step-depends">
+        <fieldset className="stack-s fieldset-box" data-testid="procedure-step-depends">
           <legend className="text-small">{t('什么时候开始', 'When it starts')}</legend>
           <label className="choice-line text-small">
             <input
@@ -388,7 +388,7 @@ export function WorkerPlanFields({
           />
         </Field>
 
-        <fieldset className="stack-s" data-testid="procedure-step-bindings">
+        <fieldset className="stack-s fieldset-box" data-testid="procedure-step-bindings">
           <legend className="text-small">{t('输入绑定', 'Input bindings')}</legend>
           <span className="text-small text-3">
             {t(

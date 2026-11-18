@@ -1540,7 +1540,7 @@ function WorkerBindingReview({
           {workerSystemsDriftText(drift, latestVersion, t)}
         </Notice>
       ) : binding.source === 'workspace' ? null : binding.candidates.length > 0 ? (
-        <fieldset className="stack-s" data-testid={`${prefix}-choice`}>
+        <fieldset className="stack-s fieldset-box" data-testid={`${prefix}-choice`}>
           <legend className="text-small">
             {t(
               '安装时把它接上这些系统（默认全部接上，可以取消勾选）：',

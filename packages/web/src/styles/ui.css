@@ -1652,9 +1652,6 @@ a.ref-chip-name {
 }
 
 .launcher-kinds {
-  margin: 0;
-  padding: 0;
-  border: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1683,4 +1680,17 @@ a.ref-chip-name {
   border-radius: 0 0 var(--radius-l) var(--radius-l);
   background: var(--surface-1);
   box-shadow: 0 var(--overlay-actions-inset, 0px) 0 0 var(--surface-1);
+}
+
+/* Legacy 637: the one boxed look for a <fieldset> that groups controls — the card's light rounded
+ * border instead of the user agent's dark groove. The legend sits on the border line with a little
+ * room on each side so the line does not touch its text. */
+.fieldset-box {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  padding: var(--space-3);
+}
+
+.fieldset-box > legend {
+  padding: 0 var(--space-1);
 }

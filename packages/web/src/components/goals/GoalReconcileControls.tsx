@@ -138,7 +138,7 @@ function RecordFinding(props: DialogProps & { readonly canReexecute: boolean }) 
         );
       }}
     >
-      <fieldset className="stack-s" data-testid="goal-reconcile-verdict">
+      <fieldset className="stack-s fieldset-box" data-testid="goal-reconcile-verdict">
         <legend className="text-small">{t('核对结果', 'What you found')}</legend>
         <label className="row-wrap text-small">
           <input

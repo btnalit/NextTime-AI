@@ -159,7 +159,7 @@ export function OnboardingWizard({
 
       {step === 'kind' ? (
         <div className="stack" data-testid="wizard-step-kind">
-          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          <fieldset className="field">
             <legend className="field-label">
               {t('选择要接入的系统类型', "Choose the system's kind")}
             </legend>
