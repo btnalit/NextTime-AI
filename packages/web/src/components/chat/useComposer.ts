@@ -1,4 +1,4 @@
-import { UNSTORABLE_CHAR } from '@nexttime/shared';
+import { UNSTORABLE_CHAR, findUnstorableText } from '@nexttime/shared';
 import {
   type Dispatch,
   type FormEvent,
@@ -6,6 +6,7 @@ import {
   type RefObject,
   type SetStateAction,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -26,13 +27,21 @@ import {
   WsNotSentError,
 } from '../../lib/ws-client.js';
 
+/** Half of a surrogate pair — a high surrogate with no low one after it, or a low one with no
+ *  high one before it (the same test as `@nexttime/shared` `storable-text`, legacy 849). */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export interface ComposerState {
   readonly composerText: string;
   readonly setComposerText: (text: string) => void;
-  /** The draft holds U+0000, which the kernel refuses to store (`unstorable_text`). */
+  /** The draft holds U+0000 or half of a surrogate pair (legacy 849), which the kernel refuses to
+   *  store (`unstorable_text`). */
   readonly hasUnstorableChar: boolean;
-  /** Legacy 335: takes every U+0000 out of the draft, clears the refusal and returns focus to the
-   *  box; it does not send — the person checks the message first. Returns how many it removed. */
+  /** Which of the two the draft holds (U+0000 first), when it holds one. */
+  readonly unstorableCharacter: 'nul' | 'lone_surrogate' | undefined;
+  /** Legacy 335: takes every U+0000 and every half of a surrogate pair out of the draft, clears the
+   *  refusal and returns focus to the box; it does not send — the person checks the message first.
+   *  Returns how many it removed. */
   readonly removeUnstorableChars: () => number;
   readonly busy: boolean;
   /** Legacy 673: the last send got no answer — it timed out, or its connection closed under it —
@@ -185,19 +194,25 @@ export function useComposer(
   }
 
   function removeUnstorableChars(): number {
-    const removed = composerText.split(UNSTORABLE_CHAR).length - 1;
-    setComposerText(composerText.replaceAll(UNSTORABLE_CHAR, ''));
+    const lone = composerText.match(LONE_SURROGATE)?.length ?? 0;
+    const removed = composerText.split(UNSTORABLE_CHAR).length - 1 + lone;
+    setComposerText(composerText.replaceAll(UNSTORABLE_CHAR, '').replace(LONE_SURROGATE, ''));
     setSendError(null);
     textareaRef.current?.focus();
     return removed;
   }
 
+  const unstorableCharacter = useMemo(
+    () => findUnstorableText(composerText)?.character,
+    [composerText],
+  );
   const composerDisabled = turnStatus === 'running' || busy || archived;
 
   return {
     composerText,
     setComposerText,
-    hasUnstorableChar: composerText.includes(UNSTORABLE_CHAR),
+    hasUnstorableChar: unstorableCharacter !== undefined,
+    unstorableCharacter,
     removeUnstorableChars,
     busy,
     sendUncertain,

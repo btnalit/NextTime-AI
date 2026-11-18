@@ -1189,6 +1189,69 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
   });
 });
 
+// Legacy 849: half of a surrogate pair (an emoji cut in two) reads as what it is, and the remove
+// button takes it out too.
+describe('ChatPage send refused for half a character (legacy 849)', () => {
+  it('offers 「移除残缺的字符」, which strips the lone surrogate from the draft', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32017,
+        new UnstorableTextError('capability "send_chat_message"', {
+          path: ['text'],
+          in: 'value',
+          character: 'lone_surrogate',
+        }).message,
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'cut \uD83D here 😀' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
+    expect(body).toMatch(/^消息内容里有半个字符/);
+    expect(body).toContain('点「移除残缺的字符」');
+    expect(body).not.toContain('U+0000');
+
+    fireEvent.click(within(banner).getByTestId('composer-remove-unstorable'));
+    // The whole emoji stays; only the half goes.
+    expect(box.value).toBe('cut  here 😀');
+    expect(await screen.findByText('已移除 1 个存不了的字符')).toBeTruthy();
+    expect(fake.client.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps naming half a character once the person has edited it out themselves', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32017,
+        new UnstorableTextError('capability "send_chat_message"', {
+          path: ['text'],
+          in: 'value',
+          character: 'lone_surrogate',
+        }).message,
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'a\uDE00b' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await screen.findByRole('alert');
+    fireEvent.change(box, { target: { value: 'ab' } });
+    expect(screen.queryByTestId('composer-remove-unstorable')).toBeNull();
+    const body = screen.getByRole('alert').querySelector('.error-banner-message')?.textContent;
+    expect(body).toMatch(/^消息内容里有半个字符/);
+    expect(body).toContain('emoji 中间截断');
+  });
+});
+
 /** The page's subscription handlers, for pushes the `FakeClient` helpers do not wrap. */
 function handlersOf(fake: FakeClient): ChatSubscriptionHandlers {
   const call = (fake.client.subscribeChat as ReturnType<typeof vi.fn>).mock.calls[0];
