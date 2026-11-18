@@ -3126,16 +3126,16 @@ const ingestCapabilities = [
     paramsSchema: z
       .object({
         kind: z.string().min(1),
-        // Legacy 309.
-        name: z.string().min(1).max(NAME_MAX_LENGTH),
+        // Legacy 309: a new Source's name is capped (`NAME_MAX_LENGTH`) by the handler, which
+        // knows whether the name is already registered (collectors re-register every run).
+        name: z.string().min(1),
         visibility: z.enum(['workspace', 'private']),
         uri: z.string().optional(),
         metadata: jsonRecord.optional(),
       })
       .strict(),
     resultSchema: wire.RegisterSourceResultWireSchema,
-    description:
-      'Register a Source (document/DB/API/person/agent session). Idempotent on (kind, name): registering a name you already own with the same visibility returns the existing Source with created: false; a name held by another owner, or registered with the other visibility, is 409 source_identity_conflict.',
+    description: `Register a Source (document/DB/API/person/agent session). Idempotent on (kind, name): registering a name you already own with the same visibility returns the existing Source with created: false; a name held by another owner, or registered with the other visibility, is 409 source_identity_conflict. A new Source’s name is at most ${NAME_MAX_LENGTH} characters (400 invalid_params); one already registered is not checked again.`,
   },
   {
     // S3.3: real handler (`submitObservationsHandler`). `activityId` optional — see this file's

@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { OperationSchema } from './action-description.js';
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
-import { NAME_MAX_LENGTH } from './name-limits.js';
 import { OUTPUT_MAX_CHARS, isOutputJsonValue } from './output-schema.js';
-import { ProposeSkillContentSchema } from './skill.js';
+import { ProposeSkillContentSchema, SKILL_NAME_MAX_LENGTH } from './skill.js';
 
 /**
  * worker-result: the Zod shape of the S2.9 result contract (design doc §7.3 "结果契约: Worker
@@ -164,7 +163,7 @@ export const WorkerResultOutputSchema = z
  *  {@link ProposeSkillContentSchema} itself: `propose_skill` also takes a Skill's next version, which
  *  keeps its family's name however long it is. */
 const WorkerResultProposedSkillSchema = ProposeSkillContentSchema.extend({
-  name: z.string().min(1).max(NAME_MAX_LENGTH),
+  name: z.string().min(1).max(SKILL_NAME_MAX_LENGTH),
 });
 
 export const WorkerResultContractSchema = z

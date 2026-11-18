@@ -7,6 +7,7 @@ import {
   NAME_MAX_LENGTH,
   type OntologyDefinition,
   type Role,
+  SKILL_NAME_MAX_LENGTH,
   WORKER_DEFINITION_NAME_MAX_LENGTH,
 } from '@nexttime/shared';
 import type { Pool } from 'pg';
@@ -107,19 +108,6 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('caps in a capability’s params', () => {
-      it('register_source: name up to NAME_MAX_LENGTH', async () => {
-        const over = nameOf(NAME_MAX_LENGTH + 1, 'src');
-        await expect(
-          call('register_source', { kind: 'document', name: over, visibility: 'workspace' }),
-        ).rejects.toBeInstanceOf(InvalidCapabilityParamsError);
-        expect(await count('sources', 'name', over)).toBe(0);
-
-        const at = nameOf(NAME_MAX_LENGTH, 'src');
-        await expect(
-          call('register_source', { kind: 'document', name: at, visibility: 'workspace' }),
-        ).resolves.toMatchObject({ created: true });
-      });
-
       it('create_principal: displayName up to DISPLAY_NAME_MAX_LENGTH', async () => {
         const over = nameOf(DISPLAY_NAME_MAX_LENGTH + 1, 'svc');
         await expect(
@@ -145,24 +133,74 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
-    describe('caps a handler checks inside the payload', () => {
-      it('propose_skill: a new Skill’s name up to NAME_MAX_LENGTH', async () => {
+    describe('caps a handler checks (inside the payload, or against what is stored)', () => {
+      it('register_source: a new Source’s name up to NAME_MAX_LENGTH; one already registered is not checked again', async () => {
+        const source = (name: string) => ({ kind: 'document', name, visibility: 'workspace' });
+        const over = nameOf(NAME_MAX_LENGTH + 1, 'src');
+        await expect(call('register_source', source(over))).rejects.toMatchObject({
+          name: 'NameTooLongError',
+          details: { path: 'name', maxLength: NAME_MAX_LENGTH },
+        });
+        expect(await count('sources', 'name', over)).toBe(0);
+
+        const at = nameOf(NAME_MAX_LENGTH, 'src');
+        await expect(call('register_source', source(at))).resolves.toMatchObject({
+          created: true,
+        });
+
+        // A collector re-registers its Source every run, under a name it may have chosen before
+        // the cap.
+        const long = nameOf(NAME_MAX_LENGTH + 20, 'src');
+        const id = randomUUID();
+        await admin((client) =>
+          client.query(
+            `insert into sources (workspace_id, id, kind, owner_principal_id, visibility, name)
+             values ($1, $2, 'document', $3, 'workspace', $4)`,
+            [workspaceId, id, ownerId, long],
+          ),
+        );
+        await expect(call('register_source', source(long))).resolves.toMatchObject({
+          id,
+          created: false,
+        });
+      });
+
+      it('propose_skill: a new Skill’s name up to SKILL_NAME_MAX_LENGTH, the length publishing holds it to', async () => {
         const skill = (name: string) => ({
           skill: { name, description: 'Legacy 309.', markdown: '# Steps' },
         });
-        const over = nameOf(NAME_MAX_LENGTH + 1, 'skill');
+        const over = nameOf(SKILL_NAME_MAX_LENGTH + 1, 'skill');
         const refused = call('propose_skill', skill(over));
         await expect(refused).rejects.toBeInstanceOf(NameTooLongError);
         await expect(refused).rejects.toMatchObject({
           code: 'invalid_params',
-          details: { path: 'skill.name', maxLength: NAME_MAX_LENGTH },
+          details: { path: 'skill.name', maxLength: SKILL_NAME_MAX_LENGTH },
         });
         expect(await count('skills', 'name', over)).toBe(0);
 
-        const at = nameOf(NAME_MAX_LENGTH, 'skill');
+        const at = nameOf(SKILL_NAME_MAX_LENGTH, 'skill');
         await expect(call('propose_skill', skill(at))).resolves.toMatchObject({
           status: 'draft',
         });
+      });
+
+      it('propose_skill: a next version keeps its family’s name, however long', async () => {
+        const id = randomUUID();
+        const long = nameOf(NAME_MAX_LENGTH + 20, 'skill');
+        await admin((client) =>
+          client.query(
+            `insert into skills (workspace_id, id, version, status, name, description, markdown,
+               proposed_by, published_by, published_at)
+             values ($1, $2, 1, 'published', $3, 'Named before the cap.', '# v1', $4, $4, now())`,
+            [workspaceId, id, long, ownerId],
+          ),
+        );
+        await expect(
+          call('propose_skill', {
+            skillId: id,
+            skill: { name: long, description: 'Its next version.', markdown: '# v2' },
+          }),
+        ).resolves.toMatchObject({ id, version: 2, status: 'draft' });
       });
 
       it('propose_procedure: a new Procedure’s name up to NAME_MAX_LENGTH', async () => {

@@ -2,6 +2,7 @@ import {
   NAME_MAX_LENGTH,
   ProposeProcedureContentSchema,
   ProposeSkillContentSchema,
+  SKILL_NAME_MAX_LENGTH,
 } from '@nexttime/shared';
 import type { ProcedureRow, SkillRow } from '../../application/worker/index.js';
 import {
@@ -58,9 +59,12 @@ import { assertNameWithin, assertVersionNameWithin } from './name-length.js';
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skill: rawSkill, skillId } = params as { skill: unknown; skillId?: string };
   const content = ProposeSkillContentSchema.parse(rawSkill);
-  // Legacy 309: a new family's name. A next version keeps its family's name
-  // (`SkillFamilyNameChangedError`), so it brings no new one; publishing caps it again, at pi's 64.
-  if (skillId === undefined) assertNameWithin(content.name, 'skill.name', NAME_MAX_LENGTH);
+  // Legacy 309: a new family's name, at the length publishing holds it to (pi's rule; its
+  // characters are still checked there). A next version keeps its family's name
+  // (`SkillFamilyNameChangedError`), so it brings no new one.
+  if (skillId === undefined) {
+    assertNameWithin(content.name, 'skill.name', SKILL_NAME_MAX_LENGTH);
+  }
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const record = await proposeSkill(client, workspaceId, principalId, {

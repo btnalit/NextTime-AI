@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
-import { NAME_MAX_LENGTH } from './name-limits.js';
+import { SKILL_NAME_MAX_LENGTH } from './skill.js';
 import {
   ARTIFACT_CONTENT_MAX_CHARS,
   MAX_ARTIFACTS_PER_CONTRACT,
@@ -70,21 +70,24 @@ describe('WorkerResultContractSchema — artifacts array cap', () => {
 });
 
 // Legacy 309: a Worker's proposedSkill is a new Skill's draft — its name takes propose_skill's cap
-// for a new Skill, refused with the whole report as any other contract problem.
+// for a new Skill (the length publishing holds it to), refused with the whole report as any other
+// contract problem.
 describe('WorkerResultContractSchema — proposedSkill name cap', () => {
   const report = (name: string) => ({
     summary: 'ok',
     proposedSkill: { name, description: 'd', markdown: '# Steps' },
   });
 
-  it('accepts a name of NAME_MAX_LENGTH', () => {
-    expect(WorkerResultContractSchema.safeParse(report('s'.repeat(NAME_MAX_LENGTH))).success).toBe(
-      true,
-    );
+  it('accepts a name of SKILL_NAME_MAX_LENGTH', () => {
+    expect(
+      WorkerResultContractSchema.safeParse(report('s'.repeat(SKILL_NAME_MAX_LENGTH))).success,
+    ).toBe(true);
   });
 
   it('refuses one character more, at proposedSkill.name', () => {
-    const result = WorkerResultContractSchema.safeParse(report('s'.repeat(NAME_MAX_LENGTH + 1)));
+    const result = WorkerResultContractSchema.safeParse(
+      report('s'.repeat(SKILL_NAME_MAX_LENGTH + 1)),
+    );
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(['proposedSkill', 'name']);
   });

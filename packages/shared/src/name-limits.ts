@@ -8,11 +8,12 @@ import { OPERATION_NAME_MAX } from './action-description.js';
  * payload, an HTTP route — checks the same one:
  *
  *   - {@link NAME_MAX_LENGTH}: a name with no cap anywhere before — a Source, a Procedure, a new
- *     Skill family's draft, a new ObjectType / LinkType / ActionType of an ontology — takes the
- *     Operation name's number;
+ *     ObjectType / LinkType / ActionType of an ontology — takes the Operation name's number;
  *   - a name some path already capped keeps that cap, now on every path that writes it:
  *     {@link DISPLAY_NAME_MAX_LENGTH}, {@link LOGIN_MAX_LENGTH}, {@link CHAT_TITLE_MAX_LENGTH},
- *     {@link WORKER_DEFINITION_NAME_MAX_LENGTH}.
+ *     {@link WORKER_DEFINITION_NAME_MAX_LENGTH}, and a new Skill's name, `SKILL_NAME_MAX_LENGTH`
+ *     (skill.ts): publishing held it to that, and a Skill never changes its name, so a longer
+ *     draft could never be published.
  *
  * Counted as Zod's `.max()` counts — UTF-16 code units — like every other cap of the wire contract,
  * so the contract shows it (`maxLength`). Only on a name new to its record: a stored name parses
