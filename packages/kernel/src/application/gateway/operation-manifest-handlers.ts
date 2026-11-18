@@ -28,6 +28,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { callerKindOf } from './draft-viewer.js';
+import { invalidOpaqueParamError } from './invalid-params.js';
 
 /**
  * application/gateway/operation-manifest-handlers: `propose_operation` (Handle channel, drafts
@@ -89,12 +90,13 @@ export const proposeOperationHandler: CapabilityHandler = async (
   const parsedOperation = OperationSchema.safeParse(rawOperation);
   if (!parsedOperation.success) {
     // S11 GO12 (I-Q4): a refused `target` declaration answers 400 `invalid_operation_target` with
-    // its reason, as an import or announcement of it does; any other issue is thrown as before.
+    // its reason, as an import or announcement of it does; any other issue is a params problem
+    // (400 `invalid_params`), not the bare `ZodError` it was (a 500).
     throw (
       OperationTargetInvalidError.fromIssues(
         parsedOperation.error.issues,
         () => (rawOperation as { readonly name?: unknown } | undefined)?.name,
-      ) ?? parsedOperation.error
+      ) ?? invalidOpaqueParamError('propose_operation', 'operation', parsedOperation.error.issues)
     );
   }
   const operation = parsedOperation.data;
