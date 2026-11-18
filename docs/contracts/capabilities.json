@@ -71602,7 +71602,7 @@
       "properties": {
         "decisions": {
           "items": {
-            "minLength": 1,
+            "format": "uuid",
             "type": "string"
           },
           "type": "array"

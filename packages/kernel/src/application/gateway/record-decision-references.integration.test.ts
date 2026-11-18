@@ -19,7 +19,7 @@ import {
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { dispatchCapability } from './dispatch.js';
+import { InvalidCapabilityParamsError, dispatchCapability } from './dispatch.js';
 import { DecisionReferenceError, NoActiveTurnError } from './handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -30,6 +30,10 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * refused alike — 400 `unresolved_references` listing them, and no Decision written — while a
  * Fact the caller can read is accepted whatever its status (an invalidated one still exists).
  * The rule is the caller's own visibility: the draft's proposer relates its draft's Fact.
+ *
+ * Legacy 783: `relatedTaskId` the same way — a Task `get_task` would show the caller — and
+ * `report_turn`'s `decisions`, Decision ids `query_decisions` would show it. Someone else's and an
+ * unknown id are refused with the same code, details shape and message (but for the id echoed).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -128,7 +132,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ws: workspaceId,
           sid,
           obo: principalId,
-          scope: { capabilities: ['record_decision'], resources: {} },
+          scope: { capabilities: ['record_decision', 'report_turn'], resources: {} },
           jti: randomUUID(),
           iat: now,
           exp: now + 600,
@@ -200,6 +204,48 @@ describe.runIf(DATABASE_URL !== undefined)(
         const id = result.rows[0]?.id;
         if (!id) throw new Error(`test setup: no exposes Fact for ${name}`);
         return id;
+      });
+    }
+
+    /** A Task requested on behalf of `principalId` — `get_task` shows it to them (and the owner on
+     *  the human channel), to no one else's agent. */
+    async function taskFor(principalId: string): Promise<string> {
+      return admin(async (client) => {
+        const result = await client.query<{ id: string }>(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
+                              worker_definition_version)
+           values ($1, 'completed', $2, $3, 1) returning id`,
+          [workspaceId, principalId, randomUUID()],
+        );
+        const id = result.rows[0]?.id;
+        if (!id) throw new Error('test setup: no task');
+        return id;
+      });
+    }
+
+    async function refusalOf(
+      caller: ResolvedCaller,
+      capability: 'record_decision' | 'report_turn',
+      params: Record<string, unknown>,
+    ): Promise<DecisionReferenceError> {
+      const refused = await dispatchCapability({ pool }, caller, capability, params).catch(
+        (err: unknown) => err,
+      );
+      expect(refused).toBeInstanceOf(DecisionReferenceError);
+      return refused as DecisionReferenceError;
+    }
+
+    async function turnRow(
+      turnId: string,
+    ): Promise<{ status: string; metadata: Record<string, unknown> }> {
+      return admin(async (client) => {
+        const result = await client.query<{ status: string; metadata: Record<string, unknown> }>(
+          'select status, metadata from activities where workspace_id = $1 and id = $2',
+          [workspaceId, turnId],
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error('test setup: no Turn');
+        return row;
       });
     }
 
@@ -355,6 +401,151 @@ describe.runIf(DATABASE_URL !== undefined)(
         relatedFactIds: [draftExposesFactId, proposersPrivateFactId],
       });
       expect(await decisionsOf(turnId)).toHaveLength(1);
+    });
+
+    it('legacy 783: relates a Task the caller can read; another person’s Task and an unknown id are refused alike, recording nothing', async () => {
+      const ownTask = await taskFor(memberId);
+      const othersTask = await taskFor(proposerId);
+      const unknownTask = randomUUID();
+
+      const { caller, turnId } = await entryAgentInTurn(memberId);
+      await dispatchCapability({ pool }, caller, 'record_decision', {
+        summary: 'retry the import',
+        relatedTaskId: ownTask,
+      });
+      expect(await decisionsOf(turnId)).toEqual([
+        { rationale: { relatedFactIds: [], relatedTaskId: ownTask } },
+      ]);
+
+      const others = await refusalOf(caller, 'record_decision', {
+        summary: 'piggyback on their task',
+        relatedTaskId: othersTask,
+      });
+      const unknown = await refusalOf(caller, 'record_decision', {
+        summary: 'a task that never was',
+        relatedTaskId: unknownTask,
+      });
+      // Nothing tells the two apart: the same code, the same details shape, the same message but
+      // for the id each one echoes back.
+      expect(others.code).toBe('unresolved_references');
+      expect(unknown.code).toBe('unresolved_references');
+      expect(others.details).toEqual({ unresolved: { relatedTaskId: [othersTask] } });
+      expect(unknown.details).toEqual({ unresolved: { relatedTaskId: [unknownTask] } });
+      expect(others.message.replaceAll(othersTask, '<id>')).toBe(
+        unknown.message.replaceAll(unknownTask, '<id>'),
+      );
+      expect(others.message).toContain(
+        `relatedTaskId names 1 Task that is not there or not readable to you ("${othersTask}")`,
+      );
+      // Only the first, accepted Decision was recorded.
+      expect(await decisionsOf(turnId)).toHaveLength(1);
+    });
+
+    it('legacy 783: one refusal names every field that does not resolve, Facts and Task together', async () => {
+      const { caller, turnId } = await entryAgentInTurn(memberId);
+      const unknownFact = randomUUID();
+      const othersTask = await taskFor(proposerId);
+      const refused = await refusalOf(caller, 'record_decision', {
+        summary: 'two bad references',
+        relatedFactIds: [publishedExposesFactId, unknownFact],
+        relatedTaskId: othersTask,
+      });
+      expect(refused.details).toEqual({
+        unresolved: { relatedFactIds: [unknownFact], relatedTaskId: [othersTask] },
+      });
+      expect(await decisionsOf(turnId)).toEqual([]);
+    });
+
+    it('legacy 783: an owner’s agent reads Tasks as get_task shows them on the handle channel — a member’s Task is refused', async () => {
+      const membersTask = await taskFor(memberId);
+      const { caller, turnId } = await entryAgentInTurn(ownerId);
+      const refused = await refusalOf(caller, 'record_decision', {
+        summary: 'the owner’s agent reaching into a member’s task',
+        relatedTaskId: membersTask,
+      });
+      expect(refused.details).toEqual({ unresolved: { relatedTaskId: [membersTask] } });
+      expect(await decisionsOf(turnId)).toEqual([]);
+    });
+
+    it('legacy 783: report_turn’s decisions are Decision ids the caller can read — stored as sent', async () => {
+      const { caller, turnId } = await entryAgentInTurn(memberId);
+      const recorded = (await dispatchCapability({ pool }, caller, 'record_decision', {
+        summary: 'restart in the evening',
+      })) as { id: string };
+      await dispatchCapability({ pool }, caller, 'report_turn', {
+        turnId,
+        summary: 'restarted the service',
+        decisions: [recorded.id, recorded.id.toUpperCase()],
+      });
+      const turn = await turnRow(turnId);
+      expect(turn.metadata.decisions).toEqual([recorded.id, recorded.id.toUpperCase()]);
+      expect(turn.metadata.summary).toBe('restarted the service');
+    });
+
+    it('legacy 783: report_turn refuses another person’s Decision and an unknown id alike — the Turn is not ended and nothing is recorded on it', async () => {
+      // A Decision in the proposer's own conversation: the member's agent cannot read it.
+      const proposer = await entryAgentInTurn(proposerId);
+      const othersDecision = (
+        (await dispatchCapability({ pool }, proposer.caller, 'record_decision', {
+          summary: 'their own call',
+        })) as { id: string }
+      ).id;
+      const unknownDecision = randomUUID();
+      // A Decision whose subject does not resolve (an outcome naming no goal run): no conversation
+      // hides it, the read rule every Decision read applies does (`decisionVisibleSql`, legacy 421)
+      // — only the owner on the human channel reads it.
+      const unresolvedSubjectDecision = await admin(async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'goal.outcome_decision',
+          metadata: { goalRunId: randomUUID() },
+        });
+        const inserted = await client.query<{ id: string; subject_unresolved: boolean }>(
+          `insert into decisions (workspace_id, status, activity_id, summary, rationale)
+           values ($1, 'proposed', $2, 'an outcome of a run that is gone', '{}'::jsonb)
+           returning id, subject_unresolved`,
+          [workspaceId, activity.id],
+        );
+        expect(inserted.rows[0]?.subject_unresolved).toBe(true);
+        return inserted.rows[0]?.id as string;
+      });
+
+      const { caller, turnId } = await entryAgentInTurn(memberId);
+      const before = await turnRow(turnId);
+      const others = await refusalOf(caller, 'report_turn', {
+        turnId,
+        summary: 'done',
+        decisions: [othersDecision],
+      });
+      const unknown = await refusalOf(caller, 'report_turn', {
+        turnId,
+        summary: 'done',
+        decisions: [unknownDecision],
+      });
+      expect(others.code).toBe('unresolved_references');
+      expect(others.details).toEqual({ unresolved: { decisions: [othersDecision] } });
+      expect(unknown.details).toEqual({ unresolved: { decisions: [unknownDecision] } });
+      expect(others.message.replaceAll(othersDecision, '<id>')).toBe(
+        unknown.message.replaceAll(unknownDecision, '<id>'),
+      );
+      expect(others.message).toMatch(/^report_turn: decisions names 1 Decision that is not there/);
+      const hidden = await refusalOf(caller, 'report_turn', {
+        turnId,
+        summary: 'done',
+        decisions: [unresolvedSubjectDecision],
+      });
+      expect(hidden.details).toEqual({ unresolved: { decisions: [unresolvedSubjectDecision] } });
+      expect(await turnRow(turnId)).toEqual(before);
+      expect(before.metadata).not.toHaveProperty('summary');
+
+      // Text where an id belongs is refused by the schema, before any id is read.
+      await expect(
+        dispatchCapability({ pool }, caller, 'report_turn', {
+          turnId,
+          summary: 'done',
+          decisions: ['keep the plain one'],
+        }),
+      ).rejects.toBeInstanceOf(InvalidCapabilityParamsError);
+      expect(await turnRow(turnId)).toEqual(before);
     });
 
     it('with no running Turn, the Turn is what it refuses first — 409 before any reference is read', async () => {

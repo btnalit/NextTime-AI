@@ -267,6 +267,26 @@ async function getDecisionRow(
   return mapDecisionRow(row);
 }
 
+/** Legacy 783 (`report_turn`'s `decisions`): which of `decisionIds` (lowercase uuids) name a
+ *  Decision `viewer` can read — the visibility every read here applies (`decisionVisibleSql`, on
+ *  top of the `decisions` RLS policy), so a hidden Decision is missing from the set exactly like
+ *  an id that names none. */
+export async function readableDecisionIds(
+  client: PoolClient,
+  workspaceId: string,
+  decisionIds: readonly string[],
+  viewer: DecisionViewer,
+): Promise<ReadonlySet<string>> {
+  if (decisionIds.length === 0) return new Set();
+  const visible = decisionVisibleSql('d', viewer, '$1', 3);
+  const result = await client.query<{ id: string }>(
+    `select d.id from decisions d
+     where d.workspace_id = $1 and d.id = any($2::uuid[]) and ${visible.sql}`,
+    [workspaceId, decisionIds, ...visible.values],
+  );
+  return new Set(result.rows.map((row) => row.id));
+}
+
 // -------------------------------------------------------------------------------------------
 // query_decisions
 // -------------------------------------------------------------------------------------------

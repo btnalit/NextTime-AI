@@ -144,7 +144,7 @@ import {
 } from '../../governance/redaction/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
-import { explainByNodeId } from '../../substrate/epistemic/index.js';
+import { explainByNodeId, readableDecisionIds } from '../../substrate/epistemic/index.js';
 import type {
   GraphObject,
   ListFactsInput,
@@ -1105,10 +1105,16 @@ function scrubAgentText(text: string): string {
  * caller's own chats simply matches no row, indistinguishable from a nonexistent one, same masking
  * convention as application/chat/service.ts's `requireChatAccess`.
  *
- * `summary` and `decisions` are agent text, stored the way the Turn's reply is: every
- * secret-looking value scrubbed first (`scrubAgentText`, legacy 183).
+ * `summary` is agent text, stored the way the Turn's reply is: every secret-looking value scrubbed
+ * first (`scrubAgentText`, legacy 183).
+ *
+ * Legacy 783: `decisions` are Decision ids, as the schema says — each must name a Decision the
+ * caller can read (`readableDecisionIds`, `query_decisions`' visibility: an id it may not read is
+ * refused exactly like one that names none), else {@link DecisionReferenceError} before anything
+ * is written: the Turn is not ended and nothing is recorded on it. They are stored as sent. No
+ * caller sends them today (the entry extension reports `turnId` and `summary` only).
  */
-const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { turnId, summary, decisions } = params as {
     turnId: string;
     summary: string;
@@ -1117,11 +1123,26 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   // Legacy 320 (`HANDLERS_SETTLING_UNSTORABLE_TEXT`, dispatch.ts): the summary is the agent's own
   // account of a Turn that already happened, so U+0000 in it is stored as the visible `\u{0}`
   // (counted on the Turn) rather than refusing the report and leaving the Turn's end unrecorded.
-  // `turnId` and `decisions` are ids, which the schema already holds to uuid shape.
+  // `decisions` are Decision ids, which the schema holds to uuid shape (legacy 783).
+  const sentDecisionIds = idsOnceByLowercase(decisions ?? []);
+  if (sentDecisionIds.size > 0) {
+    const readable = await readableDecisionIds(
+      client,
+      workspaceId,
+      [...sentDecisionIds.keys()],
+      await decisionViewerOf(client, workspaceId, ctx),
+    );
+    const unreadable = [...sentDecisionIds]
+      .filter(([key]) => !readable.has(key))
+      .map(([, decisionId]) => decisionId);
+    if (unreadable.length > 0) {
+      throw new DecisionReferenceError('report_turn', { decisions: unreadable });
+    }
+  }
   const storableSummary = storableValue(scrubAgentText(summary));
   const metadataPatch: Record<string, unknown> = { summary: storableSummary.value };
   if (storableSummary.escaped > 0) metadataPatch.unstorableEscaped = storableSummary.escaped;
-  if (decisions !== undefined) metadataPatch.decisions = decisions.map(scrubAgentText);
+  if (decisions !== undefined) metadataPatch.decisions = decisions;
 
   // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a
   // Turn that already ended (Stop, accept timeout, agent-host's own `turnEnded`) keeps its status,
@@ -1170,28 +1191,98 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   };
 };
 
-/** How many of a refusal's ids {@link DecisionReferenceError}'s message names; `details` has all. */
+/** How many of a refusal's ids {@link DecisionReferenceError}'s message names per field; `details`
+ *  has all. */
 const DECISION_REFERENCE_MESSAGE_IDS = 10;
 
-/** Legacy 308: 400 `unresolved_references` — `record_decision`'s `relatedFactIds` names a Fact
- *  that is not there or that the caller may not read (the two read the same), so no Decision was
- *  recorded. `details.unresolved.relatedFactIds` lists each such id once, in the order sent. */
+/** The id fields {@link DecisionReferenceError} names: `record_decision`'s `relatedFactIds`
+ *  (legacy 308) and `relatedTaskId`, and `report_turn`'s `decisions` (legacy 783). */
+type DecisionReferenceField = 'relatedFactIds' | 'relatedTaskId' | 'decisions';
+
+/** Each field's ids that do not resolve, as first sent, in the order sent — only the fields that
+ *  have any (the shape `WorkerDefinitionReferenceError`'s `details.unresolved` has). */
+export type UnresolvedDecisionReferences = Partial<
+  Readonly<Record<DecisionReferenceField, readonly string[]>>
+>;
+
+const DECISION_REFERENCE_FIELDS: readonly DecisionReferenceField[] = [
+  'relatedFactIds',
+  'relatedTaskId',
+  'decisions',
+];
+
+const DECISION_REFERENCE_WHAT: Readonly<
+  Record<DecisionReferenceField, { one: string; many: string; pass: string }>
+> = {
+  relatedFactIds: {
+    one: 'Fact',
+    many: 'Facts',
+    pass: 'ids of Facts the graph tools returned (list_facts, traverse, state_at)',
+  },
+  relatedTaskId: {
+    one: 'Task',
+    many: 'Tasks',
+    pass: 'the id of a Task you can read (get_task, list_tasks)',
+  },
+  decisions: {
+    one: 'Decision',
+    many: 'Decisions',
+    pass: 'ids of Decisions you can read (record_decision returned them)',
+  },
+};
+
+/**
+ * 400 `unresolved_references` — an id that names something not there or that the caller may not
+ * read (the two read the same, and the answer never says which), so nothing was recorded:
+ *   - legacy 308: `record_decision`'s `relatedFactIds`, a Fact the caller cannot read;
+ *   - legacy 783: `record_decision`'s `relatedTaskId`, a Task `get_task` would not show the caller;
+ *     `report_turn`'s `decisions`, a Decision `query_decisions` would not show it.
+ * `details.unresolved` lists, per field that has any, each such id once, in the order sent.
+ */
 export class DecisionReferenceError extends Error {
   readonly code = 'unresolved_references' as const;
-  readonly details: { readonly unresolved: { readonly relatedFactIds: readonly string[] } };
-  constructor(relatedFactIds: readonly string[]) {
-    const shown = relatedFactIds
-      .slice(0, DECISION_REFERENCE_MESSAGE_IDS)
-      .map((factId) => JSON.stringify(factId))
-      .join(', ');
-    const more = relatedFactIds.length - DECISION_REFERENCE_MESSAGE_IDS;
-    const count = relatedFactIds.length;
+  readonly details: { readonly unresolved: UnresolvedDecisionReferences };
+  constructor(
+    capability: 'record_decision' | 'report_turn',
+    unresolved: UnresolvedDecisionReferences,
+  ) {
+    const fields = DECISION_REFERENCE_FIELDS.filter(
+      (field) => (unresolved[field]?.length ?? 0) > 0,
+    );
+    const named = fields
+      .map((field) => {
+        const ids = unresolved[field] ?? [];
+        const what = DECISION_REFERENCE_WHAT[field];
+        const shown = ids
+          .slice(0, DECISION_REFERENCE_MESSAGE_IDS)
+          .map((id) => JSON.stringify(id))
+          .join(', ');
+        const more = ids.length - DECISION_REFERENCE_MESSAGE_IDS;
+        const count = ids.length;
+        return `${field} names ${count} ${count === 1 ? `${what.one} that is` : `${what.many} that are`} not there or not readable to you (${shown}${more > 0 ? `, and ${more} more` : ''})`;
+      })
+      .join('; ');
+    const pass = fields.map((field) => DECISION_REFERENCE_WHAT[field].pass).join('; ');
+    const them = fields.length === 1 && fields[0] === 'relatedTaskId' ? 'it' : 'them';
     super(
-      `record_decision: relatedFactIds names ${count} ${count === 1 ? 'Fact that is' : 'Facts that are'} not there or not readable to you (${shown}${more > 0 ? `, and ${more} more` : ''}), so nothing was recorded. Pass only ids of Facts the graph tools returned (list_facts, traverse, state_at), or leave them out.`,
+      `${capability}: ${named}, so nothing was recorded. Pass only ${pass}, or leave ${them} out.`,
     );
     this.name = 'DecisionReferenceError';
-    this.details = { unresolved: { relatedFactIds: [...relatedFactIds] } };
+    const copied: Partial<Record<DecisionReferenceField, readonly string[]>> = {};
+    for (const field of fields) copied[field] = [...(unresolved[field] ?? [])];
+    this.details = { unresolved: copied };
   }
+}
+
+/** Each id once, by its lowercase form (a uuid in any case names the same row, and Postgres returns
+ *  it lowercase), mapped to the id as first sent — which a refusal names. */
+function idsOnceByLowercase(ids: readonly string[]): Map<string, string> {
+  const sent = new Map<string, string>();
+  for (const id of ids) {
+    const key = id.toLowerCase();
+    if (!sent.has(key)) sent.set(key, id);
+  }
+  return sent;
 }
 
 /**
@@ -1225,9 +1316,11 @@ export class DecisionReferenceError extends Error {
  * Legacy 308: every `relatedFactIds` entry must name a Fact the caller can read
  * (`graphStore.readableFactIds`, with the caller's viewer — the visibility `explain` applies, so
  * an id it may not read is refused exactly like an unknown one and the answer never says it
- * exists); otherwise {@link DecisionReferenceError} and nothing is recorded. A Decision is never
- * deleted, so a dangling id would stay in its provenance for good. `relatedTaskId` is stored as
- * given.
+ * exists). Legacy 783: `relatedTaskId` likewise must name a Task the caller can read — `get_task`'s
+ * own check (`getTaskVisibleTo` with `taskViewerOf`), whose not-found an unknown id and another
+ * person's Task share. Otherwise {@link DecisionReferenceError}, naming every id of both fields
+ * that does not resolve, and nothing is recorded. A Decision is never deleted, so a dangling id
+ * would stay in its provenance for good.
  */
 const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { summary, relatedFactIds, relatedTaskId } = params as {
@@ -1243,13 +1336,8 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
   });
   if (!attributedTurn?.wasRunning) throw new NoActiveTurnError();
 
-  // Each id once, by its lowercase form (a uuid in any case names the same row, and Postgres
-  // returns it lowercase); a refusal names an id as first sent.
-  const sentFactIds = new Map<string, string>();
-  for (const factId of relatedFactIds ?? []) {
-    const key = factId.toLowerCase();
-    if (!sentFactIds.has(key)) sentFactIds.set(key, factId);
-  }
+  const unresolved: { relatedFactIds?: string[]; relatedTaskId?: string[] } = {};
+  const sentFactIds = idsOnceByLowercase(relatedFactIds ?? []);
   if (sentFactIds.size > 0) {
     const viewer = await graphReadViewerOf(client, workspaceId, ctx);
     const readable = await graphStore.readableFactIds(
@@ -1258,10 +1346,24 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
       [...sentFactIds.keys()],
       viewer,
     );
-    const unresolved = [...sentFactIds]
+    const unreadable = [...sentFactIds]
       .filter(([key]) => !readable.has(key))
       .map(([, factId]) => factId);
-    if (unresolved.length > 0) throw new DecisionReferenceError(unresolved);
+    if (unreadable.length > 0) unresolved.relatedFactIds = unreadable;
+  }
+  if (relatedTaskId !== undefined) {
+    const viewer = await taskViewerOf(client, workspaceId, ctx);
+    const readable = await getTaskVisibleTo(client, workspaceId, viewer, relatedTaskId).then(
+      () => true,
+      (err: unknown) => {
+        if (err instanceof TaskNotFoundError) return false;
+        throw err;
+      },
+    );
+    if (!readable) unresolved.relatedTaskId = [relatedTaskId];
+  }
+  if (unresolved.relatedFactIds !== undefined || unresolved.relatedTaskId !== undefined) {
+    throw new DecisionReferenceError('record_decision', unresolved);
   }
 
   const result = await client.query<{ id: string; status: string }>(

@@ -524,7 +524,8 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof WorkerDefinitionReferenceError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  // Legacy 308: mirrors HTTP 400 `unresolved_references` for `record_decision` (capability-route.ts).
+  // Legacy 308 / 783: mirrors HTTP 400 `unresolved_references` for `record_decision` and
+  // `report_turn` (capability-route.ts).
   if (err instanceof DecisionReferenceError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
