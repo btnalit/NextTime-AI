@@ -1,9 +1,15 @@
-import type { PlatformRoleWire, ResetUserPasswordResultWire, UserWire } from '@nexttime/shared';
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  type PlatformRoleWire,
+  type ResetUserPasswordResultWire,
+  type UserWire,
+} from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
+import { nameOverflow, nameTooLongText } from '../../lib/name-input.js';
 import { passwordLengthProblem } from '../../lib/password-rule.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
 import { SavedNote } from '../../lib/saved-note.js';
@@ -153,6 +159,11 @@ export function UserDetailPanel({
 
   const profileDirty =
     displayName.trim() !== user.displayName || platformRole !== user.platformRole;
+  // #1476 follow-up: a display name saved before the cap (it took 200) still saves back unchanged.
+  const displayNameOver =
+    displayName.trim() === user.displayName
+      ? 0
+      : nameOverflow(displayName, DISPLAY_NAME_MAX_LENGTH);
   const parsedDaily = parseBudget(dailyCallLimit);
   const parsedMonthly = parseBudget(monthlyTokenBudget);
   const budgetValid = parsedDaily !== undefined && parsedMonthly !== undefined;
@@ -161,7 +172,7 @@ export function UserDetailPanel({
     monthlyTokenBudget !== budgetInput(user.monthlyTokenBudget);
 
   async function saveProfile(): Promise<void> {
-    if (!profileDirty || savingProfile) return;
+    if (!profileDirty || displayNameOver > 0 || savingProfile) return;
     const params: Record<string, unknown> = { userId: user.id };
     if (displayName.trim() !== user.displayName) params.displayName = displayName.trim();
     if (platformRole !== user.platformRole) params.platformRole = platformRole;
@@ -290,7 +301,11 @@ export function UserDetailPanel({
 
       <div className="divider" />
 
-      <Field id="ud-display-name" label={t('显示名', 'Display name')}>
+      <Field
+        id="ud-display-name"
+        label={t('显示名', 'Display name')}
+        error={nameTooLongText(displayNameOver, DISPLAY_NAME_MAX_LENGTH, t)}
+      >
         <Input
           id="ud-display-name"
           value={displayName}
@@ -299,6 +314,7 @@ export function UserDetailPanel({
             setProfileSaved(false);
           }}
           disabled={savingProfile}
+          invalid={displayNameOver > 0}
         />
       </Field>
       <Field id="ud-platform-role" label={t('平台角色', 'Platform role')}>
@@ -320,12 +336,13 @@ export function UserDetailPanel({
       <PlatformError error={profileError} title={t('无法保存', 'Could not update this user')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         {profileSaved ? <SavedNote testId="user-profile-saved" /> : null}
-        {/* ux-lint-allow-disabled: nothing changed yet — the fields above show the saved values. */}
+        {/* ux-lint-allow-disabled: nothing changed yet — the fields above show the saved values —
+            or the display name is too long, which its field says. */}
         <Button
           variant="secondary"
           onClick={() => void saveProfile()}
           loading={savingProfile}
-          disabled={!profileDirty}
+          disabled={!profileDirty || displayNameOver > 0}
         >
           {t('保存', 'Save')}
         </Button>

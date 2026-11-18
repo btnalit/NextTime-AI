@@ -1,10 +1,11 @@
-import { ROLE_VALUES, type Role } from '@nexttime/shared';
+import { DISPLAY_NAME_MAX_LENGTH, ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { RESERVED_PRINCIPAL_DISPLAY_NAME, roleDescription, roleLabel } from '../lib/labels.js';
+import { nameOverflow, nameTooLongText } from '../lib/name-input.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
@@ -56,6 +57,8 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const ownerCopy = ownerCredentialConfirmCopy(t);
   // Legacy 362: say so while typing instead of after a refused submit.
   const reservedName = RESERVED_PRINCIPAL_DISPLAY_NAME.test(displayName.trim());
+  const displayNameOver = nameOverflow(displayName, DISPLAY_NAME_MAX_LENGTH);
+  const nameInvalid = reservedName || displayNameOver > 0;
 
   async function createPrincipal(trimmed: string): Promise<void> {
     const result = await http.call<CreatePrincipalResult>('create_principal', {
@@ -68,7 +71,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = displayName.trim();
-    if (!trimmed || reservedName || submitting) return;
+    if (!trimmed || nameInvalid || submitting) return;
     if (role === 'owner') {
       setError(null);
       setConfirmingOwner(true);
@@ -141,15 +144,15 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
                 '前后各带两个下划线的显示名留给平台内部的身份，换一个名字。',
                 'Names with two underscores at each end are reserved for the platform’s internal identities; choose another.',
               )
-            : null
+            : nameTooLongText(displayNameOver, DISPLAY_NAME_MAX_LENGTH, t)
         }
       >
         <input
           id="cp-name"
           className="input"
           value={displayName}
-          aria-invalid={reservedName || undefined}
-          aria-describedby={describedBy('cp-name', false, reservedName)}
+          aria-invalid={nameInvalid || undefined}
+          aria-describedby={describedBy('cp-name', false, nameInvalid)}
           onChange={(event) => setDisplayName(event.target.value)}
           disabled={submitting}
         />
@@ -198,7 +201,9 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
                       'a display name without two underscores at each end',
                     ),
                   ]
-                : []
+                : displayNameOver > 0
+                  ? [t('缩短显示名', 'shorten the display name')]
+                  : []
           }
           hidden={submitting}
           testId="create-principal-missing"
@@ -215,7 +220,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
               type="submit"
               variant="primary"
               aria-busy={submitting}
-              disabled={!displayName.trim() || reservedName}
+              disabled={!displayName.trim() || nameInvalid}
             >
               {t('创建', 'Create')}
             </Button>

@@ -1,4 +1,4 @@
-import type { WorkspaceWire } from '@nexttime/shared';
+import { DISPLAY_NAME_MAX_LENGTH, type WorkspaceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import { useCapability } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -21,6 +21,7 @@ import {
   loginRuleText,
   normalizeLoginInput,
 } from '../lib/login-input.js';
+import { nameOverflow, nameTooLongText } from '../lib/name-input.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import {
   passwordLengthHint,
@@ -237,10 +238,12 @@ function ClaimPasswordCard({
   // #541 review: the same length rule (floor and 256 cap) as every other password form.
   const passwordProblem = passwordLengthProblem(password, t);
   const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
+  const displayNameOver = nameOverflow(displayName, DISPLAY_NAME_MAX_LENGTH);
   const canSubmit =
     Boolean(apiKey) &&
     LOGIN_PATTERN.test(normalizedLogin) &&
     displayName.trim().length > 0 &&
+    displayNameOver === 0 &&
     password !== '' &&
     passwordProblem === null &&
     password === confirmPassword;
@@ -252,7 +255,11 @@ function ClaimPasswordCard({
       : LOGIN_PATTERN.test(normalizedLogin)
         ? null
         : t('改正登录名', 'fix the login'),
-    displayName.trim() === '' ? t('填写显示名', 'enter a display name') : null,
+    displayName.trim() === ''
+      ? t('填写显示名', 'enter a display name')
+      : displayNameOver > 0
+        ? t('缩短显示名', 'shorten the display name')
+        : null,
     password === ''
       ? t('填写密码', 'enter a password')
       : passwordProblem !== null
@@ -319,6 +326,7 @@ function ClaimPasswordCard({
                 )
               : undefined
           }
+          error={nameTooLongText(displayNameOver, DISPLAY_NAME_MAX_LENGTH, t)}
         >
           <Input
             id="account-claim-display-name"
@@ -326,6 +334,7 @@ function ClaimPasswordCard({
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
             disabled={submitting}
+            invalid={displayNameOver > 0}
           />
         </Field>
 
@@ -395,11 +404,12 @@ function DisplayNameCard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [saved, setSaved] = useState(false);
+  const displayNameOver = nameOverflow(displayName, DISPLAY_NAME_MAX_LENGTH);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = displayName.trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || displayNameOver > 0 || submitting) return;
     setSubmitting(true);
     setError(null);
     setSaved(false);
@@ -417,7 +427,12 @@ function DisplayNameCard({
   return (
     <Card title={t('显示名', 'Display name')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
-        <Field id="account-display-name" label={t('显示名', 'Display name')} required>
+        <Field
+          id="account-display-name"
+          label={t('显示名', 'Display name')}
+          required
+          error={nameTooLongText(displayNameOver, DISPLAY_NAME_MAX_LENGTH, t)}
+        >
           <Input
             id="account-display-name"
             value={displayName}
@@ -426,6 +441,7 @@ function DisplayNameCard({
               setSaved(false);
             }}
             disabled={submitting}
+            invalid={displayNameOver > 0}
           />
         </Field>
         {error !== null ? (
@@ -434,12 +450,15 @@ function DisplayNameCard({
           <Notice tone="info">{t('已保存', 'Saved')}</Notice>
         ) : null}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          {/* ux-lint-allow-disabled: one field — empty, or unchanged from the saved display name. */}
+          {/* ux-lint-allow-disabled: one field — empty, unchanged from the saved display name, or
+              too long, which the field says. */}
           <Button
             type="submit"
             variant="primary"
             loading={submitting}
-            disabled={!displayName.trim() || displayName.trim() === user.displayName}
+            disabled={
+              !displayName.trim() || displayName.trim() === user.displayName || displayNameOver > 0
+            }
           >
             {t('保存', 'Save')}
           </Button>

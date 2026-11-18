@@ -3,6 +3,7 @@ import {
   type CombinationCandidateWire,
   type CombinationCandidatesWire,
   type CombinationEvidenceWire,
+  WORKER_DEFINITION_NAME_MAX_LENGTH,
   type WorkerDefinitionDerivationWire,
   type WorkerDefinitionWire,
   type WorkerSpec,
@@ -334,7 +335,7 @@ function KeepAsDefinition({
           id={nameId}
           className="input"
           value={name}
-          maxLength={200}
+          maxLength={WORKER_DEFINITION_NAME_MAX_LENGTH}
           onChange={(event) => setName(event.target.value)}
           data-testid={nameId}
           data-discard-guard
