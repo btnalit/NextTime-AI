@@ -531,6 +531,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           hosts: ['h1'],
           database: { user: 'app', password: '[redacted]' },
         },
+        // Legacy 817: marked as the kept copy, so the raw-secret scrub never counts it.
+        payloadRedacted: true,
       });
       const stored = JSON.stringify(content);
       expect(stored).not.toContain(SYNTHETIC_FIELD_SECRET);

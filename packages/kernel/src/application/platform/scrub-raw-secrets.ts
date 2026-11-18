@@ -13,6 +13,7 @@ import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
 import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
 import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
+import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate-observation.js';
 
 /**
  * application/platform/scrub-raw-secrets: the rows written before STATUS legacy 183–187 were fixed,
@@ -73,6 +74,13 @@ import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
  *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself;
+ *   - `gateCallObservations`: an Observation of a Worker's gate call (Activity kind
+ *     `worker_gate_call`) written before legacy 237, which kept the gate's result as it came — one
+ *     the rule it is now kept by would hide something in; a row written since is marked as that
+ *     copy and never counted (application/task/gate-observation.ts `gatePayloadKeptRaw`; legacy
+ *     817). No read returns an Observation's `content`, so the raw copy is in the table and in every
+ *     dump only; Observations are insert-only (core 0035 revokes UPDATE), the provenance of what
+ *     was observed, so — like a Fact — none is rewritten here;
  *   - `connectedSystemDuplicates`: not a credential — every ConnectedSystem a run (this one or an
  *     earlier one) made a duplicate (`connectedSystems` above), for the record. Read after the
  *     rewrites, so a dry run lists only earlier runs' duplicates: whether a cut name collides is
@@ -115,6 +123,7 @@ export const COUNTED_CATEGORIES = [
   'factProperties',
   'objectProperties',
   'auditResults',
+  'gateCallObservations',
   'connectedSystemDuplicates',
 ] as const;
 export type CountedRawSecretCategory = (typeof COUNTED_CATEGORIES)[number];
@@ -589,6 +598,24 @@ const SCANS: readonly Scan[] = [
         ? null
         : { values: 1 };
     },
+  },
+  {
+    category: 'gateCallObservations',
+    // Keyed on the Observation; its Activity says whose gate call it observed.
+    window: async (client, after, limit) =>
+      (
+        await client.query<ScannedRow>(
+          `select o.workspace_id, o.id, o.content from observations o
+             join activities a on a.workspace_id = o.workspace_id and a.id = o.activity_id
+            where (o.workspace_id, o.id) > ($1::uuid, $2::uuid) and a.kind = $4
+            order by o.workspace_id, o.id limit $3`,
+          [after.workspaceId, after.id, limit, GATE_OBSERVATION_ACTIVITY_KIND],
+        )
+      ).rows,
+    inspect: (row) =>
+      gatePayloadKeptRaw((row as ScannedRow & { content: Record<string, unknown> }).content)
+        ? { values: 1 }
+        : null,
   },
   {
     category: 'connectedSystemDuplicates',
