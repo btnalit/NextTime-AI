@@ -1228,6 +1228,69 @@ describe('CatalogPage', () => {
     expect(diff.textContent).not.toContain('没有差异');
   });
 
+  it('legacy 848: a revision with no definition comparison does not blame this version alone', async () => {
+    const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.get',
+            status: 'draft',
+            version: 2,
+            // The kernel leaves `definitionChange` out when either side does not parse — after an
+            // unreadable published version, the corrected revision.
+            governanceChange: { before: fields, after: fields, direction: 'neutral' },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    const first = renderPage(http, 'operations', 'gk-1::stock.get@draft');
+    const diff = await screen.findByTestId('operation-revision-diff');
+    expect(diff.textContent).toContain('读不出这一版或已发布版本的定义');
+    first.unmount();
+
+    // UX P2-1 of #1459: it stays a line of its own when the revision also changes its description.
+    renderPage(
+      scriptedHttp({
+        list_operations: () => ({
+          items: [
+            {
+              gatekeeperId: 'gk-1',
+              name: 'stock.get',
+              status: 'published',
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              version: 1,
+            },
+            {
+              gatekeeperId: 'gk-1',
+              name: 'stock.get',
+              status: 'draft',
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              version: 2,
+              description: 'Reads the stock level.',
+              governanceChange: { before: fields, after: fields, direction: 'neutral' },
+            },
+          ],
+        }),
+        get_operation_stats: () => ({ items: [] }),
+      }),
+      'operations',
+      'gk-1::stock.get@draft',
+    );
+    const both = await screen.findByTestId('operation-revision-diff');
+    expect(
+      within(both)
+        .getAllByTestId('operation-revision-diff-line')
+        .map((line) => line.textContent),
+    ).toEqual(['读不出这一版或已发布版本的定义，没法比较执行定义。', '说明变了']);
+  });
+
   it('legacy 614: a revision draft that only rewrites its description says so; one that keeps it says all three match', async () => {
     const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
     const rowsWith = (draftDescription: string) => [
