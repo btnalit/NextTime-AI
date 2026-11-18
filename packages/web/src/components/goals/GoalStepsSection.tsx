@@ -39,6 +39,7 @@ import {
   retriedStepKeys,
   stepAcceptanceLabel,
   stepFailureText,
+  stepHeldLabel,
   stepHintChipLabel,
   stepWaitingReasonLabel,
 } from '../../lib/goals.js';
@@ -366,6 +367,8 @@ function StepItem({
   const dependsOn = planStep?.dependsOn ?? [];
   const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const failure = run?.failureCategory ? stepFailureText(run.failureCategory, t) : null;
+  // Legacy 582: a step the pause says did not start does not read 「可以开始」.
+  const held = detail && run ? stepHeldLabel(detail, view.key, t) : null;
   return (
     <li
       className="goal-step stack-s"
@@ -406,7 +409,11 @@ function StepItem({
           )}
           {/* S11 GO8b (UX P3-4 on #855): a trial approved and waiting, or one that lapsed. */}
           {trialChip(trials, t)}
-          {run ? (
+          {held ? (
+            <span className="chip chip-warn chip-s" data-testid="goal-step-held">
+              {held}
+            </span>
+          ) : run ? (
             <StatusChip machine="stepRun" status={run.status} size="s" />
           ) : (
             <span className="text-3 text-small">{t('尚未开始', 'Not started')}</span>
