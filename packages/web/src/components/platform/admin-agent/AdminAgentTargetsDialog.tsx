@@ -1,12 +1,14 @@
 import {
   ADMIN_AGENT_TARGETS_MAX,
+  type AdminAgentStatusWire,
+  type AdminAgentTargetWire,
   type AdminAgentTargetsResultWire,
   type AdminAgentTrialWorkspaceWire,
   type PlatformWorkspaceWire,
 } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../../hooks/useCapability.js';
-import { adminAgentTargetsErrorOverrides } from '../../../lib/admin-agent.js';
+import { adminAgentTargetsErrorOverrides, rebaseTargets } from '../../../lib/admin-agent.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { useT } from '../../../lib/i18n.js';
 import { Button } from '../../kit/button.js';
@@ -45,6 +47,15 @@ interface Candidate {
   readonly disabled: boolean;
 }
 
+/** What changed in the saved targets between the dialog opening and Save (legacy 648), by name:
+ *  another page of the same administrator saved, or this page reopened the dialog before its status
+ *  read caught up with its own save. `settled`: the reader's own changes are all in there already. */
+interface Moved {
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  readonly settled: boolean;
+}
+
 /**
  * components/platform/admin-agent/AdminAgentTargetsDialog: 选择目标工作区 (S11 AA4c-3; the AA4c
  * plan D1). The workspaces the reader's admin agent may make an admin proposal to from one trial
@@ -52,6 +63,11 @@ interface Candidate {
  * ephemeral workspace is never one), at most `ADMIN_AGENT_TARGETS_MAX`, saved as the whole list
  * (`set_admin_agent_targets`). The dialog says that the choice is shared by all of the reader's
  * admin agent chats in that trial workspace, and what adding and removing one does.
+ *
+ * Legacy 648: the call replaces the whole list, so Save first reads the targets as saved now. When
+ * they are not what the dialog opened on, nothing is saved: the reader's own additions and removals
+ * are put on the targets as they now are, the dialog says what had changed, and the reader saves
+ * again — an older list never silently takes back a target added since.
  */
 export function AdminAgentTargetsDialog({
   http,
@@ -71,21 +87,23 @@ export function AdminAgentTargetsDialog({
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // The targets the choice is made against: as the dialog opened, then as Save last read them.
+  const [base, setBase] = useState<readonly AdminAgentTargetWire[]>([]);
+  const [moved, setMoved] = useState<Moved | null>(null);
 
   // A fresh choice, from what is saved now, every time the dialog opens.
   const workspaceId = workspace?.workspaceId ?? null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the dialog opens on a trial workspace
   useEffect(() => {
     if (workspace === null) return;
+    setBase(workspace.targets);
     setSelected(new Set(workspace.targets.map((target) => target.workspaceId)));
     setSearch('');
     setError(null);
+    setMoved(null);
   }, [workspaceId]);
 
-  const saved = useMemo(
-    () => new Set(workspace?.targets.map((target) => target.workspaceId) ?? []),
-    [workspace],
-  );
+  const saved = useMemo(() => new Set(base.map((target) => target.workspaceId)), [base]);
   const candidates = useMemo<readonly Candidate[]>(() => {
     const listed =
       workspaces.state.status === 'ready'
@@ -96,7 +114,7 @@ export function AdminAgentTargetsDialog({
           }))
         : [];
     const listedIds = new Set(listed.map((row) => row.workspaceId));
-    const kept = (workspace?.targets ?? [])
+    const kept = base
       .filter((target) => !listedIds.has(target.workspaceId))
       .map((target) => ({
         workspaceId: target.workspaceId,
@@ -104,7 +122,7 @@ export function AdminAgentTargetsDialog({
         disabled: target.status === 'disabled',
       }));
     return [...kept, ...listed];
-  }, [workspaces.state, workspace]);
+  }, [workspaces.state, base]);
 
   const query = search.trim().toLowerCase();
   const shown =
@@ -129,6 +147,25 @@ export function AdminAgentTargetsDialog({
     setBusy(true);
     setError(null);
     try {
+      // Legacy 648: the whole list is replaced, so check it is still the one the choice was made on.
+      const now = await http.call<AdminAgentStatusWire>('get_admin_agent_status', {});
+      const current =
+        now.workspaces.find((row) => row.workspaceId === workspace.workspaceId)?.targets ?? [];
+      const currentIds = current.map((target) => target.workspaceId);
+      const currentSet = new Set(currentIds);
+      const appeared = currentIds.filter((id) => !saved.has(id));
+      const vanished = [...saved].filter((id) => !currentSet.has(id));
+      if (appeared.length > 0 || vanished.length > 0) {
+        const next = rebaseTargets(currentIds, added, removed);
+        const settled = next.length === currentIds.length && next.every((id) => currentSet.has(id));
+        const nameNow = (id: string) =>
+          current.find((target) => target.workspaceId === id)?.name ?? nameOf(id);
+        setMoved({ added: appeared.map(nameNow), removed: vanished.map(nameOf), settled });
+        setBase(current);
+        setSelected(new Set(next));
+        invalidateCapability(http, 'get_admin_agent_status');
+        return;
+      }
       const result = await http.call<AdminAgentTargetsResultWire>('set_admin_agent_targets', {
         trialWorkspaceId: workspace.workspaceId,
         targetWorkspaceIds: [...selected],
@@ -235,6 +272,32 @@ export function AdminAgentTargetsDialog({
               </fieldset>
             </>
           )}
+          {moved !== null ? (
+            <Notice tone="warn" testId="admin-agent-targets-moved">
+              {t(
+                '还没有保存：打开这个对话框之后，这里的目标已经被改过',
+                'Not saved yet: since this dialog opened, the targets here were changed',
+              )}
+              {moved.added.length > 0
+                ? t(`（加上了 ${moved.added.join('、')}）`, ` (${moved.added.join(', ')} added)`)
+                : null}
+              {moved.removed.length > 0
+                ? t(
+                    `（去掉了 ${moved.removed.join('、')}）`,
+                    ` (${moved.removed.join(', ')} removed)`,
+                  )
+                : null}
+              {moved.settled
+                ? t(
+                    '，可能是在另一个页面里。你要做的改动已经都在里面了，不用再保存。',
+                    ', perhaps on another page. The changes you made are all in there already; there is nothing to save.',
+                  )
+                : t(
+                    '，可能是在另一个页面里。你的改动已经放到现在的目标上，核对下面的勾选后再保存。',
+                    ', perhaps on another page. Your changes are now applied to the targets as they are; check the ticks below and save again.',
+                  )}
+            </Notice>
+          ) : null}
           <InlineError
             error={error}
             overrides={adminAgentTargetsErrorOverrides(t)}

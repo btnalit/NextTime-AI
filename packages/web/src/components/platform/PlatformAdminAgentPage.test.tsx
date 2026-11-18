@@ -312,6 +312,74 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     expect(screen.getByTestId('admin-agent-targets-dialog')).toBeTruthy();
   });
 
+  it('legacy 648: does not overwrite targets saved since the dialog opened; puts the reader’s changes on them first', async () => {
+    let saved: AdminAgentTargetWire[] = [target()];
+    const http = scriptedHttp({
+      get_admin_agent_status: () => status({ workspaces: [trial({ targets: saved })] }),
+      list_workspaces: () => ({ items: STANDARD_WORKSPACES }),
+      set_admin_agent_targets: (params) => {
+        const ids = (params as { targetWorkspaceIds: string[] }).targetWorkspaceIds;
+        saved = ids.map((id) => target({ workspaceId: id, name: id === WS_OPS ? '运维' : '生产' }));
+        return { trialWorkspaceId: WS_TRIAL, targets: saved, added: [], removed: [WS_PROD] };
+      },
+    });
+    renderPage(http);
+
+    fireEvent.click(await screen.findByTestId('admin-agent-choose-targets'));
+    const dialog = await screen.findByTestId('admin-agent-targets-dialog');
+    const options = await within(dialog).findAllByTestId('admin-agent-target-option');
+    const box = (id: string) =>
+      within(
+        options.find((row) => row.getAttribute('data-workspace-id') === id) as HTMLElement,
+      ).getByRole('checkbox') as HTMLInputElement;
+    // The reader takes 生产 off; meanwhile another page of theirs adds 运维.
+    fireEvent.click(box(WS_PROD));
+    saved = [target(), target({ workspaceId: WS_OPS, name: '运维' })];
+    fireEvent.click(within(dialog).getByTestId('admin-agent-targets-save'));
+
+    const moved = await within(dialog).findByTestId('admin-agent-targets-moved');
+    expect(text(moved)).toContain(
+      '还没有保存：打开这个对话框之后，这里的目标已经被改过（加上了 运维）',
+    );
+    expect(text(moved)).toContain('你的改动已经放到现在的目标上，核对下面的勾选后再保存');
+    expect(named(http.calls, 'set_admin_agent_targets')).toHaveLength(0);
+    // 运维 stays; the reader's own removal of 生产 is still what Save does.
+    expect(box(WS_OPS).checked).toBe(true);
+    expect(box(WS_PROD).checked).toBe(false);
+    expect(text(within(dialog).getByTestId('admin-agent-targets-diff'))).toContain('去掉：生产');
+    expect(text(within(dialog).getByTestId('admin-agent-targets-diff'))).not.toContain('运维');
+
+    fireEvent.click(within(dialog).getByTestId('admin-agent-targets-save'));
+    await waitFor(() => expect(screen.queryByTestId('admin-agent-targets-dialog')).toBeNull());
+    expect(named(http.calls, 'set_admin_agent_targets').map((call) => call.params)).toEqual([
+      { trialWorkspaceId: WS_TRIAL, targetWorkspaceIds: [WS_OPS] },
+    ]);
+  });
+
+  it('legacy 648: says there is nothing to save when the targets saved since already hold the reader’s change', async () => {
+    let saved: AdminAgentTargetWire[] = [target()];
+    const http = scriptedHttp({
+      get_admin_agent_status: () => status({ workspaces: [trial({ targets: saved })] }),
+      list_workspaces: () => ({ items: STANDARD_WORKSPACES }),
+    });
+    renderPage(http, { english: true });
+
+    fireEvent.click(await screen.findByTestId('admin-agent-choose-targets'));
+    const dialog = await screen.findByTestId('admin-agent-targets-dialog');
+    const options = await within(dialog).findAllByTestId('admin-agent-target-option');
+    fireEvent.click(within(options[1] as HTMLElement).getByRole('checkbox'));
+    saved = [target(), target({ workspaceId: WS_OPS, name: 'Ops' })];
+    fireEvent.click(within(dialog).getByTestId('admin-agent-targets-save'));
+
+    expect(text(await within(dialog).findByTestId('admin-agent-targets-moved'))).toBe(
+      'Not saved yet: since this dialog opened, the targets here were changed (Ops added), perhaps on another page. The changes you made are all in there already; there is nothing to save.',
+    );
+    expect(within(dialog).queryByTestId('admin-agent-targets-diff')).toBeNull();
+    expect(
+      (within(dialog).getByTestId('admin-agent-targets-save') as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it('says a configuration-only administrator cannot choose targets yet', async () => {
     const http = scriptedHttp({
       get_admin_agent_status: () => status(),
