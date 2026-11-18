@@ -461,7 +461,10 @@ export async function getActionRequestForUpdateOrThrow(
  *     comment) — `substrate/audit`'s `queryAuditActionOperationStats` (S3.8). These Operations
  *     never create an `action_requests` row at all (§11 "观察免审"), so `approved`/`rejected`/
  *     `autoApproved`/`failed` are always `0` for a row sourced this way; `observeCalls` carries
- *     the count instead, and `calls` includes it (see the merge note below).
+ *     the count instead, and `calls` includes it (see the merge note below). Legacy 222: only
+ *     calls that ran — a call the gate (or the dispatcher) refused leaves an AuditRecord with
+ *     `outcome: 'refused'`, which is not counted, as a refused execute call leaves no
+ *     `action_requests` row; an Operation whose only calls in the window were refused has no row.
  *
  *  A `{gatekeeperId, operationName}` key present in *both* sources (not expected in practice — a
  *  published Operation has exactly one `mode`, design doc §5.5 — but not something this read

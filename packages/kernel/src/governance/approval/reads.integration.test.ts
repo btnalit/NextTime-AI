@@ -88,11 +88,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       gatekeeperId: string;
       operation: string;
       at?: Date;
+      /** Legacy 222: the row a refused call leaves (`dispatch.ts`'s `auditGateRefusal`, or
+       *  `auditAdminAgentRefusal` for an admin agent's call outside its ceiling) — the same params,
+       *  plus `outcome: 'refused'` and the `refusal`. */
+      refusal?: { code: string; status: number; reason?: string };
     }): Promise<void> {
       const payload = JSON.stringify({
         channel: 'handle',
         onBehalfOf: ownerId,
         params: { gatekeeperId: params.gatekeeperId, operation: params.operation, params: {} },
+        ...(params.refusal !== undefined ? { outcome: 'refused', refusal: params.refusal } : {}),
       });
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         params.at
@@ -173,6 +178,65 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(scoped.some((r) => r.gatekeeperId === gateA)).toBe(true);
       expect(scoped.some((r) => r.gatekeeperId === gateB)).toBe(false);
+    });
+
+    it('legacy 222: a refused observe call is not a call — it adds nothing to calls/observeCalls and does not move lastCalledAt', async () => {
+      const gatekeeperId = randomUUID();
+      const ranAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const refusedAt = new Date(Date.now() - 60 * 60 * 1000);
+      await seedObserveCall({ gatekeeperId, operation: 'opSomeRefused', at: ranAt });
+      await seedObserveCall({
+        gatekeeperId,
+        operation: 'opSomeRefused',
+        at: new Date(ranAt.getTime() - 60 * 1000),
+      });
+      // Newer than either call that ran: the gate refused it (a definition mismatch), and the
+      // dispatcher refused an admin agent's call outside its ceiling.
+      await seedObserveCall({
+        gatekeeperId,
+        operation: 'opSomeRefused',
+        at: refusedAt,
+        refusal: { code: 'operation_definition_mismatch', status: 409 },
+      });
+      await seedObserveCall({
+        gatekeeperId,
+        operation: 'opSomeRefused',
+        at: refusedAt,
+        refusal: { code: 'admin_agent_refused', status: 403, reason: 'outside_ceiling' },
+      });
+      // Every call to this one was refused: it has no row at all.
+      await seedObserveCall({
+        gatekeeperId,
+        operation: 'opOnlyRefused',
+        refusal: { code: 'credential_unavailable', status: 424 },
+      });
+
+      const stats = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getOperationStats(client, workspaceId, { days: 30, gatekeeperId }),
+      );
+      expect(stats).toHaveLength(1);
+      expect(stats[0]).toMatchObject({
+        gatekeeperId,
+        operationName: 'opSomeRefused',
+        calls: 2,
+        observeCalls: 2,
+        approved: 0,
+        rejected: 0,
+        autoApproved: 0,
+        failed: 0,
+      });
+      expect(stats[0]?.lastCalledAt.getTime()).toBe(ranAt.getTime());
+
+      // The refusals are still in the audit log: the stats leave them out, nothing deletes them.
+      const kept = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ n: string }>(
+          `select count(*) as n from audit_records
+            where workspace_id = $1 and action = 'observe_operation'
+              and payload->'params'->>'gatekeeperId' = $2 and payload->>'outcome' = 'refused'`,
+          [workspaceId, gatekeeperId],
+        ),
+      );
+      expect(Number(kept.rows[0]?.n)).toBe(3);
     });
 
     it('merges with an execute-class row sharing the same {gatekeeperId, operationName}: calls sums both sources, observeCalls stays the observe-only subset', async () => {

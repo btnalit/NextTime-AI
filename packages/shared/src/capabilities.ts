@@ -1367,6 +1367,10 @@ const connectionCapabilities = [
     // comment for the full merge rule and the one remaining, still-documented gap: a Worker's
     // `request_action` call that happens to resolve to an observe-mode Operation audits under
     // `action = 'request_action'`, not `'observe_operation'`, and is not attributed here).
+    //
+    // Legacy 222: a call refused before it ran (its AuditRecord carries `outcome: 'refused'` — the
+    // gate refused it, or the dispatcher did) is not counted as an observe call, as a refused
+    // execute call never becomes an `action_requests` row; the audit log keeps every refusal.
     name: 'get_operation_stats',
     group: 'connection',
     mode: 'observe',
@@ -1391,7 +1395,7 @@ const connectionCapabilities = [
         .strict(),
     ),
     description:
-      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls` — see this entry’s own doc comment for the merge rule and remaining known gap.',
+      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls`; a call refused before it ran (by the gate, or the dispatcher) is not a call on either side, and is read in the audit log instead — see this entry’s own doc comment for the merge rule and remaining known gap.',
   },
 ] as const satisfies readonly Capability[];
 
