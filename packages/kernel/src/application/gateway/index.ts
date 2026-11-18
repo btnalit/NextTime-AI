@@ -16,6 +16,7 @@ export {
 export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
 
 export { authenticateHandle, HandlePresentationRefused } from './handle-auth.js';
+export { NameTooLongError } from './name-length.js';
 export type { HandleAuthDeps, HandlePresentationKind } from './handle-auth.js';
 
 export {

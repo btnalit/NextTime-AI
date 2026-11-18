@@ -348,6 +348,37 @@ async function loadPublishedHeads(
   return result.rows;
 }
 
+/** Legacy 309: where `definition` gives an ObjectType, LinkType or ActionType a name longer than
+ *  `maxLength` that no family of `workspaceId` has published as that kind — `objectTypes.<i>.name`
+ *  and so on, in the definition's order; empty when there is none. A name the workspace's published
+ *  ontology declares is its own already: a new version that carries it on (any family's, as a pack
+ *  or an earlier proposal published it) is not refused for it. Reads the published heads only when
+ *  some name is that long. */
+export async function findNewOntologyNamesOver(
+  client: PoolClient,
+  workspaceId: string,
+  definition: OntologyDefinition,
+  maxLength: number,
+): Promise<string[]> {
+  const kinds = ['objectTypes', 'linkTypes', 'actionTypes'] as const;
+  const long = kinds.flatMap((kind) =>
+    (definition[kind] ?? []).flatMap((entry, index) =>
+      entry.name.length > maxLength ? [{ kind, index, name: entry.name }] : [],
+    ),
+  );
+  if (long.length === 0) return [];
+  const published = new Set(
+    (await loadPublishedHeads(client, workspaceId)).flatMap((head) =>
+      kinds.flatMap((kind) =>
+        (head.definition[kind] ?? []).map((entry) => `${kind}:${entry.name}`),
+      ),
+    ),
+  );
+  return long
+    .filter((entry) => !published.has(`${entry.kind}:${entry.name}`))
+    .map((entry) => `${entry.kind}.${entry.index}.name`);
+}
+
 /** What a retired family declares once its last version is gone: nothing. Only ever compared,
  *  never stored (a stored definition has at least one ObjectType and LinkType). */
 const EMPTY_DEFINITION: OntologyDefinition = { objectTypes: [], linkTypes: [] };

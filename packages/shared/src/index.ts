@@ -27,6 +27,7 @@ export * from './agent-host-protocol.js';
 export * from './worker-definition.js';
 export * from './chat-message-content.js';
 export * from './skill.js';
+export * from './name-limits.js';
 export * from './procedure.js';
 export * from './predicate.js';
 export * from './draft-evaluation.js';

@@ -1,4 +1,4 @@
-import { isMetaOntologyObjectType, storableValue } from '@nexttime/shared';
+import { NAME_MAX_LENGTH, isMetaOntologyObjectType, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
@@ -16,6 +16,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { MetaOntologyWriteForbiddenError } from './meta-ontology-guard.js';
+import { assertNameWithin } from './name-length.js';
 import { assertActivityStartedByCaller } from './provenance-anchor-guard.js';
 import { toWireSource } from './resource-wire.js';
 
@@ -129,6 +130,9 @@ export const registerSourceHandler: CapabilityHandler = async (
 
   const existing = await findSourceByName(client, workspaceId, identity);
   if (existing) return existingSourceResult(existing, params, ownerPrincipalId);
+  // Legacy 309: a new Source's name. One already registered is not checked again — a collector
+  // re-registers its Source every run, under a name it may have chosen before the cap.
+  assertNameWithin(params.name, 'name', NAME_MAX_LENGTH);
 
   // First registration of this (kind, name): same select → transaction-scoped advisory lock →
   // re-select → insert shape as `SqlGraphStore.assertFact`'s first-time identity path, so two
