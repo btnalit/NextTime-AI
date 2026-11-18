@@ -2089,6 +2089,27 @@ function pausedNote(
         ? stepFilesPauseText(goal, t)
         : null;
       if (files) return { tone: 'warn', text: files };
+      // Legacy 579: no step of the plan in force failed — e.g. a revision replaced the one that
+      // did — so the general sentence below would point at steps marked below, and none is.
+      if (
+        goal.steps !== undefined &&
+        !goal.steps.some((step) => step.status === 'failed' && !step.supersededInRevision)
+      ) {
+        const revision = goal.planRevision?.revision ?? goal.currentRevision;
+        return {
+          tone: 'warn',
+          text:
+            revision !== null && revision !== undefined && revision > 1
+              ? t(
+                  `需要人决定：现在没有失败的步骤要处理，计划在用第 ${revision} 版。按「继续」照这一版往下做，也可以再修订计划或结束目标。`,
+                  `A person must decide: no step has failed now, and the plan in force is v${revision}. Resume to go on with it, or revise the plan again or end the goal.`,
+                )
+              : t(
+                  '需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。',
+                  'A person must decide: no step has failed now. Resume, revise the plan or end the goal.',
+                ),
+        };
+      }
       return {
         tone: 'warn',
         text: t(

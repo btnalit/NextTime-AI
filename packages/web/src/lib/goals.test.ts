@@ -500,10 +500,10 @@ describe('lib/goals', () => {
     expect(goalStateNote(paused('failed'), undefined, budget, zh)?.text).toMatch(
       /^需要人决定：验收没通过、动作被拒绝或过期/,
     );
-    // A step that reads no files: the general note stays.
+    // A step that reads no files, and none failed: nothing below is marked (legacy 579).
     expect(
       goalStateNote(paused('succeeded', { filesFrom: undefined }), undefined, budget, zh)?.text,
-    ).toMatch(/^需要人决定：验收没通过、动作被拒绝或过期/);
+    ).toBe('需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。');
   });
 
   it('S11 GO8a: a paused run names the step that did not start, and why', () => {
@@ -623,14 +623,15 @@ describe('lib/goals', () => {
     expect(goalStateNote(two, undefined, budget, zh)?.text).toBe(
       '需要人决定：步骤「a」、「b」不能照计划往下做。见下面「步骤」里的说明。',
     );
-    // A step still waiting for others is not why the run paused: the general note stays.
+    // A step still waiting for others is not why the run paused; none failed either, so nothing
+    // below is marked (legacy 579).
     const pending = paused(
       'needs_decision',
       [draft],
       [stepRun({ id: 'sr-a', stepKey: 'a', status: 'pending', attemptCount: 0, attempts: [] })],
     );
-    expect(goalStateNote(pending, undefined, budget, zh)?.text).toMatch(
-      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    expect(goalStateNote(pending, undefined, budget, zh)?.text).toBe(
+      '需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。',
     );
     // Nor is a draft while another step failed.
     const failed = paused(
@@ -1172,10 +1173,45 @@ describe('lib/goals', () => {
         zh,
       )?.text,
     ).toMatch(/^需要人决定：验收没通过/);
+    // Neither a check nor a step to point at (legacy 579).
     expect(
       goalStateNote({ ...goal, acceptance: acceptance('passed'), steps: [] }, undefined, budget, zh)
         ?.text,
-    ).toMatch(/^需要人决定：验收没通过/);
+    ).toBe('需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。');
+  });
+
+  it('legacy 579: after a revision replaced the failed step, the decision pause points at no marked step', () => {
+    const goal = goalRun({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      currentRevision: 2,
+    });
+    const budget = goalBudgetRows(goal, zh);
+    const replaced = {
+      stepKey: 'apply',
+      status: 'failed',
+      supersededInRevision: 2,
+    } as unknown as GoalDetailWire['steps'][number];
+    const fresh = {
+      stepKey: 'apply2',
+      status: 'ready',
+      supersededInRevision: null,
+    } as unknown as GoalDetailWire['steps'][number];
+    const revised = { ...goal, steps: [replaced, fresh] };
+    expect(goalStateNote(revised, undefined, budget, zh)?.text).toBe(
+      '需要人决定：现在没有失败的步骤要处理，计划在用第 2 版。按「继续」照这一版往下做，也可以再修订计划或结束目标。',
+    );
+    expect(goalStateNote(revised, undefined, budget, en)?.text).toBe(
+      'A person must decide: no step has failed now, and the plan in force is v2. Resume to go on with it, or revise the plan again or end the goal.',
+    );
+    // A failed step of the plan in force is still marked below: the general note stays.
+    const stillFailed = {
+      ...goal,
+      steps: [replaced, { ...fresh, status: 'failed' } as GoalDetailWire['steps'][number]],
+    };
+    expect(goalStateNote(stillFailed, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
   });
 
   it('a budget pause names the dimension used up', () => {
