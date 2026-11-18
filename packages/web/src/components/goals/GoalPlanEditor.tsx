@@ -25,6 +25,7 @@ import {
   draftFromDetail,
   draftProblems,
   emptyStep,
+  endedKeptSteps,
   fieldOfProblem,
   fieldOfRefusal,
   hasRequesterConfirm,
@@ -806,7 +807,8 @@ function impactLines(
   if (diff.acceptanceChanged) lines.push(t('验收检查有改动', 'The acceptance checks change'));
   // S11 GO13 (UX on #880): what the revision does with its Workers' contracts, and the two hints
   // the revised plan will carry — said here, before it is sent.
-  const contracts = planContractNotes(draft, plan, definitions);
+  // Legacy 571: only the steps still to start — a kept step that ended never starts again.
+  const contracts = planContractNotes(draft, plan, definitions, endedKeptSteps(draft, goal));
   if (contracts.adopted.length > 0) {
     lines.push(
       t(
