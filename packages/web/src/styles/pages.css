@@ -2139,3 +2139,17 @@ html:has(.md-layout--wide .md-detail-pane .overlay-actions),
     min-width: 0;
   }
 }
+
+/* Legacy 599: below 768px the platform workspaces table pins only the name column, so the name
+ * cell also carries the workspace's purpose chip, under the name. */
+.workspace-name-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.workspace-name-cell > .truncate {
+  max-width: 100%;
+}
