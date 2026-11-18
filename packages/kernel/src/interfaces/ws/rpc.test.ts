@@ -32,6 +32,7 @@ import {
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { DecisionReferenceError, UnknownOperationError } from '../../application/gateway/index.js';
+import { NameTooLongError } from '../../application/gateway/name-length.js';
 import {
   GoalPlanValidationError,
   GoalRunForbiddenError,
@@ -186,6 +187,14 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
 
   it('OperationNameInvalidError maps to INVALID_PARAMS with its message', () => {
     const err = new OperationNameInvalidError('x'.repeat(200), 'too_long');
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('NameTooLongError (legacy 309) maps to INVALID_PARAMS with its message', () => {
+    const err = new NameTooLongError('change.objectTypes.0.name', 128, 'why');
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

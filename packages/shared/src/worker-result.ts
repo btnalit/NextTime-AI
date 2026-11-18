@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OperationSchema } from './action-description.js';
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
+import { NAME_MAX_LENGTH } from './name-limits.js';
 import { OUTPUT_MAX_CHARS, isOutputJsonValue } from './output-schema.js';
 import { ProposeSkillContentSchema } from './skill.js';
 
@@ -158,6 +159,14 @@ export const WorkerResultOutputSchema = z
  * `application/task/result.ts`'s `postWorkerResult` forwards it verbatim to `proposeSkill`
  * (`application/worker/skills.ts`), owned by the Task's `on_behalf_of` principal.
  */
+/** Legacy 309: a Worker's `proposedSkill` is always a new Skill's draft, so its name takes the cap
+ *  `propose_skill` holds a new Skill's name to (the model sees it as the tool's `maxLength`). Not on
+ *  {@link ProposeSkillContentSchema} itself: `propose_skill` also takes a Skill's next version, which
+ *  keeps its family's name however long it is. */
+const WorkerResultProposedSkillSchema = ProposeSkillContentSchema.extend({
+  name: z.string().min(1).max(NAME_MAX_LENGTH),
+});
+
 export const WorkerResultContractSchema = z
   .object({
     summary: z.string(),
@@ -165,7 +174,7 @@ export const WorkerResultContractSchema = z
     factsToAssert: z.array(WorkerResultFactSchema).optional(),
     evidence: z.array(WorkerResultEvidenceSchema).optional(),
     artifacts: z.array(WorkerResultArtifactSchema).max(MAX_ARTIFACTS_PER_CONTRACT).optional(),
-    proposedSkill: ProposeSkillContentSchema.optional(),
+    proposedSkill: WorkerResultProposedSkillSchema.optional(),
     proposedOperations: z.array(WorkerResultProposedOperationSchema).optional(),
     output: WorkerResultOutputSchema.optional(),
   })

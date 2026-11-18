@@ -1,4 +1,9 @@
-import { UnstorableTextError, findUnstorableText } from '@nexttime/shared';
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  LOGIN_MAX_LENGTH,
+  UnstorableTextError,
+  findUnstorableText,
+} from '@nexttime/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CryptoKey } from 'jose';
 import { z } from 'zod';
@@ -68,13 +73,20 @@ export type AuthRouteDeps = ResolveCallerDeps;
 
 const LoginBody = z.object({ login: z.string().min(1), password: z.string().min(1) }).strict();
 const BindBody = z.object({ apiKey: z.string().min(1) }).strict();
+// Legacy 309: a login and a display name have the caps `create_user` / `update_user` give them.
 const ClaimBody = z
-  .object({ login: z.string().min(1), displayName: z.string().min(1), password: z.string().min(1) })
+  .object({
+    login: z.string().min(1).max(LOGIN_MAX_LENGTH),
+    displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH),
+    password: z.string().min(1),
+  })
   .strict();
 const PasswordBody = z
   .object({ currentPassword: z.string().min(1), newPassword: z.string().min(1) })
   .strict();
-const ProfileBody = z.object({ displayName: z.string().min(1) }).strict();
+const ProfileBody = z
+  .object({ displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH) })
+  .strict();
 
 interface WireUser {
   readonly id: string;
@@ -284,7 +296,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
     const body = ClaimBody.safeParse(request.body ?? {});
     if (!body.success)
-      return fail(reply, 400, 'invalid_params', 'login, displayName and password are required');
+      return fail(
+        reply,
+        400,
+        'invalid_params',
+        `login (at most ${LOGIN_MAX_LENGTH} characters), displayName (at most ${DISPLAY_NAME_MAX_LENGTH}) and password are required`,
+      );
     const claimRefused = unstorableField(reply, 'auth/claim', {
       login: body.data.login,
       displayName: body.data.displayName,
@@ -400,7 +417,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       );
     }
     const body = ProfileBody.safeParse(request.body ?? {});
-    if (!body.success) return fail(reply, 400, 'invalid_params', 'displayName is required');
+    if (!body.success)
+      return fail(
+        reply,
+        400,
+        'invalid_params',
+        `displayName is required, at most ${DISPLAY_NAME_MAX_LENGTH} characters`,
+      );
     const profileRefused = unstorableField(reply, 'auth/me', {
       displayName: body.data.displayName,
     });

@@ -103,6 +103,7 @@ import {
   InvalidCapabilityParamsError,
   MetaOntologyObjectWriteError,
   ModelsCatalogUnavailableError,
+  NameTooLongError,
   ObservationIdentityError,
   OntologyBaseMovedError,
   OntologyChangeValidationError,
@@ -535,6 +536,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Legacy 232: mirrors HTTP 400 `invalid_operation_name` (capability-route.ts).
   if (err instanceof OperationNameInvalidError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 309: mirrors HTTP 400 `invalid_params` for a name over its cap (capability-route.ts).
+  if (err instanceof NameTooLongError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S11 GO12: mirrors HTTP 400 `invalid_operation_target` (capability-route.ts).

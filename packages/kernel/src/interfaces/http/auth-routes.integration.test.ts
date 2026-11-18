@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DISPLAY_NAME_MAX_LENGTH, LOGIN_MAX_LENGTH } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
@@ -812,6 +813,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(second.json()).toMatchObject({ ok: false, error: { code: 'login_taken' } });
       });
 
+      it('legacy 309: a login or displayName over its cap → 400 naming the caps, the key still claimable', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const app = appWithKeys();
+        const claim = (login: string, displayName: string) =>
+          app.inject({
+            method: 'POST',
+            url: '/api/auth/claim',
+            headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+            payload: { login, displayName, password },
+          });
+        for (const [login, displayName] of [
+          ['l'.repeat(LOGIN_MAX_LENGTH + 1), 'Fine'],
+          [`claim-long-${randomUUID().slice(0, 8)}`, 'n'.repeat(DISPLAY_NAME_MAX_LENGTH + 1)],
+        ] as const) {
+          const refused = await claim(login, displayName);
+          expect(refused.statusCode).toBe(400);
+          expect(refused.json().error).toMatchObject({ code: 'invalid_params' });
+          expect(refused.json().error.message).toContain(`at most ${LOGIN_MAX_LENGTH}`);
+          expect(refused.json().error.message).toContain(`at most ${DISPLAY_NAME_MAX_LENGTH}`);
+        }
+        const claimed = await claim(
+          `claim-cap-${randomUUID().slice(0, 8)}`,
+          'n'.repeat(DISPLAY_NAME_MAX_LENGTH),
+        );
+        expect(claimed.statusCode).toBe(200);
+      });
+
       it('missing Authorization header → 401', async () => {
         const app = appWithKeys();
         const response = await app.inject({
@@ -1191,6 +1219,25 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: { displayName: '' },
         });
         expect(response.statusCode).toBe(400);
+      });
+
+      it('legacy 309: a displayName longer than DISPLAY_NAME_MAX_LENGTH → 400 naming the cap; at the cap → 200', async () => {
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+        const patch = (displayName: string) =>
+          app.inject({
+            method: 'PATCH',
+            url: '/api/auth/me',
+            headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+            payload: { displayName },
+          });
+        const over = await patch('n'.repeat(DISPLAY_NAME_MAX_LENGTH + 1));
+        expect(over.statusCode).toBe(400);
+        expect(over.json().error).toMatchObject({ code: 'invalid_params' });
+        expect(over.json().error.message).toContain(`at most ${DISPLAY_NAME_MAX_LENGTH}`);
+        const at = await patch('n'.repeat(DISPLAY_NAME_MAX_LENGTH));
+        expect(at.statusCode).toBe(200);
+        expect(at.json().result.user.displayName).toHaveLength(DISPLAY_NAME_MAX_LENGTH);
       });
     });
 

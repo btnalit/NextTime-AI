@@ -11585,6 +11585,7 @@
       "additionalProperties": false,
       "properties": {
         "displayName": {
+          "maxLength": 128,
           "minLength": 1,
           "type": "string"
         },
@@ -11692,7 +11693,7 @@
       "additionalProperties": false,
       "properties": {
         "displayName": {
-          "maxLength": 200,
+          "maxLength": 128,
           "minLength": 1,
           "type": "string"
         },
@@ -51448,6 +51449,7 @@
           "type": "string"
         },
         "title": {
+          "maxLength": 200,
           "type": "string"
         }
       },
@@ -67055,6 +67057,7 @@
           "type": "object"
         },
         "name": {
+          "maxLength": 128,
           "minLength": 1,
           "type": "string"
         },
@@ -71445,6 +71448,7 @@
               "type": "string"
             },
             "name": {
+              "maxLength": 128,
               "minLength": 1,
               "type": "string"
             }
@@ -82655,7 +82659,7 @@
       "additionalProperties": false,
       "properties": {
         "displayName": {
-          "maxLength": 200,
+          "maxLength": 128,
           "minLength": 1,
           "type": "string"
         },
