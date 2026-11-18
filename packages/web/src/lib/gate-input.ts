@@ -151,28 +151,42 @@ export function addressCarriesCredential(value: string): boolean {
   return addressCredential(withScheme) !== null;
 }
 
-/** Legacy 247 UX acceptance P3-2 (#1450): a host the kernel would read a manifest from — a full
- *  domain name or an IP literal. A single-label name (a service name such as `grafana`, or
- *  `localhost`) and a `*.localhost` name are refused (`bare-hostname`, `loopback`), so a suggestion
- *  built from one would only lead to a refused registration. */
-function namesReachableHost(hostname: string): boolean {
+/** Legacy 844 (UX acceptance P3-2 on #1450): a host the kernel reads a manifest from when it
+ *  connects a gate (`create_connection` checks the manifest source against the outbound-target
+ *  rules) — a full domain name or an IP that is not loopback or unspecified. A single-label name (a
+ *  service name such as `grafana`, or `localhost`), a `*.localhost` name, `127.x`, `0.0.0.0`,
+ *  `[::1]` and `[::]` are refused (`bare-hostname`, `loopback`, `unspecified`), so a suggestion
+ *  built from one only leads to a refused registration. */
+function kernelReadsManifestAt(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '');
-  if (host.startsWith('[')) return true;
+  if (host.startsWith('[')) return host !== '[::1]' && host !== '[::]';
   if (!host.includes('.')) return false;
-  return host !== 'localhost' && !host.endsWith('.localhost');
+  if (host === 'localhost' || host.endsWith('.localhost')) return false;
+  const octets = ipv4Octets(host);
+  return octets === undefined || (octets[0] !== 127 && octets[0] !== 0);
+}
+
+export interface SuggestedManifestOptions {
+  /** The kernel reads the manifest (a workspace connecting a gate), so the suggestion is offered
+   *  only for a host it accepts. A platform gate instance's manifest is read by its gate host,
+   *  which reaches service names on the platform's network — that form leaves this off. */
+  readonly kernelReads?: boolean;
 }
 
 /** The OpenAPI document an http target usually serves, `<target>/openapi.json`, offered as a
  *  one-click fill: built from the target's origin and path only (never its user name, password,
  *  query or fragment), and not offered at all while the target carries a credential — a
  *  suggestion must never copy one into the manifest source (review of #549). `''` when the target
- *  is not an http(s) URL or host, or names a host that is not a full domain name or an IP. */
-export function suggestedManifestSource(target: string): string {
+ *  is not an http(s) URL or host, or (`kernelReads`) names a host the kernel would refuse. */
+export function suggestedManifestSource(
+  target: string,
+  options: SuggestedManifestOptions = {},
+): string {
   const value = withDefaultScheme(target, 'https');
   if (value === '' || !isAbsoluteUrl(value) || addressCarriesCredential(value)) return '';
   const url = new URL(value);
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
-  if (!namesReachableHost(url.hostname)) return '';
+  if (options.kernelReads === true && !kernelReadsManifestAt(url.hostname)) return '';
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}/openapi.json`;
 }
 
