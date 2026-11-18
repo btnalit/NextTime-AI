@@ -93,8 +93,9 @@ export function findUnstorableText(
 }
 
 /** How a refusal names `character` in running text: `UnstorableTextError`'s message, and a
- *  refused proposal's detail (`report_task_result`). The console finds the place it names by the
- *  words right after it (`holds U+0000`, `holds an unpaired surrogate`). */
+ *  refused proposal's detail (`report_task_result`). The place it names sits right before
+ *  `holds`, where the console reads it (`web/src/lib/errors.ts` `UNSTORABLE_TEXT_PLACE`, which so
+ *  far matches only the U+0000 wording — review #501 on #1457). */
 export function unstorableCharacterName(character: UnstorableCharacter): string {
   return character === 'nul'
     ? 'U+0000 (NUL)'
