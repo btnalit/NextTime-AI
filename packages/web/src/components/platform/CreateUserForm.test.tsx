@@ -115,6 +115,20 @@ describe('CreateUserForm', () => {
     expect(texts.length).toBe(5);
   });
 
+  it('#1476 follow-up: a display name past 128 characters says how far over it is and keeps Create disabled', () => {
+    renderForm();
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });
+    const name = screen.getByLabelText(/显示名/);
+    fireEvent.change(name, { target: { value: ` ${'名'.repeat(129)} ` } });
+    expect(screen.getByText('最多 128 个字符，现在多了 1 个。')).toBeTruthy();
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByRole('button', { name: '创建' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('create-user-missing').textContent).toContain('缩短显示名');
+    fireEvent.change(name, { target: { value: '名'.repeat(128) } });
+    expect(screen.queryByText(/最多 128 个字符/)).toBeNull();
+    expect(screen.getByRole('button', { name: '创建' }).hasAttribute('disabled')).toBe(false);
+  });
+
   it('a custom password shorter than 8 says how long it is and keeps Create disabled', () => {
     renderForm();
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });

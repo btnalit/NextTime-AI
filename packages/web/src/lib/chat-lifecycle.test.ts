@@ -53,12 +53,15 @@ describe('normalizeChatTitle (mirror of the kernel rule)', () => {
     expect(normalizeChatTitle('')).toBeNull();
   });
 
-  it('cuts to 200 code points without splitting a surrogate pair', () => {
-    const long = `${'龙'.repeat(199)}😀x`;
-    const normalized = normalizeChatTitle(long);
-    expect(normalized).not.toBeNull();
-    expect(Array.from(normalized as string)).toHaveLength(CHAT_TITLE_MAX_CHARS);
-    expect((normalized as string).endsWith('😀')).toBe(true);
+  it('cuts to 200 UTF-16 code units, as rename_chat counts, without splitting a surrogate pair', () => {
+    const fits = normalizeChatTitle(`${'龙'.repeat(198)}😀x`) as string;
+    expect(fits).toHaveLength(CHAT_TITLE_MAX_CHARS);
+    expect(fits.endsWith('😀')).toBe(true);
+    // The cut would land inside the emoji: it is left out, not halved.
+    expect(normalizeChatTitle(`${'龙'.repeat(199)}😀x`)).toBe('龙'.repeat(199));
+    // #1476 follow-up: 150 emoji are 150 code points but 300 units — over the cap the kernel
+    // checks before it cuts; 100 of them are sent.
+    expect(normalizeChatTitle('😀'.repeat(150))).toBe('😀'.repeat(100));
   });
 });
 

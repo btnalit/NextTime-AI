@@ -1421,6 +1421,42 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('#1476 follow-up: a name past 128 characters is said on its field and not sent; a new version keeps its long name', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-1', version: 3, status: 'draft', name: 'x' }),
+    });
+    const longName = 'p'.repeat(150);
+    const row = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published' as const,
+      name: longName,
+      description: 'Deploy web',
+      steps: [{ kind: 'approval' as const, description: 'sign off' }],
+    };
+    render(<ProcedureEditor http={caller} copyOf={row} onProposed={vi.fn()} onDone={vi.fn()} />);
+    // A copy is a new Procedure: its name is held to the cap.
+    const name = screen.getByLabelText(/^名称/);
+    expect(screen.getByText('最多 128 个字符，现在多了 22 个。')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(calls).toHaveLength(0);
+    fireEvent.change(name, { target: { value: 'p'.repeat(128) } });
+    expect(screen.queryByText(/最多 128 个字符/)).toBeNull();
+    cleanup();
+
+    render(
+      <ProcedureEditor http={caller} nextVersionOf={row} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    expect(screen.queryByText(/最多 128 个字符/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: `${longName}!` } });
+    expect(screen.getByText('最多 128 个字符，现在多了 23 个。')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: longName } });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await waitFor(() => expect(calls.map((call) => call.name)).toEqual(['propose_procedure']));
+    expect(calls[0]?.params).toMatchObject({ procedureId: 'pr-1', procedure: { name: longName } });
+  });
+
   it('a contract the field list cannot say stays JSON; one it can goes back and forth (legacy 453)', () => {
     const { caller } = http({});
     render(

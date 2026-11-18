@@ -286,6 +286,28 @@ describe('AccountPage: API-key mode, still-needed line (audit P1-9)', () => {
       false,
     );
   });
+
+  it('#1476 follow-up: a display name past 128 characters is said on its field and in the still-needed line', () => {
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="sk-claim"
+        onClaimed={vi.fn()}
+        fetchImpl={vi.fn() as unknown as typeof fetch}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'c'.repeat(129) } });
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'longenough' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), { target: { value: 'longenough' } });
+    expect(screen.getByText('最多 128 个字符，现在多了 1 个。')).toBeTruthy();
+    expect(screen.getByTestId('account-claim-missing').textContent).toBe('还差：缩短显示名');
+    expect((screen.getByRole('button', { name: '设置密码' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
 });
 
 describe('AccountPage: API-key mode, display-name prefill', () => {
@@ -364,6 +386,24 @@ describe('AccountPage: cookie mode', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/auth/me');
     expect(init.method).toBe('PATCH');
+  });
+
+  it('#1476 follow-up: a new display name past 128 characters is not sent', () => {
+    const fetchImpl = vi.fn();
+    render(
+      <AccountPage
+        user={USER}
+        memberships={MEMBERSHIPS}
+        onUserChanged={vi.fn()}
+        fetchImpl={fetchImpl as unknown as typeof fetch}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'n'.repeat(140) } });
+    expect(screen.getByText('最多 128 个字符，现在多了 12 个。')).toBeTruthy();
+    const save = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.submit(save.closest('form') as HTMLFormElement);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('changes the password via POST /api/auth/password', async () => {

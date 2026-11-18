@@ -388,6 +388,45 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     expect(done.textContent).not.toContain('Worker definition');
   });
 
+  it('#1476 follow-up: a new definition’s name past 200 characters is said on its field and not sent; a next version keeps its long name', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-e', version: 2, status: 'draft' }),
+    });
+    const longName = 'w'.repeat(240);
+    render(<WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Fix.' } });
+    const name = screen.getByLabelText(/^名称/);
+    fireEvent.change(name, { target: { value: 'w'.repeat(201) } });
+    expect(screen.getByText('最多 200 个字符，现在多了 1 个。')).toBeTruthy();
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(calls).toHaveLength(0);
+    cleanup();
+
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-e',
+          version: 1,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'Fix.', name: longName },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/最多 200 个字符/)).toBeNull();
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toMatchObject({
+      definitionId: 'wd-e',
+      definition: expect.objectContaining({ name: longName }),
+    });
+  });
+
   it('capabilities are grouped by mode, filterable, and a group can be selected at once', async () => {
     const { caller, calls } = http({
       propose_worker_definition: () => ({ id: 'wd-g', version: 1, status: 'draft' }),
