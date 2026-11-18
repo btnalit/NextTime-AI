@@ -289,9 +289,17 @@ function VerificationResult({
   const t = useT();
   const who = principalName(verification.verifiedBy, t);
   const notInEffect = verification.items.filter((item) => item.state !== 'in_effect');
+  // Legacy 603: a rolled-back record is not verified again, so its latest run is from before the
+  // roll-back and says nothing about now.
+  const beforeRollBack = segment.status === 'rolled_back';
   return (
     <div className="stack-s" data-testid="catalog-change-verification-result">
       <span className="row-wrap">
+        {beforeRollBack ? (
+          <span className="chip chip-s" data-testid="catalog-change-verification-before-rollback">
+            {t('撤销前', 'Before the roll-back')}
+          </span>
+        ) : null}
         <StatusChip
           machine="changeSegment"
           status={verification.passed ? 'verified' : 'verification_failed'}
@@ -300,18 +308,42 @@ function VerificationResult({
         />
         <span className="text-small">
           {verification.trigger === 'system'
-            ? t(
-                `安装后自动核验（记在 ${who} 名下）`,
-                `Verified after the install (recorded under ${who})`,
-              )
+            ? segment.source.kind === 'admin_proposal'
+              ? // UX on #1478: an admin proposal's record was applied, not installed.
+                t(
+                  `应用后自动核验（记在 ${who} 名下）`,
+                  `Verified after the apply (recorded under ${who})`,
+                )
+              : t(
+                  `安装后自动核验（记在 ${who} 名下）`,
+                  `Verified after the install (recorded under ${who})`,
+                )
             : t(`${who} 手动核验`, `Verified by ${who}`)}
           {' · '}
           <span data-volatile="">{formatDateTime(verification.verifiedAt)}</span>
         </span>
       </span>
+      {beforeRollBack ? (
+        <span className="text-3 text-small" data-testid="catalog-change-verification-rolled-back">
+          {t(
+            '这是撤销前最后一次核验的结论。撤销已经把这次写入的改动退回，之后不再核验。',
+            'This is what the last verification before the roll-back found. The roll-back took back what this wrote, and it is not verified again.',
+          )}
+        </span>
+      ) : null}
       {notInEffect.length === 0 ? (
         <span className="text-3 text-small">
-          {t('这次写入的改动项都还在生效。', 'Every change this install wrote is still in effect.')}
+          {beforeRollBack
+            ? t(
+                '当时这次写入的改动项都还在生效。',
+                'Every change this wrote was still in effect then.',
+              )
+            : // UX P3-1 on #1478: what the run found then — a change replaced since does not make
+              // this sentence untrue.
+              t(
+                '核验时，这次写入的改动项都还在生效。',
+                'When verified, every change this wrote was still in effect.',
+              )}
         </span>
       ) : (
         notInEffect.map((checked) => (
@@ -472,15 +504,26 @@ export function ChangeVerificationSection({
     <div className="stack-s" data-testid="catalog-change-verification">
       <span className="section-title">{t('核验', 'Verification')}</span>
       <p className="text-3 text-small">
-        {segment.source.kind === 'admin_proposal'
-          ? t(
-              '核验会检查这次应用写入的内容是否还在生效。它只读，不会执行任何操作。',
-              'Verification checks that what this apply wrote is still in effect. It only reads; it runs nothing.',
-            )
-          : t(
-              '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
-              'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
-            )}
+        {segment.status === 'rolled_back'
+          ? // UX P3-2 on #1478: a rolled-back record is not verified again — what a run checked.
+            segment.source.kind === 'admin_proposal'
+            ? t(
+                '核验当时检查的是这次应用写入的内容是否还在生效。它只读，不执行任何操作。',
+                'Verification checked whether what this apply wrote was still in effect. It only read; it ran nothing.',
+              )
+            : t(
+                '核验当时检查的是这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不执行任何操作。',
+                'Verification checked whether what this install wrote was still in effect, and whether the systems the pack needs were connected and answering. It only asked whether each system was up; it ran nothing.',
+              )
+          : segment.source.kind === 'admin_proposal'
+            ? t(
+                '核验会检查这次应用写入的内容是否还在生效。它只读，不会执行任何操作。',
+                'Verification checks that what this apply wrote is still in effect. It only reads; it runs nothing.',
+              )
+            : t(
+                '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
+                'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
+              )}
       </p>
       {/* The cooldown describes the result the focus lands on — not a live region, which would
        *  read every second of the countdown out. */}
