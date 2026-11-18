@@ -560,8 +560,8 @@ function PublishGovernanceConfirm({
       }
       title={t('发布这个 Operation', 'Publish this operation')}
       description={t(
-        '这个草稿改了当前生效版本的治理字段——它们决定这个 Operation 要不要人工审批、要不要授权、调用方等不等审批结果。发布后替换当前版本。',
-        'This draft changes governance fields of the version in effect — they decide whether this operation needs a person’s approval and a grant, and whether the caller waits for the decision. Publishing replaces the current version.',
+        '这个草稿改了当前生效版本的治理字段——它们决定这个 Operation 要不要人工审批、要不要授权、调用方等不等审批结果，以及它的请求和同一个系统上的其他请求怎么排队。发布后替换当前版本。',
+        'This draft changes governance fields of the version in effect — they decide whether this operation needs a person’s approval and a grant, whether the caller waits for the decision, and how its requests queue with other requests on the system. Publishing replaces the current version.',
       )}
       target={actionKindTagText(row.name)}
       confirmLabel={t('发布', 'Publish')}

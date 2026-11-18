@@ -553,6 +553,8 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(within(confirm).getAllByTestId('governance-diff-list-item')).toHaveLength(1);
     expect(confirm.textContent).toContain('直接改写');
     expect(confirm.textContent).not.toContain('就地');
+    // Legacy 570: the fields it rewrites include the queue scope, so the sentence says so too.
+    expect(confirm.textContent).toContain('这决定它们要不要人工审批、同一个系统上的请求怎么排队');
     const redefined = within(confirm).getByTestId('align-gk-1-redefined');
     expect(redefined.textContent).toContain('container.restart、container.logs');
 
@@ -1383,6 +1385,9 @@ describe('RefreshOperationGovernanceConfirm', () => {
       expect(confirm.textContent).toContain('就地收紧 stock.adjust 的治理字段');
       expect(confirm.textContent).toContain(
         '门放宽的 stock.reserve 不就地改：只打开修订草稿，发布后才生效。',
+      );
+      expect(confirm.textContent).toContain(
+        '同步后立即生效。这决定它们要不要人工审批、同一个系统上的请求怎么排队。',
       );
       expect(confirm.textContent).not.toContain('就地修正');
       expect(confirm.textContent).not.toMatch(/就地收紧[^。]*stock\.reserve/);

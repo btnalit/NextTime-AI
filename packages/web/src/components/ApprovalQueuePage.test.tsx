@@ -411,7 +411,7 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     const waiting = screen.getAllByTestId('approval-history-waiting');
     expect(waiting.map((line) => [line.getAttribute('data-waiting'), line.textContent])).toEqual([
       ['outcome_in_doubt', '结果不明，平台向门查询中'],
-      ['queued_behind', '排队中：同一系统上更早的请求结果不明'],
+      ['queued_behind', '排队中：同一系统上另一条请求结果不明'],
     ]);
     expect(waiting[0]?.className).toContain('text-warn');
   });
