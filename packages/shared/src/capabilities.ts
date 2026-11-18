@@ -1129,7 +1129,8 @@ const connectionCapabilities = [
     minRole: 'owner',
     paramsSchema: z.object({ status: ConnectionRequestStatusSchema.optional() }).strict(),
     resultSchema: listEnvelope(wire.ConnectionRequestWireSchema),
-    description: 'List ConnectionRequests, optionally filtered by status.',
+    description:
+      'List ConnectionRequests, optionally filtered by status. `target` is shown as every gate address is: one stored with a credential in it (a request from before such targets were refused) reads without its user info, query and fragment, or `[redacted]`, and then carries `targetRedacted: true`.',
   },
   {
     // S6-A C26 (docs/console-completion-plan.md §5.6, §6; S2.13's own "known deviation", runbook

@@ -7134,6 +7134,10 @@
         },
         "target": {
           "type": "string"
+        },
+        "targetRedacted": {
+          "const": true,
+          "type": "boolean"
         }
       },
       "required": [
@@ -41473,6 +41477,10 @@
               },
               "target": {
                 "type": "string"
+              },
+              "targetRedacted": {
+                "const": true,
+                "type": "boolean"
               }
             },
             "required": [
