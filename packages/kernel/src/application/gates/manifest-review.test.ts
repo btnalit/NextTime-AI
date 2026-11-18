@@ -229,6 +229,136 @@ describe('diffAnnouncedManifest changed[] (review #501 on #571 ③)', () => {
   });
 });
 
+describe('the answers that mean "does not exist" (legacy 477)', () => {
+  const lookup = op({
+    name: 'orders.lookup',
+    mode: 'observe',
+    blast_radius: 'low',
+    binding: { kind: 'http', method: 'GET', path: '/orders/{id}' },
+  });
+  const declaring = op({
+    ...lookup,
+    binding: { kind: 'http', method: 'GET', path: '/orders/{id}', absent_statuses: [404] },
+  });
+
+  it('a summary carries them when the Operation declares some — statuses or exit codes', () => {
+    expect(toWireGateOperation(declaring).absentAnswers).toEqual({ statuses: [404] });
+    expect(
+      toWireGateOperation(
+        op({
+          name: 'host.which',
+          mode: 'observe',
+          binding: { kind: 'cli', command_template: 'which {name}', absent_exit_codes: [1] },
+        }),
+      ).absentAnswers,
+    ).toEqual({ exitCodes: [1] });
+    expect(toWireGateOperation(lookup)).not.toHaveProperty('absentAnswers');
+    // Added and removed entries of a pending manifest are summaries too.
+    expect(diffAnnouncedManifest([], [declaring]).added[0]?.absentAnswers).toEqual({
+      statuses: [404],
+    });
+    expect(diffAnnouncedManifest([declaring], []).removed[0]?.absentAnswers).toEqual({
+      statuses: [404],
+    });
+  });
+
+  it('a change shows them before and after when they differ — declared, widened, dropped', () => {
+    const declared = diffAnnouncedManifest([lookup], [declaring]).changed[0];
+    expect(declared?.otherChangedFields).toEqual(['binding']);
+    expect(declared?.bindingChangedFields).toEqual(['absent_statuses']);
+    expect(declared?.absentAnswers).toEqual({ before: null, after: { statuses: [404] } });
+
+    const widened = op({
+      ...lookup,
+      binding: { kind: 'http', method: 'GET', path: '/orders/{id}', absent_statuses: [404, 410] },
+    });
+    expect(diffAnnouncedManifest([declaring], [widened]).changed[0]?.absentAnswers).toEqual({
+      before: { statuses: [404] },
+      after: { statuses: [404, 410] },
+    });
+
+    expect(diffAnnouncedManifest([declaring], [lookup]).changed[0]?.absentAnswers).toEqual({
+      before: { statuses: [404] },
+      after: null,
+    });
+  });
+
+  it('a change that keeps them carries no before / after, though its binding changed', () => {
+    const moved = op({
+      ...declaring,
+      binding: { kind: 'http', method: 'GET', path: '/v2/orders/{id}', absent_statuses: [404] },
+    });
+    const change = diffAnnouncedManifest([declaring], [moved]).changed[0];
+    expect(change?.otherChangedFields).toEqual(['binding']);
+    expect(change?.bindingChangedFields).toEqual(['path']);
+    expect(change).not.toHaveProperty('absentAnswers');
+  });
+
+  it('names the binding keys that changed, so widening them alone reads apart from widening them and moving the path (review #501 on #1485)', () => {
+    const widened = diffAnnouncedManifest(
+      [declaring],
+      [
+        op({
+          ...declaring,
+          binding: {
+            kind: 'http',
+            method: 'GET',
+            path: '/orders/{id}',
+            absent_statuses: [404, 410],
+          },
+        }),
+      ],
+    ).changed[0];
+    const widenedAndMoved = diffAnnouncedManifest(
+      [declaring],
+      [
+        op({
+          ...declaring,
+          binding: {
+            kind: 'http',
+            method: 'GET',
+            path: '/v2/everything',
+            absent_statuses: [404, 410],
+          },
+        }),
+      ],
+    ).changed[0];
+    expect(widened?.bindingChangedFields).toEqual(['absent_statuses']);
+    expect(widenedAndMoved?.bindingChangedFields).toEqual(['absent_statuses', 'path']);
+    // The same declaration change either way; only the keys tell the two apart.
+    expect(widenedAndMoved?.absentAnswers).toEqual(widened?.absentAnswers);
+    expect(widenedAndMoved).not.toEqual(widened);
+
+    // Another kind: every key either kind carries that differs, names only — never a value.
+    const toCli = diffAnnouncedManifest(
+      [declaring],
+      [
+        op({
+          ...declaring,
+          binding: { kind: 'cli', command_template: 'lookup {id}', absent_exit_codes: [1] },
+        }),
+      ],
+    ).changed[0];
+    expect(toCli?.bindingChangedFields).toEqual([
+      'absent_exit_codes',
+      'absent_statuses',
+      'command_template',
+      'kind',
+      'method',
+      'path',
+    ]);
+    expect(JSON.stringify(toCli?.bindingChangedFields)).not.toContain('lookup');
+
+    // A change that leaves the binding alone names none.
+    const governed = diffAnnouncedManifest(
+      [declaring],
+      [op({ ...declaring, blast_radius: 'medium' })],
+    ).changed[0];
+    expect(governed?.otherChangedFields).toEqual([]);
+    expect(governed).not.toHaveProperty('bindingChangedFields');
+  });
+});
+
 describe('manifestDigest / canonicalJson', () => {
   it('digests the same stored manifest the same, whatever its key order', () => {
     const a = [{ name: 'x', mode: 'observe', nested: { b: 1, a: 2 } }];
