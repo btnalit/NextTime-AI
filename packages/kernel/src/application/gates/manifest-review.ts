@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '@nexttime/gatekeeper-base';
-import type {
-  GateOperationSummaryWire,
-  Operation,
-  PendingGateManifestChangeWire,
+import {
+  type GateOperationSummaryWire,
+  OPERATION_BINDING_KEYS,
+  type Operation,
+  type OperationAbsentAnswersWire,
+  type PendingGateManifestChangeWire,
+  operationAbsentAnswers,
 } from '@nexttime/shared';
 import {
   OPERATION_GOVERNANCE_KEYS,
@@ -59,10 +62,32 @@ export function isReviewedManifestChange(
   return reviewedKey(inEffect) !== reviewedKey(announced);
 }
 
+/** The answers `operation` declares mean "does not exist", as the wire carries them; `null` when
+ *  it declares none (an execute-class Operation cannot declare any). */
+function absentAnswersOf(operation: Operation): OperationAbsentAnswersWire | null {
+  const answers = operationAbsentAnswers(operation);
+  if (answers === undefined) return null;
+  return 'statuses' in answers
+    ? { statuses: [...answers.statuses] }
+    : { exitCodes: [...answers.exitCodes] };
+}
+
+/** The keys of the binding that differ between `before` and `after`, sorted — names from the
+ *  binding schema only (a key one kind has and the other lacks counts as changed). */
+function bindingChangedFields(before: Operation, after: Operation): string[] {
+  const previous: Record<string, unknown> = before.binding;
+  const next: Record<string, unknown> = after.binding;
+  return OPERATION_BINDING_KEYS.filter(
+    (key) => canonicalJson(previous[key]) !== canonicalJson(next[key]),
+  ).sort();
+}
+
 /** One Operation as `GateInstanceWire.operations` lists it. `gateOwnedParams` (console G4) is the
- *  same judgment `publish_operation` refuses by — an entry carrying it is never published. */
+ *  same judgment `publish_operation` refuses by — an entry carrying it is never published. Legacy
+ *  477: `absentAnswers` when it declares some, as the enable preview shows them. */
 export function toWireGateOperation(operation: Operation): GateOperationSummaryWire {
   const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
+  const absentAnswers = absentAnswersOf(operation);
   return {
     name: operation.name,
     mode: operation.mode,
@@ -76,6 +101,7 @@ export function toWireGateOperation(operation: Operation): GateOperationSummaryW
           gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),
         }
       : {}),
+    ...(absentAnswers !== null ? { absentAnswers } : {}),
   };
 }
 
@@ -108,15 +134,25 @@ export function diffAnnouncedManifest(
     );
     if (differing.length === 0) continue;
     const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
+    // Legacy 477: what an Operation reads as absent is part of its binding; `binding` in
+    // `otherChangedFields` names only the field, so the keys of it that changed are named and the
+    // declaration before and after is shown.
+    const bindingChanged = bindingChangedFields(previous, operation);
+    const absentBefore = absentAnswersOf(previous);
+    const absentAfter = absentAnswersOf(operation);
     changed.push({
       name,
       ...operationGovernanceChange(previous, operation),
       // Every governance field is in `before` / `after` (STATUS leftover 344); the rest is listed.
       otherChangedFields: differing.filter((key) => !OPERATION_GOVERNANCE_KEYS.has(key)).sort(),
+      ...(bindingChanged.length > 0 ? { bindingChangedFields: bindingChanged } : {}),
       ...(gateOwnedParams.length > 0
         ? {
             gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),
           }
+        : {}),
+      ...(canonicalJson(absentBefore) !== canonicalJson(absentAfter)
+        ? { absentAnswers: { before: absentBefore, after: absentAfter } }
         : {}),
     });
   }

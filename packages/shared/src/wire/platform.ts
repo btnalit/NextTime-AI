@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OPERATION_BINDING_KEYS } from '../action-description.js';
 import {
   AuditActingThroughSchema,
   BlastRadiusSchema,
@@ -576,6 +577,10 @@ export const GateOperationSummaryWireSchema = z
     /** Console G4: present when the entry declares a param only the gate sets — the bulk publish
      *  leaves it a draft and `publish_operation` refuses it until the gate's manifest drops it. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** Legacy 477: the answers the definition declares mean "does not exist"
+     *  (`operationAbsentAnswers`) — present only when it declares some, so a reviewer of an
+     *  announced manifest sees what an Operation would read as absent. */
+    absentAnswers: OperationAbsentAnswersWireSchema.optional(),
   })
   .strict();
 export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
@@ -700,6 +705,21 @@ export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWire
    *  once adopted, the revision each enabling workspace opens for this Operation is held back as
    *  an unpublished draft. */
   gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+  /** Legacy 477: when `binding` is in `otherChangedFields`, which of its keys changed (sorted) —
+   *  names only, from the binding schema (`OPERATION_BINDING_KEYS`), never their values. Review
+   *  #501 on #1485: a change to the answers that mean "does not exist" alone and the same change
+   *  with the path moved read differently. */
+  bindingChangedFields: z.array(z.enum(OPERATION_BINDING_KEYS)).optional(),
+  /** Legacy 477: the answers that mean "does not exist" before and after (`null`: none declared —
+   *  an execute-class Operation cannot declare any, `OperationSchema` refuses it). Present only
+   *  when they differ. */
+  absentAnswers: z
+    .object({
+      before: OperationAbsentAnswersWireSchema.nullable(),
+      after: OperationAbsentAnswersWireSchema.nullable(),
+    })
+    .strict()
+    .optional(),
 }).strict();
 export type PendingGateManifestChangeWire = z.infer<typeof PendingGateManifestChangeWireSchema>;
 
