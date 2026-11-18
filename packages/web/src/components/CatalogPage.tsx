@@ -901,6 +901,17 @@ function RevisionDiff({
         t(`${operationFieldLabel(field, t)}变了`, `${operationFieldLabel(field, t)} changed`),
       );
     }
+  } else {
+    // Legacy 848 (#501's review of #1459): `definitionChange` is absent when either side does not
+    // parse — after an unreadable published version, the corrected revision. A line of its own
+    // (UX P2-1 of #1459), so a revision that also changes its description or governance fields
+    // does not read as one whose definition is unchanged.
+    lines.push(
+      t(
+        '读不出这一版或已发布版本的定义，没法比较执行定义。',
+        'This version’s or the published version’s definition could not be read, so the definitions cannot be compared.',
+      ),
+    );
   }
   // Legacy 614: a draft that only rewrites its description read 「没有差异」.
   const descriptionChanged =
@@ -916,22 +927,15 @@ function RevisionDiff({
       </span>
       {lines.length === 0 ? (
         <span className="text-3">
-          {change
-            ? // Legacy 614: say what was compared, not that nothing differs at all.
-              published !== undefined
-              ? t(
-                  '治理字段、执行定义和说明都和已发布版本相同。',
-                  'Governance fields, the definition the gate runs and the description all match the published version.',
-                )
-              : t(
-                  '治理字段和执行定义都和已发布版本相同。',
-                  'Governance fields and the definition the gate runs match the published version.',
-                )
+          {/* Legacy 614: say what was compared, not that nothing differs at all. */}
+          {published !== undefined
+            ? t(
+                '治理字段、执行定义和说明都和已发布版本相同。',
+                'Governance fields, the definition the gate runs and the description all match the published version.',
+              )
             : t(
-                // Legacy 848 (#501's review of #1459): `definitionChange` is absent when either side
-                // does not parse — after an unreadable published version, the corrected revision.
-                '读不出这一版或已发布版本的定义，没法比较执行定义。',
-                'This version’s or the published version’s definition could not be read, so the definitions cannot be compared.',
+                '治理字段和执行定义都和已发布版本相同。',
+                'Governance fields and the definition the gate runs match the published version.',
               )}
         </span>
       ) : (
