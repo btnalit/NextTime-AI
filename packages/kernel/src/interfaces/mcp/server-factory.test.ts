@@ -170,7 +170,9 @@ describe('mapCapabilityErrorToToolResult', () => {
 
   it('prefixes record_decision relating Facts that are not there with its code (legacy 308)', () => {
     const result = mapCapabilityErrorToToolResult(
-      new DecisionReferenceError(['00000000-0000-4000-8000-000000000001']),
+      new DecisionReferenceError('record_decision', {
+        relatedFactIds: ['00000000-0000-4000-8000-000000000001'],
+      }),
     );
     expect(result.isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toMatch(

@@ -759,15 +759,15 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
     }
     return { status: 400, code: err.code, message: err.message, details: { unresolved } };
   }
-  // Legacy 308 (application/gateway/handlers.ts): `record_decision` relating Facts that are not
-  // there or not readable to the caller — same code and `details.unresolved` shape as above.
+  // Legacy 308 / 783 (application/gateway/handlers.ts): `record_decision` relating Facts or a Task,
+  // or `report_turn` naming Decisions, that are not there or not readable to the caller — same code
+  // and `details.unresolved` shape as above (each field that has any, its ids).
   if (err instanceof DecisionReferenceError) {
-    return {
-      status: 400,
-      code: err.code,
-      message: err.message,
-      details: { unresolved: { relatedFactIds: [...err.details.unresolved.relatedFactIds] } },
-    };
+    const unresolved: Record<string, string[]> = {};
+    for (const [field, ids] of Object.entries(err.details.unresolved)) {
+      if (ids) unresolved[field] = [...ids];
+    }
+    return { status: 400, code: err.code, message: err.message, details: { unresolved } };
   }
   // S11 「门确认不存在」 B-a (governance/gatekeepers/absent-answers-review.ts): `publish_operation`
   // on an observe Operation declaring answers that mean "does not exist", without
