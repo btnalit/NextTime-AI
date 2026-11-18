@@ -289,9 +289,17 @@ function VerificationResult({
   const t = useT();
   const who = principalName(verification.verifiedBy, t);
   const notInEffect = verification.items.filter((item) => item.state !== 'in_effect');
+  // Legacy 603: a rolled-back record is not verified again, so its latest run is from before the
+  // roll-back and says nothing about now.
+  const beforeRollBack = segment.status === 'rolled_back';
   return (
     <div className="stack-s" data-testid="catalog-change-verification-result">
       <span className="row-wrap">
+        {beforeRollBack ? (
+          <span className="chip chip-s" data-testid="catalog-change-verification-before-rollback">
+            {t('撤销前', 'Before the roll-back')}
+          </span>
+        ) : null}
         <StatusChip
           machine="changeSegment"
           status={verification.passed ? 'verified' : 'verification_failed'}
@@ -309,9 +317,25 @@ function VerificationResult({
           <span data-volatile="">{formatDateTime(verification.verifiedAt)}</span>
         </span>
       </span>
+      {beforeRollBack ? (
+        <span className="text-3 text-small" data-testid="catalog-change-verification-rolled-back">
+          {t(
+            '这是撤销前最后一次核验的结论。撤销已经把这次写入的改动退回，之后不再核验。',
+            'This is what the last verification before the roll-back found. The roll-back took back what this wrote, and it is not verified again.',
+          )}
+        </span>
+      ) : null}
       {notInEffect.length === 0 ? (
         <span className="text-3 text-small">
-          {t('这次写入的改动项都还在生效。', 'Every change this install wrote is still in effect.')}
+          {beforeRollBack
+            ? t(
+                '当时这次写入的改动项都还在生效。',
+                'Every change this wrote was still in effect then.',
+              )
+            : t(
+                '这次写入的改动项都还在生效。',
+                'Every change this install wrote is still in effect.',
+              )}
         </span>
       ) : (
         notInEffect.map((checked) => (
