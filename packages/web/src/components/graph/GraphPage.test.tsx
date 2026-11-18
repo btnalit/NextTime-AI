@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import { HttpError } from '../../lib/http-client.js';
 import { GraphPage } from './GraphPage.js';
-import { HOST, WEB, scriptedHttp } from './test-fixtures.js';
+import { FACTS, HOST, WEB, scriptedHttp } from './test-fixtures.js';
 
 afterEach(() => {
   cleanup();
@@ -328,5 +328,105 @@ describe('GraphPage without list_types / list_conflicts', () => {
       screen.getByTestId('graph-object-card').querySelector('.graph-object-title')?.textContent,
     ).toBe('node-a');
     await act(async () => undefined);
+  });
+});
+
+// Legacy 147: browse the graph by relationship type — `graph_overview` counts in the search pane,
+// one type's Facts (`list_facts`) in the object pane.
+describe('GraphPage browse by relationship', () => {
+  it('lists the relationship types with counts and opens one type’s Facts, names from nodeDetails', async () => {
+    const { http } = renderPage();
+    const buttons = await screen.findAllByTestId('graph-relation');
+    expect(buttons.map((button) => button.getAttribute('data-link-type'))).toEqual([
+      'depends_on',
+      'runs_on',
+    ]);
+    expect(buttons[1]?.textContent).toContain('2');
+    fireEvent.click(buttons[1] as HTMLElement);
+    const view = await screen.findByTestId('graph-relation-view');
+    expect(window.location.hash).toBe('#/work/graph?relation=runs_on');
+    expect(buttons[1]?.getAttribute('aria-pressed')).toBe('true');
+    expect(within(view).getByTestId('graph-relation-total').textContent).toBe('共 2 条');
+    const rows = await within(view).findAllByTestId('graph-relation-fact');
+    expect(rows).toHaveLength(2);
+    expect(
+      within(rows[0] as HTMLElement).getByTestId('graph-relation-source').textContent,
+    ).toContain('web');
+    expect(
+      within(rows[0] as HTMLElement).getByTestId('graph-relation-target').textContent,
+    ).toContain('node-a');
+    expect(http.callsTo('list_facts')).toEqual([{ linkType: 'runs_on', limit: 50 }]);
+    // An endpoint links to that Object, keeping the relationship so Back returns to the list.
+    const link = within(rows[0] as HTMLElement)
+      .getByTestId('graph-relation-source')
+      .querySelector('a');
+    expect(link?.getAttribute('href')).toBe('#/work/graph?objectId=c-1&relation=runs_on');
+  });
+
+  it('comes back to the relationship list from an Object opened from it', async () => {
+    window.location.hash = '#/work/graph?objectId=c-1&relation=runs_on';
+    renderPage();
+    await screen.findByTestId('graph-object-card');
+    const back = screen.getByTestId('graph-back');
+    expect(back.textContent).toContain('返回关系');
+    expect(back.textContent).toContain('runs_on');
+    fireEvent.click(back);
+    await screen.findByTestId('graph-relation-view');
+    expect(window.location.hash).toBe('#/work/graph?relation=runs_on');
+    fireEvent.click(screen.getByTestId('graph-relation-close'));
+    await screen.findByTestId('graph-no-object');
+    expect(window.location.hash).toBe('#/work/graph');
+  });
+
+  it('follows nextCursor with 加载更多, naming the endpoints of every page', async () => {
+    const page1 = FACTS.filter((f) => f.linkType === 'runs_on').slice(0, 1);
+    const page2 = FACTS.filter((f) => f.linkType === 'runs_on').slice(1);
+    window.location.hash = '#/work/graph?relation=runs_on';
+    const http = scriptedHttp({
+      list_facts: (params) => {
+        const { cursor } = params as { cursor?: string };
+        return cursor === 'p2'
+          ? {
+              items: page2,
+              nodeDetails: [
+                { id: 'c-2', typeName: 'Container', name: 'db' },
+                { id: 'h-1', typeName: 'Host', name: 'node-a' },
+              ],
+            }
+          : {
+              items: page1,
+              nodeDetails: [
+                { id: 'c-1', typeName: 'Container', name: 'web' },
+                { id: 'h-1', typeName: 'Host', name: 'node-a' },
+              ],
+              nextCursor: 'p2',
+            };
+      },
+    });
+    renderPage(http);
+    const view = await screen.findByTestId('graph-relation-view');
+    expect(await within(view).findAllByTestId('graph-relation-fact')).toHaveLength(1);
+    fireEvent.click(within(view).getByTestId('graph-relation-load-more'));
+    await waitFor(() => expect(within(view).getAllByTestId('graph-relation-fact')).toHaveLength(2));
+    const second = within(view).getAllByTestId('graph-relation-fact')[1] as HTMLElement;
+    expect(within(second).getByTestId('graph-relation-source').textContent).toContain('db');
+    expect(within(view).queryByTestId('graph-relation-load-more')).toBeNull();
+    expect(http.callsTo('list_facts')[1]).toEqual({ linkType: 'runs_on', limit: 50, cursor: 'p2' });
+  });
+
+  it('says so when the workspace has no relationships, or graph_overview fails', async () => {
+    renderPage(scriptedHttp({ graph_overview: () => ({ factCountsByLinkType: [] }) }));
+    expect(await screen.findByTestId('graph-relations-empty')).toBeTruthy();
+    cleanup();
+    renderPage(
+      scriptedHttp({
+        graph_overview: () => {
+          throw new HttpError('capability_error', 'no', 'forbidden');
+        },
+      }),
+    );
+    expect(await screen.findByTestId('graph-relations-error')).toBeTruthy();
+    // Search still works.
+    expect(await screen.findAllByTestId('graph-result-row')).toHaveLength(2);
   });
 });

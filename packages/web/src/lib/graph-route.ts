@@ -34,6 +34,10 @@ export interface GraphQuery {
    *  alone). Absent = the Proposals tab's own list view. */
   readonly proposalId?: string;
   readonly proposalVersion?: string;
+  /** Legacy 147: the relationship type (`linkType`) browsed in the object pane while no Object is
+   *  focused — every active Fact of that type (`list_facts`). Kept while an Object is focused from
+   *  it, so leaving the Object comes back to the list. */
+  readonly relation?: string;
 }
 
 const KEYS = [
@@ -46,6 +50,7 @@ const KEYS = [
   'ontologyTab',
   'proposalId',
   'proposalVersion',
+  'relation',
 ] as const;
 
 /** `null` when `hash` is not the graph route at all. An empty query is `{}`. */

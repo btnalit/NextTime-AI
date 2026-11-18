@@ -1,6 +1,6 @@
 import type { ConflictWire, FactWire, OntologyTypeWire } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   conflictsByFactId,
@@ -21,6 +21,8 @@ import { ObjectSearch } from './ObjectSearch.js';
 import { ObjectView } from './ObjectView.js';
 import { OntologyTypesDrawer } from './OntologyTypesDrawer.js';
 import { ProvenanceDrawer } from './ProvenanceDrawer.js';
+import { RelationFactsView } from './RelationFactsView.js';
+import { type GraphOverview, RelationTypes } from './RelationTypes.js';
 import { useGraphQuery } from './useGraphQuery.js';
 
 export interface GraphPageProps {
@@ -84,6 +86,15 @@ export function GraphPage({ http }: GraphPageProps) {
   const conflictRows = conflicts.state.status === 'ready' ? conflicts.state.data.items : undefined;
   const conflictsByFact = useMemo(() => conflictsByFactId(conflictRows ?? []), [conflictRows]);
 
+  // Legacy 147: browse by relationship type — the counts list in the search pane, one type's Facts
+  // in the object pane while no Object is focused.
+  const overview = useCapability<GraphOverview>(http, 'graph_overview');
+  const relation = query.relation;
+  const relationTotal =
+    relation !== undefined && overview.state.status === 'ready'
+      ? overview.state.data.factCountsByLinkType.find((row) => row.linkType === relation)?.count
+      : undefined;
+
   // The focus trail: grows on "展开" / a result click, truncates when a crumb (or Back) is
   // chosen, and is cleared when the reader leaves the object pane. Derived from the hash's
   // `objectId` so a browser Back also walks it.
@@ -132,7 +143,10 @@ export function GraphPage({ http }: GraphPageProps) {
       />
       <GraphFreshnessNotice http={http} />
       <GraphObjectsProvider http={http} identityKeys={identityKeys} baseQuery={query}>
-        <div className="graph-layout" data-object-open={objectId !== undefined}>
+        <div
+          className="graph-layout"
+          data-object-open={objectId !== undefined || relation !== undefined}
+        >
           <aside className="graph-search-pane" aria-label="Search">
             <ObjectSearch
               http={http}
@@ -147,6 +161,13 @@ export function GraphPage({ http }: GraphPageProps) {
               identityKeys={identityKeys}
               asOf={asOf}
             />
+            <RelationTypes
+              overview={overview}
+              selected={relation}
+              onSelect={(linkType) =>
+                setQuery({ ...query, relation: linkType, objectId: undefined })
+              }
+            />
             <ConflictsPanel
               http={http}
               conflicts={conflictRows ?? []}
@@ -156,7 +177,16 @@ export function GraphPage({ http }: GraphPageProps) {
             <FreshnessLegend />
           </aside>
           <section className="graph-object-pane" aria-label="Object">
-            {objectId === undefined ? (
+            {objectId === undefined && relation !== undefined ? (
+              <RelationFactsView
+                http={http}
+                linkType={relation}
+                total={relationTotal}
+                asOf={asOf}
+                onClose={() => setQuery({ ...query, relation: undefined })}
+                onProvenance={setProvenanceFact}
+              />
+            ) : objectId === undefined ? (
               <EmptyState
                 icon="link"
                 title={t('选择一个对象', 'Pick an Object')}
@@ -177,6 +207,7 @@ export function GraphPage({ http }: GraphPageProps) {
                 trail={trail}
                 onFocus={focus}
                 onBack={back}
+                backToRelation={relation}
                 onProvenance={setProvenanceFact}
                 onRefresh={() => setSessionAt(new Date().toISOString())}
                 onAsOfChange={(iso) => setQuery({ ...query, at: iso })}

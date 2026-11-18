@@ -54,6 +54,58 @@
   padding: 2px var(--space-1);
 }
 
+/* Legacy 147: 「按关系浏览」 — relationship types with counts in the search pane
+ * (`components/graph/RelationTypes`), one type's Facts in the object pane (`RelationFactsView`). */
+.graph-relation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.graph-relation-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-m);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-relation-button:hover {
+  background: var(--surface-2);
+}
+
+.graph-relation-button[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.graph-relation-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.graph-relation-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Focused object header */
 .graph-object-card {
   padding: var(--space-4);

@@ -27,6 +27,8 @@ describe('IssueOwnHandleSection', () => {
     expect(screen.getByTestId('issue-own-handle-section').textContent).toContain(
       '只供平台外的客户端使用',
     );
+    // Legacy 147: what is granted later needs a new Handle.
+    expect(screen.getByTestId('ioh-reissue-note').textContent).toContain('重新签发一个');
     const ttl = screen.getByLabelText(/有效期/) as HTMLSelectElement;
     expect(Array.from(ttl.options).map((option) => option.value)).toEqual(['1', '7', '30']);
     expect(ttl.value).toBe('1');
