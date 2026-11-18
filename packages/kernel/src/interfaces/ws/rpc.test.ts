@@ -56,7 +56,10 @@ import {
   ScopeValidationError,
 } from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
-import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDefinitionUnreadableError,
+  OperationNameInvalidError,
+} from '../../governance/gatekeepers/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -251,6 +254,14 @@ describe('mapDispatchError — legacy 175 observe params', () => {
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,
+    });
+  });
+
+  it('OperationDefinitionUnreadableError (legacy 220) maps to ILLEGAL_TRANSITION with its code in front', () => {
+    const err = new OperationDefinitionUnreadableError('gk-1', 'list_items', new Error('bad'));
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: `operation_definition_unavailable: ${err.message}`,
     });
   });
 

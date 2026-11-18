@@ -13,7 +13,10 @@ import {
 } from '../../adapters/gatekeeper-client/index.js';
 import { DecisionReferenceError, UnknownOperationError } from '../../application/gateway/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
-import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDefinitionUnreadableError,
+  OperationNameInvalidError,
+} from '../../governance/gatekeepers/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
 import { buildToolCatalog } from './tool-projection.js';
@@ -133,6 +136,18 @@ describe('mapCapabilityErrorToToolResult', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^credentials_in_observe_params: inventory\.list_items: /);
     expect(text).toMatch(/Do not pass credentials/);
+  });
+
+  it('prefixes an Operation whose stored definition does not parse with its code (legacy 220)', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new OperationDefinitionUnreadableError('gk-1', 'list_items', new Error('bad')),
+    );
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(
+      /^operation_definition_unavailable: Operation "list_items" on gatekeeper gk-1: /,
+    );
+    expect(text).toMatch(/Publish a corrected revision/);
   });
 
   it('prefixes a request_action naming nothing the gate runs with its code (legacy 232)', () => {

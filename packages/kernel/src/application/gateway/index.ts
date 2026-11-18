@@ -60,6 +60,7 @@ export {
   CALL_REFUSAL_REASONS,
   CapabilityCallRefusedError,
   ForbiddenError,
+  OperationDisabledError,
 } from './authorize.js';
 export type { CallRefusalReason } from './authorize.js';
 export { renderCallRefusalMetrics } from './call-refusals.js';

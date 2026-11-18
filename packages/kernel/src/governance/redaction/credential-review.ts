@@ -359,6 +359,9 @@ export function redactedPathsIn(value: unknown): readonly string[] {
  */
 export class ObserveParamsCarryCredentialsError extends Error {
   readonly code = 'credentials_in_observe_params' as const;
+  /** The Operation called — its refused-call audit row names it (`dispatch.ts`'s
+   *  `auditPlatformGateRefusal`). */
+  readonly operationName: string;
   readonly details: {
     readonly suspectedSecretValues: number;
     readonly suspectedSecretPaths: readonly string[];
@@ -369,6 +372,7 @@ export class ObserveParamsCarryCredentialsError extends Error {
       `${gateName}.${operation}: the params carry ${found.count} credential value(s)${where} (a JWT, a vendor API key, a private key, a literal Bearer or Authorization token, a Basic user:password or a URL's password) — refused, nothing was sent to the gate. Do not pass credentials as Operation params: the gate authenticates with the credentials configured on it. Text that only mentions one is fine (an Authorization header name, token=expired, a $VAR placeholder).`,
     );
     this.name = 'ObserveParamsCarryCredentialsError';
+    this.operationName = operation;
     this.details = { suspectedSecretValues: found.count, suspectedSecretPaths: found.paths };
   }
 }
