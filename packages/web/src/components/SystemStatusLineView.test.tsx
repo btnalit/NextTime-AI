@@ -33,6 +33,39 @@ describe('SystemStatusLineView', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  it('legacy 515: a Turn the evaluation seal kept from starting reads as a warning naming the refusal, says what to do, and opens nothing', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'turn_not_started',
+          text: 'The agent was not started for this message',
+          turnId: 'turn-1',
+          reason: 'evaluation_paused',
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    const row = screen.getByTestId('system-status-line');
+    expect(row.getAttribute('data-variant')).toBe('turn_not_started');
+    const label = screen.getByTestId('system-status-failure');
+    expect(label.textContent).toBe('智能体已暂停');
+    expect(label.className).toContain('text-danger');
+    expect(row.textContent).toContain('「治理 → 评测」');
+    expect(row.textContent).not.toContain('The agent was not started');
+    expect(document.querySelector('.chip')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    cleanup();
+
+    render(
+      <SystemStatusLineView
+        line={{ variant: 'turn_not_started', text: 'kernel text', turnId: 'turn-1', reason: null }}
+      />,
+    );
+    expect(screen.getByTestId('system-status-failure').textContent).toBe('智能体没有启动');
+    expect(screen.getByTestId('system-status-line').textContent).toContain('kernel text');
+  });
+
   it('renders status badge and text for an action_update line', () => {
     render(
       <SystemStatusLineView

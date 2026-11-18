@@ -1,4 +1,6 @@
 import {
+  EVALUATION_START_REFUSAL_VALUES,
+  type EvaluationStartRefusal,
   GOAL_OUTCOME_BASIS_VALUES,
   GOAL_RUN_CHANGE_VALUES,
   GOAL_RUN_PAUSE_REASON_VALUES,
@@ -85,11 +87,23 @@ export interface ModelRefusedStatusLine {
   readonly resetsAt: string | null;
 }
 
+/** Legacy 515: the evaluation seal kept the entry agent from starting for a message, so the Turn
+ *  ended with no reply. Worded in the reader's language from `reason` (`turnNotStartedText`); the
+ *  kernel's English `text` is kept for a reason this console cannot read. */
+export interface TurnNotStartedStatusLine {
+  readonly variant: 'turn_not_started';
+  readonly text: string;
+  readonly turnId: string;
+  /** Why; `null` for a value this console does not know. */
+  readonly reason: EvaluationStartRefusal | null;
+}
+
 export type SystemStatusLineData =
   | ActionUpdateStatusLine
   | TaskUpdateStatusLine
   | GoalUpdateStatusLine
-  | ModelRefusedStatusLine;
+  | ModelRefusedStatusLine
+  | TurnNotStartedStatusLine;
 
 function oneOf<T extends string>(values: readonly T[], value: unknown): T | null {
   return typeof value === 'string' && (values as readonly string[]).includes(value)
@@ -174,7 +188,38 @@ export function systemStatusLineFromMessage(
     };
   }
 
+  if (content.kind === 'system.turn_not_started') {
+    const turnId = content.turnId;
+    if (typeof turnId !== 'string') return undefined;
+    return {
+      variant: 'turn_not_started',
+      text: typeof content.text === 'string' ? content.text : message.text,
+      turnId,
+      reason: oneOf(EVALUATION_START_REFUSAL_VALUES, content.reason),
+    };
+  }
+
   return undefined;
+}
+
+/** Legacy 515: why a message got no reply because the evaluation seal kept the agent from
+ *  starting, and what the reader can do — their own prompt addendum and the Skills they exclude are
+ *  theirs to change in 「我的智能体」, anything else is a workspace owner's or builder's; a pause is
+ *  released by a workspace owner. A reason this console does not know shows the kernel's text. */
+export function turnNotStartedText(line: TurnNotStartedStatusLine, t: Translate): string {
+  if (line.reason === 'evaluation_paused') {
+    return t(
+      '评测防泄漏暂停了代你行动的智能体，这条消息没有交给智能体，所以没有回复。工作区所有者在「治理 → 评测」查看后可以解除。',
+      'The evaluation seal has paused the agents acting for you, so this message was not handed to an agent and there is no reply. A workspace owner can review and release the pause under Govern → Evaluation.',
+    );
+  }
+  if (line.reason === 'evaluation_withheld') {
+    return t(
+      '智能体要读的内容（它的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分，所以它没有启动，这条消息没有回复。如果在你自己加的补充说明里，或是你可以排除的 Skill，到「我的智能体」里修改；其他的请找工作区所有者或构建者。',
+      'What the agent would read (its system prompt or a Skill it mounts) holds text an evaluation suite keeps for testing, so it was not started and this message has no reply. If it is in your own prompt addendum or a Skill you can exclude, change it in My Agent; otherwise ask a workspace owner or builder.',
+    );
+  }
+  return line.text;
 }
 
 /** Legacy 589: why a Turn has no reply, in the reader's language — which budget ran out, when it

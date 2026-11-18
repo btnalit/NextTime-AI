@@ -432,6 +432,20 @@ export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
 
 /**
+ * Legacy 515: why the evaluation seal (kernel `application/eval-seal`) kept an agent from starting
+ * — a Worker's run (the Task's failure reason) or an entry agent's Turn (`system.turn_not_started`
+ * in its chat): `evaluation_withheld`, what it would start with carries content reserved for
+ * evaluation; `evaluation_paused`, the seal has paused the agents acting for the person, until a
+ * workspace owner releases the pause.
+ */
+export const EVALUATION_START_REFUSAL_VALUES = [
+  'evaluation_withheld',
+  'evaluation_paused',
+] as const satisfies readonly TaskFailureReason[];
+export type EvaluationStartRefusal = (typeof EVALUATION_START_REFUSAL_VALUES)[number];
+export const EvaluationStartRefusalSchema = asEnum(EVALUATION_START_REFUSAL_VALUES);
+
+/**
  * How one metered model call ended (`llm_usage.status`; llm-proxy's `LlmUsageRecord.status`). The
  * column stays free text (migrations/llm-usage/0001's header) and the kernel accepts any non-empty
  * value, so a record from a newer llm-proxy is never refused; these are the values the platform

@@ -2,7 +2,11 @@ import { failureReading } from '../lib/action-outcome.js';
 import { goalMilestoneText } from '../lib/goals.js';
 import { useT } from '../lib/i18n.js';
 import { taskFailureReasonText } from '../lib/labels.js';
-import { type SystemStatusLineData, modelRefusedText } from '../lib/system-status.js';
+import {
+  type SystemStatusLineData,
+  modelRefusedText,
+  turnNotStartedText,
+} from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
 import { StatusChip } from './ui/StatusChip.js';
 
@@ -21,6 +25,7 @@ const OPEN_TITLE = {
   goal_update: ['打开目标', 'Open goal'],
   // Never opened: the Turn it is about is the message right above it.
   model_refused: ['', ''],
+  turn_not_started: ['', ''],
 } as const;
 
 /** components/SystemStatusLineView: the compact inline notice for `system.action_update`/
@@ -44,6 +49,24 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
           {t('模型调用被平台拒绝', 'Model calls refused')}
         </span>
         <span className="system-status-text">{modelRefusedText(line, t)}</span>
+      </div>
+    );
+  }
+  // Legacy 515: the same shape — the label names the refusal as a Task's failure does.
+  if (line.variant === 'turn_not_started') {
+    const label = line.reason
+      ? taskFailureReasonText(line.reason, t).short
+      : t('智能体没有启动', 'Agent not started');
+    return (
+      <div
+        className="system-status-line"
+        data-testid="system-status-line"
+        data-variant={line.variant}
+      >
+        <span className="system-status-failure text-danger" data-testid="system-status-failure">
+          {label}
+        </span>
+        <span className="system-status-text">{turnNotStartedText(line, t)}</span>
       </div>
     );
   }

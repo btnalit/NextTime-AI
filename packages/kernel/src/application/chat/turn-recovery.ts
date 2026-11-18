@@ -1,4 +1,9 @@
-import { type SystemMessageContent, TURN_TRANSITIONS, type TurnStatus } from '@nexttime/shared';
+import {
+  type EvaluationStartRefusal,
+  type SystemMessageContent,
+  TURN_TRANSITIONS,
+  type TurnStatus,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type RefusedOnlyUsage,
@@ -51,6 +56,10 @@ import { insertChatMessage } from './service.js';
  * (llm-proxy's `nexttime_llm_proxy_refusal_delivery_timeouts_total`) the Turn ends `completed`
  * with no reply, as before.
  *
+ * A Turn the evaluation seal kept from starting (legacy 515): the runtime ends it `failed` and
+ * says why (`turnEnded.notStarted`); `endTurn` records that on the Turn and writes a
+ * `system.turn_not_started` message into its Chat — which refusal, never what was withheld.
+ *
  * Push after commit: `endTurn` only writes; the caller pushes the returned `EndedTurn` with
  * `publishTurnEnded` once its transaction has committed (the event sink after `withWorkspace`, a
  * capability handler from `afterCommit`). A push from inside the transaction told a connected client
@@ -72,16 +81,21 @@ export interface EndedTurn {
   readonly turnId: string;
   readonly status: TurnEndStatus;
   readonly chatId: string | null;
-  /** The `system.model_refused` message written into the Chat (legacy 589), to push with it. */
-  readonly modelRefusedMessage?: {
+  /** The system message written into the Chat with the end, to push with it: why the Turn has no
+   *  reply — `system.model_refused` (legacy 589) or `system.turn_not_started` (legacy 515). */
+  readonly systemMessage?: {
     readonly id: string;
     readonly createdAt: Date;
     readonly sequence: number;
-    readonly content: SystemModelRefusedMessage;
+    readonly content: SystemModelRefusedMessage | SystemTurnNotStartedMessage;
   };
 }
 
 type SystemModelRefusedMessage = Extract<SystemMessageContent, { kind: 'system.model_refused' }>;
+type SystemTurnNotStartedMessage = Extract<
+  SystemMessageContent,
+  { kind: 'system.turn_not_started' }
+>;
 
 /** The `system.model_refused` content for a Turn the platform refused (legacy 589). The `text` is
  *  the fallback a client without the kind's own rendering shows. */
@@ -103,6 +117,24 @@ export function modelRefusedContent(
   };
 }
 
+/** The `system.turn_not_started` content for a Turn the evaluation seal kept from starting (legacy
+ *  515). Says which refusal, never what was withheld; the `text` is the fallback a client without
+ *  the kind's own rendering shows. */
+export function turnNotStartedContent(
+  turnId: string,
+  reason: EvaluationStartRefusal,
+): SystemTurnNotStartedMessage {
+  return {
+    kind: 'system.turn_not_started',
+    text:
+      reason === 'evaluation_paused'
+        ? 'The agent was not started for this message: the evaluation seal has paused the agents acting for you. A workspace owner can review and release the pause under Govern → Evaluation.'
+        : 'The agent was not started for this message: what it starts with (its system prompt or a Skill it mounts) carries content reserved for evaluation. Your own prompt addendum and the Skills you exclude are yours to change under My Agent; for anything else, ask a workspace owner or builder.',
+    turnId,
+    reason,
+  };
+}
+
 /** The states `TURN_TRANSITIONS` lets a Turn reach `status` from. */
 function sourceStatesFor(status: TurnEndStatus): string[] {
   return TURN_TRANSITIONS.edges.filter((edge) => edge.to === status).map((edge) => edge.from);
@@ -117,13 +149,18 @@ function sourceStatesFor(status: TurnEndStatus): string[] {
  * or `undefined` when it did not move (already ended — by any writer, for any reason — or not
  * visible): a duplicate or late report is a no-op, with no second `TurnCompleted` and nothing to
  * push.
+ *
+ * Legacy 515: `notStarted` — the evaluation seal kept the Turn from starting — on a `failed` end
+ * is recorded on the Turn (`metadata.notStarted`) and told to its Chat (`system.turn_not_started`).
  */
 export async function endTurn(
   client: PoolClient,
   workspaceId: string,
   turnId: string,
   status: TurnEndStatus,
+  notStarted?: EvaluationStartRefusal,
 ): Promise<EndedTurn | undefined> {
+  const seal = status === 'failed' && notStarted !== undefined ? notStarted : null;
   // Only a `completed` can turn out to be a refused Turn; any other end keeps what it reports.
   const refusal =
     status === 'completed' ? await entryTurnRefusedOnly(client, workspaceId, turnId) : null;
@@ -131,6 +168,7 @@ export async function endTurn(
     chat_id: string | null;
     status: TurnEndStatus;
     model_refused: boolean;
+    not_started: boolean;
   }>(
     `update activities
      set status = case when $3::text = 'completed' and metadata ? 'stopRequestedAt'
@@ -143,10 +181,13 @@ export async function endTurn(
          metadata = case when $3::text = 'completed' and $5::boolean
                               and not metadata ? 'stopRequestedAt'
                          then metadata || jsonb_build_object('modelRefused', $6::jsonb)
+                         when $7::text is not null
+                         then metadata || jsonb_build_object('notStarted', $7::text)
                          else metadata end,
          ended_at = now()
      where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = any($4::text[])
-     returning chat_id, status, metadata ? 'modelRefused' as model_refused`,
+     returning chat_id, status, metadata ? 'modelRefused' as model_refused,
+               metadata ? 'notStarted' as not_started`,
     [
       workspaceId,
       turnId,
@@ -154,6 +195,7 @@ export async function endTurn(
       sourceStatesFor(status),
       refusal !== null,
       refusal ? JSON.stringify({ scope: refusal.scope, refusedCalls: refusal.refusedCalls }) : null,
+      seal,
     ],
   );
   const row = result.rows[0];
@@ -168,8 +210,13 @@ export async function endTurn(
       status: row.status,
     });
   }
-  if (refusal && row.model_refused && row.chat_id !== null) {
-    const content = modelRefusedContent(turnId, refusal);
+  const content =
+    refusal && row.model_refused
+      ? modelRefusedContent(turnId, refusal)
+      : seal !== null && row.not_started
+        ? turnNotStartedContent(turnId, seal)
+        : null;
+  if (content !== null && row.chat_id !== null) {
     // Like every system message (application/linkage), not one of the Turn's own messages: the
     // Turn is named in the content.
     const message = await insertChatMessage(client, workspaceId, {
@@ -182,7 +229,7 @@ export async function endTurn(
       turnId,
       status: row.status,
       chatId: row.chat_id,
-      modelRefusedMessage: {
+      systemMessage: {
         id: message.id,
         createdAt: message.createdAt,
         sequence: message.sequence,
@@ -200,19 +247,19 @@ export async function endTurn(
  */
 export function publishTurnEnded(ended: EndedTurn | undefined): void {
   if (!ended || ended.chatId === null) return;
-  const refused = ended.modelRefusedMessage;
-  if (refused) {
+  const system = ended.systemMessage;
+  if (system) {
     publishChatPushEvent({
       type: 'chat.message',
       chatId: ended.chatId,
       message: {
-        id: refused.id,
+        id: system.id,
         role: 'system',
-        text: refused.content.text,
-        createdAt: refused.createdAt.toISOString(),
-        sequence: refused.sequence,
-        kind: refused.content.kind,
-        content: refused.content as unknown as Record<string, unknown>,
+        text: system.content.text,
+        createdAt: system.createdAt.toISOString(),
+        sequence: system.sequence,
+        kind: system.content.kind,
+        content: system.content as unknown as Record<string, unknown>,
       },
     });
   }

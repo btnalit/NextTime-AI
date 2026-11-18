@@ -574,6 +574,8 @@ describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
       {
         type: 'turnEnded',
         status: 'failed',
+        // Legacy 515: the chat is told why.
+        notStarted: 'evaluation_paused',
         workspaceId,
         chatId: input.chatId,
         turnId: input.turnId,
@@ -595,7 +597,7 @@ describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
     expect(JSON.stringify(auditWrites)).not.toContain('entry agent of this workspace');
   });
 
-  it('fails closed: a seal check that cannot run ends the Turn failed, sends nothing, and logs no prompt', async () => {
+  it('fails closed: a seal check that cannot run ends the Turn failed, sends nothing, and logs no prompt — and tells the chat no reason it did not find', async () => {
     const workspaceId = randomUUID();
     const { pool } = createFakePool(
       new Map([

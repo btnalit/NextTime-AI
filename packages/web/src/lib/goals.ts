@@ -37,7 +37,13 @@ import type {
   UnresolvedGoalActionWire,
   WorkerSpec,
 } from '@nexttime/shared';
-import { GOAL_PLANNER_NO_PROGRESS_LIMIT, PLAN_HINT_ADMISSION, visibleText } from '@nexttime/shared';
+import {
+  EVALUATION_START_REFUSAL_VALUES,
+  type EvaluationStartRefusal,
+  GOAL_PLANNER_NO_PROGRESS_LIMIT,
+  PLAN_HINT_ADMISSION,
+  visibleText,
+} from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
 import {
@@ -186,9 +192,11 @@ const FAILURE: Readonly<
 };
 
 /** Legacy 515: why the evaluation seal refused to start a step's Worker — the Task's own failure
- *  reason. The step fails `transient`, but the platform does not retry it (a retry is refused the
- *  same way) and the run pauses `needs_decision`, so the category's words do not fit. */
-export type SealRefusedReason = 'evaluation_withheld' | 'evaluation_paused';
+ *  reason, one of the shared `EvaluationStartRefusal` values (an entry Turn's
+ *  `system.turn_not_started` names the same ones). The step fails `transient`, but the platform
+ *  does not retry it (a retry is refused the same way) and the run pauses `needs_decision`, so the
+ *  category's words do not fit. */
+export type SealRefusedReason = EvaluationStartRefusal;
 
 /** The seal's refusal that ended `run`'s latest attempt, or `null` (also while it is not failed). */
 export function sealRefusedReasonOf(
@@ -200,7 +208,9 @@ export function sealRefusedReasonOf(
     if (latest === undefined || attempt.attempt > latest.attempt) latest = attempt;
   }
   const reason = latest?.status === 'failed' ? latest.failureReason : null;
-  return reason === 'evaluation_withheld' || reason === 'evaluation_paused' ? reason : null;
+  return reason !== null && (EVALUATION_START_REFUSAL_VALUES as readonly string[]).includes(reason)
+    ? (reason as SealRefusedReason)
+    : null;
 }
 
 const SEAL_REFUSED_FAILURE: Readonly<
