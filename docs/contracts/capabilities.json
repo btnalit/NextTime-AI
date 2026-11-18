@@ -9676,6 +9676,22 @@
                         ],
                         "type": "object"
                       },
+                      "bindingChangedFields": {
+                        "items": {
+                          "enum": [
+                            "kind",
+                            "method",
+                            "path",
+                            "absent_statuses",
+                            "tool_name",
+                            "command_template",
+                            "absent_exit_codes",
+                            "command_pattern"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
                       "direction": {
                         "enum": [
                           "loosened",
@@ -11709,6 +11725,22 @@
                           "target"
                         ],
                         "type": "object"
+                      },
+                      "bindingChangedFields": {
+                        "items": {
+                          "enum": [
+                            "kind",
+                            "method",
+                            "path",
+                            "absent_statuses",
+                            "tool_name",
+                            "command_template",
+                            "absent_exit_codes",
+                            "command_pattern"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
                       },
                       "direction": {
                         "enum": [
@@ -25377,6 +25409,22 @@
                           "target"
                         ],
                         "type": "object"
+                      },
+                      "bindingChangedFields": {
+                        "items": {
+                          "enum": [
+                            "kind",
+                            "method",
+                            "path",
+                            "absent_statuses",
+                            "tool_name",
+                            "command_template",
+                            "absent_exit_codes",
+                            "command_pattern"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
                       },
                       "direction": {
                         "enum": [
@@ -44380,6 +44428,22 @@
                                 "target"
                               ],
                               "type": "object"
+                            },
+                            "bindingChangedFields": {
+                              "items": {
+                                "enum": [
+                                  "kind",
+                                  "method",
+                                  "path",
+                                  "absent_statuses",
+                                  "tool_name",
+                                  "command_template",
+                                  "absent_exit_codes",
+                                  "command_pattern"
+                                ],
+                                "type": "string"
+                              },
+                              "type": "array"
                             },
                             "direction": {
                               "enum": [
@@ -83166,6 +83230,22 @@
                           "target"
                         ],
                         "type": "object"
+                      },
+                      "bindingChangedFields": {
+                        "items": {
+                          "enum": [
+                            "kind",
+                            "method",
+                            "path",
+                            "absent_statuses",
+                            "tool_name",
+                            "command_template",
+                            "absent_exit_codes",
+                            "command_pattern"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
                       },
                       "direction": {
                         "enum": [

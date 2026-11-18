@@ -131,6 +131,13 @@ const OperationBindingUnion = z.discriminatedUnion('kind', [
   SshBindingSchema,
 ]);
 
+/** Legacy 477: every key a binding can carry, across its kinds, as the schemas above declare them
+ *  — a parsed binding carries no other key (unknown keys are stripped). A manifest review names
+ *  the ones that changed (`PendingGateManifestChangeWire.bindingChangedFields`), never their values. */
+export const OPERATION_BINDING_KEYS: readonly string[] = [
+  ...new Set(OperationBindingUnion.options.flatMap((option) => Object.keys(option.shape))),
+];
+
 export const OperationBindingSchema = OperationBindingUnion.refine(
   (binding) =>
     binding.kind !== 'ssh' ||

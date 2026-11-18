@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OPERATION_BINDING_KEYS } from '../action-description.js';
 import {
   AuditActingThroughSchema,
   BlastRadiusSchema,
@@ -704,9 +705,14 @@ export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWire
    *  once adopted, the revision each enabling workspace opens for this Operation is held back as
    *  an unpublished draft. */
   gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+  /** Legacy 477: when `binding` is in `otherChangedFields`, which of its keys changed (sorted) —
+   *  names only, from the binding schema (`OPERATION_BINDING_KEYS`), never their values. Review
+   *  #501 on #1485: a change to the answers that mean "does not exist" alone and the same change
+   *  with the path moved read differently. */
+  bindingChangedFields: z.array(z.enum(OPERATION_BINDING_KEYS)).optional(),
   /** Legacy 477: the answers that mean "does not exist" before and after (`null`: none declared —
-   *  or no longer counted, an Operation that stops being observe-class). Present only when they
-   *  differ: `binding` in `otherChangedFields` says only that something in it changed. */
+   *  an execute-class Operation cannot declare any, `OperationSchema` refuses it). Present only
+   *  when they differ. */
   absentAnswers: z
     .object({
       before: OperationAbsentAnswersWireSchema.nullable(),
