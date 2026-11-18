@@ -130,6 +130,26 @@ describe('findSuspectedSecrets — where, by field path only', () => {
     expect(found.paths.join(' ')).not.toContain(FAKE);
   });
 
+  it('cuts a long field name at 64 characters, never through a surrogate pair (review #501 on #1452)', () => {
+    // Half an emoji left at the cut is text jsonb refuses: the row recording the path was lost.
+    const atTheCut = `${'x'.repeat(63)}😀`;
+    for (const found of [
+      findCredentialValues({ [`${atTheCut}tail`]: `Bearer ${FAKE}` }),
+      findSuspectedSecrets({ [`${atTheCut}Token`]: 'cursor-1' }, { secretFields: true }),
+    ]) {
+      expect(found.count).toBe(1);
+      expect(found.paths).toEqual([`${'x'.repeat(63)}…`]);
+    }
+  });
+
+  it('a parent field whose name holds a credential-looking literal is named without it (review #501 on #1452)', () => {
+    // Only the value is refused — `findCredentialValues` counts no key here — so the path's own
+    // scrub (`segment`) is all that keeps the parent's literal out of a refused call's audit row.
+    const found = findCredentialValues({ [`PGPASSWORD=${FAKE}`]: { a: `Bearer ${FAKE}` } });
+    expect(found.count).toBe(1);
+    expect(found.paths).toEqual(['PGPASSWORD=[redacted].a']);
+  });
+
   it('keeps the count exact but lists at most 20 paths', () => {
     const many = Object.fromEntries(
       Array.from({ length: 25 }, (_, i) => [`cmd${i}`, `PGPASSWORD=${FAKE} psql`]),

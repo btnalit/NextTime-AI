@@ -1,4 +1,4 @@
-import { SECRET_FIELD_MASK } from '@nexttime/shared';
+import { SECRET_FIELD_MASK, sliceKeepingPairs } from '@nexttime/shared';
 import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   type RedactSecretsOptions,
@@ -56,11 +56,14 @@ const MAX_PATHS = 20;
 const MAX_SEGMENT_CHARS = 64;
 
 /** A path segment as the console shows it. Field names come from the content (an agent's call
- *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut. */
+ *  arguments), so a name that itself looks like a secret is scrubbed and a long one cut — never
+ *  through a surrogate pair (review #501 on #1452): half an emoji left at the cut is text Postgres
+ *  will not store in jsonb, which lost the audit row a refused call leaves and failed an observe
+ *  call whose row records the paths (`credentialReview`). */
 function segment(key: string): string {
   const scrubbed = scrubSecretValues(key).value;
   return scrubbed.length > MAX_SEGMENT_CHARS
-    ? `${scrubbed.slice(0, MAX_SEGMENT_CHARS)}…`
+    ? `${sliceKeepingPairs(scrubbed, MAX_SEGMENT_CHARS)}…`
     : scrubbed;
 }
 

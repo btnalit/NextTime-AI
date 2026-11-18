@@ -655,6 +655,59 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
 
       it.each(ways)(
+        '%s (%s channel) audits a refused credential whose path is cut at an emoji (review #501 on #1452)',
+        async (capability, channel) => {
+          // A field name past 64 characters is cut; one with half an emoji at the cut was text
+          // jsonb refuses, and the refused call's row was lost.
+          const atTheCut = `${'x'.repeat(63)}😀`;
+          const auditBefore = await auditIds(capability);
+
+          await expect(
+            dispatchCapability({ pool }, callerFor(channel), capability, {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: { [`${atTheCut}tail`]: `Bearer ${FAKE}` },
+            }),
+          ).rejects.toBeInstanceOf(ObserveParamsCarryCredentialsError);
+
+          const added = await newAuditRows(capability, auditBefore);
+          expect(added).toHaveLength(1);
+          expect(added[0]?.payload).toMatchObject({
+            channel,
+            refusal: {
+              code: 'credentials_in_observe_params',
+              suspectedSecretValues: 1,
+              suspectedSecretPaths: [`${'x'.repeat(63)}…`],
+            },
+          });
+          expect(JSON.stringify(added[0])).not.toContain(FAKE);
+        },
+      );
+
+      it('records a passed call whose secret-named field is cut at an emoji (review #501 on #1452)', async () => {
+        // The same cut in the row of a call that passed the review: it failed the whole call.
+        const atTheCut = `${'x'.repeat(63)}😀`;
+        const cursor = `cursor-${randomUUID()}`;
+        const result = (await dispatchCapability(
+          { pool },
+          callerFor('human'),
+          'observe_operation',
+          { gatekeeperId, operation: 'observe.stock', params: { [`${atTheCut}Token`]: cursor } },
+        )) as { status: string };
+        expect(result.status).toBe('ok');
+
+        const rows = await auditRows('observe_operation');
+        const row = rows.find((r) => JSON.stringify(r.payload).includes(`${'x'.repeat(63)}…`));
+        expect(row?.payload).toMatchObject({
+          credentialReview: {
+            suspectedSecretValues: 1,
+            suspectedSecretPaths: [`${'x'.repeat(63)}…`],
+          },
+        });
+        expect(JSON.stringify(rows)).not.toContain(cursor);
+      });
+
+      it.each(ways)(
         '%s (%s channel) passes a value under a secret-named field to the gate as sent, and the audit row records it redacted',
         async (capability, channel) => {
           const cursor = `cursor-${randomUUID()}`;
@@ -2962,6 +3015,27 @@ describe.runIf(DATABASE_URL !== undefined)(
             refusal: { code: 'operation_definition_unavailable', status: 409, operation },
           });
         }
+
+        // The same 409 from a capability that is not a gate call (review #493 on #1452): no
+        // refused row — it is not a call the gate or the platform refused to run.
+        await expect(
+          dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), 'set_policy', {
+            policy: {
+              gatekeeperId: kGatekeeperId,
+              actionKindTag: unreadable.name,
+              autoApprove: true,
+              operationVersion: 1,
+            },
+          }),
+        ).rejects.toMatchObject({ code: 'operation_definition_unavailable' });
+        const policyRows = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) => queryAudit(client, workspaceId, { action: 'set_policy', limit: 1000 }),
+        );
+        expect(
+          policyRows.filter((row) => (row.payload as { outcome?: string }).outcome === 'refused'),
+        ).toEqual([]);
       });
 
       it('legacy 700: refuses a call to a gate connected at http:// on the public internet — 424 target_refused with the rule, audited without the address, nothing sent', async () => {
