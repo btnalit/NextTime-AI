@@ -351,7 +351,10 @@ function outcomeUnknownMessage(t: Translate, system?: string, action?: string): 
 /** Why a request that has not finished is waiting, said in the viewer's language: an `executing`
  *  one in doubt (warn — the platform is still asking the gate, nothing for the reader to do yet;
  *  danger is kept for the final "outcome unknown" a person has to check, UX acceptance of #586),
- *  or an approved one queued behind an earlier request (info). `null` when the row says neither. */
+ *  or an approved one queued behind another request (info). `null` when the row says neither.
+ *  Legacy 573: a request still awaiting approval that holds this one back is always ahead of it, so
+ *  it is called earlier; a running one may have been requested after it (legacy 565: two that
+ *  conflict never run together, whichever came first), so it is only ever 「另一条」. */
 export function waitingReason(
   row: { readonly status: string } & ActionWaitingFields,
   t: Translate,
@@ -371,13 +374,13 @@ export function waitingReason(
         t(
           `执行请求发出后没有收到门的答复，动作可能已经执行。平台约 10 分钟后向门查询这次请求，查到就记下结果，从不重新执行；查不到会标为「结果不明」交你核对。${
             row.target
-              ? `在这之前，同一个目标（${actionTargetText(row.target, t)}）上排在它后面的请求和作用于整个系统的请求会等它，别的目标上的请求照常执行。`
-              : '在这之前，同一个系统上排在它后面的请求都会等它。'
+              ? `在这之前，同一个目标（${actionTargetText(row.target, t)}）上的其他请求和作用于整个系统的请求会等它，别的目标上的请求照常执行。`
+              : '在这之前，同一个系统上的其他请求都会等它。'
           }`,
           `The call got no answer from the gate after it was sent, so the action may have run. About 10 minutes after the call the platform asks the gate about this request and records what it says — it never runs it again; if the gate cannot say, it is marked "outcome unknown" for you to check. ${
             row.target
-              ? `Until then, later requests on the same target (${actionTargetText(row.target, t)}) and requests on the whole system wait for it; requests on other targets run as usual.`
-              : 'Until then, later requests on the same system wait for it.'
+              ? `Until then, other requests on the same target (${actionTargetText(row.target, t)}) and requests on the whole system wait for it; requests on other targets run as usual.`
+              : 'Until then, other requests on the same system wait for it.'
           }`,
         ),
         row.outcomeInDoubt.reason,
@@ -408,12 +411,12 @@ export function waitingReason(
             )
           : behind.outcomeInDoubt
             ? t(
-                '同一个系统上更早的一条请求结果不明，平台正在向门查询。它有结论后这条才会执行。',
-                'An earlier request on the same system has an unknown outcome and the platform is asking the gate about it. This one runs once that one is settled.',
+                '同一个系统上另一条请求结果不明，平台正在向门查询。两条不会同时执行，它有结论后这条才会执行。',
+                'Another request on the same system has an unknown outcome and the platform is asking the gate about it. The two never run at the same time, so this one runs once that one is settled.',
               )
             : t(
-                '同一个系统上更早的一条请求正在执行，它结束后这条才会执行。',
-                'An earlier request on the same system is still running; this one runs after it.',
+                '同一个系统上另一条请求正在执行。两条不会同时执行，它结束后这条才会执行。',
+                'Another request on the same system is running. The two never run at the same time, so this one runs after it.',
               ),
     };
   }
@@ -422,7 +425,7 @@ export function waitingReason(
 
 type QueuedBehind = NonNullable<ActionWaitingFields['queuedBehind']>;
 
-/** S11 GO12, `scope: 'target'`: an earlier request on the same instance holds it back. */
+/** S11 GO12, `scope: 'target'`: another request on the same instance holds it back. */
 function sameTargetWaiting(
   behind: QueuedBehind,
   target: ActionTargetFields | null | undefined,
@@ -437,12 +440,12 @@ function sameTargetWaiting(
       )
     : behind.outcomeInDoubt
       ? t(
-          `${zhWhich}上更早的一条请求结果不明，平台正在向门查询。它有结论后这条才会执行。`,
-          `An earlier request on ${enWhich} has an unknown outcome and the platform is asking the gate about it. This one runs once that one is settled.`,
+          `${zhWhich}上另一条请求结果不明，平台正在向门查询。两条不会同时执行，它有结论后这条才会执行。`,
+          `Another request on ${enWhich} has an unknown outcome and the platform is asking the gate about it. The two never run at the same time, so this one runs once that one is settled.`,
         )
       : t(
-          `${zhWhich}上更早的一条请求正在执行，它结束后这条才会执行。`,
-          `An earlier request on ${enWhich} is still running; this one runs after it.`,
+          `${zhWhich}上另一条请求正在执行。两条不会同时执行，它结束后这条才会执行。`,
+          `Another request on ${enWhich} is running. The two never run at the same time, so this one runs after it.`,
         );
 }
 
@@ -458,12 +461,12 @@ function wholeSystemWaiting(behind: QueuedBehind, t: Translate): string {
       )
     : behind.outcomeInDoubt
       ? t(
-          `同一个系统上更早的一条请求结果不明，平台正在向门查询。${zhWhy}它有结论后这条才会执行。`,
-          `An earlier request on the same system has an unknown outcome and the platform is asking the gate about it. ${enWhy} this one runs once that one is settled.`,
+          `同一个系统上另一条请求结果不明，平台正在向门查询。${zhWhy}它有结论后这条才会执行。`,
+          `Another request on the same system has an unknown outcome and the platform is asking the gate about it. ${enWhy} this one runs once that one is settled.`,
         )
       : t(
-          `同一个系统上更早的一条请求正在执行。${zhWhy}它结束后这条才会执行。`,
-          `An earlier request on the same system is still running. ${enWhy} this one runs after it.`,
+          `同一个系统上另一条请求正在执行。${zhWhy}它结束后这条才会执行。`,
+          `Another request on the same system is running. ${enWhy} this one runs after it.`,
         );
 }
 
@@ -491,12 +494,12 @@ export function waitingShortLabel(
               )
             : behind.outcomeInDoubt
               ? t(
-                  '排队中：同一目标上更早的请求结果不明',
-                  'Queued: an earlier request on the same target has an unknown outcome',
+                  '排队中：同一目标上另一条请求结果不明',
+                  'Queued: another request on the same target has an unknown outcome',
                 )
               : t(
-                  '排队中：同一目标上更早的请求正在执行',
-                  'Queued: an earlier request on the same target is running',
+                  '排队中：同一目标上另一条请求正在执行',
+                  'Queued: another request on the same target is running',
                 ),
       };
     }
@@ -510,12 +513,12 @@ export function waitingShortLabel(
             )
           : behind.outcomeInDoubt
             ? t(
-                '排队中：同一系统上更早的请求结果不明',
-                'Queued: an earlier request on this system has an unknown outcome',
+                '排队中：同一系统上另一条请求结果不明',
+                'Queued: another request on this system has an unknown outcome',
               )
             : t(
-                '排队中：同一系统上更早的请求正在执行',
-                'Queued: an earlier request on this system is running',
+                '排队中：同一系统上另一条请求正在执行',
+                'Queued: another request on this system is running',
               ),
     };
   }

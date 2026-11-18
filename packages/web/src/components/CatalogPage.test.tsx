@@ -536,6 +536,8 @@ describe('CatalogPage', () => {
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
     expect(confirm.textContent?.split('docker.restart')).toHaveLength(2);
     expect(within(confirm).queryByTestId('confirm-impact')).toBeNull();
+    // Legacy 570: what governance fields decide includes how its requests queue.
+    expect(confirm.textContent).toContain('以及它的请求和同一个系统上的其他请求怎么排队');
     expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain(
       '治理字段的变化',
     );

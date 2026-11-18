@@ -278,7 +278,7 @@ describe('waitingReason / waitingShortLabel', () => {
     expect(reason?.tone).toBe('warn');
     expect(reason?.title).toBe('动作结果不明，平台正在向门查询');
     expect(reason?.message).toContain('从不重新执行');
-    expect(reason?.message).toContain('排在它后面的请求都会等它');
+    expect(reason?.message).toContain('同一个系统上的其他请求都会等它');
     expect(waitingShortLabel(row, zh)?.tone).toBe('warn');
   });
 
@@ -330,10 +330,10 @@ describe('waitingReason / waitingShortLabel', () => {
       'An earlier request on the same target (Container “c1”) is still awaiting approval.',
     );
     expect(behind('target', 'executing', true)).toContain(
-      '同一个目标（Container「c1」）上更早的一条请求结果不明',
+      '同一个目标（Container「c1」）上另一条请求结果不明',
     );
     expect(behind('target', 'executing', false)).toContain(
-      '同一个目标（Container「c1」）上更早的一条请求正在执行',
+      '同一个目标（Container「c1」）上另一条请求正在执行',
     );
     // A request on the whole system is in the way, or this one is on the whole system.
     for (const on of [target, null]) {
@@ -381,10 +381,47 @@ describe('waitingReason / waitingShortLabel', () => {
         zh,
       )?.message;
     expect(message({ objectType: 'Container', identity: ['c1'] })).toContain(
-      '同一个目标（Container「c1」）上排在它后面的请求和作用于整个系统的请求会等它，别的目标上的请求照常执行',
+      '同一个目标（Container「c1」）上的其他请求和作用于整个系统的请求会等它，别的目标上的请求照常执行',
     );
-    expect(message(null)).toContain('同一个系统上排在它后面的请求都会等它');
-    expect(message(undefined)).toContain('同一个系统上排在它后面的请求都会等它');
+    expect(message(null)).toContain('同一个系统上的其他请求都会等它');
+    expect(message(undefined)).toContain('同一个系统上的其他请求都会等它');
+  });
+
+  it('legacy 573: a running request in the way is "another", not "an earlier", one: the two never run together', () => {
+    // Legacy 565: an `executing` row holds back a conflicting approved one even when its request
+    // was made after it (it started before that one committed), so no text says it came first.
+    const scopes = ['target', 'gate', undefined] as const;
+    for (const scope of scopes) {
+      for (const outcomeInDoubt of [false, true]) {
+        const row = {
+          status: 'approved',
+          target: { objectType: 'Container', identity: ['c1'] },
+          queuedBehind: {
+            status: 'executing' as const,
+            outcomeInDoubt,
+            ...(scope ? { scope } : {}),
+          },
+        };
+        for (const t of [zh, en]) {
+          const message = waitingReason(row, t)?.message ?? '';
+          const label = waitingShortLabel(row, t)?.label ?? '';
+          for (const text of [message, label]) {
+            expect(text).not.toMatch(/更早|排在它后面|按提出顺序|earlier|in the order/i);
+          }
+        }
+        const zhMessage = waitingReason(row, zh)?.message ?? '';
+        expect(zhMessage).toContain('另一条请求');
+        expect(zhMessage).toMatch(/两条不会同时执行|不和这个系统上的其他请求同时执行/);
+        expect(waitingShortLabel(row, zh)?.label).toContain('另一条请求');
+      }
+    }
+    // A request still awaiting approval is ahead of this one in the queue: "earlier" stays.
+    expect(
+      waitingReason(
+        { status: 'approved', queuedBehind: { status: 'pending_approval', outcomeInDoubt: false } },
+        zh,
+      )?.message,
+    ).toContain('更早的一条请求还在等审批');
   });
 
   it('says nothing for a row that is not waiting, or a field on the wrong status', () => {
