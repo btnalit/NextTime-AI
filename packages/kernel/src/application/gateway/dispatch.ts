@@ -73,6 +73,7 @@ import {
   runEvaluationSessionCall,
 } from './evaluation-session.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
+import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { MAX_PARAMS_VALUES, exceedsValueBudget } from './params-budget.js';
 import { UnknownOperationError } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -119,17 +120,7 @@ export class CapabilityNotFoundError extends Error {
   }
 }
 
-export class InvalidCapabilityParamsError extends Error {
-  readonly issues: unknown;
-  /** `reason`, when given, is appended to the message: Zod's issues stay in the kernel, so a refusal
-   *  the caller could not otherwise explain (the value budget) says why in the message itself. */
-  constructor(name: string, issues: unknown, reason?: string) {
-    const message = `invalid params for capability "${name}"`;
-    super(reason === undefined ? message : `${message}: ${reason}`);
-    this.name = 'InvalidCapabilityParamsError';
-    this.issues = issues;
-  }
-}
+export { InvalidCapabilityParamsError } from './invalid-params.js';
 
 /** S11 GO12 (I-Q4): params carrying an Operation (`report_task_result`'s `proposedOperations[]`)
  *  whose `target` declaration is refused — the reason, where, and why, in the message, since the
