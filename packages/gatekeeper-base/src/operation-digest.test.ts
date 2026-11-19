@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalBinding,
   canonicalJson,
+  operationDefinition,
   operationDefinitionDigest,
   shortOperationDigest,
 } from './operation-digest.js';
@@ -95,6 +98,70 @@ describe('operationDefinitionDigest (legacy K)', () => {
     for (const overrides of changed) {
       expect(operationDefinitionDigest(httpOp(overrides))).not.toBe(digest);
     }
+  });
+
+  it('reads the answers that mean "does not exist" as a set: their order never changes it (UX acceptance of #1490)', () => {
+    const observe = (binding: Operation['binding']) =>
+      httpOp({ mode: 'observe', result_mapping: undefined, binding });
+    const http = (absent_statuses: (404 | 410)[]) =>
+      observe({ kind: 'http', method: 'GET', path: '/stock/{sku}', absent_statuses });
+    expect(operationDefinitionDigest(http([410, 404]))).toBe(
+      operationDefinitionDigest(http([404, 410])),
+    );
+    // What they are still counts: one answer fewer is another definition.
+    expect(operationDefinitionDigest(http([404]))).not.toBe(
+      operationDefinitionDigest(http([404, 410])),
+    );
+    for (const kind of ['cli', 'ssh'] as const) {
+      const exit = (absent_exit_codes: number[]) =>
+        observe({ kind, command_template: 'stat {sku}', absent_exit_codes });
+      expect(operationDefinitionDigest(exit([4, 1, 2]))).toBe(
+        operationDefinitionDigest(exit([1, 2, 4])),
+      );
+      expect(operationDefinitionDigest(exit([1, 2]))).not.toBe(
+        operationDefinitionDigest(exit([1, 2, 4])),
+      );
+    }
+  });
+
+  it('hashes a declaration already in ascending order exactly as before, so older gates agree on it', () => {
+    // The digest a base that hashed the binding as written computes: the same canonical JSON with
+    // the declaration left in place. Equal whenever the declaration is ascending.
+    const asWritten = (operation: Operation) => {
+      const definition = { ...operationDefinition(operation), binding: operation.binding };
+      return `sha256:${createHash('sha256').update(canonicalJson(definition)).digest('hex')}`;
+    };
+    const declaring = (absent_statuses: (404 | 410)[]) =>
+      httpOp({
+        mode: 'observe',
+        result_mapping: undefined,
+        binding: { kind: 'http', method: 'GET', path: '/stock/{sku}', absent_statuses },
+      });
+    expect(operationDefinitionDigest(declaring([404, 410]))).toBe(asWritten(declaring([404, 410])));
+    expect(operationDefinitionDigest(declaring([404]))).toBe(asWritten(declaring([404])));
+    expect(operationDefinitionDigest(httpOp())).toBe(asWritten(httpOp()));
+    // Out of order, the older digest differs — the case release notes ask a gate's maintainer about.
+    expect(operationDefinitionDigest(declaring([410, 404]))).not.toBe(
+      asWritten(declaring([410, 404])),
+    );
+  });
+
+  it('canonicalBinding sorts only the declaration, numerically, and leaves its input alone', () => {
+    const declared = {
+      kind: 'cli' as const,
+      command_template: 'ls {p}',
+      absent_exit_codes: [10, 9, 2],
+    };
+    expect(canonicalBinding(declared)).toEqual({
+      kind: 'cli',
+      command_template: 'ls {p}',
+      absent_exit_codes: [2, 9, 10],
+    });
+    expect(declared.absent_exit_codes).toEqual([10, 9, 2]);
+    const plain = { kind: 'mcp' as const, tool_name: 'search' };
+    expect(canonicalBinding(plain)).toBe(plain);
+    const none = { kind: 'http' as const, method: 'GET', path: '/x' };
+    expect(canonicalBinding(none)).toBe(none);
   });
 
   it('covers blast_radius for an ssh binding, where the gate enforces it', () => {

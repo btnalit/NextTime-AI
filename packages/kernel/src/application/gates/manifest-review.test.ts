@@ -357,6 +357,45 @@ describe('the answers that mean "does not exist" (legacy 477)', () => {
     expect(governed?.otherChangedFields).toEqual([]);
     expect(governed).not.toHaveProperty('bindingChangedFields');
   });
+
+  it('a declaration only reordered is no change: not held, not listed (UX acceptance of #1490)', () => {
+    const both = (absent_statuses: (404 | 410)[], path = '/orders/{id}') =>
+      op({ ...lookup, binding: { kind: 'http', method: 'GET', path, absent_statuses } });
+    expect(isReviewedManifestChange([both([404, 410])], [both([410, 404])])).toBe(false);
+    expect(diffAnnouncedManifest([both([404, 410])], [both([410, 404])]).changed).toEqual([]);
+    const exits = (absent_exit_codes: number[]) =>
+      op({
+        name: 'host.which',
+        mode: 'observe',
+        binding: { kind: 'cli', command_template: 'which {name}', absent_exit_codes },
+      });
+    expect(isReviewedManifestChange([exits([1, 2, 4])], [exits([4, 1, 2])])).toBe(false);
+    // Changing the set is still a reviewed change.
+    expect(isReviewedManifestChange([exits([1, 2, 4])], [exits([1, 2])])).toBe(true);
+
+    // Reordered beside a real change: only the real change is named, no before / after.
+    const moved = diffAnnouncedManifest([both([404, 410])], [both([410, 404], '/v2/orders/{id}')])
+      .changed[0];
+    expect(moved?.bindingChangedFields).toEqual(['path']);
+    expect(moved).not.toHaveProperty('absentAnswers');
+
+    // A real change to the set is shown as each side declares it.
+    const narrowed = diffAnnouncedManifest([both([410, 404])], [both([404])]).changed[0];
+    expect(narrowed?.bindingChangedFields).toEqual(['absent_statuses']);
+    expect(narrowed?.absentAnswers).toEqual({
+      before: { statuses: [410, 404] },
+      after: { statuses: [404] },
+    });
+  });
+
+  it('declaring answers on an Operation that turns execute-class still shows them dropped', () => {
+    // The binding keeps its declaration, but only an observe Operation reads one.
+    const execute = op({ ...declaring, mode: 'execute' });
+    expect(diffAnnouncedManifest([declaring], [execute]).changed[0]?.absentAnswers).toEqual({
+      before: { statuses: [404] },
+      after: null,
+    });
+  });
 });
 
 describe('manifestDigest / canonicalJson', () => {
