@@ -19,7 +19,8 @@ import { SkeletonRows } from '../kit/skeleton.js';
  * be one the reader can read; stored redacted). Each call is the chat's own persisted row
  * (`PersistedToolCallRowView`, which takes a record and nothing of the chat's live state), oldest
  * first. A Turn that called no tool says so (an empty list, not an error); more than the kernel
- * lists (100) says only the first are here and links to the Chat, which has them all.
+ * lists (100) says only the first are here and links to the Chat, which has them all. Each call's
+ * start carries its date unless it is today (UX review on #1517: a Turn read here may be days old).
  */
 export function TurnToolCalls({
   http,
@@ -77,11 +78,17 @@ export function TurnToolCalls({
         </p>
       ) : (
         <>
-          <span className="text-3 text-small">
-            {t(
-              `共 ${records.length} 个，按调用先后排列。这是智能体自己报告的调用，参数和结果在存下时已遮蔽疑似凭据并截断。`,
-              `${records.length} call(s), in the order they were made. Reported by the agent; arguments and results had credential-like values hidden and were shortened when stored.`,
-            )}{' '}
+          <span className="text-3 text-small" data-testid="explain-turn-tool-calls-count">
+            {data.truncated === true
+              ? // UX review on #1517: never a count that reads as the total when there are more.
+                t(
+                  `显示前 ${records.length} 个，这一轮还有更多；按调用先后排列。这是智能体自己报告的调用，参数和结果在存下时已遮蔽疑似凭据并截断。`,
+                  `Showing the first ${records.length} call(s); this turn made more. In the order they were made. Reported by the agent; arguments and results had credential-like values hidden and were shortened when stored.`,
+                )
+              : t(
+                  `共 ${records.length} 个，按调用先后排列。这是智能体自己报告的调用，参数和结果在存下时已遮蔽疑似凭据并截断。`,
+                  `${records.length} call(s), in the order they were made. Reported by the agent; arguments and results had credential-like values hidden and were shortened when stored.`,
+                )}{' '}
             <RouteLink href={hrefs.chat(data.chatId)} testId="explain-turn-tool-calls-chat">
               {t('打开对话', 'Open the chat')}
             </RouteLink>
@@ -96,7 +103,7 @@ export function TurnToolCalls({
           ) : null}
           <div className="tool-calls" data-testid="explain-turn-tool-calls-list">
             {records.map((record) => (
-              <PersistedToolCallRowView key={record.toolCallId} record={record} http={http} />
+              <PersistedToolCallRowView key={record.toolCallId} record={record} http={http} dated />
             ))}
           </div>
         </>
