@@ -6251,6 +6251,85 @@ describe('CatalogPage — a Worker draft below the published head (legacy 742)',
   });
 });
 
+// Legacy 541: a superseded draft (legacy 742) is discarded from its 「我的草稿」 row, behind the same
+// confirmation as the detail's — a draft above the published head offers nothing there.
+describe('CatalogPage — discard a superseded Worker draft from its row (legacy 541)', () => {
+  const version = (n: number, status: string) => ({
+    id: 'wd-7',
+    version: n,
+    kind: 'worker',
+    status,
+    proposedBy: 'p-me',
+    definition: { name: 'Runner', systemPrompt: `Run, v${n}.` },
+  });
+
+  it('the superseded row discards after confirming, with the reason; the open detail stays', async () => {
+    let discarded = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const published = [version(1, 'published'), version(3, 'published')];
+        const drafts = discarded
+          ? [version(4, 'draft')]
+          : [version(2, 'draft'), version(4, 'draft')];
+        return {
+          items: (params as { includeOwnDrafts?: boolean }).includeOwnDrafts
+            ? [...published, ...drafts]
+            : published,
+        };
+      },
+      discard_draft: () => {
+        discarded = true;
+        return { kind: 'worker_definition', id: 'wd-7', version: 2 };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const rows = within(section).getAllByTestId('workers-my-draft-row');
+    expect(rows).toHaveLength(2);
+    const rowOf = (n: number) =>
+      rows.find((row) => row.textContent?.includes(`v${n}`)) as HTMLElement;
+    // v4 is above the published v3: no discard on its row.
+    expect(
+      rowOf(4).parentElement?.querySelector('[data-testid^="workers-my-draft-discard-"]'),
+    ).toBeNull();
+    await selectRow(rowOf(4));
+    expect(screen.getByTestId('worker-detail').getAttribute('data-worker-key')).toBe('wd-7@4');
+
+    const trigger = screen.getByTestId('workers-my-draft-discard-wd-7@2-trigger');
+    expect(rowOf(2).contains(trigger)).toBe(false);
+    expect(rowOf(2).parentElement?.contains(trigger)).toBe(true);
+    fireEvent.click(trigger);
+    const confirm = await screen.findByTestId('workers-my-draft-discard-wd-7@2');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Runner v2');
+    expect(confirm.textContent).toContain('已经发布了更新的 v3，这份草稿 v2 不能再发布');
+    expect(confirm.textContent).toContain('已发布的版本不受影响');
+    expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(false);
+    fireEvent.change(within(confirm).getByRole('textbox'), {
+      target: { value: '已被 v3 取代' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'discard_draft')?.params).toEqual({
+        kind: 'worker_definition',
+        id: 'wd-7',
+        version: 2,
+        reason: '已被 v3 取代',
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('workers-my-drafts-section')).getAllByTestId(
+          'workers-my-draft-row',
+        ),
+      ).toHaveLength(1),
+    );
+    expect(screen.getByTestId('worker-detail').getAttribute('data-worker-key')).toBe('wd-7@4');
+    expect((await screen.findByTestId('toast')).textContent).toContain('Runner v2');
+  });
+});
+
 // Legacy 747 (UX acceptance of #1225, P3): a draft whose definition went is proposed as a new
 // definition from its editor — the title then says it is a new one, not 「修改草稿」.
 describe('CatalogPage — a draft whose definition went starts a new one (legacy 747)', () => {
