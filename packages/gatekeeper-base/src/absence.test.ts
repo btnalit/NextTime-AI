@@ -130,6 +130,21 @@ describe('gate-confirmed absence over http', () => {
     const plain = recordGet({ binding: { kind: 'http', method: 'GET', path: '/records/{id}' } });
     expect(operationDefinitionDigest(declared)).not.toBe(operationDefinitionDigest(plain));
   });
+
+  it('runs a call approved under the same declaration in another order (UX acceptance of #1490)', async () => {
+    const declaredAs = (absent_statuses: (404 | 410)[]) =>
+      recordGet({
+        binding: { kind: 'http', method: 'GET', path: '/records/{id}', absent_statuses },
+      });
+    // The gate announces [410, 404]; the platform approved the definition as [404, 410].
+    const { gate } = httpGate(() => new Response('', { status: 410 }), [declaredAs([410, 404])]);
+    const result = await gate.observe('record.get', { id: 'r1' }, digest(declaredAs([404, 410])));
+    expect(result).toEqual({ data: null, observedFacts: [], absent: { status: 410 } });
+    // A different set is still refused before the target is called.
+    await expect(
+      gate.observe('record.get', { id: 'r1' }, digest(declaredAs([404]))),
+    ).rejects.toThrow(/definition/i);
+  });
 });
 
 describe('gate-confirmed absence over cli and ssh', () => {

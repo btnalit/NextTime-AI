@@ -4127,6 +4127,63 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    // UX acceptance of #1490: the answers an Operation reads as "does not exist" are a set. An
+    // enabled gate that announces them in another order is not held (the gate's digest, which
+    // hashes them in ascending order, is unchanged, so no call is refused either); changing the
+    // set still is. Own gate id / connector / endpoint.
+    describe('absent answers only reordered (UX acceptance of #1490)', () => {
+      const ORDER_GATE = 'absent-order-gate';
+      const lookup = (absent_statuses: (404 | 410)[]): Operation => ({
+        ...OBSERVE_OP,
+        name: 'record_lookup',
+        binding: { kind: 'http', method: 'GET', path: '/records/{id}', absent_statuses },
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: 'string', 'x-in': 'path' } },
+          required: ['id'],
+        },
+      });
+      const orderBody = (operations: Operation[]) => ({
+        ...announceBody,
+        gateId: ORDER_GATE,
+        connector: 'absent-order-fixture',
+        transportKind: 'http',
+        target: 'http://records.example.invalid',
+        endpoint: 'http://127.0.0.1:4',
+        displayName: 'Absent order fixture',
+        operations,
+      });
+      const instance = () =>
+        callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: ORDER_GATE });
+
+      it('is neither held nor a change; a new set is held with both sides as declared', async () => {
+        expect((await announce(orderBody([lookup([404, 410])]))).statusCode).toBe(200);
+        await callAsAdmin('update_gate_instance', { gateId: ORDER_GATE, status: 'enabled' });
+
+        expect((await announce(orderBody([lookup([410, 404])]))).statusCode).toBe(200);
+        const reordered = await instance();
+        expect(reordered.pendingManifest).toBeNull();
+        // The manifest in effect is what the gate announced last, in its own order.
+        expect(reordered.operations.map((o) => o.absentAnswers)).toEqual([
+          { statuses: [410, 404] },
+        ]);
+
+        expect((await announce(orderBody([lookup([404])]))).statusCode).toBe(200);
+        const narrowed = await instance();
+        expect(narrowed.pendingManifest).toMatchObject({
+          changed: [
+            {
+              name: 'record_lookup',
+              otherChangedFields: ['binding'],
+              bindingChangedFields: ['absent_statuses'],
+              absentAnswers: { before: { statuses: [410, 404] }, after: { statuses: [404] } },
+            },
+          ],
+          refusedOperations: ['record_lookup'],
+        });
+      });
+    });
+
     // Last in the file: the instance it creates is one more under the packaged connector.
     describe('S11 GO12 (I-Q4) a valid target declaration', () => {
       it('is announced; the instance lists the declaring Operation', async () => {
