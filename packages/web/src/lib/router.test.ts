@@ -5,6 +5,7 @@ import {
   readCompleteConnectionRequest,
   readConnectorPresetLink,
   readCreateWorkspacePreset,
+  readGateCredentialLink,
   readIntegrationsTab,
   readOpenAdminAgentChat,
   routeFromHash,
@@ -201,6 +202,15 @@ describe('admin agent links (S11 AA4c-3)', () => {
     expect(readCompleteConnectionRequest(href)).toBe(id);
     expect(readCompleteConnectionRequest(hrefs.systems())).toBeNull();
     expect(readCompleteConnectionRequest('#/govern/systems?complete=')).toBeNull();
+  });
+
+  it('legacy 520: 系统与授权 asked to put one gate’s 「录入我的凭证」 in focus', () => {
+    const href = hrefs.gateCredential('gk 1');
+    expect(href).toBe('#/govern/systems?credential=gk%201');
+    expect(routeFromHash(href)).toEqual({ kind: 'systems' });
+    expect(readGateCredentialLink(href)).toBe('gk 1');
+    expect(readGateCredentialLink(hrefs.systems())).toBeNull();
+    expect(readGateCredentialLink('#/govern/systems?credential=')).toBeNull();
   });
 
   it('S11 AA4e: 管理员智能体 with a trial workspace marked, and with its targets open', () => {

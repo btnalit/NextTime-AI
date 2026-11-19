@@ -436,6 +436,7 @@ export function ApprovalDetail({
       {row.status === 'pending_approval' && row.onBehalfOfAccount === 'not_connected' ? (
         <RequesterAccountNotice
           own={callerPrincipalId != null && row.onBehalfOf === callerPrincipalId}
+          gatekeeperId={row.gatekeeperId}
           testId="approval-requester-account"
         />
       ) : null}

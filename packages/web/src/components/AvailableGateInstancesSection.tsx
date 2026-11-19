@@ -55,6 +55,11 @@ export interface AvailableGateInstancesSectionProps {
   /** The signed-in user is a platform administrator: the empty state reads the platform's own
    *  instance list to say which step is actually missing, with a direct link to it. */
   readonly platformAdmin?: boolean;
+  /** Legacy 520: the Gatekeeper whose 「录入我的凭证」 the page was opened for
+   *  (`hrefs.gateCredential`) — its button takes the focus once the list is read, then
+   *  `onCredentialFocused` clears it; a gate with no such button here says so instead. */
+  readonly focusCredentialFor?: string | null;
+  readonly onCredentialFocused?: () => void;
 }
 
 /**
@@ -80,6 +85,8 @@ export function AvailableGateInstancesSection({
   canEnable,
   canEnterCredential = true,
   platformAdmin = false,
+  focusCredentialFor = null,
+  onCredentialFocused,
 }: AvailableGateInstancesSectionProps) {
   const t = useT();
   const toast = useToast();
@@ -90,6 +97,19 @@ export function AvailableGateInstancesSection({
   }, [forbidden, permissions]);
 
   const rows = available.state.status === 'ready' ? available.state.data.items : [];
+  // Legacy 520: a link to a gate's 「录入我的凭证」 that has no such button here — not a platform
+  // instance enabled in this workspace, or the reader's role enters none — says so, once read.
+  const [credentialMissing, setCredentialMissing] = useState(false);
+  useEffect(() => {
+    if (focusCredentialFor === null || available.state.status !== 'ready') return;
+    const found = available.state.data.items.some((row) => row.gatekeeperId === focusCredentialFor);
+    if (found && canEnterCredential) return;
+    setCredentialMissing(true);
+    document
+      .getElementById('available-gates-title')
+      ?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    onCredentialFocused?.();
+  }, [focusCredentialFor, available.state, canEnterCredential, onCredentialFocused]);
 
   // Each row's enable result lives here, not in its cell: the cell remounts when the list switches
   // between table and cards at 768px (legacy 388), and the notice under 已启用 must survive that.
@@ -155,6 +175,19 @@ export function AvailableGateInstancesSection({
         </Button>
       </div>
 
+      {credentialMissing ? (
+        <Notice tone="warn" testId="available-gates-credential-missing">
+          {canEnterCredential
+            ? t(
+                '要录入凭证的那个门不在下面的平台实例里，这里没有它的「录入我的凭证」。请找工作区所有者确认这个门是怎么接入的。',
+                'The gate to enter a credential for is not among the platform instances below, so there is no “Enter my credential” for it here. Ask a workspace owner how that gate is connected.',
+              )
+            : t(
+                '你的角色不能在这里录入自己的凭证。',
+                'Your role cannot enter its own credential here.',
+              )}
+        </Notice>
+      ) : null}
       {available.state.status === 'loading' ? (
         <SkeletonRows
           count={2}
@@ -190,7 +223,15 @@ export function AvailableGateInstancesSection({
         // of a six-column table whose 本工作区 column sat off-screen to the right.
         <DataTable
           columns={availableGateColumns(
-            { http, canEnable, canEnterCredential, platformAdmin, enabledResults },
+            {
+              http,
+              canEnable,
+              canEnterCredential,
+              platformAdmin,
+              enabledResults,
+              focusCredentialFor,
+              onCredentialFocused,
+            },
             handleEnabled,
             t,
           )}
@@ -258,6 +299,8 @@ interface AvailableGateCellContext {
   readonly canEnterCredential: boolean;
   readonly platformAdmin: boolean;
   readonly enabledResults: ReadonlyMap<string, EnableGateInstanceResultWire>;
+  readonly focusCredentialFor: string | null;
+  readonly onCredentialFocused: (() => void) | undefined;
 }
 
 /** The 待启用的平台实例 table's columns (`kit/data-table`): the instance is the card title and what
@@ -339,6 +382,8 @@ function AvailableGateWorkspaceCell({
   canEnable,
   canEnterCredential,
   platformAdmin,
+  focusCredentialFor,
+  onCredentialFocused,
 }: Omit<AvailableGateCellContext, 'enabledResults'> & {
   readonly row: AvailableGateInstanceWire;
   readonly enabledResult: EnableGateInstanceResultWire | null;
@@ -371,6 +416,8 @@ function AvailableGateWorkspaceCell({
                 })
               }
               tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
+              focusOnMount={row.gatekeeperId === focusCredentialFor}
+              onFocused={onCredentialFocused}
             />
           ) : null}
         </div>
