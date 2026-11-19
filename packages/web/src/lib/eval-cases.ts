@@ -14,6 +14,7 @@ import {
   type EvalFixtureOperationWire,
   type EvalFixtureProblemKind,
   type EvalFixtureRule,
+  PREDICATE_PATH_MAX,
   type Predicate,
   PredicateSchema,
   evalCallCountPath,
@@ -589,8 +590,19 @@ function expectOf(
       const field = assertion.field.trim();
       const at = `${assertion.uid}.value`;
       const value = comparedValue(assertion.valueKind, assertion.valueText, at, errors, t);
+      // Legacy 528: a field name the path cap refuses is said on the field, not under 等于 —
+      // the cap is the whole path's (`result.output.` and any quoting count too).
+      const path = evalOutputFieldPath(field);
+      const over = path.length - PREDICATE_PATH_MAX;
+      if (over > 0) {
+        errors[`${assertion.uid}.field`] = t(
+          `字段名最多 ${field.length - over} 个字符，现在多了 ${over} 个。`,
+          `A field name holds at most ${field.length - over} characters; this is ${over} over.`,
+        );
+        return null;
+      }
       if (field === '' || value === undefined) return null;
-      return leafOf({ path: evalOutputFieldPath(field), op: 'eq', value }, at, errors, t);
+      return leafOf({ path, op: 'eq', value }, at, errors, t);
     }
     case 'called':
     case 'not_called':

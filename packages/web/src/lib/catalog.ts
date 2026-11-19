@@ -79,6 +79,38 @@ interface IssueLike {
   readonly input?: unknown;
   readonly format?: string;
   readonly values?: readonly unknown[];
+  /** A size issue: `false` when the bound itself is refused too (`.positive()` is `> 0`). */
+  readonly inclusive?: boolean;
+  /** An `unrecognized_keys`: the keys the object may not have. */
+  readonly keys?: readonly string[];
+  /** An `invalid_union`: each branch's own issues, paths relative to the union's. */
+  readonly errors?: readonly (readonly IssueLike[])[];
+}
+
+/**
+ * Legacy 528: an `invalid_union` says only that no branch took the value ("这一项的值不被接受").
+ * The branch that came closest usually says what is wrong and where — an op written wrong in a
+ * condition: its `op`, with the values it may take. Closest: the fewest issues; on a tie, the
+ * fewest wrong literals (a branch whose `op` does not match is the wrong shape, one only missing
+ * `value` is the right one). Its first issue, path relative to the union's, nested unions
+ * likewise; `null` when that is a guess — two branches tie on only missing keys (`{}`).
+ */
+function closestUnionIssue(issue: IssueLike): IssueLike | null {
+  const branches = (issue.errors ?? []).filter((branch) => branch.length > 0);
+  if (branches.length === 0) return null;
+  const fewest = Math.min(...branches.map((branch) => branch.length));
+  const tied = branches.filter((branch) => branch.length === fewest);
+  const onlyMissing = (branch: readonly IssueLike[]) =>
+    branch.every((inner) => inner.code === 'invalid_type' && isMissing(inner));
+  if (tied.filter(onlyMissing).length > 1) return null;
+  const wrongLiterals = (branch: readonly IssueLike[]) =>
+    branch.filter((inner) => inner.code === 'invalid_value').length;
+  let closest = tied[0] as readonly IssueLike[];
+  for (const branch of tied) if (wrongLiterals(branch) < wrongLiterals(closest)) closest = branch;
+  const first = closest[0] as IssueLike;
+  if (first.code !== 'invalid_union') return first;
+  const nested = closestUnionIssue(first);
+  return nested === null ? first : { ...nested, path: [...first.path, ...nested.path] };
 }
 
 /** An `invalid_type` issue for a value that is not there at all. Zod names what it received
@@ -92,9 +124,12 @@ function isMissing(issue: IssueLike): boolean {
 /** The shared schemas' only `custom` issues are a Worker definition's `egressDeny` entries
  *  (`EgressDenyListSchema`, English by design: the kernel and CLI read it too). Each problem it
  *  can name gets its own sentence here, so the editor never shows that English (audit P3). */
-const EGRESS_DENY_ISSUE = /^egressDeny entry "(.*)" (.*)$/s;
+const EGRESS_DENY_ISSUE =
+  /^egressDeny entry "(.*)" (is an IP address|starts with|contains "\*"|is empty|ends in a number|is not a host name)/s;
 
 function customIssueMessage(message: string, t: Translate): string {
+  // A condition's comparison with no `value` (`PredicateSchema`'s JSON-value refinement).
+  if (message === 'value must be a JSON value') return t('要填一个值', 'Needs a value');
   const match = EGRESS_DENY_ISSUE.exec(message);
   if (!match) return t('这一项的值不被接受', 'This value is not accepted');
   const entry = match[1] ?? '';
@@ -115,6 +150,12 @@ function customIssueMessage(message: string, t: Translate): string {
     return t(`「${entry}」里不支持通配符 *`, `"${entry}" contains *; wildcards are not supported`);
   }
   if (problem === 'is empty') return t('不能留空', 'Must not be empty');
+  if (problem === 'ends in a number') {
+    return t(
+      `「${entry}」以数字结尾，会被当成 IPv4 地址：这里只填主机名`,
+      `"${entry}" ends in a number, so it reads as an IPv4 address: list host names only`,
+    );
+  }
   return t(
     `「${entry}」不是合法的主机名：不要带协议、端口、路径、网段或空格`,
     `"${entry}" is not a host name: no scheme, port, path, CIDR or spaces`,
@@ -138,6 +179,10 @@ export function issueMessage(issue: IssueLike, t: Translate): string {
     case 'invalid_type':
       return isMissing(issue) ? t('必填', 'Required') : t('格式不对', 'Wrong format');
     case 'too_small':
+      // Legacy 528: `.positive()` refuses 0 itself — "不能小于 0" read as if 0 were fine.
+      if (issue.inclusive === false && issue.origin !== 'string' && issue.origin !== 'array') {
+        return t(`必须大于 ${min}`, `Must be greater than ${min}`);
+      }
       if (issue.origin === 'string') {
         return min !== null && min <= 1
           ? t('必填', 'Required')
@@ -150,10 +195,11 @@ export function issueMessage(issue: IssueLike, t: Translate): string {
     case 'too_big':
       if (issue.origin === 'string') return t(`最多 ${max} 个字符`, `At most ${max} characters`);
       if (issue.origin === 'array') return t(`最多 ${max} 项`, `At most ${max} items`);
+      if (issue.inclusive === false) return t(`必须小于 ${max}`, `Must be less than ${max}`);
       return t(`不能大于 ${max}`, `Must be at most ${max}`);
     case 'invalid_value': {
-      const options = (issue.values ?? []).map(String).join('、');
-      return t(`只能是：${options}`, `Must be one of: ${options}`);
+      const options = (issue.values ?? []).map(String);
+      return t(`只能是：${options.join('、')}`, `Must be one of: ${options.join(', ')}`);
     }
     case 'invalid_format':
       return issue.format === 'url'
@@ -161,9 +207,39 @@ export function issueMessage(issue: IssueLike, t: Translate): string {
         : t('格式不对', 'Wrong format');
     case 'custom':
       return customIssueMessage(issue.message, t);
+    case 'unrecognized_keys': {
+      const keys = issue.keys ?? [];
+      return t(`不能有这些字段：${keys.join('、')}`, `Fields not allowed here: ${keys.join(', ')}`);
+    }
+    case 'invalid_union': {
+      const closest = closestUnionIssue(issue);
+      if (closest === null) return t('这一项的值不被接受', 'This value is not accepted');
+      return issueAtText(closest.path, issueMessage(closest, t), t);
+    }
     default:
       return t('这一项的值不被接受', 'This value is not accepted');
   }
+}
+
+/** Where inside a value an issue is, counted from 1 as the editor's own notes count items
+ *  (UX acceptance of #1488 P3): `all.0.op` → 「all 第 1 项的「op」」, "op in all item 1". */
+function issueAtText(path: readonly PropertyKey[], message: string, t: Translate): string {
+  if (path.length === 0) return message;
+  const step = (segment: PropertyKey) =>
+    typeof segment === 'number'
+      ? t(`第 ${segment + 1} 项`, `item ${segment + 1}`)
+      : String(segment);
+  const leaf = path[path.length - 1] as PropertyKey;
+  const outer = path.slice(0, -1).map(step).join(' ');
+  if (typeof leaf === 'number') {
+    const place = path.map(step).join(' ');
+    return t(`${place}：${message}`, `${place}: ${message}`);
+  }
+  const name = String(leaf);
+  if (outer === '') return t(`「${name}」${message}`, `${name}: ${message}`);
+  // 「all 第 1 项的」 runs on; a bare field name keeps a space before 的 (「not 的」).
+  const gap = typeof path[path.length - 2] === 'number' ? '' : ' ';
+  return t(`${outer}${gap}的「${name}」${message}`, `${name} in ${outer}: ${message}`);
 }
 
 export function fieldErrorsFromIssues(issues: readonly IssueLike[], t: Translate): FieldErrors {

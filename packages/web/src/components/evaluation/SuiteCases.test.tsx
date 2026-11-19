@@ -664,6 +664,31 @@ describe('SuiteCases (S10 E3-1b)', () => {
     );
   });
 
+  it('legacy 528: an output field name past the path cap is said on the field, not under 等于', async () => {
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite([]),
+        () => [],
+      ),
+    );
+    renderDetail(http);
+    fireEvent.click(await screen.findByTestId('eval-case-add-trigger'));
+    const sheet = await screen.findByTestId('eval-case-sheet');
+    const assertion = within(sheet).getByTestId('eval-case-assertion');
+    select(within(assertion).getByTestId('eval-case-assertion-template'), 'output_equals');
+    const field = within(assertion).getByTestId('eval-case-assertion-field');
+    type(field, 'f'.repeat(500));
+    type(within(assertion).getByTestId('eval-case-assertion-value'), 'ok');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    const said = document.getElementById(`${field.id}-error`);
+    expect(said?.textContent).toBe('字段名最多 498 个字符，现在多了 2 个。');
+    expect(field.getAttribute('aria-describedby')).toContain(`${field.id}-error`);
+    type(field, 'f'.repeat(498));
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(assertion.textContent).not.toContain('字段名最多');
+  });
+
   it('a custom condition says what its paths read: the call’s params in a rule, the run in an assertion', async () => {
     const http = scriptedHttp(
       handlers(

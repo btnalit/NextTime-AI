@@ -1,7 +1,10 @@
+import { PredicateSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_STEP,
+  EMPTY_WORKER_DEFINITION_FORM,
   type ProcedureStepForm,
+  fieldErrorsFromIssues,
   issueMessage,
   opsRunnerTemplateForm,
   parseJsonObject,
@@ -475,5 +478,62 @@ describe('issueMessage', () => {
     expect(issueMessage({ path: ['x'], message: 'something else', code: 'custom' }, zhT)).toBe(
       '这一项的值不被接受',
     );
+  });
+});
+
+describe('legacy 528: validation messages say what is wrong, in the viewer’s words, where it is', () => {
+  const enT: Translate = (_zh, en) => en;
+
+  it('a Worker step’s version 0 is refused as not greater than 0, not as less than 0', () => {
+    const result = validateProcedure(
+      {
+        name: 'Deploy',
+        description: 'Deploy web',
+        steps: [{ ...EMPTY_STEP, kind: 'worker', definitionId: 'wd-1', version: '0' }],
+      },
+      zhT,
+    );
+    expect(result.ok ? null : result.errors['steps.0.version']).toBe('必须大于 0');
+  });
+
+  it('every egressDeny refusal is one sentence with no English left in it', () => {
+    const refused = (entry: string) => {
+      const result = validateWorkerDefinition(
+        { ...EMPTY_WORKER_DEFINITION_FORM, systemPrompt: 'Fix.', egressDeny: entry },
+        zhT,
+      );
+      return result.ok ? null : (result.errors.egressDeny ?? null);
+    };
+    expect(refused('http://x y')).toBe(
+      '「http://x y」不是合法的主机名：不要带协议、端口、路径、网段或空格',
+    );
+    expect(refused('a*b.example')).toBe('「a*b.example」里不支持通配符 *');
+    expect(refused('foo.123')).toBe('「foo.123」以数字结尾，会被当成 IPv4 地址：这里只填主机名');
+    expect(refused('1.2.3.4')).toBe(
+      '「1.2.3.4」是 IP 地址：这里只填主机名（私有网段已经按地址拦截）',
+    );
+  });
+
+  it('a condition no branch takes names the field the closest branch refuses', () => {
+    const said = (value: unknown, t: Translate = zhT) => {
+      const parsed = PredicateSchema.safeParse(value);
+      return parsed.success ? null : fieldErrorsFromIssues(parsed.error.issues, t)._;
+    };
+    const comparisons = 'eq、ne、gt、gte、lt、lte、contains';
+    expect(said({ path: 'a', op: 'eqq', value: 1 })).toBe(`「op」只能是：${comparisons}`);
+    expect(said({ path: 'a', op: 'eqq', value: 1 }, enT)).toBe(
+      'op: Must be one of: eq, ne, gt, gte, lt, lte, contains',
+    );
+    expect(said({ all: [{ path: 'a', op: 'eqq', value: 1 }] })).toBe(
+      `all 第 1 项的「op」只能是：${comparisons}`,
+    );
+    expect(said({ all: [{ path: 'a', op: 'eqq', value: 1 }] }, enT)).toBe(
+      'op in all item 1: Must be one of: eq, ne, gt, gte, lt, lte, contains',
+    );
+    // Only `value` missing: the comparison is the shape meant, not `exists`.
+    expect(said({ not: { path: 'a', op: 'gt' } })).toBe('not 的「value」要填一个值');
+    expect(said({ path: 'a', op: 'exists', value: 1 })).toMatch(/^不能有这些字段：value$/);
+    // Nothing to go by: still the plain sentence.
+    expect(said({})).toBe('这一项的值不被接受');
   });
 });
