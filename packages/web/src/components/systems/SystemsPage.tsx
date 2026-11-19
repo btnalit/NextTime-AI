@@ -1079,10 +1079,9 @@ export function SystemsPage({
               key={selectedGatekeeperId}
               http={http}
               gatekeeperId={selectedGatekeeperId}
-              platformDisabled={
+              cardGate={
                 readiness.state.status === 'ready'
                   ? readiness.state.data.gates.find((g) => g.gateId === selectedGatekeeperId)
-                      ?.disabledOperations
                   : undefined
               }
             />

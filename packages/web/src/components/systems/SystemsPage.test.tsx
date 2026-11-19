@@ -1358,7 +1358,13 @@ describe('SystemsPage', () => {
       execution_readiness: () =>
         readiness({
           principalId: 'p-self',
-          gates: [gate({ disabledOperations: ['docker.restart', 'docker.status'] })],
+          gates: [
+            gate({
+              observeOperationCount: 1,
+              executeOperationCount: 1,
+              disabledOperations: ['docker.restart', 'docker.status'],
+            }),
+          ],
         }),
       get_gatekeeper: () => ({
         id: 'gk-1',
@@ -1384,6 +1390,10 @@ describe('SystemsPage', () => {
     expect(notice.textContent).toContain('已发布的 1 个');
     expect(notice.textContent).toContain('docker.restart。');
     expect(notice.textContent).not.toContain('docker.status');
+    // UX acceptance of #1495 P2: the published counts are the card's, docker.restart included.
+    expect(within(drawer).getByTestId('gatekeeper-op-counts').textContent).toBe(
+      '已发布 1 个只读 · 1 个写（其中 1 个被平台停用，下面没有列出）',
+    );
   });
 
   it('legacy 716: a member’s page does not read the marks, and a card shows none', async () => {
