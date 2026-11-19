@@ -357,6 +357,43 @@ export function distinctDefinitionName(
   return sameNameDefinitionIds(definitions).has(id) ? `${name} · ${shortId(id)}` : name;
 }
 
+/** Legacy 550: the goal a planning or review Task works for — its input (the kernel's
+ *  `plannerInput` / `reviewerInput`) is a large JSON object, not a person's request, and names the
+ *  goal as `goal.statement`. `undefined` for any other Task, or an input without one. */
+export function taskGoalStatement(
+  task: Pick<TaskSummary, 'purpose' | 'input'>,
+): string | undefined {
+  if (task.purpose !== 'planning' && task.purpose !== 'review') return undefined;
+  const input = task.input;
+  if (!input || typeof input !== 'object') return undefined;
+  const goal = (input as Record<string, unknown>).goal;
+  if (!goal || typeof goal !== 'object') return undefined;
+  const statement = (goal as Record<string, unknown>).statement;
+  return typeof statement === 'string' && statement.trim() !== '' ? statement : undefined;
+}
+
+/** Legacy 551: the definition a Task ran, as the Tasks page names it — a planning or review Task's
+ *  is the platform's goal planner / reviewer, named in the reader's language (as the catalog does,
+ *  UX P3-1 on #864), never its stored English name; any other, `distinctDefinitionName`. */
+export function taskDefinitionName(
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+  task: Pick<TaskSummary, 'purpose' | 'workerDefinitionId' | 'workerDefinitionVersion'>,
+  t: Translate,
+): string | undefined {
+  const row =
+    definitions?.find(
+      (entry) =>
+        entry.id === task.workerDefinitionId && entry.version === task.workerDefinitionVersion,
+    ) ?? definitions?.find((entry) => entry.id === task.workerDefinitionId);
+  if (task.purpose === 'planning' || row?.goalPlanner === true) {
+    return t('目标规划器', 'Goal planner');
+  }
+  if (task.purpose === 'review' || row?.goalReviewer === true) {
+    return t('目标评审器', 'Goal reviewer');
+  }
+  return distinctDefinitionName(definitions, task.workerDefinitionId, task.workerDefinitionVersion);
+}
+
 /** Whether the exact version a Task names is a deprecated one (legacy 264). */
 export function definitionDeprecated(
   definitions: readonly WorkerDefinitionSummary[] | undefined,
