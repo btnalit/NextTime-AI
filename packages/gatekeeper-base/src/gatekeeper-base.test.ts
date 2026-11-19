@@ -491,14 +491,31 @@ describe('GatekeeperBase', () => {
     await expect(gate.revert('stock.adjust', {})).rejects.toThrow(/does not support revert/);
   });
 
-  it('health defaults to ok when the transport has no health check', async () => {
+  it('health defaults to ok when the transport has no health check, and says it checks digests (legacy 215)', async () => {
     const gate = new GatekeeperBase({
       manifest: [],
       transport: fakeTransport(),
       credentialResolver: { resolve: async () => ({}) },
       idempotencyStore: new InMemoryIdempotencyStore(),
     });
-    await expect(gate.health()).resolves.toEqual({ status: 'ok' });
+    await expect(gate.health()).resolves.toEqual({ status: 'ok', checksOperationDigest: true });
+  });
+
+  it('a transport’s own health keeps its status and detail, and the gate says it checks digests (legacy 215)', async () => {
+    const gate = new GatekeeperBase({
+      manifest: [],
+      transport: {
+        ...fakeTransport(),
+        health: async () => ({ status: 'degraded', detail: 'slow upstream' }),
+      },
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    await expect(gate.health()).resolves.toEqual({
+      status: 'degraded',
+      detail: 'slow upstream',
+      checksOperationDigest: true,
+    });
   });
 });
 
