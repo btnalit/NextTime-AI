@@ -8,6 +8,7 @@ import {
   latestGoalStatuses,
   modelRefusedText,
   systemStatusLineFromMessage,
+  turnNotStartedText,
 } from './system-status.js';
 import type { ChatMessage } from './ws-client.js';
 
@@ -267,6 +268,74 @@ describe('system.model_refused (legacy 589)', () => {
     expect(modelRefusedText(line({ scope: null }), zh)).toBe(
       `工作区的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；管理员也可以调高它。`,
     );
+  });
+});
+
+describe('system.turn_not_started (legacy 515)', () => {
+  it('parses the Turn and why; a reason it does not know reads as absent; without the Turn it is nothing', () => {
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({
+          kind: 'system.turn_not_started',
+          text: 'The agent was not started for this message',
+          turnId: 'turn-1',
+          reason: 'evaluation_withheld',
+        }),
+      ),
+    ).toEqual({
+      variant: 'turn_not_started',
+      text: 'The agent was not started for this message',
+      turnId: 'turn-1',
+      reason: 'evaluation_withheld',
+    });
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.turn_not_started', turnId: 'turn-1', reason: 'later' }, 'kept'),
+      ),
+    ).toEqual({ variant: 'turn_not_started', text: 'kept', turnId: 'turn-1', reason: null });
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.turn_not_started', reason: 'evaluation_paused' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  const zh: Translate = (text) => text;
+  const en: Translate = (_zh, text) => text;
+  const line = (reason: 'evaluation_withheld' | 'evaluation_paused' | null) =>
+    ({ variant: 'turn_not_started', text: 'kernel text', turnId: 'turn-1', reason }) as const;
+
+  it('says why there is no reply and who can change it, in the reader’s language — never what was withheld', () => {
+    expect(turnNotStartedText(line('evaluation_withheld'), zh)).toBe(
+      '智能体要读的内容（它的系统提示词、平台的附加指令或挂载的 Skill）里有评测用例集留作测试的部分，所以它没有启动，这条消息没有回复。如果在你自己加的补充说明里，或是你可以排除的 Skill，到「我的智能体」里修改；在平台的附加指令里的话，平台管理员可以在「平台设置」里修改；其他的请找工作区所有者或构建者。',
+    );
+    expect(turnNotStartedText(line('evaluation_withheld'), en)).toContain('change it in My Agent');
+    expect(turnNotStartedText(line('evaluation_paused'), zh)).toBe(
+      '评测防泄漏暂停了代你行动的智能体，这条消息没有交给智能体，所以没有回复。工作区所有者在「治理 → 评测」查看后可以解除。',
+    );
+    expect(turnNotStartedText(line('evaluation_paused'), en)).toContain('Govern → Evaluation');
+    // A reason this console does not know: the kernel's own words.
+    expect(turnNotStartedText(line(null), zh)).toBe('kernel text');
+  });
+
+  it('review #493 of #1498: an admin agent reads only its built-in prompt and the platform’s instructions — never sent to My Agent', () => {
+    const withheld = line('evaluation_withheld');
+    expect(turnNotStartedText(withheld, zh, 'admin_agent')).toBe(
+      '管理员智能体要读的内容（它内置的系统提示词或平台的附加指令）里有评测用例集留作测试的部分，所以它没有启动，这条消息没有回复。在平台的附加指令里的话，平台管理员可以在「平台设置」里修改；其他的请找这个工作区的所有者或构建者。',
+    );
+    expect(turnNotStartedText(withheld, en, 'admin_agent')).toBe(
+      'What the admin agent would read (its built-in system prompt or the platform’s appended instructions) holds text an evaluation suite keeps for testing, so it was not started and this message has no reply. If it is in the platform’s appended instructions, a platform administrator can change them in Platform settings; otherwise ask an owner or builder of this workspace.',
+    );
+    expect(turnNotStartedText(withheld, zh, 'admin_agent')).not.toContain('我的智能体');
+    expect(turnNotStartedText(withheld, en, 'admin_agent')).not.toContain('My Agent');
+    // The entry agent's line names all four places; a pause reads the same for both.
+    expect(turnNotStartedText(withheld, en, 'entry')).toBe(
+      'What the agent would read (its system prompt, the platform’s appended instructions or a Skill it mounts) holds text an evaluation suite keeps for testing, so it was not started and this message has no reply. If it is in your own prompt addendum or a Skill you can exclude, change it in My Agent; if it is in the platform’s appended instructions, a platform administrator can change them in Platform settings; otherwise ask a workspace owner or builder.',
+    );
+    expect(turnNotStartedText(line('evaluation_paused'), zh, 'admin_agent')).toBe(
+      turnNotStartedText(line('evaluation_paused'), zh),
+    );
+    expect(turnNotStartedText(line(null), zh, 'admin_agent')).toBe('kernel text');
   });
 });
 

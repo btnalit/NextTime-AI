@@ -10,6 +10,7 @@
  * `index.ts`'s module doc for how the two are wired together (through this file's types alone,
  * plus the outbox for the *inbound* half) without either module importing the other.
  */
+import type { EvaluationStartRefusal } from '@nexttime/shared';
 
 export interface StartTurnInput {
   readonly workspaceId: string;
@@ -74,7 +75,14 @@ export type AgentRuntimeEventFields =
        *  wire field (projected defensively). Real content modeling is S1.5+ scope. */
       readonly content: Record<string, unknown>;
     }
-  | { readonly type: 'turnEnded'; readonly status: TurnEndStatus };
+  | {
+      readonly type: 'turnEnded';
+      readonly status: TurnEndStatus;
+      /** Legacy 515: the evaluation seal kept the Turn from starting, and why — the chat is told
+       *  (`system.turn_not_started`). Absent for any other end, a seal check that could not run
+       *  included (nothing was found to say). */
+      readonly notStarted?: EvaluationStartRefusal;
+    };
 
 /**
  * The platform event vocabulary (design doc §7.4 "接口注入的机制" event names, §9.4 chat.stream sub-

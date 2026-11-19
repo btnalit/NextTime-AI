@@ -695,8 +695,11 @@
 
 /* Legacy 589 (UX acceptance of #910): a refused Turn's sentence is the point of the line — why
    there is no reply, when the budget resets, who can raise it — so it is never cut: it wraps on
-   the rows under its label, and the line reads as a box rather than a pill. */
-.system-status-line[data-variant="model_refused"] {
+   the rows under its label, and the line reads as a box rather than a pill. Legacy 515 (UX
+   acceptance of #1498): so is the sentence of a Turn the evaluation seal kept from starting —
+   why there is no reply and who can change it. */
+.system-status-line[data-variant="model_refused"],
+.system-status-line[data-variant="turn_not_started"] {
   flex-wrap: wrap;
   align-items: baseline;
   row-gap: 2px;
@@ -705,7 +708,8 @@
   text-align: left;
 }
 
-.system-status-line[data-variant="model_refused"] .system-status-text {
+.system-status-line[data-variant="model_refused"] .system-status-text,
+.system-status-line[data-variant="turn_not_started"] .system-status-text {
   white-space: normal;
 }
 

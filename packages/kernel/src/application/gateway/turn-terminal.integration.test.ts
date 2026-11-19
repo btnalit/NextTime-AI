@@ -889,5 +889,67 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await turnCompletedStatuses(turnId)).toEqual(['completed']);
       expect(await systemMessages(chatId)).toEqual([]);
     });
+
+    it('legacy 515: a Turn the evaluation seal kept from starting ends failed with why on it and a system.turn_not_started message, pushed before the end; a replayed end writes no second one', async () => {
+      for (const reason of ['evaluation_withheld', 'evaluation_paused'] as const) {
+        const { chatId, turnId } = await startTurn();
+        const pushes: ChatPushEvent[] = [];
+        const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event));
+        try {
+          await sink.handle({ ...turnEnded(chatId, turnId, 'failed'), notStarted: reason });
+          await vi.waitFor(() =>
+            expect(pushes.map((event) => event.type)).toContain('chat.metadata'),
+          );
+        } finally {
+          unsubscribe();
+        }
+
+        const row = await turnRow(turnId);
+        expect(row?.status).toBe('failed');
+        expect(row?.metadata.notStarted).toBe(reason);
+        expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+        const content = {
+          kind: 'system.turn_not_started',
+          text: expect.stringMatching(
+            reason === 'evaluation_paused'
+              ? /^The agent was not started for this message: the evaluation seal has paused the agents acting for you\./
+              : /^The agent was not started for this message: .*content reserved for evaluation\. Your own prompt addendum .*under My Agent; the platform’s appended instructions are a platform administrator’s, under Platform settings; for anything else, ask a workspace owner or builder\.$/,
+          ),
+          turnId,
+          reason,
+        };
+        expect(await systemMessages(chatId)).toEqual([
+          expect.objectContaining({ kind: 'system.turn_not_started', content }),
+        ]);
+        expect(pushes.filter((event) => event.type !== 'chat.stream')).toEqual([
+          {
+            type: 'chat.message',
+            chatId,
+            message: expect.objectContaining({
+              role: 'system',
+              kind: 'system.turn_not_started',
+              content,
+            }),
+          },
+          { type: 'chat.metadata', chatId, metadata: { turnId, turnStatus: 'failed' } },
+        ]);
+
+        await sink.handle({ ...turnEnded(chatId, turnId, 'failed'), notStarted: reason });
+        expect(await systemMessages(chatId)).toHaveLength(1);
+        expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+      }
+    });
+
+    it('legacy 515: a reason on any end but failed is not told — a stopped Turn says nothing of the seal', async () => {
+      const { chatId, turnId } = await startTurn();
+      await sink.handle({
+        ...turnEnded(chatId, turnId, 'interrupted'),
+        notStarted: 'evaluation_withheld',
+      });
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('interrupted');
+      expect(row?.metadata).not.toHaveProperty('notStarted');
+      expect(await systemMessages(chatId)).toEqual([]);
+    });
   },
 );

@@ -18,9 +18,11 @@ import {
   DraftOriginSchema,
   ENTRY_AGENT_SESSION_STATUS_VALUES,
   EPISTEMIC_STATUS_VALUES,
+  EVALUATION_START_REFUSAL_VALUES,
   EXTENSION_MODE_VALUES,
   EntryAgentSessionStatusSchema,
   EpistemicStatusSchema,
+  EvaluationStartRefusalSchema,
   ExtensionModeSchema,
   GATE_CREDENTIAL_MODE_VALUES,
   GOAL_ABSENCE_BASELINE_STATUS_VALUES,
@@ -189,6 +191,12 @@ const enumsUnderTest = [
       'evaluation_withheld',
       'evaluation_paused',
     ],
+  ],
+  [
+    'EvaluationStartRefusal',
+    EVALUATION_START_REFUSAL_VALUES,
+    EvaluationStartRefusalSchema,
+    ['evaluation_withheld', 'evaluation_paused'],
   ],
   [
     'TaskFailureCategory',
@@ -370,8 +378,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 39 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus) + S11 AA3a (DraftOrigin, legacy 293) + legacy 757 (GateCredentialMode)', () => {
-    expect(enumsUnderTest).toHaveLength(40);
+  it('covers all 41 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus) + S11 AA3a (DraftOrigin, legacy 293) + legacy 757 (GateCredentialMode) + legacy 515 (EvaluationStartRefusal)', () => {
+    expect(enumsUnderTest).toHaveLength(41);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

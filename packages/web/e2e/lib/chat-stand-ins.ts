@@ -4,8 +4,9 @@ import { type Page, expect } from '@playwright/test';
 /**
  * e2e/lib/chat-stand-ins.ts: messages the CI stack cannot produce (its agent runtime only echoes),
  * appended to a real chat's history as the socket carries it — the rest of the page is the real
- * stack. Shared by chat-goal.spec.ts (a goal's proposal and milestones, S11 GO5e-2) and
- * chat-model-refused.spec.ts (a Turn the platform refused, legacy 589).
+ * stack. Shared by chat-goal.spec.ts (a goal's proposal and milestones, S11 GO5e-2),
+ * chat-model-refused.spec.ts (a Turn the platform refused, legacy 589) and
+ * chat-turn-not-started.spec.ts (a Turn the evaluation seal kept from starting, legacy 515).
  */
 
 /** A chat message as `get_chat_history` returns it. */

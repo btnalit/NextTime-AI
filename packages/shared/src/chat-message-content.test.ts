@@ -8,18 +8,19 @@ import {
 /**
  * chat-message-content.test: round-trip/rejection coverage for the `SystemMessageContent`
  * variants `application/linkage` (kernel) writes into `chat_messages.content` — docs/development-
- * tasks.md S2.11 deliverable 1, S11 GO5e-2's `system.goal_update` and legacy 589's
- * `system.model_refused`.
+ * tasks.md S2.11 deliverable 1, S11 GO5e-2's `system.goal_update`, legacy 589's
+ * `system.model_refused` and legacy 515's `system.turn_not_started`.
  */
 
 describe('SYSTEM_MESSAGE_KIND_VALUES', () => {
-  it('lists the three S2.11 chat message kinds, S11 GO5e-2 system.goal_update and legacy 589 system.model_refused', () => {
+  it('lists the three S2.11 chat message kinds, S11 GO5e-2 system.goal_update, legacy 589 system.model_refused and legacy 515 system.turn_not_started', () => {
     expect(SYSTEM_MESSAGE_KIND_VALUES).toEqual([
       'system.task_update',
       'system.action_pending',
       'system.action_update',
       'system.goal_update',
       'system.model_refused',
+      'system.turn_not_started',
     ]);
   });
 });
@@ -96,6 +97,19 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     scope: 'workspace_daily_tokens',
     resetsAt: '2026-11-02T00:00:00.000Z',
   },
+  // Legacy 515: an entry Turn the evaluation seal kept from starting, for each reason.
+  {
+    kind: 'system.turn_not_started',
+    text: 'The agent was not started: what it starts with carries content reserved for evaluation',
+    turnId: 'turn2',
+    reason: 'evaluation_withheld',
+  },
+  {
+    kind: 'system.turn_not_started',
+    text: 'The agent was not started: the evaluation seal paused the agents acting for you',
+    turnId: 'turn3',
+    reason: 'evaluation_paused',
+  },
 ];
 
 describe('SystemMessageContentSchema', () => {
@@ -143,6 +157,17 @@ describe('SystemMessageContentSchema', () => {
         turnId: 'turn1',
         scope: 'task_budget',
         resetsAt: '2026-11-02T00:00:00.000Z',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects system.turn_not_started whose reason is not an EvaluationStartRefusal', () => {
+    expect(() =>
+      SystemMessageContentSchema.parse({
+        kind: 'system.turn_not_started',
+        text: 'x',
+        turnId: 'turn1',
+        reason: 'spawn_failed',
       }),
     ).toThrow();
   });

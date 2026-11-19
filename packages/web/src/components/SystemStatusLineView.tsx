@@ -1,8 +1,13 @@
+import type { ChatAgentKind } from '@nexttime/shared';
 import { failureReading } from '../lib/action-outcome.js';
 import { goalMilestoneText } from '../lib/goals.js';
 import { useT } from '../lib/i18n.js';
 import { taskFailureReasonText } from '../lib/labels.js';
-import { type SystemStatusLineData, modelRefusedText } from '../lib/system-status.js';
+import {
+  type SystemStatusLineData,
+  modelRefusedText,
+  turnNotStartedText,
+} from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
 import { StatusChip } from './ui/StatusChip.js';
 
@@ -13,6 +18,9 @@ export interface SystemStatusLineViewProps {
   /** S11 GO5e-2 (#737 UX P2-2): for a goal's milestone or a goal step's Task, which goal it is —
    *  its statement on one line, or that it cannot be read (`chatGoalLabel`); `null` while read. */
   readonly goalLabel?: string | null;
+  /** Legacy 515: whose chat the line is in — an admin agent reads no addendum and no Skills, so a
+   *  Turn the evaluation seal kept from starting names other places to change. */
+  readonly agentKind?: ChatAgentKind;
 }
 
 const OPEN_TITLE = {
@@ -21,6 +29,7 @@ const OPEN_TITLE = {
   goal_update: ['打开目标', 'Open goal'],
   // Never opened: the Turn it is about is the message right above it.
   model_refused: ['', ''],
+  turn_not_started: ['', ''],
 } as const;
 
 /** components/SystemStatusLineView: the compact inline notice for `system.action_update`/
@@ -29,7 +38,12 @@ const OPEN_TITLE = {
  *  language (`goalMilestoneText`) and, unlike the kernel's one-line tail, never cut: it wraps on a
  *  narrow screen (pages.css). A Task run for a goal's step shows a tag naming the step in place of
  *  the kernel's line. */
-export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLineViewProps) {
+export function SystemStatusLineView({
+  line,
+  onOpen,
+  goalLabel,
+  agentKind,
+}: SystemStatusLineViewProps) {
   const t = useT();
   // Legacy 589: no chip and nothing to open — what happened and what to do, in the reader's
   // language, after a short warning label that is never cut.
@@ -44,6 +58,24 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
           {t('模型调用被平台拒绝', 'Model calls refused')}
         </span>
         <span className="system-status-text">{modelRefusedText(line, t)}</span>
+      </div>
+    );
+  }
+  // Legacy 515: the same shape — the label names the refusal as a Task's failure does.
+  if (line.variant === 'turn_not_started') {
+    const label = line.reason
+      ? taskFailureReasonText(line.reason, t).short
+      : t('智能体没有启动', 'Agent not started');
+    return (
+      <div
+        className="system-status-line"
+        data-testid="system-status-line"
+        data-variant={line.variant}
+      >
+        <span className="system-status-failure text-danger" data-testid="system-status-failure">
+          {label}
+        </span>
+        <span className="system-status-text">{turnNotStartedText(line, t, agentKind)}</span>
       </div>
     );
   }
