@@ -195,6 +195,7 @@ export function ActionRequestCard({
       {decidable && card.onBehalfOfAccount === 'not_connected' ? (
         <RequesterAccountNotice
           own={callerPrincipalId != null && card.onBehalfOf === callerPrincipalId}
+          gatekeeperId={card.gatekeeperId}
           testId="action-card-requester-account"
         />
       ) : null}

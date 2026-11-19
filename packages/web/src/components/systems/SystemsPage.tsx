@@ -32,7 +32,7 @@ import { useT } from '../../lib/i18n.js';
 import { principalShownName, transportKindLabel } from '../../lib/labels.js';
 import { launcherStepsText } from '../../lib/launcher-steps.js';
 import { breadcrumbFor } from '../../lib/nav.js';
-import { hrefs, readCompleteConnectionRequest } from '../../lib/router.js';
+import { hrefs, readCompleteConnectionRequest, readGateCredentialLink } from '../../lib/router.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
 import {
   trialRequestNeedsPlatformAdminNote,
@@ -184,6 +184,25 @@ export function SystemsPage({
       const requestId = readCompleteConnectionRequest(hash);
       if (requestId === null) return;
       setLinkedRequestId(requestId);
+      window.history.replaceState(null, '', hash.slice(0, hash.indexOf('?')));
+    }
+    consume();
+    window.addEventListener('hashchange', consume);
+    return () => window.removeEventListener('hashchange', consume);
+  }, []);
+  // Legacy 520: the approval page's 「去录入我的凭证」 links here with `?credential=<gatekeeper id>`
+  // (`hrefs.gateCredential`): that gate's 「录入我的凭证」 under 待启用的平台实例 takes the focus once
+  // the instances are read. Dropped from the address once read, as `?complete=` is.
+  const [credentialGatekeeperId, setCredentialGatekeeperId] = useState<string | null>(() =>
+    readGateCredentialLink(window.location.hash),
+  );
+  const clearCredentialLink = useCallback(() => setCredentialGatekeeperId(null), []);
+  useEffect(() => {
+    function consume(): void {
+      const hash = window.location.hash;
+      const gatekeeperId = readGateCredentialLink(hash);
+      if (gatekeeperId === null) return;
+      setCredentialGatekeeperId(gatekeeperId);
       window.history.replaceState(null, '', hash.slice(0, hash.indexOf('?')));
     }
     consume();
@@ -923,6 +942,8 @@ export function SystemsPage({
           canEnable={canEnable}
           canEnterCredential={can('issue_gate_credential_token') !== false}
           platformAdmin={platformAdmin}
+          focusCredentialFor={credentialGatekeeperId}
+          onCredentialFocused={clearCredentialLink}
         />
       </section>
 

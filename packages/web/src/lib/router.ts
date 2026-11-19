@@ -310,6 +310,10 @@ export const hrefs = {
    *  the `request_connection` call that made it (`readCompleteConnectionRequest`). */
   completeConnectionRequest: (requestId: string) =>
     `#/govern/systems?complete=${encodeURIComponent(requestId)}`,
+  /** Legacy 520: 系统与授权 with the reader's own 「录入我的凭证」 for one gate in focus — the
+   *  approval page's link when the requester has not connected their own account on it. */
+  gateCredential: (gatekeeperId: string) =>
+    `#/govern/systems?credential=${encodeURIComponent(gatekeeperId)}`,
   catalog: (tab: CatalogTab = 'operations', itemId?: string) =>
     itemId !== undefined
       ? `#/govern/catalog/${tab}/${encodeURIComponent(itemId)}`
@@ -415,6 +419,14 @@ export function readCompleteConnectionRequest(hash: string): string | null {
   const query = hash.indexOf('?');
   if (query === -1) return null;
   const id = new URLSearchParams(hash.slice(query + 1)).get('complete');
+  return id ? id : null;
+}
+
+/** The gate `hrefs.gateCredential` asks 系统与授权 to put 「录入我的凭证」 in focus for, else `null`. */
+export function readGateCredentialLink(hash: string): string | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  const id = new URLSearchParams(hash.slice(query + 1)).get('credential');
   return id ? id : null;
 }
 

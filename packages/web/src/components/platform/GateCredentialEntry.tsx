@@ -1,5 +1,5 @@
 import type { GateHostTokenWire } from '@nexttime/shared';
-import { type ReactNode, useEffect, useId, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { postGateCredential } from '../../lib/gate-host.js';
 import { useT } from '../../lib/i18n.js';
 import { StillNeeded } from '../kit/still-needed.js';
@@ -17,6 +17,10 @@ export interface GateCredentialEntryProps {
    *  系统接入 the click *is* the capability call ("录入我的凭证"). Either way the button becomes the
    *  countdown once a token comes back. */
   readonly tokenButtonLabel: ReactNode;
+  /** Legacy 520: the page was opened to enter this credential — the button takes the focus (and
+   *  is scrolled to) once, then `onFocused` lets the caller forget it. */
+  readonly focusOnMount?: boolean;
+  readonly onFocused?: () => void;
 }
 
 type Phase =
@@ -56,8 +60,22 @@ function formatCountdown(secondsLeft: number): string {
  * state, and every field (plus the token itself) is dropped the instant the gate host confirms
  * `stored` (`clearFields` below) — a re-render after that shows only the success notice.
  */
-export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCredentialEntryProps) {
+export function GateCredentialEntry({
+  requestToken,
+  tokenButtonLabel,
+  focusOnMount = false,
+  onFocused,
+}: GateCredentialEntryProps) {
   const t = useT();
+  const tokenButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!focusOnMount) return;
+    const button = tokenButton.current;
+    if (!button) return;
+    button.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    button.focus();
+    onFocused?.();
+  }, [focusOnMount, onFocused]);
   // Unique per mount: `AvailableGateInstancesSection` renders one of these per linked row, so a
   // hardcoded id would make every row's label point at the first row's input.
   const domId = useId();
@@ -167,6 +185,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
     return (
       <div className="stack-s">
         <Button
+          ref={tokenButton}
           variant="secondary"
           size="s"
           icon="key"
