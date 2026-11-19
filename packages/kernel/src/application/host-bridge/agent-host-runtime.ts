@@ -1,4 +1,4 @@
-import type { Role } from '@nexttime/shared';
+import type { EvaluationStartRefusal, Role } from '@nexttime/shared';
 import { AGENT_HOST_SPAWN_TIMEOUT_MS, AGENT_HOST_TURN_STARTUP_MS } from '@nexttime/shared';
 import type {
   AgentHostToKernelFrame,
@@ -619,9 +619,16 @@ export class AgentHostRuntime implements AgentRuntime {
     // seal, as a Worker's start does (`spawnWorkerRun`) — the person's message itself was checked
     // when it was sent (`sendChatMessage`). S11 AA4c-2: an admin agent's too, and a seal hold on
     // its person stops it like their entry agent.
-    if (await this.startWithheld(input, systemPrompt, skillsInline)) {
+    const withheld = await this.startWithheld(input, systemPrompt, skillsInline);
+    if (withheld !== null) {
       this.activeTurns.delete(input.turnId);
-      await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
+      // Legacy 515: the chat is told why — unless a stop came first (the person ended it), or the
+      // check could not run (nothing was found to say).
+      await this.emitEnded(
+        input,
+        turn.stopRequested ? 'interrupted' : 'failed',
+        turn.stopRequested || withheld === 'unchecked' ? undefined : withheld,
+      );
       return;
     }
 
@@ -986,12 +993,15 @@ export class AgentHostRuntime implements AgentRuntime {
    * S10 E3-2c (legacy 514): first, whether the person's agents are paused by the seal — then the
    * Turn is not started either (audited as a refusal under the pause). `sendChatMessage` refused a
    * new message already; this covers a Turn on its way here when the pause opened.
+   *
+   * Legacy 515: says why it is not started — `evaluation_paused`, `evaluation_withheld`, or
+   * `unchecked` for a check that could not run — and `null` when it starts.
    */
   private async startWithheld(
     input: StartTurnInput,
     systemPrompt: string | undefined,
     skillsInline: SkillInlineMount[],
-  ): Promise<boolean> {
+  ): Promise<EvaluationStartRefusal | 'unchecked' | null> {
     const { workspaceId, principalId } = input;
     let withheld: boolean;
     let held = false;
@@ -1009,9 +1019,9 @@ export class AgentHostRuntime implements AgentRuntime {
           error: String(err),
         }),
       );
-      return true;
+      return 'unchecked';
     }
-    if (!withheld) return false;
+    if (!withheld) return null;
     if (held) {
       this.log(
         JSON.stringify({
@@ -1021,7 +1031,7 @@ export class AgentHostRuntime implements AgentRuntime {
         }),
       );
       await recordProbeHoldRefusal(this.pool, { workspaceId, principalId, path: 'entry_start' });
-      return true;
+      return 'evaluation_paused';
     }
     this.log(
       JSON.stringify({
@@ -1031,13 +1041,18 @@ export class AgentHostRuntime implements AgentRuntime {
       }),
     );
     await recordEvaluationWithheld(this.pool, { workspaceId, principalId, where: 'entry_start' });
-    return true;
+    return 'evaluation_withheld';
   }
 
-  private async emitEnded(input: StartTurnInput, status: 'failed' | 'interrupted'): Promise<void> {
+  private async emitEnded(
+    input: StartTurnInput,
+    status: 'failed' | 'interrupted',
+    notStarted?: EvaluationStartRefusal,
+  ): Promise<void> {
     await this.sinkInOrder({
       type: 'turnEnded',
       status,
+      ...(notStarted ? { notStarted } : {}),
       workspaceId: input.workspaceId,
       chatId: input.chatId,
       turnId: input.turnId,

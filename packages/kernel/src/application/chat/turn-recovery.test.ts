@@ -89,6 +89,7 @@ describe('endTurn', () => {
       ['running'],
       false,
       null,
+      null,
     ]);
     expect(updateQuery?.text).toContain("metadata ? 'stopRequestedAt'");
     expect(outboxPayload(queries)).toMatchObject({
@@ -165,6 +166,7 @@ describe('endTurn: refused model calls (legacy 589)', () => {
       ['running'],
       true,
       JSON.stringify({ scope: 'workspace_daily_cost', refusedCalls: 2 }),
+      null,
     ]);
     // Stop intent comes first in the UPDATE itself.
     expect(updateQuery?.text.indexOf("metadata ? 'stopRequestedAt'")).toBeLessThan(
@@ -183,7 +185,7 @@ describe('endTurn: refused model calls (legacy 589)', () => {
     await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed');
 
     const updateQuery = queries.find((q) => q.text.startsWith('update activities'));
-    expect(updateQuery?.values?.slice(4)).toEqual([false, null]);
+    expect(updateQuery?.values?.slice(4)).toEqual([false, null, null]);
   });
 
   it('an end other than completed never reads the usage', async () => {
@@ -192,6 +194,22 @@ describe('endTurn: refused model calls (legacy 589)', () => {
     await endTurn(client, WORKSPACE_ID, TURN_ID, 'failed');
 
     expect(queries.some((q) => q.text.includes('llm_usage'))).toBe(false);
+  });
+});
+
+describe('endTurn: a Turn the evaluation seal kept from starting (legacy 515)', () => {
+  it('hands the reason to the guarded UPDATE on a failed end only', async () => {
+    const failed = createFakeClient({ chat_id: CHAT_ID, status: 'failed' });
+    await endTurn(failed.client, WORKSPACE_ID, TURN_ID, 'failed', 'evaluation_paused');
+    const update = failed.queries.find((q) => q.text.startsWith('update activities'));
+    expect(update?.values?.slice(4)).toEqual([false, null, 'evaluation_paused']);
+    expect(update?.text).toContain("jsonb_build_object('notStarted', $7::text)");
+
+    const stopped = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
+    await endTurn(stopped.client, WORKSPACE_ID, TURN_ID, 'interrupted', 'evaluation_withheld');
+    const kept = stopped.queries.find((q) => q.text.startsWith('update activities'));
+    expect(kept?.values?.slice(4)).toEqual([false, null, null]);
+    expect(stopped.queries.some((q) => q.text.includes('chat_messages'))).toBe(false);
   });
 });
 
@@ -227,6 +245,7 @@ describe('endUnknownRuntimeTurn', () => {
       'interrupted',
       ['running'],
       false,
+      null,
       null,
     ]);
     expect(outboxPayload(queries)).toMatchObject({

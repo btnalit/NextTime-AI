@@ -1840,6 +1840,34 @@ describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => 
     expect(streaming?.textContent).toContain('正在输出');
   });
 
+  it('legacy 515 (review #493 of #1498): a Turn the evaluation seal kept from starting names the places an admin agent reads — never My Agent', async () => {
+    const fake = fakeClient({}, chatRow({ agentKind: 'admin_agent' }));
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    act(() => {
+      fake.deliver(persisted(1, 'user', '看一下试验场'));
+      fake.deliver({
+        ...persisted(2, 'user', ''),
+        role: 'system',
+        kind: 'system.turn_not_started',
+        content: {
+          kind: 'system.turn_not_started',
+          text: 'The agent was not started for this message',
+          turnId: 'turn-1',
+          reason: 'evaluation_withheld',
+        },
+      });
+    });
+    const line = await screen.findByTestId('system-status-line');
+    expect(line.getAttribute('data-variant')).toBe('turn_not_started');
+    expect(line.textContent).toContain(
+      '管理员智能体要读的内容（它内置的系统提示词或平台的附加指令）',
+    );
+    expect(line.textContent).toContain('「平台设置」');
+    expect(line.textContent).not.toContain('我的智能体');
+  });
+
   it('S11 AA4e: says above the composer when no target is chosen yet, and links to choosing them', async () => {
     const trialStatus = (targets: readonly unknown[]) => ({
       enabled: true,

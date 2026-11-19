@@ -542,10 +542,10 @@ describe('lib/goals', () => {
 
     const withheld = paused([refused('evaluation_withheld')]);
     expect(goalStateNote(withheld, undefined, budget, zh)?.text).toBe(
-      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。',
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词、平台的附加指令或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；在平台的附加指令里的话，平台管理员可以在「平台设置」里修改，之后再重试这一步；也可以取消目标。',
     );
     expect(goalStateNote(withheld, undefined, budget, en)?.text).toBe(
-      'A person must decide: step fetch’s attempt 1 did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.',
+      'A person must decide: step fetch’s attempt 1 did not start, because what its Worker would read (the step’s input, the Worker’s system prompt, the platform’s appended instructions or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); if it is in the platform’s appended instructions, a platform administrator can change them in Platform settings, then retry the step; or cancel the goal.',
     );
     // UX P2 on #1486: get_goal says whether that pause holds now. Released: the step can be
     // retried; not read (another caller of the note): what a person does either way.
@@ -660,7 +660,7 @@ describe('lib/goals', () => {
       ],
     });
     expect(goalStateNote(withheld, undefined, budget, zh)?.text).toBe(
-      '需要人决定：步骤「fetch」第 1 次尝试没有启动。评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后重试也会被同样拦下，要修订计划去掉它，见下面这一步的说明。',
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动。评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后直接重试也会被同样拦下，怎么处理见下面这一步的说明。',
     );
     expect(goalStateNote(withheld, undefined, budget, en)?.text).toMatch(
       /^A person must decide: step fetch’s attempt 1 did not start\. The evaluation seal has paused .* Besides, what this step’s Worker would read holds text an evaluation suite keeps for testing/,

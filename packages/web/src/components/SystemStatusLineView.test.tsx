@@ -33,6 +33,58 @@ describe('SystemStatusLineView', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  it('legacy 515: a Turn the evaluation seal kept from starting reads as a warning naming the refusal, says what to do, and opens nothing', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'turn_not_started',
+          text: 'The agent was not started for this message',
+          turnId: 'turn-1',
+          reason: 'evaluation_paused',
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    const row = screen.getByTestId('system-status-line');
+    expect(row.getAttribute('data-variant')).toBe('turn_not_started');
+    const label = screen.getByTestId('system-status-failure');
+    expect(label.textContent).toBe('智能体已暂停');
+    expect(label.className).toContain('text-danger');
+    expect(row.textContent).toContain('「治理 → 评测」');
+    expect(row.textContent).not.toContain('The agent was not started');
+    expect(document.querySelector('.chip')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    cleanup();
+
+    render(
+      <SystemStatusLineView
+        line={{ variant: 'turn_not_started', text: 'kernel text', turnId: 'turn-1', reason: null }}
+      />,
+    );
+    expect(screen.getByTestId('system-status-failure').textContent).toBe('智能体没有启动');
+    expect(screen.getByTestId('system-status-line').textContent).toContain('kernel text');
+    cleanup();
+
+    // Review #493 of #1498: in an admin agent's chat, the places it reads — never My Agent.
+    const withheld = {
+      variant: 'turn_not_started',
+      text: 'kernel text',
+      turnId: 'turn-1',
+      reason: 'evaluation_withheld',
+    } as const;
+    render(<SystemStatusLineView agentKind="admin_agent" line={withheld} />);
+    expect(screen.getByTestId('system-status-failure').textContent).toBe('含评测保留的内容');
+    expect(screen.getByTestId('system-status-line').textContent).toContain(
+      '管理员智能体要读的内容',
+    );
+    expect(screen.getByTestId('system-status-line').textContent).not.toContain('我的智能体');
+    cleanup();
+    render(<SystemStatusLineView line={withheld} />);
+    expect(screen.getByTestId('system-status-line').textContent).toContain('「我的智能体」');
+    expect(screen.getByTestId('system-status-line').textContent).toContain('「平台设置」');
+  });
+
   it('renders status badge and text for an action_update line', () => {
     render(
       <SystemStatusLineView

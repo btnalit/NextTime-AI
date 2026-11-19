@@ -499,7 +499,13 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                     unrecorded,
                   );
                 }
-                return endTurn(client, event.workspaceId, event.turnId, event.status);
+                return endTurn(
+                  client,
+                  event.workspaceId,
+                  event.turnId,
+                  event.status,
+                  event.notStarted,
+                );
               },
             );
           } finally {

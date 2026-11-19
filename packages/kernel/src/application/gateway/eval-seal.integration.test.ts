@@ -740,8 +740,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       const refused = await startTurn();
       expect(refused.sent).toEqual([]);
       expect(refused.events).toEqual([
-        expect.objectContaining({ type: 'turnEnded', status: 'failed', turnId: refused.turnId }),
+        expect.objectContaining({
+          type: 'turnEnded',
+          status: 'failed',
+          turnId: refused.turnId,
+          // Legacy 515: the chat is told why, never what.
+          notStarted: 'evaluation_withheld',
+        }),
       ]);
+      expectNothingOf(JSON.stringify(refused.events));
       const rows = (await sealRows()).slice(before);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.actor_principal_id).toBe(ownerId);

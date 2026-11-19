@@ -3,6 +3,7 @@ import {
   ActionRequestFailureKindSchema,
   ActionRequestStatusSchema,
   BlastRadiusSchema,
+  EvaluationStartRefusalSchema,
   GoalOutcomeBasisSchema,
   GoalRunPauseReasonSchema,
   GoalRunStatusSchema,
@@ -18,7 +19,8 @@ import { GOAL_RUN_CHANGE_VALUES } from './transitions.js';
  * (kernel) writes into `chat_messages` (docs/development-tasks.md S2.11 deliverable 1: "message
  * kinds: system.task_update, system.action_pending, system.action_update; extend the chat message
  * schema/enum in the existing style"; S11 GO5e-2 adds `system.goal_update`; legacy 589 adds
- * `system.model_refused`, which `application/chat` writes when it ends a Turn).
+ * `system.model_refused`, which `application/chat` writes when it ends a Turn; legacy 515
+ * `system.turn_not_started`, written the same way).
  *
  * `chat_messages.role` (migrations/core/0008_chat_messages.sql) already reserves `'system'` for
  * exactly this future case (that migration's own comment says so) — this file is the "existing
@@ -41,6 +43,7 @@ export const SYSTEM_MESSAGE_KIND_VALUES = [
   'system.action_update',
   'system.goal_update',
   'system.model_refused',
+  'system.turn_not_started',
 ] as const;
 export type SystemMessageKind = (typeof SYSTEM_MESSAGE_KIND_VALUES)[number];
 
@@ -130,12 +133,28 @@ const SystemModelRefusedContent = z.object({
   resetsAt: z.string(),
 });
 
+/**
+ * Legacy 515: the evaluation seal kept an entry Turn from starting — what the agent would start
+ * with (its system prompt, a Skill it mounts) carries content reserved for evaluation
+ * (`evaluation_withheld`), or the seal has paused the agents acting for the person who sent it
+ * (`evaluation_paused`) — so the Turn ended `failed` with no reply. Written into that Turn's chat
+ * (`turnId`) by the kernel when it ends the Turn. Says which, never what was withheld: neither is
+ * something the person who sent the message can change by sending it again.
+ */
+const SystemTurnNotStartedContent = z.object({
+  kind: z.literal('system.turn_not_started'),
+  text: z.string(),
+  turnId: z.string(),
+  reason: EvaluationStartRefusalSchema,
+});
+
 export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemTaskUpdateContent,
   SystemActionPendingContent,
   SystemActionUpdateContent,
   SystemGoalUpdateContent,
   SystemModelRefusedContent,
+  SystemTurnNotStartedContent,
 ]);
 export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
 

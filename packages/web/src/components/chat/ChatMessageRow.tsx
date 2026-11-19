@@ -122,6 +122,7 @@ export function ChatMessageRow({
           : undefined;
     return (
       <SystemStatusLineView
+        agentKind={agentKind}
         goalLabel={goalRunId ? chatGoalLabel(goals.get(goalRunId), t) : undefined}
         key={message.sequence}
         line={statusLine}

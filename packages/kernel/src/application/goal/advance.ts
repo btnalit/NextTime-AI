@@ -482,7 +482,7 @@ function sealRefusedStartDetail(
 ): string {
   return reason === 'evaluation_paused'
     ? `step ${stepKey}: attempt ${attempt} did not start: ${STEP_ATTEMPT_PAUSED_DETAIL} (evaluation_paused)`
-    : `step ${stepKey}: attempt ${attempt} did not start: what its Worker would start with (the step's input, the Worker's system prompt or a Skill it mounts) carries content reserved for evaluation (evaluation_withheld), and a retry is refused the same way, since it keeps this attempt's Worker version and Skills — revise the plan so the step's input leaves it out or the step uses a Worker version without it (a workspace owner or builder publishes one), or cancel`;
+    : `step ${stepKey}: attempt ${attempt} did not start: what its Worker would start with (the step's input, the Worker's system prompt, the platform's appended instructions or a Skill it mounts) carries content reserved for evaluation (evaluation_withheld), and a retry is refused the same way, since it keeps this attempt's Worker version and Skills — revise the plan so the step's input leaves it out or the step uses a Worker version without it (a workspace owner or builder publishes one); if it is in the platform's appended instructions, a platform administrator changes them in Platform settings, then retry the step; or cancel`;
 }
 
 /** The pause a refused attempt start causes, or `null` for a quota that clears by itself. */
