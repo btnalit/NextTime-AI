@@ -2,8 +2,11 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeResult, WireMembership, WireUser } from '../lib/auth-api.js';
-import type { HttpClientOptions } from '../lib/http-client.js';
+import { type HttpClientOptions, HttpError } from '../lib/http-client.js';
 import type { WsSessionEndReason } from '../lib/ws-client.js';
+
+/** The kernel's own answer to `GET /api/auth/me` with no signed-in user (legacy 868). */
+const SIGNED_OUT = new HttpError('capability_error', 'unauthorized', 'unauthorized');
 
 /**
  * useSessionMachine.test.tsx: R-16 (review 2026-10-02) — where the session machine goes when the
@@ -47,12 +50,20 @@ const stubs = vi.hoisted(() => ({
   refusedWorkspaces: new Set<string>(),
 }));
 
-vi.mock('../lib/auth-api.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../lib/auth-api.js')>()),
-  getMe: stubs.getMe,
-  logout: stubs.logout,
-  setWorkspaceCookie: stubs.setWorkspaceCookie,
-}));
+vi.mock('../lib/auth-api.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/auth-api.js')>();
+  return {
+    ...original,
+    // Legacy 868: the same tries, without waiting between them.
+    getMeRetrying: (
+      read: () => Promise<MeResult>,
+      options?: Parameters<typeof original.getMeRetrying>[1],
+    ) => original.getMeRetrying(read, { ...options, delaysMs: [0, 0, 0] }),
+    getMe: stubs.getMe,
+    logout: stubs.logout,
+    setWorkspaceCookie: stubs.setWorkspaceCookie,
+  };
+});
 
 vi.mock('../lib/ws-client.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../lib/ws-client.js')>();
@@ -177,7 +188,7 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
   it('-32002 when /api/auth/me itself is now refused → login', async () => {
     const { result } = await bootCookieSession([membership('ws-1')]);
 
-    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    stubs.getMe.mockRejectedValueOnce(SIGNED_OUT);
     act(() => lastSocket().end('membership_gone'));
 
     await waitFor(() =>
@@ -187,7 +198,7 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
   });
 
   it('an API-key session that ends → login, and the dead key is forgotten', async () => {
-    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    stubs.getMe.mockRejectedValueOnce(SIGNED_OUT);
     const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
     await waitFor(() => expect(result.current.preSession).toEqual({ kind: 'login' }));
 
@@ -355,7 +366,7 @@ describe('useSessionMachine: Sign out when the kernel cannot be reached (R-15)',
     hook.unmount();
     vi.clearAllMocks();
 
-    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    stubs.getMe.mockRejectedValueOnce(SIGNED_OUT);
     const next = bootFresh();
     await waitFor(() => expect(next.result.current.preSession).toEqual({ kind: 'login' }));
     expect(stubs.getMe).toHaveBeenCalledTimes(1);
@@ -408,7 +419,7 @@ describe('useSessionMachine: back at sign-in, the reason and the drafts (legacy 
   });
 
   it('Forget key clears the drafts too', async () => {
-    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    stubs.getMe.mockRejectedValueOnce(SIGNED_OUT);
     const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
     await waitFor(() => expect(result.current.preSession).toEqual({ kind: 'login' }));
     await act(() => result.current.connectApiKey('sk-member'));
@@ -418,5 +429,89 @@ describe('useSessionMachine: back at sign-in, the reason and the drafts (legacy 
 
     expect(result.current.session).toBeNull();
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+});
+
+// Legacy 868: only the kernel's own 401 means signed out. A network error at boot (a reload during
+// a network change, a kernel restart) is tried again, and never lands on the sign-in form.
+describe('useSessionMachine: boot when /api/auth/me is not reached (legacy 868)', () => {
+  const NETWORK = new HttpError('network', '/api/auth/me failed: net::ERR_NETWORK_CHANGED');
+
+  it('a network error, then the answer: the session opens, never via sign-in', async () => {
+    stubs.getMe
+      .mockRejectedValueOnce(NETWORK)
+      .mockRejectedValueOnce(new HttpError('invalid_response', 'HTTP 502'))
+      .mockResolvedValueOnce({ user: BOB, memberships: [membership('ws-1')] });
+    const kinds: string[] = [];
+    let reconnecting = false;
+    const { result } = renderHook(() => {
+      const machine = useSessionMachine({ syncRoute: () => undefined });
+      kinds.push(machine.preSession.kind);
+      if (machine.preSession.kind === 'boot' && machine.preSession.reconnecting)
+        reconnecting = true;
+      return machine;
+    });
+    await waitFor(() => expect(result.current.session?.selectedWorkspaceId).toBe('ws-1'));
+    expect(stubs.getMe).toHaveBeenCalledTimes(3);
+    expect(kinds).not.toContain('login');
+    expect(kinds).not.toContain('unreachable');
+    expect(reconnecting).toBe(true);
+  });
+
+  it('the kernel’s 401 lands on sign-in at once, without trying again', async () => {
+    stubs.getMe.mockRejectedValueOnce(SIGNED_OUT);
+    const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+    await waitFor(() => expect(result.current.preSession).toEqual({ kind: 'login' }));
+    expect(stubs.getMe).toHaveBeenCalledTimes(1);
+  });
+
+  it('still not reached after the tries: unreachable, not sign-in; 「重试」 opens the session', async () => {
+    stubs.getMe.mockRejectedValue(NETWORK);
+    const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+    await waitFor(() =>
+      expect(result.current.preSession).toEqual({
+        kind: 'unreachable',
+        error: NETWORK,
+        retrying: false,
+      }),
+    );
+    expect(stubs.getMe).toHaveBeenCalledTimes(4);
+    expect(result.current.session).toBeNull();
+
+    stubs.getMe.mockReset();
+    stubs.getMe.mockResolvedValueOnce({ user: BOB, memberships: [membership('ws-1')] });
+    await act(() => result.current.retryBoot());
+    await waitFor(() => expect(result.current.session?.selectedWorkspaceId).toBe('ws-1'));
+  });
+
+  it('「去登录」 from unreachable goes to sign-in and still tries the stored API key', async () => {
+    stubs.getMe.mockRejectedValue(NETWORK);
+    const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+    await waitFor(() => expect(result.current.preSession.kind).toBe('unreachable'));
+    await act(() => result.current.leaveUnreachable());
+    expect(result.current.preSession).toEqual({ kind: 'login' });
+  });
+
+  it('a retry that is still not reached says so again, not retrying any more', async () => {
+    stubs.getMe.mockRejectedValue(NETWORK);
+    const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+    await waitFor(() => expect(result.current.preSession.kind).toBe('unreachable'));
+    await act(() => result.current.retryBoot());
+    expect(result.current.preSession).toEqual({
+      kind: 'unreachable',
+      error: NETWORK,
+      retrying: false,
+    });
+    expect(stubs.getMe).toHaveBeenCalledTimes(8);
+  });
+
+  it('membership gone, and the re-read hits a network blip: tried again, the session reopens', async () => {
+    const { result } = await bootCookieSession([membership('ws-1'), membership('ws-2')]);
+    stubs.getMe
+      .mockRejectedValueOnce(NETWORK)
+      .mockResolvedValueOnce({ user: BOB, memberships: [membership('ws-2')] });
+    act(() => lastSocket().end('membership_gone'));
+    await waitFor(() => expect(result.current.session?.selectedWorkspaceId).toBe('ws-2'));
+    expect(result.current.preSession.kind).not.toBe('login');
   });
 });

@@ -158,6 +158,45 @@ export function getMe(fetchImpl: typeof fetch = defaultFetch): Promise<MeResult>
   return request<MeResult>('/api/auth/me', { method: 'GET' }, fetchImpl);
 }
 
+/** Legacy 868: only the kernel's own answer that there is no signed-in user (`401 unauthorized`)
+ *  means signed out. A network error, a proxy's non-JSON page or a kernel 5xx says nothing about
+ *  the session — the console was simply not reached. */
+export function isSignedOutError(err: unknown): boolean {
+  return err instanceof HttpError && err.kind === 'capability_error' && err.code === 'unauthorized';
+}
+
+/** Legacy 868: the waits between the tries of {@link getMeRetrying} — 3.5 s in all, enough for a
+ *  network change (`ERR_NETWORK_CHANGED`) or a short kernel restart to pass. */
+export const GET_ME_RETRY_DELAYS_MS: readonly number[] = [500, 1000, 2000];
+
+/** Legacy 868: `read` (the session machine passes {@link getMe}), tried again after each of
+ *  `delaysMs` while the failure is not a signed-out answer ({@link isSignedOutError}); a
+ *  signed-out answer, or the last failure, is thrown. `onRetry` is told before each wait. */
+export async function getMeRetrying(
+  read: () => Promise<MeResult>,
+  options: {
+    readonly delaysMs?: readonly number[];
+    readonly sleep?: (ms: number) => Promise<void>;
+    readonly onRetry?: () => void;
+  } = {},
+): Promise<MeResult> {
+  const {
+    delaysMs = GET_ME_RETRY_DELAYS_MS,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    onRetry,
+  } = options;
+  for (let tried = 0; ; tried += 1) {
+    try {
+      return await read();
+    } catch (err) {
+      const delay = delaysMs[tried];
+      if (isSignedOutError(err) || delay === undefined) throw err;
+      onRetry?.();
+      await sleep(delay);
+    }
+  }
+}
+
 export function patchMe(
   input: { readonly displayName: string },
   fetchImpl: typeof fetch = defaultFetch,

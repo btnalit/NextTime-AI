@@ -1,4 +1,5 @@
 import { AccountPage } from './components/AccountPage.js';
+import { BootConnecting, BootUnreachablePage } from './components/BootUnreachablePage.js';
 import { ChangePasswordPage } from './components/ChangePasswordPage.js';
 import { LoginPage } from './components/LoginPage.js';
 import { NoWorkspacePage } from './components/NoWorkspacePage.js';
@@ -53,7 +54,17 @@ export function App() {
 
   switch (preSession.kind) {
     case 'boot':
-      return null;
+      // Legacy 868 (UX on #1504): blank on an ordinary load; a line once a failed read is retried.
+      return preSession.reconnecting ? <BootConnecting /> : null;
+    case 'unreachable':
+      return (
+        <BootUnreachablePage
+          error={preSession.error}
+          retrying={preSession.retrying}
+          onRetry={() => void machine.retryBoot()}
+          onSignIn={() => void machine.leaveUnreachable()}
+        />
+      );
     case 'login':
       return (
         <LoginPage

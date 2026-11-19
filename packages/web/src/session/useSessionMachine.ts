@@ -6,6 +6,8 @@ import {
   type WireUser,
   logout as apiLogout,
   getMe,
+  getMeRetrying,
+  isSignedOutError,
   setWorkspaceCookie,
 } from '../lib/auth-api.js';
 import { clearDrafts, keepDraftsOf } from '../lib/drafts.js';
@@ -79,6 +81,9 @@ export interface SessionMachine {
   readonly keyBound: (result: MeResult) => void;
   readonly claimed: (result: SessionResult) => void;
   readonly passwordChanged: (user: WireUser) => void;
+  /** Legacy 868: the `unreachable` page's 「重试」 and 「去登录」. */
+  readonly retryBoot: () => Promise<void>;
+  readonly leaveUnreachable: () => Promise<void>;
 }
 
 export interface SessionMachineOptions {
@@ -99,9 +104,11 @@ export interface SessionMachineOptions {
  * cookie (HttpOnly — this module never reads it, only `GET /api/auth/me`'s response). Boot sequence
  * (P-A1 revised — no setup token/page any more; the kernel pre-creates `admin`, design doc §4):
  *   1. `GET /api/auth/me`. 200 → cookie session (`proceedAfterCookieAuth` below decides
- *      changePassword / noWorkspace / platform-only / open-a-workspace from there). 401 (or any
- *      other failure — fails open rather than showing nothing forever) → `login`. Either way,
- *      also try the stored API key auto-connect — the two channels are independent. R-15: when
+ *      changePassword / noWorkspace / platform-only / open-a-workspace from there). 401 → `login`,
+ *      also trying the stored API key auto-connect — the two channels are independent. Legacy
+ *      868: any other failure (a network error, a proxy's page, a 5xx) is tried again a few
+ *      times first; still not reached → `unreachable` (never `login`: a network blip during a
+ *      reload no longer looks like being signed out). R-15: when
  *      this browser's last sign-out never reached the kernel (`lib/session.ts`
  *      `isSignOutPending`), boot retries `POST /api/auth/logout` instead and goes to `login`
  *      without asking `/me` — a cookie the user signed out of is never resumed.
@@ -385,7 +392,8 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
       }
       let me: MeResult;
       try {
-        me = await getMe();
+        // Legacy 868: a network blip while re-reading is tried again before giving up.
+        me = await getMeRetrying(() => getMe());
       } catch {
         sessionInvalid(gen);
         return;
@@ -412,6 +420,36 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     if (stored) void connectApiKey(stored);
   }, [connectApiKey]);
 
+  /** Legacy 868: reads `/api/auth/me` (tried again on a failure that is not a signed-out answer)
+   *  and goes on from it. Only the kernel's 401 lands on sign-in; still not reached after the
+   *  tries → `unreachable`, which offers {@link retryBoot}. */
+  const bootFromMe = useCallback(async (): Promise<void> => {
+    const myAttempt = attempt.current;
+    let me: MeResult;
+    try {
+      me = await getMeRetrying(() => getMe(), {
+        // Legacy 868 (UX on #1504): the blank boot frame says it is connecting once a try failed.
+        onRetry: () => {
+          if (preSessionRef.current.kind === 'boot' && attempt.current === myAttempt) {
+            setPreSession({ kind: 'boot', reconnecting: true });
+          }
+        },
+      });
+    } catch (err) {
+      // A sign-in or API-key connect started meanwhile owns what is shown now.
+      if (attempt.current !== myAttempt) return;
+      if (isSignedOutError(err)) await bootUnauthenticated();
+      else setPreSession({ kind: 'unreachable', error: err, retrying: false });
+      return;
+    }
+    if (attempt.current !== myAttempt) return;
+    try {
+      await proceedAfterCookieAuth(me.user, me.memberships);
+    } catch {
+      await bootUnauthenticated();
+    }
+  }, [proceedAfterCookieAuth, bootUnauthenticated]);
+
   // `bootAttempted` guards React 18 StrictMode's dev-only double effect invocation from firing
   // GET /api/auth/me (and, transitively, opening a second WS) twice — same pattern S1.8's own
   // API-key auto-connect always used.
@@ -432,14 +470,23 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         await bootUnauthenticated();
         return;
       }
-      try {
-        const me = await getMe();
-        await proceedAfterCookieAuth(me.user, me.memberships);
-      } catch {
-        await bootUnauthenticated();
-      }
+      await bootFromMe();
     })();
-  }, [proceedAfterCookieAuth, bootUnauthenticated]);
+  }, [bootFromMe, bootUnauthenticated]);
+
+  /** Legacy 868: the unreachable page's 「重试」 — the same read and tries as boot. */
+  const retryBoot = useCallback(async (): Promise<void> => {
+    if (preSessionRef.current.kind !== 'unreachable' || preSessionRef.current.retrying) return;
+    setPreSession({ ...preSessionRef.current, retrying: true });
+    await bootFromMe();
+  }, [bootFromMe]);
+
+  /** Legacy 868: the unreachable page's 「去登录」 — sign in anyway (or with the stored API key). */
+  const leaveUnreachable = useCallback(async (): Promise<void> => {
+    if (preSessionRef.current.kind !== 'unreachable') return;
+    attempt.current += 1;
+    await bootUnauthenticated();
+  }, [bootUnauthenticated]);
 
   const forgetKey = useCallback((): void => {
     attempt.current += 1;
@@ -598,5 +645,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     keyBound,
     claimed,
     passwordChanged,
+    retryBoot,
+    leaveUnreachable,
   };
 }
