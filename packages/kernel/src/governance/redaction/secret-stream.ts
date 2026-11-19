@@ -37,8 +37,9 @@ import {
  * CJK characters inside it, which is not held back across them.
  *
  * Bounded: at most `STREAM_HOLD_MAX_CHARS` are held. Past it the held text is dropped — one
- * `[redacted]` is emitted in its place — and nothing more is streamed until the next flush: the
- * stored message replaces the streamed text when it arrives, so nothing is lost but liveness. A
+ * `[redacted]` is emitted in its place, and that piece says it `paused` (legacy 162) — and nothing
+ * more is streamed until the next flush: the stored message replaces the streamed text when it
+ * arrives, so nothing is lost but liveness. A
  * piece is taken in slices of at most `PIECE_SLICE_CHARS`, so the work per call stays linear in
  * the piece whatever its size. Each piece rescans what is held, so many tiny deltas cost the held
  * length each — 200 KB of adversarial text in 8-character deltas takes a few hundred ms.
@@ -157,9 +158,17 @@ function safeCut(raw: string): number {
   return cut;
 }
 
+/** What `push` emits: scrubbed text, and whether the stream paused with it. */
+export interface StreamPiece extends Scrubbed<string> {
+  /** Legacy 162: this piece took the scrubber past its bound — it ends with the one `[redacted]`
+   *  that stands for what was held and dropped, and nothing more is emitted until `flush`. Absent
+   *  on every other piece, a value scrubbed at the end of one included. */
+  readonly paused?: true;
+}
+
 export interface SecretStreamScrubber {
   /** Takes the next piece of text; returns the scrubbed text now safe to emit — often `''`. */
-  push(piece: string): Scrubbed<string>;
+  push(piece: string): StreamPiece;
   /** The text ended: returns what was held back, scrubbed. The scrubber starts over afterwards. */
   flush(): Scrubbed<string>;
 }
@@ -185,6 +194,7 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
 
   return {
     push(piece) {
+      const wasDropping = dropping;
       let value = '';
       let redactedValues = 0;
       for (let at = 0; at < piece.length && !dropping; at += PIECE_SLICE_CHARS) {
@@ -192,7 +202,9 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
         value += out.value;
         redactedValues += out.redactedValues;
       }
-      return { value, redactedValues };
+      return dropping && !wasDropping
+        ? { value, redactedValues, paused: true }
+        : { value, redactedValues };
     },
     flush() {
       const out = dropping ? { value: '', redactedValues: 0 } : scrubSecretValues(held);
