@@ -2,6 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
+import { HttpError } from './lib/http-client.js';
+
+/** The kernel's own answer to `GET /api/auth/me` with no signed-in user (legacy 868). */
+const SIGNED_OUT = new HttpError('capability_error', 'unauthorized', 'unauthorized');
 
 /**
  * App.test.tsx: the two account-page flows the login page advertises and C1
@@ -143,7 +147,7 @@ async function signInWithApiKey(key: string): Promise<void> {
 
 describe('App: 我的账户', () => {
   it('API-key session → account page: the claim form can submit and a successful claim swaps in the cookie session', async () => {
-    authApi.getMe.mockRejectedValue(new Error('401'));
+    authApi.getMe.mockRejectedValue(SIGNED_OUT);
     authApi.claimIdentity.mockResolvedValue({
       user: CAROL,
       memberships: [],
