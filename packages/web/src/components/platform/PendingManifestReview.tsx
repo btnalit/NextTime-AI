@@ -277,7 +277,13 @@ function absentAnswersChangeLine(
   const text = absentAnswersChangeText(change.absentAnswers.before, change.absentAnswers.after, t);
   if (text === null) return null;
   const name = actionKindTagText(change.name);
-  return t(`${name} ${text}`, `${name}: ${text}`);
+  // Review #501 on #1490 (optional): every automatic path leaves a version that declares them a
+  // draft, so adopting this one changes no workspace until a person there confirms it.
+  if (change.absentAnswers.after === null) return t(`${name} ${text}`, `${name}: ${text}`);
+  return t(
+    `${name} ${text}；采用后，各工作区为它打开的修订会停在草稿，要那里有人确认后才发布`,
+    `${name}: ${text}; once adopted, each workspace's revision of it stays a draft until someone there confirms it`,
+  );
 }
 
 /** One announced Operation in a line: its name and how it is classified (the 新清单 review here,

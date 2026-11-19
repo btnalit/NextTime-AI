@@ -326,7 +326,7 @@ describe('PendingManifestReview', () => {
       });
       expect(text).toContain('orders.lookup 的定义变了：调用目标（表示不存在的回答、路径）');
       expect(text).toContain(
-        'orders.lookup 新声明：目标系统回答 404 或 410 时，表示要查的东西不存在，观察记为“不存在”，不算调用失败',
+        'orders.lookup 新声明：目标系统回答 404 或 410 时，表示要查的东西不存在，观察记为“不存在”，不算调用失败；采用后，各工作区为它打开的修订会停在草稿，要那里有人确认后才发布',
       );
     });
 
