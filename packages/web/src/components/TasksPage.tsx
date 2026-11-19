@@ -10,9 +10,10 @@ import {
   type TaskSummary,
   type WorkerDefinitionSummary,
   definitionDeprecated,
-  distinctDefinitionName,
   isTerminalTaskStatus,
+  taskDefinitionName,
   taskFinishedAt,
+  taskGoalStatement,
   taskNeed,
 } from '../lib/tasks.js';
 import { TaskDetail } from './TaskDetail.js';
@@ -158,11 +159,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   }
 
   const selectedDefinitionName = selected
-    ? distinctDefinitionName(
-        definitionRows,
-        selected.workerDefinitionId,
-        selected.workerDefinitionVersion,
-      )
+    ? taskDefinitionName(definitionRows, selected, t)
     : undefined;
   const selectedDefinitionDeprecated = selected
     ? definitionDeprecated(
@@ -368,12 +365,15 @@ function TasksList({
       <List ariaLabel="Tasks" testId="tasks-list">
         {rows.map((task) => {
           const finished = taskFinishedAt(task);
-          const name = distinctDefinitionName(
-            definitionRows,
-            task.workerDefinitionId,
-            task.workerDefinitionVersion,
-          );
-          const need = taskNeed(task.input) ?? excerpt(task.input, 100);
+          // Legacy 551: a planning / review Task's definition reads 「目标规划器」/「目标评审器」.
+          const name = taskDefinitionName(definitionRows, task, t);
+          // Legacy 550: a planning / review Task's input is the planner's JSON, not a request —
+          // its row names the goal it works for instead.
+          const goal = taskGoalStatement(task);
+          const need =
+            goal !== undefined
+              ? t(`目标：${goal}`, `Goal: ${goal}`)
+              : (taskNeed(task.input) ?? excerpt(task.input, 100));
           const principalName = nameOfPrincipal(principalNames, task.onBehalfOf);
           return (
             <ListRow

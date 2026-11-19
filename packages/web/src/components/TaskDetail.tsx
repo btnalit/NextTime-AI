@@ -27,6 +27,7 @@ import {
   asResultContract,
   isCancellable,
   taskFinishedAt,
+  taskGoalStatement,
   taskNeed,
 } from '../lib/tasks.js';
 import { ProxyOutcomeNote } from './ProxyOutcomeNote.js';
@@ -108,6 +109,9 @@ export function TaskDetail({
   const finished = taskFinishedAt(task);
   const contract = asResultContract(task.result);
   const need = taskNeed(task.input);
+  // Legacy 550: a planning / review Task's input is the planner's JSON (still under 「输入」 below);
+  // the goal it works for is said under the title.
+  const goal = need ? undefined : taskGoalStatement(task);
   const budgetPct =
     task.tokenBudget && task.tokenBudget > 0
       ? Math.min(100, Math.round((task.tokensUsed / task.tokenBudget) * 100))
@@ -361,6 +365,12 @@ export function TaskDetail({
         {/* Legacy 428: free text under the same rule as a goal's statement — characters nobody
          *  can see are shown as \u{…}, line breaks kept. */}
         {need ? <p className="pre-wrap">{visibleLines(need)}</p> : null}
+        {goal !== undefined ? (
+          <p className="pre-wrap" data-testid="task-goal-statement">
+            {t('目标：', 'Goal: ')}
+            {visibleLines(goal)}
+          </p>
+        ) : null}
         <RedactedNote value={need} testId="task-need-redacted" />
       </header>
 
