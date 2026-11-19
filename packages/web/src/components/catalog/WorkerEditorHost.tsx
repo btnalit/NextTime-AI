@@ -27,6 +27,7 @@ export function WorkerEditorHost({
   onProposed,
   onDone,
   onPublished,
+  onFixReferences,
 }: {
   readonly http: CapabilityCaller;
   readonly newVersionOf?: WorkerDefinitionSummary;
@@ -39,6 +40,8 @@ export function WorkerEditorHost({
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
   readonly onPublished?: () => void;
+  /** Legacy 542: as `WorkerDefinitionEditor`'s. */
+  readonly onFixReferences?: (draft: ProposedDraft, refusal: DefinitionReferenceRefusal) => void;
 }) {
   const models = useCapabilityList<ModelRow>(http, 'list_models');
   // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
@@ -59,6 +62,7 @@ export function WorkerEditorHost({
       onProposed={onProposed}
       onDone={onDone}
       onPublished={onPublished}
+      onFixReferences={onFixReferences}
     />
   );
 }

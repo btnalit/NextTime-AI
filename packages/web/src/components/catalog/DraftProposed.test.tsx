@@ -120,11 +120,34 @@ describe('DraftProposed — a Worker draft naming what is not there (legacy 302)
     expect(screen.getByTestId('worker-publish-references-capabilities').textContent).toContain(
       '「no_such_capability」不是 Worker 能持有的能力',
     );
-    // There is no editor here to open: no fix button.
+    // No way to fix it given (the reader cannot propose): no fix button.
     expect(screen.queryByTestId('worker-publish-references-fix')).toBeNull();
     expect(screen.queryByTestId('draft-publish-error')).toBeNull();
     expect(pushToast).not.toHaveBeenCalled();
     expect(screen.queryByTestId('credential-review')).toBeNull();
+  });
+});
+
+describe('DraftProposed — the fix on the success screen (legacy 542)', () => {
+  it('offers the fix where the host gives one, and hands it the refusal', async () => {
+    const onFixReferences = vi.fn();
+    const onPublish = vi.fn().mockRejectedValueOnce(
+      new HttpError('capability_error', 'not there', 'unresolved_references', {
+        unresolved: { gates: ['gk-gone'] },
+      }),
+    );
+    render(
+      <DraftProposed
+        kindLabel="Worker 定义"
+        draft={{ id: 'wd-1', version: 3, status: 'draft' }}
+        onPublish={onPublish}
+        onDone={vi.fn()}
+        onFixReferences={onFixReferences}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    fireEvent.click(await screen.findByTestId('worker-publish-references-fix'));
+    expect(onFixReferences).toHaveBeenCalledWith({ gates: ['gk-gone'] });
   });
 });
 
