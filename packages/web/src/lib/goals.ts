@@ -236,13 +236,16 @@ export function stepFailureText(
   return { short: t(entry.short[0], entry.short[1]), detail: t(entry.detail[0], entry.detail[1]) };
 }
 
-/** Legacy 515 (UX acceptance of #1486): a `needs_decision` pause at a step whose start the
- *  evaluation seal refused — which step, why, and what a person does next, since a retry is
- *  refused the same way. `null` when no step of the plan in force failed so. */
-function sealRefusedPauseText(
+/** The first step of the plan in force whose latest attempt the evaluation seal refused to start,
+ *  with the refusal and the attempt in words — `null` when none did. */
+function sealRefusedStep(
   steps: readonly StepRunWire[] | undefined,
   t: Translate,
-): string | null {
+): {
+  readonly step: StepRunWire;
+  readonly reason: SealRefusedReason;
+  readonly attempt: string;
+} | null {
   for (const step of steps ?? []) {
     if (step.supersededInRevision !== null) continue;
     const reason = sealRefusedReasonOf(step);
@@ -251,18 +254,68 @@ function sealRefusedPauseText(
       `步骤「${step.stepKey}」第 ${step.attemptCount} 次尝试`,
       `step ${step.stepKey}’s attempt ${step.attemptCount}`,
     );
-    return reason === 'evaluation_paused'
-      ? t(
-          `需要人决定：${attempt}没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。`,
-          `A person must decide: ${attempt} did not start, because the evaluation seal has paused the agents acting for the requester. Once a workspace owner reviews and releases the pause under Govern → Evaluation, the step can be retried; until then a retry is refused too. You can also cancel the goal.`,
-        )
-      : t(
-          `需要人决定：${attempt}没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。`,
-          `A person must decide: ${attempt} did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.`,
-        );
+    return { step, reason, attempt };
   }
   return null;
 }
+
+/** Legacy 515 (UX acceptance of #1486): a `needs_decision` pause at a step whose start the
+ *  evaluation seal refused — which step, why, and what a person does next, since a retry is
+ *  refused the same way. `agentsPaused` is get_goal's `requesterAgentsPaused` (UX P2 on #1486):
+ *  `false` once the owner released the pause that refused it, so the step can be retried now;
+ *  `undefined` when not read. `null` when no step of the plan in force failed so. */
+function sealRefusedPauseText(
+  steps: readonly StepRunWire[] | undefined,
+  agentsPaused: boolean | undefined,
+  t: Translate,
+): string | null {
+  const refused = sealRefusedStep(steps, t);
+  if (refused === null) return null;
+  const { reason, attempt } = refused;
+  if (reason === 'evaluation_paused' && agentsPaused === false) {
+    return t(
+      `需要人决定：${attempt}没有启动，因为当时评测防泄漏暂停了代请求人行动的智能体。这个暂停已经解除，可以重试这一步，也可以修订计划或取消目标。`,
+      `A person must decide: ${attempt} did not start, because the evaluation seal had paused the agents acting for the requester. That pause has been released: the step can be retried now, or revise the plan or cancel the goal.`,
+    );
+  }
+  return reason === 'evaluation_paused'
+    ? t(
+        `需要人决定：${attempt}没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。`,
+        `A person must decide: ${attempt} did not start, because the evaluation seal has paused the agents acting for the requester. Once a workspace owner reviews and releases the pause under Govern → Evaluation, the step can be retried; until then a retry is refused too. You can also cancel the goal.`,
+      )
+    : t(
+        `需要人决定：${attempt}没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。`,
+        `A person must decide: ${attempt} did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.`,
+      );
+}
+
+/** UX P2 on #1486: a `needs_decision` pause while the evaluation seal pauses the requester's
+ *  agents (get_goal's `requesterAgentsPaused`) — no step starts, and a resumed run stops again,
+ *  until the workspace owner releases it. Names the step whose start it refused when one of the
+ *  plan in force did; a step refused for content reserved for evaluation needs a revision too. */
+function agentsPausedPauseText(steps: readonly StepRunWire[] | undefined, t: Translate): string {
+  const refused = sealRefusedStep(steps, t);
+  const where = refused
+    ? t(`${refused.attempt}没有启动。`, `${refused.attempt} did not start. `)
+    : '';
+  const withheld =
+    refused?.reason === 'evaluation_withheld'
+      ? t(
+          '另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后重试也会被同样拦下，要修订计划去掉它，见下面这一步的说明。',
+          ' Besides, what this step’s Worker would read holds text an evaluation suite keeps for testing, so even after the release a retry is refused the same way: revise the plan to leave it out (see the step’s note below).',
+        )
+      : '';
+  return t(
+    `需要人决定：${where}评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。${withheld}`,
+    `A person must decide: ${where}The evaluation seal has paused the agents acting for the requester: until the pause is released no step of this goal starts, and resuming it only stops it again. It can go on once a workspace owner reviews and releases the pause under Govern → Evaluation; you can also revise the plan or end the goal.${withheld}`,
+  );
+}
+
+/** UX P2 on #1486: the same pause, said of a run that has not stopped for it yet. */
+const AGENTS_PAUSED_AHEAD: readonly [string, string] = [
+  '评测防泄漏暂停了代请求人行动的智能体：暂停解除之前，这个目标的步骤都不会启动，目标会停下等人决定。工作区所有者在「治理 → 评测」查看并解除暂停。',
+  'The evaluation seal has paused the agents acting for the requester: until the pause is released no step of this goal starts, and the goal stops for a person to decide. A workspace owner reviews and releases it under Govern → Evaluation.',
+];
 
 // ---------------------------------------------------------------------------------------------
 // A step's output contract, and the inputs it takes from earlier steps (S11 GO5d-1)
@@ -1811,7 +1864,13 @@ export function goalStateNote(
     Partial<
       Pick<
         GoalDetailWire,
-        'acceptance' | 'steps' | 'planRevision' | 'trialApprovals' | 'revisions' | 'planningRounds'
+        | 'acceptance'
+        | 'steps'
+        | 'planRevision'
+        | 'trialApprovals'
+        | 'revisions'
+        | 'planningRounds'
+        | 'requesterAgentsPaused'
       >
     >,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
@@ -1822,13 +1881,23 @@ export function goalStateNote(
     case 'proposed':
       return {
         tone: 'warn',
-        text: t(
+        text: `${t(
           '等请求人确认计划、验收检查和预算；确认之后才开始。',
           'Waiting for the requester to confirm the plan, its checks and budget; nothing starts before that.',
-        ),
+        )}${
+          goal.requesterAgentsPaused === true
+            ? t(
+                '另外，评测防泄漏暂停了代请求人行动的智能体：确认之后步骤也不会启动，要等工作区所有者在「治理 → 评测」解除暂停。',
+                ' Besides, the evaluation seal has paused the agents acting for the requester: even once confirmed, no step starts until a workspace owner releases the pause under Govern → Evaluation.',
+              )
+            : ''
+        }`,
       };
     case 'running':
-      return null;
+      // UX P2 on #1486: the next step's start will be refused, and the run stop for it.
+      return goal.requesterAgentsPaused === true
+        ? { tone: 'warn', text: t(AGENTS_PAUSED_AHEAD[0], AGENTS_PAUSED_AHEAD[1]) }
+        : null;
     case 'verifying':
       return {
         tone: 'info',
@@ -1875,7 +1944,13 @@ function pausedNote(
     Partial<
       Pick<
         GoalDetailWire,
-        'acceptance' | 'steps' | 'planRevision' | 'trialApprovals' | 'revisions' | 'planningRounds'
+        | 'acceptance'
+        | 'steps'
+        | 'planRevision'
+        | 'trialApprovals'
+        | 'revisions'
+        | 'planningRounds'
+        | 'requesterAgentsPaused'
       >
     >,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
@@ -1985,6 +2060,11 @@ function pausedNote(
       };
     }
     case 'needs_decision': {
+      // UX P2 on #1486: while the evaluation seal pauses the requester's agents, nothing goes on
+      // whatever else is decided here — no step, no planner round starts — so that comes first.
+      if (goal.requesterAgentsPaused === true) {
+        return { tone: 'warn', text: agentsPausedPauseText(goal.steps, t) };
+      }
       // UX P2-1 on #864: the planner's work on this pause is where the decision is made.
       const proposal = goal.revisions?.find(
         (revision) =>
@@ -2013,7 +2093,7 @@ function pausedNote(
       }
       // Legacy 515 (UX acceptance of #1486): the evaluation seal refused a step's start — say so,
       // rather than the planner's round (which the seal may refuse too) or the general sentence.
-      const sealRefused = sealRefusedPauseText(goal.steps, t);
+      const sealRefused = sealRefusedPauseText(goal.steps, goal.requesterAgentsPaused, t);
       if (sealRefused) return { tone: 'warn', text: sealRefused };
       const running = goal.planningRounds?.find((round) => round.status === 'running');
       if (running) {
@@ -2279,7 +2359,12 @@ function heldWording(
  *  `null` for any other step, while the run is not paused (the hints are read for a paused run
  *  only), and when it paused for another reason than those two, which name held steps. */
 export function stepHeldLabel(
-  goal: Partial<Pick<GoalDetailWire, 'status' | 'pauseReason' | 'steps' | 'planRevision'>>,
+  goal: Partial<
+    Pick<
+      GoalDetailWire,
+      'status' | 'pauseReason' | 'steps' | 'planRevision' | 'requesterAgentsPaused'
+    >
+  >,
   stepKey: string,
   t: Translate,
 ): string | null {
@@ -2295,9 +2380,12 @@ export function stepHeldLabel(
     (step) => step.stepKey === stepKey && step.supersededInRevision === null,
   );
   if (run?.status !== 'ready') return null;
-  const held = (goal.planRevision?.hints ?? []).some(
-    (hint) => hint.stepKey === stepKey && isStepAuthorityHint(hint),
-  );
+  // UX P2 on #1486: the evaluation seal pausing the requester's agents holds back every start.
+  const held =
+    (goal.pauseReason === 'needs_decision' && goal.requesterAgentsPaused === true) ||
+    (goal.planRevision?.hints ?? []).some(
+      (hint) => hint.stepKey === stepKey && isStepAuthorityHint(hint),
+    );
   if (!held) return null;
   return run.attemptCount > 0
     ? t('没有再试（被拦下）', 'Not tried again (held back)')

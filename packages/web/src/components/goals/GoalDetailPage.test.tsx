@@ -876,6 +876,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     const detail = goalDetail({
       status: 'paused',
       pauseReason: 'needs_decision',
+      requesterAgentsPaused: true,
       steps: [
         stepRun({
           status: 'failed',
@@ -898,7 +899,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     });
     renderPage(scriptedHttp(baseHandlers(detail)));
     expect((await screen.findByTestId('goal-state-note')).textContent).toBe(
-      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。',
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动。评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。',
     );
     const failure = screen.getByTestId('goal-step-failure');
     expect(failure.textContent).toBe(
@@ -907,6 +908,23 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(failure.textContent).not.toContain('自动重试，');
     const attempt = screen.getByTestId('goal-step-attempt-failure');
     expect(attempt.getAttribute('title')).toMatch(/^评测防泄漏暂停了/);
+  });
+
+  it('UX P2 on #1486: a goal stopped because the evaluation seal pauses the requester’s agents says so, and its step reads held back', async () => {
+    // The attempt was refused before its Task was made: no step failed, the step is still ready.
+    const detail = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      requesterAgentsPaused: true,
+      steps: [stepRun({ status: 'ready', attemptCount: 0, attempts: [] })],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    const note = (await screen.findByTestId('goal-state-note')).textContent;
+    expect(note).toBe(
+      '需要人决定：评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。',
+    );
+    expect(note).not.toContain('现在没有失败的步骤');
+    expect(screen.getByTestId('goal-step-held').textContent).toBe('没有开始（被拦下）');
   });
 
   it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {

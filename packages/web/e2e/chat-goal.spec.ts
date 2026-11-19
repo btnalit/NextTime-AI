@@ -113,6 +113,7 @@ function proposedGoal(requester: string) {
     trialApprovals: [],
     planner: null,
     planningRounds: [],
+    requesterAgentsPaused: false,
   };
 }
 
