@@ -95,7 +95,8 @@ interface CapResult {
 
 interface GatekeeperDetail {
   readonly id: string;
-  readonly health: string;
+  /** Absent while the platform suspends the gate (legacy 872). */
+  readonly health?: string;
   readonly operationCount: number;
   readonly operations: readonly { readonly name: string; readonly status: string }[];
   readonly platformSuspension?: { readonly suspendedAt: string; readonly reason?: string };
@@ -175,12 +176,21 @@ async function selfConnection(page: Page): Promise<SelfConnectionWire> {
   return row as SelfConnectionWire;
 }
 
-/** The card's ⋯ → 健康与操作, then its health chip says `health`. */
-async function openHealth(page: Page, health: string): Promise<void> {
+/** The card's ⋯ → 健康与操作, then its health chip says `health` — or, `null`, that the gate is
+ *  not checked (legacy 872: the platform suspended it, so the kernel does not probe it). */
+async function openHealth(page: Page, health: string | null): Promise<void> {
   const card = page.getByTestId('gatekeeper-card').filter({ hasText: TARGET });
   await card.getByRole('button', { name: '更多操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '健康与操作', exact: true }).click();
   const detail = page.getByRole('dialog', { name: '健康与操作' });
+  if (health === null) {
+    await expect(detail.getByTestId('gatekeeper-health-not-checked')).toHaveText(
+      '平台暂停期间不检查',
+      { timeout: 15_000 },
+    );
+    await expect(detail.getByTestId('gatekeeper-health')).toHaveCount(0);
+    return;
+  }
   await expect(detail.getByTestId('gatekeeper-health')).toHaveText(health, { timeout: 15_000 });
 }
 
@@ -370,7 +380,7 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     expect(gatekeeperId, 'test 1 connected the gate').not.toBe('');
     await signInAsOwner(page);
     await goToByLabel(page, '系统与授权');
-    await openHealth(page, '健康');
+    await openHealth(page, null);
     // Legacy 674: not the generic empty state — the platform's suspension, the reason the
     // administrator gave and who lifts it, above the Operations it keeps.
     const detail = page.getByRole('dialog', { name: '健康与操作' });
@@ -381,6 +391,8 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     for (const name of IMPORTED) await expect(detail).toContainText(name);
     const gate = await ownerGatekeeper(page);
     expect(gate.platformSuspension).toMatchObject({ reason: SUSPENSION_REASON });
+    // Legacy 872: not probed while suspended — no health in the read.
+    expect(gate).not.toHaveProperty('health');
     expect(gate.operations.map((op) => op.name).sort()).toEqual(IMPORTED);
     expect(gate.operationCount).toBe(2);
     // When and why, never who: who suspended it stays on the platform side.

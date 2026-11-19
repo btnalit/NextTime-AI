@@ -52,6 +52,7 @@ export {
   revokeEntryHandlesForConnector,
   revokeEntryHandlesInWorkspace,
   revokeExternalRuntime,
+  selfConnectionSuspended,
   updateConnector,
   updateGateInstance,
   upsertAnnouncement,

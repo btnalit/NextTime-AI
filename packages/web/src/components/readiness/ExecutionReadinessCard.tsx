@@ -13,6 +13,7 @@ import { StatusChip } from '../kit/status-chip.js';
 import { FixHint, useReadinessReader } from './FixHint.js';
 import {
   type ReadinessReader,
+  gateDownText,
   gateReasonAsk,
   gateReasonHref,
   gateReasonLink,
@@ -383,10 +384,6 @@ function GateDownRow({
   readonly reader: ReadinessReader;
 }) {
   const t = useT();
-  const back =
-    gate.status === 'direct'
-      ? t('你的智能体照常可以直接调用它', 'your agent can call it directly again')
-      : t('你的智能体照常可以委派 Worker 用它', 'your agent can use it through a Worker again');
   const detail = hrefs.gatekeeper(gate.gateId);
   return (
     <>
@@ -396,17 +393,7 @@ function GateDownRow({
         size="s"
         testId="execution-readiness-gate-health"
       />
-      <span>
-        {health === 'unreachable'
-          ? t(
-              `门现在没有回应，调用它会失败；门恢复后，${back}。`,
-              `The gate is not answering right now, so calls to it fail; once it is back, ${back}.`,
-            )
-          : t(
-              `门拒绝了平台调用它用的凭据，调用它会失败；凭据对上后，${back}。`,
-              `The gate rejects the credentials the platform calls it with, so calls to it fail; once they match again, ${back}.`,
-            )}
-      </span>
+      <span>{gateDownText(health, gate.status === 'direct' ? 'direct' : 'via_worker', t)}</span>
       {detail !== reader.currentHref ? (
         <a href={detail} className="link-inline" data-testid="execution-readiness-fix">
           {t('看门详情', 'See the gate')}

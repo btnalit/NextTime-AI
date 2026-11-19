@@ -10,6 +10,7 @@ import type { Translate } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import {
   type ReadinessReader,
+  gateDownText,
   gateReasonAsk,
   gateReasonHref,
   gateReasonLink,
@@ -196,6 +197,21 @@ describe('legacy 675: a gate the platform suspended', () => {
         'g-1',
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('legacy 253 / 872: a gate that is down, about the reader or another member', () => {
+  it('says calls fail now and that the access comes back with the gate, for whose agent and how', () => {
+    expect(gateDownText('unreachable', 'direct', t)).toBe(
+      '门现在没有回应，调用它会失败；门恢复后，你的智能体照常可以直接调用它。',
+    );
+    expect(gateDownText('unauthorized', 'via_worker', t)).toBe(
+      '门拒绝了平台调用它用的凭据，调用它会失败；凭据对上后，你的智能体照常可以委派 Worker 用它。',
+    );
+    expect(gateDownText('unreachable', 'via_worker', t, 'them')).toBe(
+      '门现在没有回应，调用它会失败；门恢复后，这位成员的智能体照常可以委派 Worker 用它。',
+    );
+    expect(gateDownText('unauthorized', 'direct', t, 'them')).not.toContain('你');
   });
 });
 

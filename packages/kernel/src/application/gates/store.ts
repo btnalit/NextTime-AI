@@ -1248,6 +1248,16 @@ export interface OperationPlatformStatus {
   readonly reason?: 'connector_deny_list' | 'self_connection_suspended';
 }
 
+/** Legacy 675 / 872: the platform suspended this gate the workspace connected itself
+ *  (`suspend_self_connection`) — every call to it is refused (`operationPlatformStatus`), and no
+ *  read contacts it on the workspace's behalf either: neither `execution_readiness` nor
+ *  `get_agent_profile` nor `get_gatekeeper` probes its health while it is suspended. */
+export function selfConnectionSuspended(
+  policy: GatekeeperPlatformPolicy | null | undefined,
+): boolean {
+  return policy?.origin === 'self' && policy.suspended;
+}
+
 export function operationPlatformStatus(
   policy: GatekeeperPlatformPolicy | null | undefined,
   operationName: string,

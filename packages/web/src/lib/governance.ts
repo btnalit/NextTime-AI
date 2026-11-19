@@ -171,11 +171,13 @@ export interface GatekeeperDetailOperation {
  *  'unreachable' | 'unauthorized'`, rendered with the same `gateHealth` chip every other gate
  *  health in the console uses (legacy 271 — an earlier lenient reader of guessed shapes showed
  *  every gate as 未知). */
-export type GatekeeperHealth = GatekeeperDetailWire['health'];
+export type GatekeeperHealth = NonNullable<GatekeeperDetailWire['health']>;
 
 export interface GatekeeperDetail extends GatekeeperListRow {
   readonly operations: readonly GatekeeperDetailOperation[];
-  readonly health: GatekeeperHealth;
+  /** Legacy 872: absent while the platform suspends this self-connected gate
+   *  (`platformSuspension`) — the kernel does not probe it then. */
+  readonly health?: GatekeeperHealth;
   /** Legacy 215: from the same probe — whether the gate says it checks each call against the
    *  definition the platform approved. Absent when the gate gave no answer. */
   readonly operationDigestCheck?: GatekeeperDetailWire['operationDigestCheck'];

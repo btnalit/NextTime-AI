@@ -25,7 +25,11 @@ import type {
   Role,
   SelfConnectionWire,
 } from '@nexttime/shared';
-import { ExecutionReadinessWireSchema, internalAuthorizationHeader } from '@nexttime/shared';
+import {
+  ExecutionReadinessWireSchema,
+  GatekeeperDetailWireSchema,
+  internalAuthorizationHeader,
+} from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -2723,6 +2727,35 @@ describe.runIf(DATABASE_URL !== undefined)(
             const up = await readiness({ includeGateHealth: true });
             expect(up.gates.find((g) => g.gateId === selfGatekeeperId)?.health).toBe('ok');
             expect(probed).toHaveLength(2);
+
+            // Review of #1510 (#501 O2, #493 optional 2): a gate the agent cannot reach is not
+            // asked about — neither the catalog gate's stored health nor a probe of the
+            // self-connected one — while it is out of reach for a reason other than a suspension.
+            await dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+              'set_agent_profile',
+              { excludedGatekeepers: [cGatekeeperId, selfGatekeeperId] },
+            );
+            try {
+              const excluded = await readiness({ includeGateHealth: true });
+              for (const gatekeeperId of [cGatekeeperId, selfGatekeeperId]) {
+                const shown = excluded.gates.find((g) => g.gateId === gatekeeperId);
+                expect(shown, gatekeeperId).toMatchObject({
+                  status: 'unreachable',
+                  reason: 'excluded_by_profile',
+                });
+                expect(shown, gatekeeperId).not.toHaveProperty('health');
+              }
+              expect(probed).toHaveLength(2);
+            } finally {
+              await dispatchCapability(
+                { pool },
+                humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+                'set_agent_profile',
+                { excludedGatekeepers: [] },
+              );
+            }
           } finally {
             setGatekeeperReadHandlerDeps({});
             await withPlatform(pool, { userId: admin.id }, (client) =>
@@ -2856,6 +2889,48 @@ describe.runIf(DATABASE_URL !== undefined)(
                 code: 'disabled_by_platform',
                 gateId: selfGatekeeperId,
               });
+              // Legacy 872 (review of #1510, #501 O1): My Agent does not probe it either — here
+              // granted, so it is still offered — nor does its details read: no old "ok" stands
+              // next to the suspension.
+              const selfGrant = await withWorkspace(
+                pool,
+                { workspaceId: cWorkspaceId, principalId: cOwnerId },
+                (client) =>
+                  grantCapability(client, cWorkspaceId, {
+                    principalId: cMemberId,
+                    resourceType: 'gatekeeper',
+                    resourceId: selfGatekeeperId,
+                    grantedBy: cOwnerId,
+                  }),
+              );
+              try {
+                const profile = (await dispatchCapability(
+                  { pool },
+                  humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+                  'get_agent_profile',
+                  { includeGateHealth: true },
+                )) as AgentProfileWire;
+                const offered = profile.availableGatekeepers.find(
+                  (g) => g.gatekeeperId === selfGatekeeperId,
+                );
+                expect(offered).toMatchObject({ granted: true });
+                expect(offered).not.toHaveProperty('health');
+              } finally {
+                await withWorkspace(
+                  pool,
+                  { workspaceId: cWorkspaceId, principalId: cOwnerId },
+                  (client) => revokeCapabilityGrant(client, cWorkspaceId, selfGrant.id),
+                );
+              }
+              const detail = await dispatchCapability(
+                { pool },
+                humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+                'get_gatekeeper',
+                { gatekeeperId: selfGatekeeperId },
+              );
+              expect(detail).not.toHaveProperty('health');
+              expect(detail).not.toHaveProperty('operationDigestCheck');
+              expect(GatekeeperDetailWireSchema.parse(detail)).toEqual(detail);
               expect(probedWhileSuspended).toEqual([]);
             } finally {
               setGatekeeperReadHandlerDeps({});
