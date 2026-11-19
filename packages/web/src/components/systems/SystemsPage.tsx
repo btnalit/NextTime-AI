@@ -16,6 +16,7 @@ import {
   type ConnectionRequestRow,
   type CreateConnectionResult,
   type DraftAsRead,
+  type ManifestPublishPlan,
   addressMasked,
   addressText,
   cancelConnectionRequestOverrides,
@@ -290,6 +291,19 @@ export function SystemsPage({
         const plan = manifestPublishPlan(rows, gatekeeperId);
         const held = [...plan.credentials, ...plan.absentAnswers];
         if (held.length > 0) map.set(gatekeeperId, held);
+      }
+    }
+    return map;
+  }, [operationsList.state]);
+
+  // Legacy 490: every draft of the gate's own 「发布清单」 leaves unpublished, by why — its confirm
+  // names them before the click.
+  const heldBackByGate = useMemo(() => {
+    const map = new Map<string, ManifestPublishPlan>();
+    if (operationsList.state.status === 'ready') {
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        map.set(gatekeeperId, manifestPublishPlan(rows, gatekeeperId));
       }
     }
     return map;
@@ -707,6 +721,7 @@ export function SystemsPage({
                 publishableCount={publishableByGate.get(gate.gateId) ?? 0}
                 firstPublishes={firstPublishesByGate.get(gate.gateId) ?? NO_FIRST_PUBLISHES}
                 heldForAPerson={heldForAPersonByGate.get(gate.gateId) ?? NO_HELD_DRAFTS}
+                heldBack={heldBackByGate.get(gate.gateId)}
                 canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}
