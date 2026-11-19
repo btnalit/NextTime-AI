@@ -91,14 +91,16 @@ export function PendingManifestReview({
       t(`移除 ${actionKindTagText(op.name)}`, `Removes ${actionKindTagText(op.name)}`),
     ),
     ...governed.map((change) => governanceChangeSummary(change, t)),
-    ...pending.changed
-      .filter((change) => change.otherChangedFields.length > 0)
-      .map((change) =>
+    ...pending.changed.flatMap((change) => {
+      const fields = changedFieldsText(change, t);
+      if (fields === null) return [];
+      return [
         t(
-          `${actionKindTagText(change.name)} 的定义变了：${changedFieldsText(change, t)}`,
-          `${actionKindTagText(change.name)} definition changed: ${changedFieldsText(change, t)}`,
+          `${actionKindTagText(change.name)} 的定义变了：${fields}`,
+          `${actionKindTagText(change.name)} definition changed: ${fields}`,
         ),
-      ),
+      ];
+    }),
     // Legacy 477: what an Operation reads as "does not exist" is part of its binding, so a change
     // to it is said before and after, not only as 「调用目标」.
     ...pending.changed.flatMap((change) => {
@@ -254,18 +256,26 @@ export function PendingManifestReview({
 }
 
 /** The fields a changed Operation's new definition differs in, in plain words — 「调用目标」 with
- *  the keys of it that changed (legacy 477, `bindingChangedFields`) when the kernel names them. */
-function changedFieldsText(change: PendingGateManifestChangeWire, t: Translate): string {
-  return change.otherChangedFields
-    .map((field) => {
-      const text = operationFieldLabel(field, t);
-      const keys = field === 'binding' ? (change.bindingChangedFields ?? []) : [];
-      if (keys.length === 0) return text;
-      const inner = keys.map((key) => bindingFieldLabel(key, t)).join(t('、', ', '));
-      return t(`${text}（${inner}）`, `${text} (${inner})`);
-    })
-    .join(t('、', ', '));
+ *  the keys of it that changed (legacy 477, `bindingChangedFields`) when the kernel names them.
+ *  The answers that mean "does not exist" have a line of their own when `absentAnswers` is there,
+ *  so they are left out here (UX acceptance of #1490 P3-2: a reordered declaration read 「定义变了」
+ *  beside 「含义不变」); `null` when nothing else changed. */
+function changedFieldsText(change: PendingGateManifestChangeWire, t: Translate): string | null {
+  const ownLine = change.absentAnswers !== undefined;
+  const parts = change.otherChangedFields.flatMap((field) => {
+    const text = operationFieldLabel(field, t);
+    if (field !== 'binding') return [text];
+    const named = change.bindingChangedFields ?? [];
+    const keys = ownLine ? named.filter((key) => !ABSENT_BINDING_KEYS.has(key)) : named;
+    if (named.length > 0 && keys.length === 0) return [];
+    if (keys.length === 0) return [text];
+    const inner = keys.map((key) => bindingFieldLabel(key, t)).join(t('、', ', '));
+    return [t(`${text}（${inner}）`, `${text} (${inner})`)];
+  });
+  return parts.length === 0 ? null : parts.join(t('、', ', '));
 }
+
+const ABSENT_BINDING_KEYS: ReadonlySet<string> = new Set(['absent_statuses', 'absent_exit_codes']);
 
 /** Legacy 477: a changed Operation's answers that mean "does not exist", before and after
  *  (`PendingGateManifestChangeWire.absentAnswers`, present only when they differ). */

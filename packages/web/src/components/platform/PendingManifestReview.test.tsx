@@ -324,7 +324,8 @@ describe('PendingManifestReview', () => {
         bindingChangedFields: ['absent_statuses', 'path'],
         absentAnswers: { before: null, after: { statuses: [404, 410] } },
       });
-      expect(text).toContain('orders.lookup 的定义变了：调用目标（表示不存在的回答、路径）');
+      // The declaration has a line of its own, so the call target names only the path here.
+      expect(text).toContain('orders.lookup 的定义变了：调用目标（路径）');
       expect(text).toContain(
         'orders.lookup 新声明：目标系统回答 404 或 410 时，表示要查的东西不存在，观察记为“不存在”，不算调用失败；采用后，各工作区为它打开的修订会停在草稿，要那里有人确认后才发布',
       );
@@ -338,6 +339,8 @@ describe('PendingManifestReview', () => {
       expect(text).toContain(
         'orders.lookup 不再声明表示不存在的回答：原来命令以退出码 4 结束时记为“不存在”，按新定义算调用失败',
       );
+      // Nothing is declared any more, so no revision waits on a person for it.
+      expect(text).not.toContain('停在草稿');
     });
 
     it('a changed declaration says both', () => {
@@ -359,6 +362,8 @@ describe('PendingManifestReview', () => {
         'orders.lookup 表示不存在的回答只换了顺序（目标系统回答 410 或 404 时），含义不变',
       );
       expect(text).not.toContain('变了：原来是');
+      // UX acceptance of #1490 P3-2: nothing else changed, so no 「定义变了」 beside 「含义不变」.
+      expect(text).not.toContain('的定义变了');
     });
 
     it('a call-target change without the keys keeps the plain field name', () => {
@@ -372,9 +377,7 @@ describe('PendingManifestReview', () => {
         bindingChangedFields: ['absent_statuses', 'path'],
         absentAnswers: { before: { statuses: [404] }, after: null },
       });
-      expect(text).toContain(
-        'orders.lookup definition changed: Call target (answers that mean absent, path)',
-      );
+      expect(text).toContain('orders.lookup definition changed: Call target (path)');
       expect(text).toContain(
         'orders.lookup: no longer declares answers that mean absent, so what it recorded as “not there” (when the target answers 404) is a failed call under the new definition',
       );
