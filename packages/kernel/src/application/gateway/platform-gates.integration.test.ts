@@ -25,7 +25,7 @@ import type {
   Role,
   SelfConnectionWire,
 } from '@nexttime/shared';
-import { internalAuthorizationHeader } from '@nexttime/shared';
+import { ExecutionReadinessWireSchema, internalAuthorizationHeader } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -2658,6 +2658,79 @@ describe.runIf(DATABASE_URL !== undefined)(
           }
         });
 
+        // Legacy 253: the readiness read gives every gate the health My Agent gives it — the same
+        // two sources, the same single probe of the self-connected gate — only when asked, and
+        // changes no reachability for it.
+        it('legacy 253: execution_readiness with includeGateHealth carries the catalog gate’s stored health and probes only the self-connected gate, once; without it nothing is probed', async () => {
+          const probed: Parameters<GatekeeperClient['health']>[0][] = [];
+          let answer: 'ok' | 'down' = 'down';
+          setGatekeeperReadHandlerDeps({
+            gatekeeperClient: {
+              health: async (target: Parameters<GatekeeperClient['health']>[0]) => {
+                probed.push(target);
+                return { status: answer };
+              },
+            } as unknown as GatekeeperClient,
+          });
+          await withPlatform(pool, { userId: admin.id }, (client) =>
+            recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'unauthorized'),
+          );
+          const readiness = (params: Record<string, unknown>) =>
+            dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+              'execution_readiness',
+              params,
+            ) as Promise<ExecutionReadinessWire>;
+          try {
+            const plain = await readiness({});
+            expect(plain.gates.some((g) => 'health' in g)).toBe(false);
+            expect(probed).toEqual([]);
+
+            const withHealth = await readiness({ includeGateHealth: true });
+            const gateOf = (gatekeeperId: string) =>
+              withHealth.gates.find((g) => g.gateId === gatekeeperId);
+            expect(gateOf(cGatekeeperId)?.health).toBe('unauthorized');
+            // A gate that answers "down" reads unreachable, and its reachability is unchanged:
+            // health is reported beside it, never folded into it.
+            expect(gateOf(selfGatekeeperId)).toMatchObject({
+              health: 'unreachable',
+              status: plain.gates.find((g) => g.gateId === selfGatekeeperId)?.status,
+            });
+            // Only a gate the agent can reach is asked about; any other's reason says it all.
+            for (const g of withHealth.gates) {
+              expect('health' in g, g.name).toBe(g.status !== 'unreachable');
+            }
+            expect(withHealth.ready).toBe(plain.ready);
+            expect(withHealth.missing).toEqual(plain.missing);
+            expect(withHealth.gates.map(({ health: _health, ...rest }) => rest)).toEqual(
+              plain.gates,
+            );
+            expect(probed).toEqual([
+              {
+                endpoint: selfEndpoint,
+                endpointKey: expect.any(String),
+                credential: {
+                  kind: 'connection',
+                  workspaceId: cWorkspaceId,
+                  salt: expect.any(String),
+                },
+              },
+            ]);
+            expect(ExecutionReadinessWireSchema.parse(withHealth)).toEqual(withHealth);
+
+            answer = 'ok';
+            const up = await readiness({ includeGateHealth: true });
+            expect(up.gates.find((g) => g.gateId === selfGatekeeperId)?.health).toBe('ok');
+            expect(probed).toHaveLength(2);
+          } finally {
+            setGatekeeperReadHandlerDeps({});
+            await withPlatform(pool, { userId: admin.id }, (client) =>
+              recordGateInstanceCheck(client, CONSISTENCY_GATE_ID, 'ok'),
+            );
+          }
+        });
+
         it('suspended: every path refuses it as disabled by the platform, the workspace cannot lift it, and resuming restores it', async () => {
           await expect(observeSelf()).resolves.toBeDefined();
           const before = await reachForMember();
@@ -2746,7 +2819,47 @@ describe.runIf(DATABASE_URL !== undefined)(
             const reach = await reachForMember();
             const gate = reach.gates.find((g) => g.gateId === selfGatekeeperId);
             expect(gate?.status).toBe('unreachable');
-            expect(gate?.reason).toBe('disabled_by_platform');
+            // Legacy 675: said as the platform's suspension, not as the connector deny list.
+            expect(gate?.reason).toBe('suspended_by_platform');
+            expect(gate?.platformSuspended).toBe(true);
+            expect(operationReachability(reach, selfGatekeeperId, 'observe', SELF_OP.name)).toEqual(
+              { status: 'unreachable', reason: 'suspended_by_platform' },
+            );
+            // The readiness read says it too, and never probes a suspended gate for its health.
+            const probedWhileSuspended: unknown[] = [];
+            setGatekeeperReadHandlerDeps({
+              gatekeeperClient: {
+                health: async (target: unknown) => {
+                  probedWhileSuspended.push(target);
+                  return { status: 'ok' };
+                },
+              } as unknown as GatekeeperClient,
+            });
+            try {
+              const readiness = (await dispatchCapability(
+                { pool },
+                humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+                'execution_readiness',
+                { includeGateHealth: true },
+              )) as ExecutionReadinessWire;
+              const shown = readiness.gates.find((g) => g.gateId === selfGatekeeperId);
+              expect(shown).toMatchObject({
+                status: 'unreachable',
+                reason: 'suspended_by_platform',
+              });
+              expect(shown).not.toHaveProperty('health');
+              expect(readiness.missing).toContainEqual({
+                code: 'suspended_by_platform',
+                gateId: selfGatekeeperId,
+              });
+              expect(readiness.missing).not.toContainEqual({
+                code: 'disabled_by_platform',
+                gateId: selfGatekeeperId,
+              });
+              expect(probedWhileSuspended).toEqual([]);
+            } finally {
+              setGatekeeperReadHandlerDeps({});
+            }
             // Legacy 674: the owner's own read says it is the platform's suspension, when and why
             // — never who — and still lists what is kept.
             const shownSuspended = await dispatchCapability(

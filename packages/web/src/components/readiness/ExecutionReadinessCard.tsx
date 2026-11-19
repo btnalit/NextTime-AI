@@ -1,13 +1,15 @@
-import type { ExecutionReadinessWire } from '@nexttime/shared';
+import type { ExecutionReadinessWire, GateHealthWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Notice } from '../kit/notice.js';
+import { StatusChip } from '../kit/status-chip.js';
 import { FixHint, useReadinessReader } from './FixHint.js';
 import {
   type ReadinessReader,
@@ -23,7 +25,11 @@ import {
   refusalKind,
   refusalKindsOf,
 } from './readiness-copy.js';
-import { useExecutionReadiness } from './useExecutionReadiness.js';
+import {
+  gateHealthDown,
+  useExecutionReadiness,
+  useReadinessGateHealth,
+} from './useExecutionReadiness.js';
 
 export interface ExecutionReadinessCardProps {
   readonly http: CapabilityCaller;
@@ -66,6 +72,8 @@ function ReadinessCardBody({
   const t = useT();
   // Held until the role is known, so a role that may not read it never asks.
   const readiness = useExecutionReadiness(http, { enabled: roleChecked });
+  // Legacy 253: whether each gate answers now, from a read of its own that may wait on a probe.
+  const health = useReadinessGateHealth(http, { enabled: roleChecked });
   const reader = useReadinessReader(http, currentHref);
 
   if (readiness.state.status === 'loading') {
@@ -86,7 +94,7 @@ function ReadinessCardBody({
       />
     );
   }
-  return <ExecutionReadinessStrip data={readiness.state.data} reader={reader} />;
+  return <ExecutionReadinessStrip data={readiness.state.data} health={health} reader={reader} />;
 }
 
 type GateWire = ExecutionReadinessWire['gates'][number];
@@ -127,9 +135,12 @@ function gateDisplayNames(gates: readonly GateWire[]): ReadonlyMap<string, strin
 
 function ExecutionReadinessStrip({
   data,
+  health,
   reader,
 }: {
   readonly data: ExecutionReadinessWire;
+  /** Legacy 253: gate id → health (`useReadinessGateHealth`); empty while unknown. */
+  readonly health: ReadonlyMap<string, GateHealthWire>;
   readonly reader: ReadinessReader;
 }) {
   const t = useT();
@@ -168,8 +179,14 @@ function ExecutionReadinessStrip({
     );
   }
 
-  const usableCount = data.gates.filter((gate) => gate.status !== 'unreachable').length;
-  const unusable = data.gates.filter((gate) => gate.status === 'unreachable');
+  // Legacy 253: a gate the agent may reach but that does not answer now (or refuses the platform's
+  // credentials) is not usable either — calls to it fail. It folds in with the unusable ones, and
+  // its row below says why.
+  const down = (gate: GateWire) =>
+    gate.status !== 'unreachable' && gateHealthDown(health.get(gate.gateId));
+  const usable = data.gates.filter((gate) => gate.status !== 'unreachable' && !down(gate));
+  const usableCount = usable.length;
+  const unusable = data.gates.filter((gate) => gate.status === 'unreachable' || down(gate));
   // Workspace-wide gaps a per-gate chip cannot say on its own (no specific gate to pin them to) —
   // everything else in `missing[]` already restates one gate's own `status`/`reason` below, so
   // showing both would say the same sentence twice.
@@ -194,21 +211,19 @@ function ExecutionReadinessStrip({
            *  wall of amber. Usable systems still get their own chip; every unusable one folds into
            *  the single "N 个用不了 · 查看原因" disclosure below instead of repeating itself once
            *  per gate. */}
-          {data.gates
-            .filter((gate) => gate.status !== 'unreachable')
-            .map((gate) => (
-              <span
-                key={gate.gateId}
-                className={`chip chip-s ${GATE_CHIP_TONE[gate.status]}`}
-                data-testid="execution-readiness-gate-chip"
-                data-gate-id={gate.gateId}
-                data-status={gate.status}
-              >
-                {displayNames.get(gate.gateId) ?? gate.name}
-                {'：'}
-                {gateChipLabel(gate.status, t)}
-              </span>
-            ))}
+          {usable.map((gate) => (
+            <span
+              key={gate.gateId}
+              className={`chip chip-s ${GATE_CHIP_TONE[gate.status]}`}
+              data-testid="execution-readiness-gate-chip"
+              data-gate-id={gate.gateId}
+              data-status={gate.status}
+            >
+              {displayNames.get(gate.gateId) ?? gate.name}
+              {'：'}
+              {gateChipLabel(gate.status, t)}
+            </span>
+          ))}
           {unusable.length > 0 ? (
             <Button
               variant="ghost"
@@ -237,6 +252,7 @@ function ExecutionReadinessStrip({
               <GateRow
                 key={gate.gateId}
                 gate={gate}
+                health={health.get(gate.gateId)}
                 displayName={displayNames.get(gate.gateId) ?? gate.name}
                 workerNames={workerNames}
                 reader={reader}
@@ -287,11 +303,13 @@ function ExecutionReadinessStrip({
 
 function GateRow({
   gate,
+  health,
   displayName,
   workerNames,
   reader,
 }: {
   readonly gate: GateWire;
+  readonly health: GateHealthWire | undefined;
   readonly displayName: string;
   readonly workerNames: ReadonlyMap<string, string>;
   readonly reader: ReadinessReader;
@@ -304,9 +322,12 @@ function GateRow({
       data-testid="execution-readiness-gate"
       data-gate-id={gate.gateId}
       data-status={gate.status}
+      data-health={health}
     >
       <strong>{displayName}</strong>
-      {gate.status === 'direct' ? (
+      {gate.status !== 'unreachable' && gateHealthDown(health) ? (
+        <GateDownRow gate={gate} health={health} reader={reader} />
+      ) : gate.status === 'direct' ? (
         <>
           <span className="chip chip-ok chip-s">{t('可直接调用', 'Callable directly')}</span>
           <span>
@@ -336,7 +357,7 @@ function GateRow({
           <span>{gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))}</span>
           {gate.reason !== undefined ? (
             <FixHint
-              href={gateReasonHref(gate.reason, reader)}
+              href={gateReasonHref(gate.reason, reader, 'me', gate.gateId)}
               label={gateReasonLink(gate.reason, t)}
               ask={gateReasonAsk(gate.reason, reader, t)}
             />
@@ -344,5 +365,53 @@ function GateRow({
         </>
       )}
     </li>
+  );
+}
+
+/** Legacy 253: a gate the agent may reach (`direct` / `via_worker`) that does not answer now —
+ *  what the reachability chip used to hide. The gate's own health chip (the one its card and 我的
+ *  智能体 show), what that means for a call, and the gate's details, where its health is checked
+ *  again. Nothing to fix in the workspace's settings: the agent's access is unchanged and works
+ *  again once the gate does. */
+function GateDownRow({
+  gate,
+  health,
+  reader,
+}: {
+  readonly gate: GateWire;
+  readonly health: 'unreachable' | 'unauthorized';
+  readonly reader: ReadinessReader;
+}) {
+  const t = useT();
+  const back =
+    gate.status === 'direct'
+      ? t('你的智能体照常可以直接调用它', 'your agent can call it directly again')
+      : t('你的智能体照常可以委派 Worker 用它', 'your agent can use it through a Worker again');
+  const detail = hrefs.gatekeeper(gate.gateId);
+  return (
+    <>
+      <StatusChip
+        machine="gateHealth"
+        status={health}
+        size="s"
+        testId="execution-readiness-gate-health"
+      />
+      <span>
+        {health === 'unreachable'
+          ? t(
+              `门现在没有回应，调用它会失败；门恢复后，${back}。`,
+              `The gate is not answering right now, so calls to it fail; once it is back, ${back}.`,
+            )
+          : t(
+              `门拒绝了平台调用它用的凭据，调用它会失败；凭据对上后，${back}。`,
+              `The gate rejects the credentials the platform calls it with, so calls to it fail; once they match again, ${back}.`,
+            )}
+      </span>
+      {detail !== reader.currentHref ? (
+        <a href={detail} className="link-inline" data-testid="execution-readiness-fix">
+          {t('看门详情', 'See the gate')}
+        </a>
+      ) : null}
+    </>
   );
 }

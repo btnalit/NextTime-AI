@@ -1,8 +1,10 @@
 import { roleSatisfiesMinRole } from '../../governance/capability/index.js';
+import type { GateHealth } from '../gates/index.js';
 import { assertPrincipalExists } from './agent-profile-handlers.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { computeCapabilityReachability } from './capability-reachability.js';
+import { planGateHealths, probeGateHealths } from './gate-health-probes.js';
 
 /**
  * application/gateway/execution-readiness-handler: `execution_readiness` (S8 W1-C, F6;
@@ -46,6 +48,17 @@ import { computeCapabilityReachability } from './capability-reachability.js';
  * (`gates[].status` / `reason`: can the entry agent call it directly, only by delegating, or not
  * at all and why). `workers[].delegable` now also honours the member's AgentProfile exclusions,
  * which `invoke_worker` itself enforces — the invariant above was not quite true before.
+ *
+ * Legacy 675: a gate the platform suspended (`suspend_self_connection`) reads
+ * `suspended_by_platform` — before, it read `disabled_by_platform`, whose copy points at the
+ * connector deny list — and adds that code to `missing[]`.
+ *
+ * Legacy 253: with `includeGateHealth`, each gate the agent can reach (`direct` / `via_worker`)
+ * carries `health` (`gate-health-probes.ts`, the values `get_agent_profile` gives): stored for a
+ * catalog gate, probed after the transaction for any other. Before, a gate that was down still read `direct`
+ * here with nothing else to say so. Health is reported beside the reachability, never folded into
+ * it: `status`, `reason`, `missing` and `ready` say what the agent may reach (the enforcement
+ * predicates), and a probe is a moment's answer that enforcement does not consult.
  */
 
 interface ExecutionReadinessMissing {
@@ -62,7 +75,10 @@ interface ExecutionReadinessMissing {
     | 'disabled_by_platform'
     /** Legacy K: the gate refuses calls to some published Operation on it — it runs another
      *  definition (`gates[].definitionMismatch` says which and whose step it is). */
-    | 'definition_mismatch';
+    | 'definition_mismatch'
+    /** Legacy 675: the platform suspended this gate the workspace connected itself — nothing in
+     *  the workspace lifts it. */
+    | 'suspended_by_platform';
   readonly gateId?: string;
   readonly workerDefinitionId?: string;
 }
@@ -80,7 +96,10 @@ export const executionReadinessHandler: CapabilityHandler = async (
   }
   const caller = ctx.principal;
 
-  const { principalId } = rawParams as { principalId?: string };
+  const { principalId, includeGateHealth } = rawParams as {
+    principalId?: string;
+    includeGateHealth?: boolean;
+  };
   const target = principalId ?? caller.id;
 
   if (target !== caller.id && !roleSatisfiesMinRole(caller.role, 'operator')) {
@@ -119,6 +138,9 @@ export const executionReadinessHandler: CapabilityHandler = async (
     if (gate.excludedByProfile) addMissing({ code: 'excluded_by_profile', gateId: gate.gateId });
     if (gate.reason === 'disabled_by_platform') {
       addMissing({ code: 'disabled_by_platform', gateId: gate.gateId });
+    }
+    if (gate.reason === 'suspended_by_platform') {
+      addMissing({ code: 'suspended_by_platform', gateId: gate.gateId });
     }
     // Any refused Operation is worth naming, not only a gate with nothing left: unlike the deny
     // list, nobody chose it.
@@ -198,15 +220,47 @@ export const executionReadinessHandler: CapabilityHandler = async (
 
   const ready = workers.some((worker) => worker.delegable && worker.reachableGateCount > 0);
 
+  const result = {
+    principalId: target,
+    ready,
+    missing: [...missingByKey.values()],
+    gates,
+    workers,
+  };
+  const done = { resourceType: 'principal', resourceId: target } as const;
+  if (includeGateHealth !== true) return { ...done, result };
+
+  // Legacy 253: stored healths now; live probes only after this transaction has committed. Only
+  // the gates the agent can reach (`direct` / `via_worker`) — health answers "would a call get
+  // through now", and for any other gate `reason` already says why none does. That leaves out a
+  // gate the platform suspended (`suspended_by_platform`): the kernel does not contact it on the
+  // workspace's behalf for a read.
+  const { stored, probes } = await planGateHealths(
+    client,
+    workspaceId,
+    reach.gates
+      .filter((gate) => gate.status !== 'unreachable' && !gate.platformSuspended)
+      .map((gate) => gate.gateId),
+  );
+  const withStored = { ...result, gates: withGateHealths(gates, stored) };
+  if (probes.length === 0) return { ...done, result: withStored };
   return {
-    result: {
-      principalId: target,
-      ready,
-      missing: [...missingByKey.values()],
-      gates,
-      workers,
-    },
-    resourceType: 'principal',
-    resourceId: target,
+    ...done,
+    result: withStored,
+    afterCommit: async () => ({
+      ...withStored,
+      gates: withGateHealths(withStored.gates, await probeGateHealths(probes)),
+    }),
   };
 };
+
+/** `gates` with each listed gate's `health` set; a gate `healths` does not name is left as is. */
+function withGateHealths<Gate extends { readonly gateId: string }>(
+  gates: readonly Gate[],
+  healths: ReadonlyMap<string, GateHealth>,
+): (Gate & { readonly health?: GateHealth })[] {
+  return gates.map((gate) => {
+    const health = healths.get(gate.gateId);
+    return health !== undefined ? { ...gate, health } : gate;
+  });
+}

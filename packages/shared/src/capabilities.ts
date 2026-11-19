@@ -2474,7 +2474,9 @@ const governanceCapabilities = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    paramsSchema: z
+      .object({ principalId: id.optional(), includeGateHealth: z.boolean().optional() })
+      .strict(),
     resultSchema: wire.ExecutionReadinessWireSchema,
     description:
       'Whether principalId’s (default: the caller’s own) entry agent can currently delegate ' +
@@ -2484,7 +2486,14 @@ const governanceCapabilities = [
       'how many gates the delegated Worker would actually reach, and what blocks it when not; ' +
       '`ready` (some Worker is delegable and reaches at least one gate) and a `missing[]` rollup ' +
       'of machine codes (no_enabled_gate / no_grant / no_published_worker / no_worker_gate) with ' +
-      'the ids involved. An operator+ ' +
+      'the ids involved. A gate the platform suspended (legacy 675) reads unreachable with reason ' +
+      'suspended_by_platform, ahead of every other reason, and adds that code to missing[]. ' +
+      'Legacy 253: with includeGateHealth true, each gate the agent can reach (status direct or ' +
+      'via_worker) carries health — for a gate enabled from the platform catalog, its instance’s stored health ' +
+      '(unknown until the gate has announced); for a gate the workspace connected itself, a live ' +
+      'probe of the gate’s own health endpoint (3 s timeout, all gates at once, after the read’s ' +
+      'transaction has ended; ok, unreachable or unauthorized). Health changes no status, reason ' +
+      'or ready. Without it (the default) no gate is probed and none carries health. An operator+ ' +
       'may pass another member’s principalId (same visibility floor as list_grants); any other ' +
       'caller may only check their own.',
   },

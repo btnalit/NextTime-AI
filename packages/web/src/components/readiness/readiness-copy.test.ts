@@ -12,6 +12,8 @@ import {
   type ReadinessReader,
   gateReasonAsk,
   gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
   missingAsk,
   missingCauseText,
   missingLinkHref,
@@ -34,6 +36,8 @@ const MISSING_FIX: Record<string, string | null> = {
   disabled_by_platform: null,
   // #538: the link opens the system's drawer, which says whose step it is — any reader may open it.
   definition_mismatch: 'get_gatekeeper',
+  // Legacy 675: likewise — the drawer says when and why, and that a platform administrator lifts it.
+  suspended_by_platform: 'get_gatekeeper',
 };
 
 const GATE_REASON_FIX: Record<string, string | null> = {
@@ -45,6 +49,7 @@ const GATE_REASON_FIX: Record<string, string | null> = {
   disabled_by_platform: null,
   // Said on the system's own row (no link); no one to ask from here.
   definition_mismatch: null,
+  suspended_by_platform: null,
 };
 
 /** What the kernel would authorize: the role predicate, plus `set_agent_profile`'s own rule — a
@@ -146,6 +151,50 @@ describe('readiness fix links follow the kernel authorization (#541 review R1)',
   it('never links to the page the reader is already on', () => {
     expect(
       missingLinkHref({ code: 'no_grant' }, { role: 'owner', currentHref: hrefs.access() }),
+    ).toBeUndefined();
+  });
+});
+
+describe('legacy 675: a gate the platform suspended', () => {
+  it('names the suspension and who lifts it, never the connector deny list', () => {
+    const names = new Map([['g-1', '库存']]);
+    const cause = missingCauseText({ code: 'suspended_by_platform', gateId: 'g-1' }, names, t);
+    expect(cause).toBe(
+      '平台管理员暂停了门「库存」，对它的每次调用都被拒绝。工作区里解除不了，要请平台管理员恢复。',
+    );
+    expect(cause).not.toContain('平台 · 集成');
+    const reason = gateReasonText('suspended_by_platform', t);
+    expect(reason).toContain('门被平台暂停');
+    expect(reason).toContain('平台管理员恢复');
+    expect(reason).not.toContain('平台 · 集成');
+    // About another member: the same sentence — it says nothing about "you".
+    expect(gateReasonText('suspended_by_platform', t, 'them')).toBe(reason);
+  });
+
+  it('links to the gate’s details where a gate is named apart from its page, and asks no one', () => {
+    for (const role of ROLE_VALUES) {
+      const reader: ReadinessReader = { role, memberCanEditProfile: true };
+      expect(missingLinkHref({ code: 'suspended_by_platform', gateId: 'g-1' }, reader), role).toBe(
+        hrefs.gatekeeper('g-1'),
+      );
+      expect(gateReasonHref('suspended_by_platform', reader, 'me', 'g-1'), role).toBe(
+        hrefs.gatekeeper('g-1'),
+      );
+      // The system's own row and drawer pass no gate: no link to where the reader already is.
+      expect(gateReasonHref('suspended_by_platform', reader), role).toBeUndefined();
+      expect(gateReasonAsk('suspended_by_platform', reader, t), role).toBeUndefined();
+    }
+    expect(missingLinkLabel({ code: 'suspended_by_platform', gateId: 'g-1' }, t)).toBe(
+      '看暂停原因',
+    );
+    expect(gateReasonLink('suspended_by_platform', t)).toBe('看暂停原因');
+    expect(
+      gateReasonHref(
+        'suspended_by_platform',
+        { role: 'owner', currentHref: hrefs.gatekeeper('g-1') },
+        'me',
+        'g-1',
+      ),
     ).toBeUndefined();
   });
 });

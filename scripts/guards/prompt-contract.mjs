@@ -373,6 +373,7 @@ export const ALLOWED_NON_TOOL_WORDS = {
     'no_worker',
     'no_published_operation',
     'disabled_by_platform', // reachability.reason value (production incident 2026-09-26) — not a tool.
+    'suspended_by_platform', // reachability.reason value (legacy 675) — not a tool.
     'verify', // a Procedure step kind (packages/shared procedure.ts), named for S10 E1 — not a tool.
     'nextCursor', // the keyset cursor field of list_facts' result (wire conventions §3), not a tool.
   ]),

@@ -23,6 +23,7 @@ function gate(
     excludedByPolicy: false,
     excludedByProfile: false,
     inEntryScope: true,
+    platformSuspended: false,
     observeOperationCount: 1,
     executeOperationCount: 1,
     disabledOperations: [],
@@ -169,6 +170,33 @@ describe('operationReachability', () => {
       status: 'unreachable',
       reason: 'disabled_by_platform',
     });
+  });
+
+  // Legacy 675: a gate the platform suspended refuses every call — every Operation on it says so,
+  // observe or execute, ahead of the deny list and of a Grant the member lacks.
+  it('every Operation on a gate the platform suspended is unreachable/suspended_by_platform', () => {
+    const r = reach([
+      gate({
+        gateId: 'g',
+        granted: false,
+        inEntryScope: false,
+        platformSuspended: true,
+        disabledOperations: ['op', 'write_op'],
+        directOperations: [],
+        executeWorkerDefinitionIds: ['wd'],
+        status: 'unreachable',
+        reason: 'suspended_by_platform',
+      }),
+    ]);
+    for (const [mode, name] of [
+      ['observe', 'op'],
+      ['execute', 'write_op'],
+    ] as const) {
+      expect(operationReachability(r, 'g', mode, name)).toEqual({
+        status: 'unreachable',
+        reason: 'suspended_by_platform',
+      });
+    }
   });
 
   // Legacy K (UX acceptance of #538): the gate refuses a call made under a definition it does not

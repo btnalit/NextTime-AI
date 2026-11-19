@@ -847,6 +847,91 @@ describe('SystemsPage', () => {
     expect(within(detail).queryByRole('link')).toBeNull();
   });
 
+  // Legacy 675: the card said only 「你：用不了」 for a gate the platform suspended.
+  it('legacy 675: a gate the platform suspended says so on its row and as the reason, with no link to fix it here', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              status: 'unreachable',
+              reason: 'suspended_by_platform',
+              disabledOperations: ['ps', 'logs', 'restart'],
+            }),
+          ],
+          missing: [{ code: 'suspended_by_platform', gateId: 'gk-1' }],
+        }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const tag = within(card).getByTestId('gatekeeper-platform-suspended-tag');
+    expect(tag.textContent).toBe('平台已暂停');
+    expect(tag.getAttribute('title')).toContain('健康与操作');
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    expect(chip.textContent).toBe('你：用不了');
+    expect(chip.getAttribute('title')).toContain('门被平台暂停');
+    expect(chip.getAttribute('title')).not.toContain('平台 · 集成');
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const detail = within(drawer).getByTestId('system-access-my-reachability');
+    expect(detail.textContent).toContain('平台管理员恢复');
+    expect(within(detail).queryByRole('link')).toBeNull();
+  });
+
+  it('legacy 675: a gate that is not suspended carries no 「平台已暂停」', async () => {
+    renderPage(scriptedHttp({ execution_readiness: () => readiness({ gates: [gate()] }) }));
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    expect(within(card).queryByTestId('gatekeeper-platform-suspended-tag')).toBeNull();
+  });
+
+  // Legacy 253: a gate the workspace connected itself had no health on its card at all.
+  it('legacy 253: a self-connected gate’s card shows its probed health once the health read is back; a catalog gate keeps its instance’s', async () => {
+    const http = scriptedHttp({
+      execution_readiness: (params) => {
+        const withHealth = (params as { includeGateHealth?: boolean }).includeGateHealth === true;
+        return readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              gateId: 'gk-self',
+              name: '自接系统',
+              ...(withHealth ? { health: 'unreachable' } : {}),
+            }),
+            gate({
+              gateId: 'gk-1',
+              name: '库存',
+              ...(withHealth ? { health: 'unauthorized' } : {}),
+            }),
+          ],
+        });
+      },
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const cardOf = async (gateId: string) =>
+      (await screen.findAllByTestId('gatekeeper-card')).find(
+        (el) => el.getAttribute('data-gatekeeper-id') === gateId,
+      ) as HTMLElement;
+    await waitFor(async () =>
+      expect(
+        within(await cardOf('gk-self')).getByTestId('gatekeeper-card-health').textContent,
+      ).toBe('不可达'),
+    );
+    // The catalog gate's chip is its instance's stored health, as the instance list says it.
+    expect(within(await cardOf('gk-1')).getByTestId('gatekeeper-card-health').textContent).toBe(
+      '健康',
+    );
+    expect(
+      http.calls.filter(
+        (c) =>
+          c.name === 'execution_readiness' &&
+          (c.params as { includeGateHealth?: boolean }).includeGateHealth === true,
+      ),
+    ).toHaveLength(1);
+  });
+
   it('legacy K (UX acceptance of #538): a gate refusing every call reads 「用不了」, never 「可直接调用」, and the drawer sends a platform admin to adopt the new manifest first', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
