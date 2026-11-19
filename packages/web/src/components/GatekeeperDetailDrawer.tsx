@@ -53,6 +53,10 @@ export interface GatekeeperCardCounts {
  * Operations — then the drafts and the old versions, so the two never read as different numbers
  * for one gate. Published Operations the platform disabled are not in `get_gatekeeper`'s list but
  * are in the card's count: the drawer names them and says who can turn them back on.
+ *
+ * Legacy 215: under the health, whether the gate says it checks each call against the definition
+ * the platform approved (the same probe's answer) — 「不校验摘要」 when it does not, with what that
+ * means and who changes it. Nothing is refused for it, so it is a note, not an error.
  */
 export function GatekeeperDetailDrawer({
   http,
@@ -154,6 +158,31 @@ export function GatekeeperDetailDrawer({
             testId="gatekeeper-health"
           />
         </dd>
+        {gate.operationDigestCheck !== undefined ? (
+          <>
+            <dt>{t('定义核对', 'Definition check')}</dt>
+            <dd data-testid="gatekeeper-digest-check">
+              {gate.operationDigestCheck === 'declared' ? (
+                t(
+                  '门只执行平台批准的定义（校验摘要）',
+                  'The gate runs only the definition the platform approved (checks the digest)',
+                )
+              ) : (
+                <>
+                  <span className="tag text-danger">
+                    {t('不校验摘要', 'Does not check the digest')}
+                  </span>{' '}
+                  <span className="text-3 text-small">
+                    {t(
+                      '这个门没有声明会核对平台批准的定义（基于旧版 gatekeeper-base 的门不核对），可能照它自己的定义执行，不管平台批准的是哪一版。平台照常调用它；门的维护者用当前版本的 gatekeeper-base 重建后，这里会改为校验。',
+                      'This gate does not say it checks calls against the definition the platform approved (gates on an older gatekeeper-base do not), so it may run its own definition whatever version was approved. The platform still calls it; once its maintainer rebuilds it on the current gatekeeper-base, this reads as checked.',
+                    )}
+                  </span>
+                </>
+              )}
+            </dd>
+          </>
+        ) : null}
         {gate.endpoint !== undefined ? (
           <>
             <dt>{t('地址', 'Address')}</dt>

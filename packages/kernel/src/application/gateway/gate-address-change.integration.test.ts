@@ -8,6 +8,7 @@ import type {
   Operation,
   PlatformGateAddressChangeWire,
 } from '@nexttime/shared';
+import { GatekeeperDetailWireSchema } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -502,6 +503,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       const forMember = await asMember<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
       expect(forMember.endpoint).toBeUndefined();
       expect(forMember.pendingAddressChange).toBeUndefined();
+
+      // Legacy 215: this gate's health answer does not say it checks digests (an older
+      // gatekeeper-base) — marked, for everyone, and nothing refused. One that says so reads
+      // `declared`; one that does not answer, nothing.
+      expect(forOwner.operationDigestCheck).toBe('undeclared');
+      expect(forMember.operationDigestCheck).toBe('undeclared');
+      expect(GatekeeperDetailWireSchema.parse(forMember)).toEqual(forMember);
+      try {
+        setGatekeeperReadHandlerDeps({
+          gatekeeperClient: {
+            ...gates.client,
+            health: async () => ({ status: 'ok', checksOperationDigest: true }),
+          },
+        });
+        expect(
+          (await asMember<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId }))
+            .operationDigestCheck,
+        ).toBe('declared');
+        setGatekeeperReadHandlerDeps({
+          gatekeeperClient: {
+            ...gates.client,
+            health: async () => {
+              throw new Error('connection refused');
+            },
+          },
+        });
+        const unanswered = await asMember<GatekeeperDetailWire>('get_gatekeeper', { gatekeeperId });
+        expect(unanswered.health).toBe('unreachable');
+        expect(unanswered).not.toHaveProperty('operationDigestCheck');
+      } finally {
+        setGatekeeperReadHandlerDeps({ gatekeeperClient: gates.client });
+      }
 
       // The platform sees scheme, host and port only.
       const read = await listed(proposal.id);

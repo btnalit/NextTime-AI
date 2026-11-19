@@ -147,6 +147,12 @@ export type RevertResponse = z.infer<typeof RevertResponseSchema>;
 export const HealthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded', 'down']),
   detail: z.string().optional(),
+  /** Legacy 215: this gate refuses every observe / simulate / apply / revert whose
+   *  `operationDigest` is not the digest of the definition it runs (`GatekeeperBase`, legacy K), so
+   *  it runs only what the platform approved. A gate on an older `gatekeeper-base`, or one not built
+   *  on it, does not say so; the kernel then marks it as one that does not check, and still calls
+   *  it. */
+  checksOperationDigest: z.literal(true).optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 

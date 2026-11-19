@@ -25784,6 +25784,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "operationDigestCheck": {
+          "enum": [
+            "declared",
+            "undeclared"
+          ],
+          "type": "string"
+        },
         "operations": {
           "items": {
             "additionalProperties": false,

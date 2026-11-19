@@ -37,6 +37,10 @@ operations`"这条路径时，两份才**保证**是同一份（因为图里导�
 运行的定义比对，不符即 409 `operation_definition_mismatch`、什么也不执行——以前是静默按门的那份执行。
 比对的字段是 `name`、`binding`、`params_schema`、`result_mapping`、`mode`、`reversibility`（`ssh` 另含
 `blast_radius`）；`description` 与 `auto_approvable` 等只影响内核侧治理的字段不计入。处理见 §12。
+门在 `/gate/health` 的回答里带 `checksOperationDigest: true` 声明自己会这样比对（遗留 215，`GatekeeperBase`
+自动带上）。基于更早的 `gatekeeper-base`、或不基于它的门不带这个声明，比对不了也不拒绝，照门自己的那份执行；
+平台照常调用它，只在「系统与授权」的门详情里标「不校验摘要」（门答不了健康检查时不显示这一行）。要去掉这个
+标记，用当前版本的 `gatekeeper-base` 重建门。
 
 **一条落地路径，两个入口（P0b）。** 不论从哪个入口进来，Gatekeeper 都由同一个落地函数写入并记下来源：
 ①**平台目录**：打包门（ssh / cli，页面**不假装能建**，只显示部署清单并等门 announce）与门宿主实例

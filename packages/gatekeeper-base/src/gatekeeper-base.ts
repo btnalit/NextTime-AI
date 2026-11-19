@@ -77,6 +77,9 @@ export interface RevertResult {
 export interface HealthResult {
   readonly status: 'ok' | 'degraded' | 'down';
   readonly detail?: string;
+  /** Legacy 215: set by `GatekeeperBase.health` — it checks every call's digest (`protocol.ts`
+   *  `HealthResponseSchema`). A transport's own health check leaves it out. */
+  readonly checksOperationDigest?: true;
 }
 
 export interface GatekeeperBaseCallContext {
@@ -426,7 +429,12 @@ export class GatekeeperBase {
   }
 
   async health(): Promise<HealthResult> {
-    if (this.options.transport.health) return this.options.transport.health();
-    return { status: 'ok' };
+    const health: HealthResult = this.options.transport.health
+      ? await this.options.transport.health()
+      : { status: 'ok' };
+    // Legacy 215: every call through this class has its digest checked (`observe`, `simulate`,
+    // `apply`, `revert`; `server.ts` passes the request's own, `null` when it carried none), so the
+    // gate says so where the kernel already asks how it is.
+    return { ...health, checksOperationDigest: true };
   }
 }

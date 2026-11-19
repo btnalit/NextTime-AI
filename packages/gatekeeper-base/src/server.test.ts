@@ -10,6 +10,7 @@ import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
 import { operationDefinitionDigest } from './operation-digest.js';
+import { HealthResponseSchema } from './protocol.js';
 import {
   type GateCallLogFields,
   createGatekeeperServer,
@@ -137,7 +138,11 @@ describe('gatekeeper protocol server', () => {
       url: '/gate/health',
       headers: AUTH_HEADERS,
     });
-    expect(response.json().result).toEqual({ status: 'ok' });
+    expect(response.json().result).toEqual({ status: 'ok', checksOperationDigest: true });
+    expect(HealthResponseSchema.parse(response.json().result)).toEqual({
+      status: 'ok',
+      checksOperationDigest: true,
+    });
   });
 
   it('POST /gate/observe calls through to the transport', async () => {
