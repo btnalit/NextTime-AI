@@ -45,24 +45,44 @@ export function versionList(versions: readonly { readonly version: number }[], t
   return t(names.join('、'), names.join(', '));
 }
 
-/** 「建议复核」 — `title` says whose latest outcomes were all not achieved. */
+/** 「建议复核」 with its reason in words beside it, not only on hover — keyboard and touch readers
+ *  see it too (legacy 495). The chip carries `testId`, the reason `${testId}-reason`. */
 export function ReviewSuggestedChip({
-  title,
+  reason,
   t,
   testId,
 }: {
-  readonly title: string;
+  readonly reason: string;
   readonly t: Translate;
   readonly testId: string;
 }) {
   return (
-    <span className="chip chip-warn chip-s" title={title} data-testid={testId}>
-      {t('建议复核', 'Review suggested')}
+    <>
+      <span className="chip chip-warn chip-s" data-testid={testId}>
+        {t('建议复核', 'Review suggested')}
+      </span>
+      <span className="text-3 text-small" data-testid={`${testId}-reason`}>
+        {reason}
+      </span>
+    </>
+  );
+}
+
+/** What a run environment's fingerprint stands for, said once above the list of environments
+ *  (legacy 495: it was only on each label's hover). */
+export function EnvironmentNote({ t, testId }: { readonly t: Translate; readonly testId: string }) {
+  return (
+    <span className="text-3 text-small" data-testid={testId}>
+      {t(
+        '指纹相同的运行，定义版本、模型、镜像、平台版本和系统提示都相同。',
+        'Runs with the same fingerprint ran the same definition version, model, image, platform version and system prompt.',
+      )}
     </span>
   );
 }
 
-/** A run environment: its short fingerprint, or 「环境未知」, each explained on hover. */
+/** A run environment: its short fingerprint with the whole one under it, or 「环境未知」 with
+ *  what that means — in words, not only on hover (legacy 495). */
 export function EnvironmentLabel({
   digest,
   t,
@@ -71,23 +91,23 @@ export function EnvironmentLabel({
   readonly t: Translate;
 }) {
   return digest !== null ? (
-    <span
-      className="mono"
-      title={t(
-        `${digest}\n指纹相同的运行，定义版本、模型、镜像、平台版本和系统提示都相同。`,
-        `${digest}\nRuns with the same fingerprint ran the same definition version, model, image, platform version and system prompt.`,
-      )}
-    >
-      {t(`环境 ${shortDigest(digest)}`, `Environment ${shortDigest(digest)}`)}
+    <span className="stack-s">
+      <strong className="text-small mono">
+        {t(`环境 ${shortDigest(digest)}`, `Environment ${shortDigest(digest)}`)}
+      </strong>
+      <span className="text-3 text-small mono wrap-anywhere" data-testid="usage-environment-digest">
+        {digest}
+      </span>
     </span>
   ) : (
-    <span
-      title={t(
-        '运行时没有上报，或用了默认模型、平台没读到模型配置',
-        'The runtime reported nothing, or the run used the default model and the platform could not read its model configuration',
-      )}
-    >
-      {t('环境未知', 'Environment unknown')}
+    <span className="stack-s">
+      <strong className="text-small">{t('环境未知', 'Environment unknown')}</strong>
+      <span className="text-3 text-small" data-testid="usage-environment-unknown">
+        {t(
+          '有运行没有上报环境，或用了默认模型、平台没读到模型配置。',
+          'A run reported nothing, or used the default model and the platform could not read its model configuration.',
+        )}
+      </span>
     </span>
   );
 }

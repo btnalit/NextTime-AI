@@ -17,7 +17,13 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { EnvironmentLabel, ReviewSuggestedChip, runNumbers, versionList } from './usage-common.js';
+import {
+  EnvironmentLabel,
+  EnvironmentNote,
+  ReviewSuggestedChip,
+  runNumbers,
+  versionList,
+} from './usage-common.js';
 
 /**
  * components/catalog/WorkerDefinitionUsage (S11 GO16a, legacy 569): 「使用情况」 on a Worker's
@@ -147,7 +153,7 @@ function VersionBlock({
         <strong>v{version.version}</strong>
         {version.reviewSuggested ? (
           <ReviewSuggestedChip
-            title={t(
+            reason={t(
               `某个运行环境或组合下最近 ${reviewStreak} 个结果都未达成，展开下面两组看是哪一个`,
               `The latest ${reviewStreak} outcomes of one run environment or combination were all not achieved; open the two lists below to see which`,
             )}
@@ -169,6 +175,7 @@ function VersionBlock({
             )}
           </summary>
           <div className="disclosure-body stack">
+            <EnvironmentNote t={t} testId={`${testId}-segments-note`} />
             {version.segments.map((segment) => (
               <SegmentBlock
                 key={segment.environmentDigest ?? 'unknown'}
@@ -229,7 +236,7 @@ function SegmentBlock({
         <EnvironmentLabel digest={segment.environmentDigest} t={t} />
         {segment.reviewSuggested ? (
           <ReviewSuggestedChip
-            title={t(
+            reason={t(
               `这个运行环境下最近 ${reviewStreak} 个结果都未达成`,
               `The latest ${reviewStreak} outcomes in this run environment were all not achieved`,
             )}
@@ -319,7 +326,7 @@ function CombinationBlock({
         </span>
         {combination.reviewSuggested ? (
           <ReviewSuggestedChip
-            title={t(
+            reason={t(
               `这个组合最近 ${reviewStreak} 个结果都未达成`,
               `The latest ${reviewStreak} outcomes of this combination were all not achieved`,
             )}

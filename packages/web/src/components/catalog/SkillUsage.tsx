@@ -15,7 +15,13 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { EnvironmentLabel, ReviewSuggestedChip, runNumbers, versionList } from './usage-common.js';
+import {
+  EnvironmentLabel,
+  EnvironmentNote,
+  ReviewSuggestedChip,
+  runNumbers,
+  versionList,
+} from './usage-common.js';
 
 /**
  * components/catalog/SkillUsage (S11 W1a E2-1): 「使用情况」 on a Skill's detail — how each version
@@ -130,7 +136,7 @@ function ReviewSuggested({
 }) {
   return (
     <ReviewSuggestedChip
-      title={t(
+      reason={t(
         `同一运行环境下最近 ${reviewStreak} 个结果都未达成`,
         `The latest ${reviewStreak} outcomes in one run environment were all not achieved`,
       )}
@@ -172,6 +178,7 @@ function VersionBlock({
             )}
           </summary>
           <div className="disclosure-body stack">
+            <EnvironmentNote t={t} testId={`${testId}-segments-note`} />
             {version.segments.map((segment) => (
               <SegmentBlock
                 key={segment.environmentDigest ?? 'unknown'}

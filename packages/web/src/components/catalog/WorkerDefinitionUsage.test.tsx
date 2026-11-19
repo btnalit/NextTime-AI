@@ -227,8 +227,10 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
       '编号只用来区分不同的调整：编号相同就是同一份调整，不论来自哪个目标。',
     );
     // Its review comes from its own outcomes, and says so.
-    const review = within(a).getByTestId(`worker-usage-version-2-combination-${REF_A}-review`);
-    expect(review.getAttribute('title')).toBe('这个组合最近 3 个结果都未达成');
+    expect(
+      within(a).getByTestId(`worker-usage-version-2-combination-${REF_A}-review-reason`)
+        .textContent,
+    ).toBe('这个组合最近 3 个结果都未达成');
 
     // Ran only in goals the reader cannot see: the number is the page's own, and says so.
     const b = screen.getByTestId(`worker-usage-version-2-combination-${REF_B}-label`);
@@ -254,12 +256,15 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
     show(scriptedHttp('builder', () => stats()));
     const review = await screen.findByTestId('worker-usage-version-2-review');
     expect(review.textContent).toBe('建议复核');
-    expect(review.getAttribute('title')).toContain('某个运行环境或组合');
+    expect(screen.getByTestId('worker-usage-version-2-review-reason').textContent).toContain(
+      '某个运行环境或组合',
+    );
 
     const segments = screen.getByTestId('worker-usage-version-2-segments');
     fireEvent.click(within(segments).getByText('按运行环境（2 段）'));
     const known = screen.getByTestId(`worker-usage-version-2-segment-${ENV_A}`);
     expect(known.textContent).toContain('v1:aaaaaaaaaaaa');
+    expect(within(known).getByTestId('usage-environment-digest').textContent).toBe(ENV_A);
     expect(
       within(known).queryByTestId(`worker-usage-version-2-segment-${ENV_A}-review`),
     ).toBeNull();
