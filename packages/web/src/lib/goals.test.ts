@@ -5,6 +5,7 @@ import {
   type GoalPlan,
   type OutputSchema,
   type StepAttemptWire,
+  type StepRunWire,
   type UnresolvedGoalActionWire,
   outputContractProblems,
   validateOutput,
@@ -42,8 +43,10 @@ import {
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
   retriedStepKeys,
+  sealRefusedReasonOf,
   skillRefShown,
   skillVersionShown,
+  stepFailureText,
   stepHeldLabel,
   stepHintChipLabel,
   unresolvedActionText,
@@ -504,6 +507,125 @@ describe('lib/goals', () => {
     expect(
       goalStateNote(paused('succeeded', { filesFrom: undefined }), undefined, budget, zh)?.text,
     ).toBe('需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。');
+  });
+
+  it('legacy 515 (UX acceptance of #1486): a step the evaluation seal kept from starting says so, not the general note', () => {
+    const budget = goalBudgetRows(goalRun(), zh);
+    const refused = (reason: string, overrides: Partial<StepRunWire> = {}) =>
+      stepRun({
+        id: 'sr-fetch',
+        stepKey: 'fetch',
+        status: 'failed',
+        failureCategory: 'transient',
+        attemptCount: 1,
+        attempts: [
+          {
+            attempt: 1,
+            taskId: 'task-fetch-1',
+            status: 'failed',
+            createdAt: '2026-10-20T00:01:00.000Z',
+            failureReason: reason,
+            rework: false,
+            outputProblems: null,
+            outputProblemCount: 0,
+          },
+        ],
+        ...overrides,
+      });
+    const paused = (steps: StepRunWire[], extra: Partial<GoalDetailWire> = {}) => ({
+      ...goalDetail(),
+      status: 'paused' as const,
+      pauseReason: 'needs_decision' as const,
+      steps,
+      ...extra,
+    });
+
+    const withheld = paused([refused('evaluation_withheld')]);
+    expect(goalStateNote(withheld, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。',
+    );
+    expect(goalStateNote(withheld, undefined, budget, en)?.text).toBe(
+      'A person must decide: step fetch’s attempt 1 did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.',
+    );
+    const pausedAgents = paused([refused('evaluation_paused')]);
+    expect(goalStateNote(pausedAgents, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。',
+    );
+    expect(goalStateNote(pausedAgents, undefined, budget, en)?.text).toMatch(
+      /^A person must decide: step fetch’s attempt 1 did not start, because the evaluation seal has paused the agents acting for the requester\. Once a workspace owner reviews and releases the pause under Govern → Evaluation/,
+    );
+    // The planner's round under this pause (which the seal may refuse too) does not hide it.
+    const planning = paused([refused('evaluation_withheld')], {
+      planningRounds: [
+        {
+          id: 'r-1',
+          status: 'running',
+          kind: 'proposal',
+          basedOnRevision: 1,
+          point: 'step_failure',
+          stepRunId: 'sr-fetch',
+          stepKey: 'fetch',
+          stepAttempt: 1,
+          failureCategory: 'transient',
+          acceptanceRound: null,
+          taskId: 'task-planner-1',
+          revision: null,
+          revisionClass: null,
+          classReasons: [],
+          outcomeReason: null,
+          detail: null,
+          createdAt: '2026-10-20T00:05:00.000Z',
+          settledAt: null,
+        },
+      ],
+    });
+    expect(goalStateNote(planning, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：步骤「fetch」第 1 次尝试没有启动/,
+    );
+    // Only the latest attempt counts, and only on the plan in force; another failure keeps the
+    // general note.
+    const [first] = refused('evaluation_withheld').attempts;
+    const [workerFailed] = refused('worker_failed').attempts;
+    if (!first || !workerFailed) throw new Error('fixture has an attempt');
+    const retriedSince = refused('evaluation_withheld', {
+      attemptCount: 2,
+      attempts: [first, { ...workerFailed, attempt: 2, taskId: 'task-fetch-2' }],
+    });
+    expect(goalStateNote(paused([retriedSince]), undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+    const superseded = paused([
+      refused('evaluation_withheld', { supersededInRevision: 2 }),
+      refused('worker_failed', { id: 'sr-b', stepKey: 'b' }),
+    ]);
+    expect(goalStateNote(superseded, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+  });
+
+  it('legacy 515: a step card reads the seal’s refusal, never the category’s automatic retry', () => {
+    const [running] = stepRun().attempts;
+    if (!running) throw new Error('fixture has an attempt');
+    const failedWith = (reason: string, status: StepRunWire['status'] = 'failed') =>
+      stepRun({
+        status,
+        failureCategory: 'transient',
+        attempts: [{ ...running, status: 'failed', failureReason: reason }],
+      });
+    expect(sealRefusedReasonOf(failedWith('evaluation_withheld'))).toBe('evaluation_withheld');
+    expect(sealRefusedReasonOf(failedWith('evaluation_paused'))).toBe('evaluation_paused');
+    expect(sealRefusedReasonOf(failedWith('worker_failed'))).toBeNull();
+    // Retried since (the run is no longer failed): the category's own words again.
+    expect(sealRefusedReasonOf(failedWith('evaluation_withheld', 'running'))).toBeNull();
+
+    const withheld = stepFailureText('transient', zh, 'evaluation_withheld');
+    expect(withheld.short).toBe('含评测保留的内容');
+    expect(withheld.detail).toContain('平台不自动重试');
+    expect(withheld.detail).not.toContain('平台会在尝试次数内自动重试');
+    const paused = stepFailureText('transient', en, 'evaluation_paused');
+    expect(paused.short).toBe('Agents paused');
+    expect(paused.detail).toContain('Govern → Evaluation');
+    expect(stepFailureText('transient', zh).detail).toContain('平台会在尝试次数内自动重试');
   });
 
   it('S11 GO8a: a paused run names the step that did not start, and why', () => {
@@ -1191,11 +1313,13 @@ describe('lib/goals', () => {
       stepKey: 'apply',
       status: 'failed',
       supersededInRevision: 2,
+      attempts: [],
     } as unknown as GoalDetailWire['steps'][number];
     const fresh = {
       stepKey: 'apply2',
       status: 'ready',
       supersededInRevision: null,
+      attempts: [],
     } as unknown as GoalDetailWire['steps'][number];
     const revised = { ...goal, steps: [replaced, fresh] };
     expect(goalStateNote(revised, undefined, budget, zh)?.text).toBe(

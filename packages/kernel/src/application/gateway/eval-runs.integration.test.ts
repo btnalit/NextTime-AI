@@ -940,6 +940,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, EVALUATION_WITHHELD_ACTION, withheldTaskId],
         ),
       ).toBe(1);
+      // Legacy 515: the Task says why it did not start; the trial still reads `withheld`.
+      const withheldTask = await asOwnerRole((client) =>
+        client.query<{ status: string; failure_reason: string }>(
+          'select status, failure_reason from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, withheldTaskId],
+        ),
+      );
+      expect(withheldTask.rows[0]).toEqual({
+        status: 'failed',
+        failure_reason: 'evaluation_withheld',
+      });
 
       await runEvalTrialTick(pool);
       const outcome = async (runId: string) => (await readRun(runId)).trials[0];

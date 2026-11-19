@@ -500,6 +500,23 @@ export const TASK_FAILURE_REASON_LABELS: Readonly<
       en: 'The workspace’s daily model budget was spent, so the platform refused every model call this Worker made and it did nothing.',
     },
   },
+  // Legacy 515: the evaluation seal kept the run from starting (kernel `application/eval-seal`) —
+  // what to do, since the person who started the Task can change only its input. A goal's step
+  // says what to do there (`lib/goals.ts`, `sealRefusedReasonOf`): revise the plan.
+  evaluation_withheld: {
+    short: { zh: '含评测保留的内容', en: 'Reserved for evaluation' },
+    detail: {
+      zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分，所以 Worker 没有启动。在任务输入里的话，去掉那一段再试；在系统提示词或 Skill 里的话，请找工作区的所有者或构建者修改。',
+      en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing, so the Worker was not started. If it is in the task input, remove that part and try again; if it is in the system prompt or a Skill, ask a workspace owner or builder to change it.',
+    },
+  },
+  evaluation_paused: {
+    short: { zh: '智能体已暂停', en: 'Agents paused' },
+    detail: {
+      zh: '评测防泄漏暂停了代这个人行动的智能体，所以 Worker 没有启动。工作区所有者在「治理 → 评测」查看后可以解除。',
+      en: 'The evaluation seal has paused the agents acting for this person, so the Worker was not started. A workspace owner can review and release the pause under Govern → Evaluation.',
+    },
+  },
 };
 
 /** A failed Task's reason as a short label and one sentence. A value an earlier release wrote and

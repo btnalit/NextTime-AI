@@ -787,8 +787,8 @@ export const ERROR_NEXT_STEPS: Readonly<
   // composer, which says it its own way (`composerEvaluationContentStep`). Never says which case
   // or which part: the refusal must not teach anyone what is held out.
   evaluation_content_withheld: {
-    zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以 Worker 没有启动，任务记为启动失败。去掉那一段再试。',
-    en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so the Worker was not started and the task is recorded as failed to start. Remove that part and try again.',
+    zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以 Worker 没有启动，任务记为失败，原因写「含评测保留的内容」。去掉那一段再试。',
+    en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so the Worker was not started and the task is recorded as failed, reserved for evaluation. Remove that part and try again.',
   },
   // S10 E3-2c (kernel application/eval-seal hold.ts): the agents of whoever this was for — a
   // person's own, or the evaluation's — are paused by the seal. Never says which refusals opened

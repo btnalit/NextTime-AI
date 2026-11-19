@@ -17,6 +17,9 @@ describe('taskFailureCategory', () => {
       ['terminated', 'platform'],
       // Legacy 589: llm-proxy refused every model call for a spent workspace budget.
       ['model_refused', 'platform'],
+      // Legacy 515: the evaluation seal kept the run from starting.
+      ['evaluation_withheld', 'platform'],
+      ['evaluation_paused', 'platform'],
     ]);
   });
 

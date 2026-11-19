@@ -23888,6 +23888,8 @@
                       "budget_exhausted",
                       "terminated",
                       "model_refused",
+                      "evaluation_withheld",
+                      "evaluation_paused",
                       "cancelled",
                       "withheld",
                       "paused"
@@ -80636,6 +80638,8 @@
                       "budget_exhausted",
                       "terminated",
                       "model_refused",
+                      "evaluation_withheld",
+                      "evaluation_paused",
                       "cancelled",
                       "withheld",
                       "paused"

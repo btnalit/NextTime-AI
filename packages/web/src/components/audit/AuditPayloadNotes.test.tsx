@@ -203,7 +203,7 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
       ],
       [{ where: 'capability_result', rolledBack: false, outcome: 'withheld' }, '调用本身已经生效'],
       [{ where: 'capability_error', outcome: 'withheld' }, '错误信息里有评测用例集保留的内容'],
-      [{ where: 'worker_start', outcome: 'withheld' }, '没有启动，任务记为启动失败'],
+      [{ where: 'worker_start', outcome: 'withheld' }, '没有启动，任务失败了'],
       [{ where: 'entry_turn', outcome: 'withheld' }, '没有发给智能体，也没有保存'],
       [{ where: 'entry_start', outcome: 'withheld' }, '这一轮没有开始'],
     ];

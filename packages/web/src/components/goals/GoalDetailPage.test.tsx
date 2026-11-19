@@ -872,6 +872,43 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(screen.getByTestId('goal-step-held').textContent).toBe('没有再试（被拦下）');
   });
 
+  it('legacy 515 (UX acceptance of #1486): a step the evaluation seal kept from starting says why in the pause, on its card and on its attempt, never that it will be retried', async () => {
+    const detail = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      steps: [
+        stepRun({
+          status: 'failed',
+          failureCategory: 'transient',
+          attemptCount: 1,
+          attempts: [
+            {
+              attempt: 1,
+              taskId: 'task-fetch-1',
+              status: 'failed',
+              createdAt: '2026-10-20T00:01:00.000Z',
+              failureReason: 'evaluation_paused',
+              rework: false,
+              outputProblems: null,
+              outputProblemCount: 0,
+            },
+          ],
+        }),
+      ],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    expect((await screen.findByTestId('goal-state-note')).textContent).toBe(
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。',
+    );
+    const failure = screen.getByTestId('goal-step-failure');
+    expect(failure.textContent).toBe(
+      '智能体已暂停Worker 没有启动：评测防泄漏暂停了代请求人行动的智能体。平台不自动重试；工作区所有者在「治理 → 评测」解除暂停后，可以重试这一步。',
+    );
+    expect(failure.textContent).not.toContain('自动重试，');
+    const attempt = screen.getByTestId('goal-step-attempt-failure');
+    expect(attempt.getAttribute('title')).toMatch(/^评测防泄漏暂停了/);
+  });
+
   it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {
     const base = goalDetail();
     const proposal = goalDetail({

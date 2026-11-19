@@ -185,12 +185,83 @@ const FAILURE: Readonly<
   },
 };
 
+/** Legacy 515: why the evaluation seal refused to start a step's Worker — the Task's own failure
+ *  reason. The step fails `transient`, but the platform does not retry it (a retry is refused the
+ *  same way) and the run pauses `needs_decision`, so the category's words do not fit. */
+export type SealRefusedReason = 'evaluation_withheld' | 'evaluation_paused';
+
+/** The seal's refusal that ended `run`'s latest attempt, or `null` (also while it is not failed). */
+export function sealRefusedReasonOf(
+  run: Pick<StepRunWire, 'status' | 'attempts'>,
+): SealRefusedReason | null {
+  if (run.status !== 'failed') return null;
+  let latest: StepRunWire['attempts'][number] | undefined;
+  for (const attempt of run.attempts) {
+    if (latest === undefined || attempt.attempt > latest.attempt) latest = attempt;
+  }
+  const reason = latest?.status === 'failed' ? latest.failureReason : null;
+  return reason === 'evaluation_withheld' || reason === 'evaluation_paused' ? reason : null;
+}
+
+const SEAL_REFUSED_FAILURE: Readonly<
+  Record<
+    SealRefusedReason,
+    { readonly short: readonly [string, string]; readonly detail: readonly [string, string] }
+  >
+> = {
+  evaluation_withheld: {
+    short: ['含评测保留的内容', 'Reserved for evaluation'],
+    detail: [
+      'Worker 没有启动：它要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试沿用这次的 Worker 版本和 Skill，会被同样拦下，所以平台不自动重试；要修订计划或取消目标。',
+      'The Worker was not started: what it would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry keeps this attempt’s Worker version and Skills and is refused the same way, so the platform does not retry it; revise the plan or cancel the goal.',
+    ],
+  },
+  evaluation_paused: {
+    short: ['智能体已暂停', 'Agents paused'],
+    detail: [
+      'Worker 没有启动：评测防泄漏暂停了代请求人行动的智能体。平台不自动重试；工作区所有者在「治理 → 评测」解除暂停后，可以重试这一步。',
+      'The Worker was not started: the evaluation seal has paused the agents acting for the requester. The platform does not retry it; once a workspace owner releases the pause under Govern → Evaluation, the step can be retried.',
+    ],
+  },
+};
+
+/** A failed step's category as a short label and one sentence — or, when the evaluation seal
+ *  refused its latest attempt's start (`sealRefusedReasonOf`), that refusal's. */
 export function stepFailureText(
   category: StepRunFailureCategory,
   t: Translate,
+  sealRefused: SealRefusedReason | null = null,
 ): { readonly short: string; readonly detail: string } {
-  const entry = FAILURE[category];
+  const entry = sealRefused !== null ? SEAL_REFUSED_FAILURE[sealRefused] : FAILURE[category];
   return { short: t(entry.short[0], entry.short[1]), detail: t(entry.detail[0], entry.detail[1]) };
+}
+
+/** Legacy 515 (UX acceptance of #1486): a `needs_decision` pause at a step whose start the
+ *  evaluation seal refused — which step, why, and what a person does next, since a retry is
+ *  refused the same way. `null` when no step of the plan in force failed so. */
+function sealRefusedPauseText(
+  steps: readonly StepRunWire[] | undefined,
+  t: Translate,
+): string | null {
+  for (const step of steps ?? []) {
+    if (step.supersededInRevision !== null) continue;
+    const reason = sealRefusedReasonOf(step);
+    if (reason === null) continue;
+    const attempt = t(
+      `步骤「${step.stepKey}」第 ${step.attemptCount} 次尝试`,
+      `step ${step.stepKey}’s attempt ${step.attemptCount}`,
+    );
+    return reason === 'evaluation_paused'
+      ? t(
+          `需要人决定：${attempt}没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。`,
+          `A person must decide: ${attempt} did not start, because the evaluation seal has paused the agents acting for the requester. Once a workspace owner reviews and releases the pause under Govern → Evaluation, the step can be retried; until then a retry is refused too. You can also cancel the goal.`,
+        )
+      : t(
+          `需要人决定：${attempt}没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。`,
+          `A person must decide: ${attempt} did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.`,
+        );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1940,6 +2011,10 @@ function pausedNote(
                 ),
         };
       }
+      // Legacy 515 (UX acceptance of #1486): the evaluation seal refused a step's start — say so,
+      // rather than the planner's round (which the seal may refuse too) or the general sentence.
+      const sealRefused = sealRefusedPauseText(goal.steps, t);
+      if (sealRefused) return { tone: 'warn', text: sealRefused };
       const running = goal.planningRounds?.find((round) => round.status === 'running');
       if (running) {
         const verification = acceptanceRoundOf(running);
