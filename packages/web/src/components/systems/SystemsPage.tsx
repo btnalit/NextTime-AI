@@ -1079,6 +1079,11 @@ export function SystemsPage({
               key={selectedGatekeeperId}
               http={http}
               gatekeeperId={selectedGatekeeperId}
+              cardGate={
+                readiness.state.status === 'ready'
+                  ? readiness.state.data.gates.find((g) => g.gateId === selectedGatekeeperId)
+                  : undefined
+              }
             />
           ) : null}
         </SheetContent>
