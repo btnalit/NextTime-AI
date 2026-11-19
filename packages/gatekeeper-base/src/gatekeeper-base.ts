@@ -78,7 +78,10 @@ export interface HealthResult {
   readonly status: 'ok' | 'degraded' | 'down';
   readonly detail?: string;
   /** Legacy 215: set by `GatekeeperBase.health` — it checks every call's digest (`protocol.ts`
-   *  `HealthResponseSchema`). A transport's own health check leaves it out. */
+   *  `HealthResponseSchema`). A transport's own health check leaves it out. True of calls that come
+   *  through `registerGateRoutes` / `createGatekeeperServer`, which pass each request's digest
+   *  (`null` when it carried none); a caller driving this class itself without an
+   *  `operationDigest` skips the check (`GatekeeperBaseCallContext.operationDigest`). */
   readonly checksOperationDigest?: true;
 }
 

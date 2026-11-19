@@ -52,7 +52,7 @@ describe('probeGatekeeper — what a gate says about checking digests (legacy 21
     ).toEqual({ health: 'unreachable', operationDigestCheck: 'declared' });
   });
 
-  it('undeclared when the gate answered without saying so — an older gatekeeper-base', async () => {
+  it('undeclared when the gate answered without saying so — gatekeeper-base before legacy 215, or not on it', async () => {
     expect(await probe(async () => ({ status: 'ok' }))).toEqual({
       health: 'ok',
       operationDigestCheck: 'undeclared',

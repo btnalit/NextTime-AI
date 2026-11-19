@@ -72,8 +72,10 @@ export type GatekeeperHealth = 'ok' | 'unreachable' | 'unauthorized';
 /** Legacy 215: whether a gate says it checks each call against the definition the platform
  *  approved (`operationDigest`, legacy K) — `declared` when its health answer says so
  *  (`checksOperationDigest`, `@nexttime/gatekeeper-base` since legacy 215), `undeclared` when it
- *  answered without saying so: a gate on an older base, or one not built on it, which may run its
- *  own definition whatever was approved. Nothing is refused for it; it is shown. */
+ *  answered without saying so. That is two kinds of gate the platform cannot tell apart: one on
+ *  `gatekeeper-base` from v0.46.0 up to legacy 215 checks without saying so; one on an earlier
+ *  base, or not built on it, does not check and may run its own definition whatever was approved.
+ *  Nothing is refused for it; it is shown. */
 export type OperationDigestCheck = 'declared' | 'undeclared';
 
 export interface GatekeeperProbe {
