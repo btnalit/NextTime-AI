@@ -406,6 +406,25 @@ const chatCapabilities = [
       'Page through a Chat’s persisted messages. Must be called after subscribe_chat (§9.4).',
   },
   {
+    // Legacy 255 (审计 P1-15 余项): the audit page's 「本轮记录」 (an `agent_turn` Activity) opens
+    // the tool calls that Turn made. They are its Chat's transcript, so they are read as
+    // `get_chat_history` reads it — human channel, the Chat visible to the caller, an admin agent's
+    // Chat still its person's — rather than through `explain`, which agents call too.
+    name: 'get_turn_tool_calls',
+    group: 'chat',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ turnId: id }).strict(),
+    resultSchema: wire.TurnToolCallsWireSchema,
+    description:
+      'The tool calls one agent Turn made: its Chat (`chatId`) and the tool-call records stored ' +
+      'for the Turn (the `role: tool` messages `get_chat_history` returns, redacted when stored), ' +
+      'oldest first, at most 100 (`truncated` when there are more). `turnId` is an Activity of ' +
+      'kind `agent_turn` (what `explain` returns for a Turn); 404 when there is no such Turn in a ' +
+      'Chat the caller can read.',
+  },
+  {
     name: 'subscribe_chat',
     group: 'chat',
     mode: 'observe',

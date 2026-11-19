@@ -5,13 +5,16 @@ import {
   type ChatMessageWire,
   LONE_SURROGATE_STAND_IN,
   ToolCallMessageContentSchema,
+  type TurnToolCallsWire,
 } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
+import { TurnNotFoundError } from '../gateway/turn-errors.js';
 import type { AgentRuntimeEvent } from '../host-bridge/index.js';
 import { createChatEventSink } from './event-sink.js';
 import {
@@ -19,6 +22,7 @@ import {
   _resetChatPushEventsForTests,
   subscribeToChatPushEvents,
 } from './push.js';
+import { MAX_TURN_TOOL_CALLS, insertToolCallMessage } from './service.js';
 import { MESSAGE_TEXT_MAX_CHARS, TOOL_CALL_RESULT_PREVIEW_CHARS } from './tool-call-record.js';
 
 /**
@@ -33,7 +37,9 @@ import { MESSAGE_TEXT_MAX_CHARS, TOOL_CALL_RESULT_PREVIEW_CHARS } from './tool-c
  *      recorded `not_finished` without failing the Turn;
  *   3. the records follow the Chat's own visibility — another member cannot page them;
  *   4. half of an emoji — where a cut falls inside one, or straight from the tool or the model —
- *      never makes a record or a reply one `jsonb` refuses (legacy 834).
+ *      never makes a record or a reply one `jsonb` refuses (legacy 834);
+ *   5. `get_turn_tool_calls` returns one Turn's records exactly as history holds them, to whoever
+ *      can read the Chat and no one else, the first 100 of a longer Turn (legacy 255).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -89,6 +95,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         chatId,
       })) as { items: ChatMessageWire[] };
       return page.items;
+    }
+
+    async function turnToolCalls(turnId: string, as = ownerId): Promise<TurnToolCallsWire> {
+      return (await dispatchCapability({ pool }, human(as), 'get_turn_tool_calls', {
+        turnId,
+      })) as TurnToolCallsWire;
     }
 
     async function turnStatus(turnId: string): Promise<string | undefined> {
@@ -328,6 +340,105 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       expect(await turnStatus(turnId)).toBe('completed');
       expect(logged.join('\n')).not.toContain('could not store');
+    });
+
+    it('legacy 255: get_turn_tool_calls returns one Turn’s records as history holds them, and only to someone who can read the Chat', async () => {
+      const first = await startTurn();
+      const sink = createChatEventSink({ pool, log: () => {} });
+      const at = { workspaceId, chatId: first.chatId, turnId: first.turnId, principalId: ownerId };
+      const firstEvents: AgentRuntimeEvent[] = [
+        { ...at, type: 'toolCallStarted', toolCallId: 'c1', name: 'list_facts', args: {} },
+        {
+          ...at,
+          type: 'toolCallEnded',
+          toolCallId: 'c1',
+          result: { content: [{ type: 'text', text: '{"items":[]}' }] },
+        },
+        {
+          ...at,
+          type: 'toolCallStarted',
+          toolCallId: 'c2',
+          name: 'bash',
+          args: { command: 'env' },
+        },
+        {
+          ...at,
+          type: 'toolCallEnded',
+          toolCallId: 'c2',
+          result: { content: [{ type: 'text', text: `CAPABILITY_HANDLE=${HANDLE}` }] },
+        },
+        { ...at, type: 'message', role: 'assistant', content: { text: '没有找到。' } },
+        { ...at, type: 'turnEnded', status: 'completed' },
+      ];
+      for (const event of firstEvents) await sink.handle(event);
+      // A second Turn in the same Chat, with a call of its own.
+      const { turnId: secondTurnId } = (await dispatchCapability(
+        { pool },
+        human(ownerId),
+        'send_chat_message',
+        { chatId: first.chatId, text: '再查一次' },
+      )) as { turnId: string };
+      const second = { ...at, turnId: secondTurnId };
+      await sink.handle({ ...second, type: 'toolCallStarted', toolCallId: 'c3', name: 'search' });
+      await sink.handle({ ...second, type: 'toolCallEnded', toolCallId: 'c3', result: {} });
+      await sink.handle({ ...second, type: 'turnEnded', status: 'completed' });
+
+      const got = await turnToolCalls(first.turnId);
+      expect(got.chatId).toBe(first.chatId);
+      expect(got.truncated).toBeUndefined();
+      expect(got.items.map((message) => message.text)).toEqual(['list_facts', 'bash']);
+      // Exactly the rows history holds for that Turn — the stored, redacted records.
+      expect(got.items).toEqual(
+        (await history(first.chatId)).filter(
+          (message) => message.role === 'tool' && message.turnId === first.turnId,
+        ),
+      );
+      expect(JSON.stringify(got)).not.toContain('eyJhbGci');
+      expect((await turnToolCalls(secondTurnId)).items.map((message) => message.text)).toEqual([
+        'search',
+      ]);
+
+      // Someone who cannot read the Chat gets what an id naming no Turn gets.
+      await expect(turnToolCalls(first.turnId, otherId)).rejects.toBeInstanceOf(TurnNotFoundError);
+      await expect(turnToolCalls(randomUUID())).rejects.toBeInstanceOf(TurnNotFoundError);
+      // An Activity that is not an agent Turn, even one in this Chat.
+      const other = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'ingest',
+          chatId: first.chatId,
+          principalId: ownerId,
+        }),
+      );
+      await expect(turnToolCalls(other.id)).rejects.toBeInstanceOf(TurnNotFoundError);
+    });
+
+    it(`legacy 255: a Turn with more than ${MAX_TURN_TOOL_CALLS} tool calls lists the first ${MAX_TURN_TOOL_CALLS}, oldest first, and says so`, async () => {
+      const { chatId, turnId } = await startTurn();
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        for (let i = 0; i <= MAX_TURN_TOOL_CALLS; i++) {
+          await insertToolCallMessage(client, workspaceId, {
+            chatId,
+            turnId,
+            content: {
+              kind: 'tool_call',
+              text: 'search',
+              toolCallId: `t${i}`,
+              name: 'search',
+              outcome: 'done',
+              redactedValues: 0,
+              startedAt: null,
+              endedAt: null,
+            },
+          });
+        }
+      });
+
+      const got = await turnToolCalls(turnId);
+      expect(got.truncated).toBe(true);
+      const ids = got.items.map(
+        (message) => ToolCallMessageContentSchema.parse(message.content).toolCallId,
+      );
+      expect(ids).toEqual(Array.from({ length: MAX_TURN_TOOL_CALLS }, (_, i) => `t${i}`));
     });
   },
 );

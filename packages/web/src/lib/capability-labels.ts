@@ -95,6 +95,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '列出对话每一轮的状态、所循流程与结果。',
     enHint: "Lists each turn's status, procedure followed and outcome.",
   },
+  get_turn_tool_calls: {
+    zh: '查看本轮工具调用',
+    en: "Read a turn's tool calls",
+    zhHint: '列出智能体某一轮调用过的工具和结果（存下时已遮蔽），只给能读这个对话的人。',
+    enHint:
+      'Lists the tools an agent called in one turn and their results (redacted when stored), for people who can read the chat.',
+  },
   mark_turn_outcome: {
     zh: '标记本轮是否达成',
     en: 'Mark turn outcome',
