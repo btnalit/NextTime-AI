@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { actionKindRaw, actionKindTagText, formatDateTime, formatRelative } from '../lib/format.js';
-import type { GatekeeperDetail } from '../lib/governance.js';
+import type { GatekeeperDetail, GatekeeperDetailOperation } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import { RedactedNote } from './kit/redacted-note.js';
@@ -19,6 +19,10 @@ import { StatusChip } from './ui/StatusChip.js';
 export interface GatekeeperDetailDrawerProps {
   readonly http: CapabilityCaller;
   readonly gatekeeperId: string;
+  /** Legacy 383: the published Operations the platform disabled on this gate
+   *  (`execution_readiness`'s `gate.disabledOperations`). `get_gatekeeper` leaves them out of its
+   *  list, while the system card counts them, so the drawer names the ones missing from its list. */
+  readonly platformDisabled?: readonly string[];
 }
 
 /**
@@ -37,8 +41,17 @@ export interface GatekeeperDetailDrawerProps {
  * Legacy 701: a workspace owner also sees the address the kernel calls a gate the workspace
  * connected itself at, and an open proposal to move it (with 撤回) — `get_gatekeeper` gives both
  * to owners only. Legacy 715: and, while none is open, how the last one ended.
+ *
+ * Legacy 383: the 「Operation」 row counts the way the system card does — published read and write
+ * Operations — then the drafts and the old versions, so the two never read as different numbers
+ * for one gate. Published Operations the platform disabled are not in `get_gatekeeper`'s list but
+ * are in the card's count: the drawer names them and says who can turn them back on.
  */
-export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
+export function GatekeeperDetailDrawer({
+  http,
+  gatekeeperId,
+  platformDisabled = NO_NAMES,
+}: GatekeeperDetailDrawerProps) {
   const t = useT();
   const detail = useCapability<GatekeeperDetail>(http, 'get_gatekeeper', { gatekeeperId });
   // Review #501 of #1158: a proposal just withdrawn is gone at once, not after the read again.
@@ -76,6 +89,7 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
   }
 
   const suspension = gate.platformSuspension;
+  const hiddenDisabled = platformDisabled.filter((name) => !nameCounts.has(name));
 
   return (
     <div className="stack" data-testid="gatekeeper-detail">
@@ -141,19 +155,39 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
         <dt>{t('清单版本', 'Manifest version')}</dt>
         <dd>{gate.manifestVersion ?? '—'}</dd>
         <dt>{t('操作', 'Operation')}</dt>
-        <dd>{gate.operationCount}</dd>
+        <dd data-testid="gatekeeper-op-counts">
+          {operationCountsText(gate.operations, hiddenDisabled.length, t)}
+        </dd>
         <dt>{t('创建于', 'Created')}</dt>
         <dd>
           <time title={formatDateTime(gate.createdAt)}>{formatRelative(gate.createdAt, t)}</time>
         </dd>
       </dl>
 
+      {hiddenDisabled.length > 0 ? (
+        <Notice tone="warn" testId="gatekeeper-platform-disabled">
+          <p className="text-small wrap-anywhere">
+            {t(
+              `平台停用了这个门上已发布的 ${hiddenDisabled.length} 个 Operation：${hiddenDisabled.map(actionKindTagText).join('、')}。它们不在下面列出，工作区里谁都调用不了，智能体也不行；系统卡片上的只读、写操作数包括它们。要再用它们，请找平台管理员。`,
+              `The platform disabled ${hiddenDisabled.length === 1 ? 'a published Operation' : `${hiddenDisabled.length} published Operations`} on this gate: ${hiddenDisabled.map(actionKindTagText).join(', ')}. ${hiddenDisabled.length === 1 ? 'It is' : 'They are'} not listed below, and nobody in this workspace can call ${hiddenDisabled.length === 1 ? 'it' : 'them'}, agents included; the read and write counts on the system card include ${hiddenDisabled.length === 1 ? 'it' : 'them'}. To use ${hiddenDisabled.length === 1 ? 'it' : 'them'} again, ask a platform administrator.`,
+            )}
+          </p>
+        </Notice>
+      ) : null}
+
       <div className="divider" />
 
       {gate.operations.length === 0 ? (
         <EmptyState
           icon="connections"
-          title={t('这个门没有 Operation', 'No operations on this gate')}
+          title={
+            hiddenDisabled.length > 0
+              ? t(
+                  '没有可列出的 Operation：已发布的都被平台停用了',
+                  'Nothing to list: the platform disabled every published operation',
+                )
+              : t('这个门没有 Operation', 'No operations on this gate')
+          }
         />
       ) : (
         <div className="gatekeeper-ops">
@@ -199,4 +233,42 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
       )}
     </div>
   );
+}
+
+const NO_NAMES: readonly string[] = [];
+
+/** Legacy 383: the drawer's Operation count, split the way the system card splits it — published
+ *  read and write Operations first — then the drafts and the old versions still listed, and the
+ *  published ones the platform disabled (left out of the list below). */
+function operationCountsText(
+  operations: readonly GatekeeperDetailOperation[],
+  hiddenDisabled: number,
+  t: ReturnType<typeof useT>,
+): string {
+  const published = operations.filter((op) => op.status === 'published');
+  const write = published.filter((op) => op.mode === 'execute').length;
+  const read = published.length - write;
+  const drafts = operations.filter((op) => op.status === 'draft').length;
+  const deprecated = operations.filter((op) => op.status === 'deprecated').length;
+  const parts = [
+    t(`已发布 ${read} 个只读 · ${write} 个写`, `Published: ${read} read · ${write} write`),
+  ];
+  if (drafts > 0) parts.push(t(`${drafts} 个草稿`, `${drafts} draft${drafts === 1 ? '' : 's'}`));
+  if (deprecated > 0) {
+    parts.push(
+      t(
+        `${deprecated} 个已弃用的旧版本`,
+        `${deprecated} deprecated old version${deprecated === 1 ? '' : 's'}`,
+      ),
+    );
+  }
+  if (hiddenDisabled > 0) {
+    parts.push(
+      t(
+        `另有 ${hiddenDisabled} 个已发布的被平台停用，没有列出`,
+        `${hiddenDisabled} more published, disabled by the platform and not listed`,
+      ),
+    );
+  }
+  return parts.join(' · ');
 }

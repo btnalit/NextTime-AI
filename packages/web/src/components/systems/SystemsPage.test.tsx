@@ -1353,6 +1353,39 @@ describe('SystemsPage', () => {
     );
   });
 
+  it('legacy 383: 「健康与操作」 names the published Operations the platform disabled, from the card’s own read', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [gate({ disabledOperations: ['docker.restart', 'docker.status'] })],
+        }),
+      get_gatekeeper: () => ({
+        id: 'gk-1',
+        name: 'Docker prod',
+        operations: [{ name: 'docker.status', status: 'published', mode: 'observe' }],
+        health: 'ok',
+      }),
+    });
+    render(
+      <PermissionsProvider>
+        <SystemsPage
+          http={http}
+          platformAdmin={false}
+          trialWorkspace={false}
+          selectedGatekeeperId="gk-1"
+          onSelectGatekeeper={vi.fn()}
+        />
+      </PermissionsProvider>,
+    );
+    const drawer = await screen.findByTestId('gatekeeper-detail-drawer');
+    // docker.status is still listed (its name is shown), so only docker.restart is named.
+    const notice = await within(drawer).findByTestId('gatekeeper-platform-disabled');
+    expect(notice.textContent).toContain('已发布的 1 个');
+    expect(notice.textContent).toContain('docker.restart。');
+    expect(notice.textContent).not.toContain('docker.status');
+  });
+
   it('legacy 716: a member’s page does not read the marks, and a card shows none', async () => {
     const http = scriptedHttp({
       get_workspace: () => workspace('member'),

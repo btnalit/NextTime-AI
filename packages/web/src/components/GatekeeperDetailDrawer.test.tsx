@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
+import { LangProvider } from '../lib/i18n.js';
 import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
 
 afterEach(cleanup);
@@ -16,10 +17,10 @@ function callerReturning(result: unknown | (() => unknown)): CapabilityCaller {
   };
 }
 
-function renderDrawer(http: CapabilityCaller) {
+function renderDrawer(http: CapabilityCaller, platformDisabled?: readonly string[]) {
   return render(
     <PermissionsProvider>
-      <GatekeeperDetailDrawer http={http} gatekeeperId="gk-1" />
+      <GatekeeperDetailDrawer http={http} gatekeeperId="gk-1" platformDisabled={platformDisabled} />
     </PermissionsProvider>,
   );
 }
@@ -431,5 +432,103 @@ describe('GatekeeperDetailDrawer', () => {
     // Rows keyed by name alone would make React warn about two children with one key.
     expect(error.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
     error.mockRestore();
+  });
+  describe('legacy 383: the Operation count reads like the system card', () => {
+    const gate = (operations: unknown[]) =>
+      callerReturning({
+        id: 'gk-1',
+        name: 'stock',
+        kind: 'http',
+        status: 'active',
+        operationCount: operations.length,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        operations,
+        health: 'ok',
+      });
+
+    it('splits published read and write, then drafts and deprecated versions', async () => {
+      renderDrawer(
+        gate([
+          { name: 'stock.list', status: 'published', mode: 'observe' },
+          { name: 'stock.get', status: 'published', mode: 'observe' },
+          { name: 'stock.sell', status: 'published', mode: 'execute' },
+          { name: 'stock.sell', status: 'deprecated', version: 1, mode: 'execute' },
+          { name: 'stock.buy', status: 'draft', mode: 'execute' },
+        ]),
+      );
+      const counts = await screen.findByTestId('gatekeeper-op-counts');
+      expect(counts.textContent).toBe('已发布 2 个只读 · 1 个写 · 1 个草稿 · 1 个已弃用的旧版本');
+      expect(screen.queryByTestId('gatekeeper-platform-disabled')).toBeNull();
+    });
+
+    it('names the published Operations the platform disabled, which the list leaves out and the card counts', async () => {
+      // The card counts 2 read and 1 write; get_gatekeeper lists only stock.list.
+      renderDrawer(gate([{ name: 'stock.list', status: 'published', mode: 'observe' }]), [
+        'stock.get',
+        'stock.sell',
+      ]);
+      const counts = await screen.findByTestId('gatekeeper-op-counts');
+      expect(counts.textContent).toBe(
+        '已发布 1 个只读 · 0 个写 · 另有 2 个已发布的被平台停用，没有列出',
+      );
+      const notice = screen.getByTestId('gatekeeper-platform-disabled');
+      expect(notice.textContent).toContain('平台停用了这个门上已发布的 2 个');
+      expect(notice.textContent).toContain('stock.get、stock.sell。');
+      expect(notice.textContent).toContain('系统卡片上的只读、写操作数包括它们');
+      expect(notice.textContent).toContain('请找平台管理员');
+    });
+
+    it('says the whole list is disabled rather than 「这个门没有 Operation」 alone when every published one is', async () => {
+      renderDrawer(gate([]), ['stock.list']);
+      const counts = await screen.findByTestId('gatekeeper-op-counts');
+      expect(counts.textContent).toBe(
+        '已发布 0 个只读 · 0 个写 · 另有 1 个已发布的被平台停用，没有列出',
+      );
+      const notice = screen.getByTestId('gatekeeper-platform-disabled').textContent ?? '';
+      expect(notice).toContain('平台停用了这个门上已发布的 1 个');
+      expect(notice).toContain('stock.list。');
+      expect(screen.getByText('没有可列出的 Operation：已发布的都被平台停用了')).toBeTruthy();
+      expect(screen.queryByText('这个门没有 Operation')).toBeNull();
+    });
+
+    it('does not repeat a disabled name the list still shows (a suspended gate keeps its Operations listed)', async () => {
+      renderDrawer(gate([{ name: 'stock.list', status: 'published', mode: 'observe' }]), [
+        'stock.list',
+      ]);
+      await screen.findByTestId('gatekeeper-op-counts');
+      expect(screen.getByTestId('gatekeeper-op-counts').textContent).toBe(
+        '已发布 1 个只读 · 0 个写',
+      );
+      expect(screen.queryByTestId('gatekeeper-platform-disabled')).toBeNull();
+    });
+
+    it('reads in English, singular for one', async () => {
+      localStorage.setItem('nexttime.lang', 'en');
+      try {
+        render(
+          <LangProvider>
+            <PermissionsProvider>
+              <GatekeeperDetailDrawer
+                http={gate([
+                  { name: 'stock.list', status: 'published', mode: 'observe' },
+                  { name: 'stock.buy', status: 'draft', mode: 'execute' },
+                ])}
+                gatekeeperId="gk-1"
+                platformDisabled={['stock.sell']}
+              />
+            </PermissionsProvider>
+          </LangProvider>,
+        );
+        const counts = await screen.findByTestId('gatekeeper-op-counts');
+        expect(counts.textContent).toBe(
+          'Published: 1 read · 0 write · 1 draft · 1 more published, disabled by the platform and not listed',
+        );
+        expect(screen.getByTestId('gatekeeper-platform-disabled').textContent).toContain(
+          'The platform disabled a published Operation on this gate: stock.sell. It is not listed below',
+        );
+      } finally {
+        localStorage.removeItem('nexttime.lang');
+      }
+    });
   });
 });
