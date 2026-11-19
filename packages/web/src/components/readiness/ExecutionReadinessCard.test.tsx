@@ -70,9 +70,13 @@ describe('ExecutionReadinessCard', () => {
     });
     render(<ExecutionReadinessCard http={http} />);
     await screen.findByTestId('execution-readiness-body');
-    expect(http.calls.filter((call) => call.name === 'execution_readiness')).toEqual([
-      { name: 'execution_readiness', params: {} },
-    ]);
+    // Legacy 253: and a second read of the same, own readiness for the gates' health only.
+    await waitFor(() =>
+      expect(
+        http.calls.filter((call) => call.name === 'execution_readiness').map((c) => c.params),
+      ).toEqual(expect.arrayContaining([{}, { includeGateHealth: true }])),
+    );
+    expect(http.calls.filter((call) => call.name === 'execution_readiness')).toHaveLength(2);
   });
 
   it('no systems at all: one line pointing at 系统接入, no chips, no toggle', async () => {
@@ -178,6 +182,116 @@ describe('ExecutionReadinessCard', () => {
     expect(rowLink?.getAttribute('href')).toBe('#/me/agent');
     expect(rowLink?.className).toContain('link-inline');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  // Legacy 253: the strip said 「可直接调用」 for a gate that was down. The health comes from a
+  // read of its own, so a slow probe never holds the strip up.
+  it('legacy 253: a gate that does not answer, or rejects the platform’s credentials, folds into the unusable ones and its row says why', async () => {
+    const gates = [
+      gate({ gateId: 'g-1', name: 'CRM' }),
+      gate({ gateId: 'g-2', name: 'Tickets', status: 'via_worker', workerDefinitionIds: ['w-1'] }),
+      gate({ gateId: 'g-3', name: 'Wiki' }),
+      gate({ gateId: 'g-4', name: 'Catalog' }),
+    ];
+    const health = { 'g-1': 'unreachable', 'g-2': 'unauthorized', 'g-3': 'ok', 'g-4': 'unknown' };
+    let answerHealth: (value: ExecutionReadinessWire) => void = () => {};
+    const http = scriptedHttp({
+      execution_readiness: (params) =>
+        (params as { includeGateHealth?: boolean }).includeGateHealth === true
+          ? new Promise((resolve) => {
+              answerHealth = resolve;
+            })
+          : readiness({ gates }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    // The strip is there before the health read answers, as before.
+    expect((await screen.findByTestId('execution-readiness-summary')).textContent).toContain('4/4');
+    answerHealth(
+      readiness({
+        gates: gates.map((g) => ({
+          ...g,
+          health: health[g.gateId as keyof typeof health] as GateWire['health'],
+        })),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('execution-readiness-summary').textContent).toContain('2/4'),
+    );
+    // `unknown` (not announced yet) and `ok` say nothing: those two keep their chips.
+    expect(
+      screen
+        .getAllByTestId('execution-readiness-gate-chip')
+        .map((c) => c.getAttribute('data-gate-id')),
+    ).toEqual(['g-3', 'g-4']);
+    const toggle = screen.getByTestId('execution-readiness-toggle');
+    expect(toggle.textContent).toContain('2 个用不了');
+    toggle.click();
+    const rows = await screen.findAllByTestId('execution-readiness-gate');
+    const row = (gateId: string) => rows.find((r) => r.getAttribute('data-gate-id') === gateId);
+    // Reachability is unchanged; the health is said beside it.
+    expect(row('g-1')?.getAttribute('data-status')).toBe('direct');
+    expect(row('g-1')?.getAttribute('data-health')).toBe('unreachable');
+    expect(row('g-1')?.textContent).toContain('不可达');
+    expect(row('g-1')?.textContent).toContain('门现在没有回应，调用它会失败');
+    expect(row('g-1')?.textContent).toContain('直接调用');
+    expect(row('g-1')?.textContent).not.toContain('可直接调用');
+    expect(row('g-1')?.querySelector('a')?.getAttribute('href')).toBe('#/govern/systems/g-1');
+    expect(row('g-1')?.querySelector('a')?.textContent).toBe('看门详情');
+    expect(row('g-2')?.textContent).toContain('凭据被拒');
+    expect(row('g-2')?.textContent).toContain('门拒绝了平台调用它用的凭据');
+    expect(row('g-2')?.textContent).toContain('照常可以委派');
+    expect(row('g-3')?.textContent).toContain('可直接调用');
+    expect(row('g-3')?.hasAttribute('data-health')).toBe(true);
+    expect(row('g-3')?.querySelector('a')).toBeNull();
+  });
+
+  it('legacy 253: a failed health read leaves the strip as it was', async () => {
+    const http = scriptedHttp({
+      execution_readiness: (params) => {
+        if ((params as { includeGateHealth?: boolean }).includeGateHealth === true) {
+          throw new Error('probe read failed');
+        }
+        return readiness({ gates: [gate({ gateId: 'g-1', name: 'CRM' })] });
+      },
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    await waitFor(() =>
+      expect(
+        http.calls.some(
+          (c) => (c.params as { includeGateHealth?: boolean } | undefined)?.includeGateHealth,
+        ),
+      ).toBe(true),
+    );
+    expect((await screen.findByTestId('execution-readiness-summary')).textContent).toContain('1/1');
+    expect(screen.queryByTestId('execution-readiness-error')).toBeNull();
+  });
+
+  // Legacy 675: a gate the platform suspended said it was disabled on 平台 · 集成.
+  it('legacy 675: a suspended gate says the platform suspended it and links to why', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          gates: [
+            gate({
+              gateId: 'g-1',
+              name: 'CRM',
+              status: 'unreachable',
+              reason: 'suspended_by_platform',
+              disabledOperations: ['crm.get'],
+            }),
+          ],
+          missing: [{ code: 'suspended_by_platform', gateId: 'g-1' }],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    (await screen.findByTestId('execution-readiness-toggle')).click();
+    const row = await screen.findByTestId('execution-readiness-gate');
+    expect(row.textContent).toContain('门被平台暂停');
+    expect(row.textContent).toContain('平台管理员恢复');
+    expect(row.textContent).not.toContain('平台 · 集成');
+    const link = row.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('#/govern/systems/g-1');
+    expect(link?.textContent).toBe('看暂停原因');
   });
 
   it('bugfix (PR #324 review): 0/5 usable shows no inline chips at all, just the summary and the toggle', async () => {

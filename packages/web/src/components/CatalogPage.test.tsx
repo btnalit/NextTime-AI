@@ -2180,7 +2180,16 @@ describe('CatalogPage', () => {
         return {};
       },
     });
-    const reads = () => http.calls.filter((c) => c.name === 'execution_readiness').length;
+    // Legacy 253: the card's separate health read (`includeGateHealth`) is not a readiness read —
+    // it is made once and not reloaded by a publish.
+    const healthReads = () =>
+      http.calls.filter(
+        (c) =>
+          c.name === 'execution_readiness' &&
+          (c.params as { includeGateHealth?: boolean } | undefined)?.includeGateHealth === true,
+      ).length;
+    const reads = () =>
+      http.calls.filter((c) => c.name === 'execution_readiness').length - healthReads();
     renderPage(http, 'workers');
     const detail = await selectRow((await screen.findAllByTestId('catalog-row'))[0] as HTMLElement);
     await screen.findByTestId('execution-readiness-body');
@@ -2192,6 +2201,7 @@ describe('CatalogPage', () => {
     await waitFor(() => expect(reads()).toBe(2));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(reads()).toBe(2);
+    expect(healthReads()).toBe(1);
   });
 
   // S8 W2 U2 (audit CW1): the entry definition renders in its own section with no Deprecate

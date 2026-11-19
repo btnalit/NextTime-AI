@@ -65,6 +65,7 @@ import { Tabs } from '../kit/tabs.js';
 import {
   announceReadinessChange,
   useExecutionReadiness,
+  useReadinessGateHealth,
 } from '../readiness/useExecutionReadiness.js';
 import { SystemAccessCard, type SystemAccessGranteeRow } from './SystemAccessCard.js';
 import { useMemberReachability } from './useMemberReachability.js';
@@ -213,6 +214,11 @@ export function SystemsPage({
   // ---- Primary content: systems -----------------------------------------------------------
   // Held until the reader's role is known: an auditor may not read it (#541 acceptance).
   const readiness = useExecutionReadiness(http, { enabled: can('execution_readiness') === true });
+  // Legacy 253: a gate the workspace connected itself has no catalog instance to carry its health
+  // (`available` below) — its card takes the live probe from this read once it is back.
+  const gateHealth = useReadinessGateHealth(http, {
+    enabled: can('execution_readiness') === true,
+  });
   const available = useCapabilityList<AvailableGateInstanceWire>(
     http,
     'list_available_gate_instances',
@@ -735,7 +741,12 @@ export function SystemsPage({
                 key={gate.gateId}
                 http={http}
                 gate={gate}
-                healthInfo={healthByGate.get(gate.gateId) ?? { linked: false }}
+                healthInfo={
+                  healthByGate.get(gate.gateId) ?? {
+                    linked: false,
+                    ...(gateHealth.has(gate.gateId) ? { health: gateHealth.get(gate.gateId) } : {}),
+                  }
+                }
                 drafts={draftsByGate.get(gate.gateId) ?? NO_DRAFTS}
                 publishableCount={publishableByGate.get(gate.gateId) ?? 0}
                 firstPublishes={firstPublishesByGate.get(gate.gateId) ?? NO_FIRST_PUBLISHES}

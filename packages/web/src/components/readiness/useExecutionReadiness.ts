@@ -1,5 +1,5 @@
-import type { ExecutionReadinessWire } from '@nexttime/shared';
-import { useEffect } from 'react';
+import type { ExecutionReadinessWire, GateHealthWire } from '@nexttime/shared';
+import { useEffect, useMemo } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { Resource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -69,4 +69,42 @@ export function useExecutionReadiness(
     return () => window.removeEventListener(READINESS_CHANGED_EVENT, onChange);
   }, [reload]);
   return readiness;
+}
+
+/**
+ * Legacy 253: how each gate stands right now — `execution_readiness` with `includeGateHealth`, a
+ * read of its own next to `useExecutionReadiness` (as 我的智能体 reads its gates' health apart from
+ * the profile, legacy 816), so a probe of a slow self-connected gate (up to 3 s) only delays the
+ * health, never the strip or the cards. Gate id → health; empty until that read is back, and when
+ * it fails — no health is then said, as before. Only the health is taken from it: the reachability
+ * on screen stays the one `useExecutionReadiness` read, reloaded on every change.
+ */
+export function useReadinessGateHealth(
+  http: CapabilityCaller,
+  options: { readonly enabled?: boolean } = {},
+): ReadonlyMap<string, GateHealthWire> {
+  const read = useCapability<ExecutionReadinessWire>(
+    http,
+    'execution_readiness',
+    { includeGateHealth: true },
+    options,
+  );
+  return useMemo(() => {
+    const byGate = new Map<string, GateHealthWire>();
+    if (read.state.status === 'ready') {
+      for (const gate of read.state.data.gates) {
+        if (gate.health !== undefined) byGate.set(gate.gateId, gate.health);
+      }
+    }
+    return byGate;
+  }, [read.state]);
+}
+
+/** Legacy 253: a gate that answered "not up" (`unreachable`) or refused the platform's credentials
+ *  (`unauthorized`) — calls to it fail now, whatever its reachability says. `unknown` (a catalog
+ *  gate that has not announced yet) and no health at all say nothing. */
+export function gateHealthDown(
+  health: GateHealthWire | undefined,
+): health is 'unreachable' | 'unauthorized' {
+  return health === 'unreachable' || health === 'unauthorized';
 }
