@@ -186,8 +186,8 @@ function ExecutionReadinessStrip({
               <span>
                 {trialWorkspace
                   ? t(
-                      '这个试验工作区还没有接入系统。管理员智能体会在对话里申请接入，你录入凭证后就接上了；也可以自己启用一个门。入口 agent（新对话）同样要等有了系统才能用。',
-                      'This trial workspace has no system connected yet. The admin agent asks to connect one in its chat, and the connection is made once you enter the credential; you can also enable a gate yourself. The entry agent (New chat) needs a system too before it can act.',
+                      '这个试验工作区还没有接入系统。管理员智能体会在对话里申请接入，你在「系统与授权」里完成连接后就接上了；也可以自己启用一个门。入口 agent（新对话）同样要等有了系统才能用。',
+                      'This trial workspace has no system connected yet. The admin agent asks to connect one in its chat, and it is connected once you complete the connection under Systems & access; you can also enable a gate yourself. The entry agent (New chat) needs a system too before it can act.',
                     )
                   : missingCauseText(first, gateNames, t, refusalKinds)}
               </span>
