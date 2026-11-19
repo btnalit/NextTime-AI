@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  GET_ME_RETRY_DELAYS_MS,
   bindApiKey,
   changePassword,
   claimIdentity,
   getMe,
+  getMeRetrying,
+  isSignedOutError,
   login,
   logout,
   patchMe,
@@ -190,5 +193,71 @@ describe('patchMe / changePassword', () => {
     ).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).code).toBe('bad_credentials');
+  });
+});
+
+// Legacy 868: only the kernel's 401 means signed out; everything else at boot is tried again.
+describe('getMeRetrying / isSignedOutError (legacy 868)', () => {
+  const ME = {
+    user: {
+      id: 'u-1',
+      login: 'bob',
+      displayName: 'Bob',
+      platformRole: 'user' as const,
+      mustChangePassword: false,
+    },
+    memberships: [],
+  };
+  const SIGNED_OUT = new HttpError('capability_error', 'unauthorized', 'unauthorized');
+
+  it('reads a 401 envelope from /api/auth/me as signed out, and nothing else', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } }),
+    );
+    const refused = await getMe(fetchImpl as unknown as typeof fetch).catch((err) => err);
+    expect(isSignedOutError(refused)).toBe(true);
+    expect(isSignedOutError(new HttpError('network', 'failed: net::ERR_NETWORK_CHANGED'))).toBe(
+      false,
+    );
+    expect(isSignedOutError(new HttpError('invalid_response', 'HTTP 502'))).toBe(false);
+    expect(isSignedOutError(new HttpError('capability_error', 'boom', 'internal_error'))).toBe(
+      false,
+    );
+    expect(isSignedOutError(new Error('unauthorized'))).toBe(false);
+  });
+
+  it('tries again after each delay until it is answered', async () => {
+    const read = vi
+      .fn<() => Promise<typeof ME>>()
+      .mockRejectedValueOnce(new HttpError('network', 'down'))
+      .mockRejectedValueOnce(new HttpError('invalid_response', 'HTTP 502'))
+      .mockResolvedValueOnce(ME);
+    const sleep = vi.fn(async () => undefined);
+    await expect(getMeRetrying(read, [10, 20, 30], sleep)).resolves.toEqual(ME);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls).toEqual([[10], [20]]);
+  });
+
+  it('a signed-out answer is thrown at once', async () => {
+    const read = vi.fn<() => Promise<typeof ME>>().mockRejectedValue(SIGNED_OUT);
+    const sleep = vi.fn(async () => undefined);
+    await expect(getMeRetrying(read, [10, 20], sleep)).rejects.toBe(SIGNED_OUT);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('the last failure is thrown once the delays run out', async () => {
+    const last = new HttpError('network', 'still down');
+    const read = vi
+      .fn<() => Promise<typeof ME>>()
+      .mockRejectedValueOnce(new HttpError('network', 'down'))
+      .mockRejectedValueOnce(last);
+    const sleep = vi.fn(async () => undefined);
+    await expect(getMeRetrying(read, [10], sleep)).rejects.toBe(last);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits 3.5 s in all by default', () => {
+    expect(GET_ME_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0)).toBe(3500);
   });
 });

@@ -59,4 +59,9 @@ export type PreSessionState =
       readonly kind: 'noWorkspace';
       readonly user: WireUser;
       readonly memberships: readonly WireMembership[];
-    };
+    }
+  /** Legacy 868: boot could not read `GET /api/auth/me` — no answer, or not the kernel's (a network
+   *  error, a proxy's page, a 5xx) — even after retrying. Whether this browser is signed in is not
+   *  known, so it is neither sign-in nor a session: the page says so and offers to try again.
+   *  `retrying` while another round of tries is in flight. */
+  | { readonly kind: 'unreachable'; readonly error: unknown; readonly retrying: boolean };
