@@ -514,6 +514,38 @@ describe('SystemsPage', () => {
     expect(within(drawer).getByTestId('cc-requester').textContent).toBe('Bob');
   });
 
+  it('legacy 520: opened for one gate’s 「录入我的凭证」, its button takes the focus and the address drops the query', async () => {
+    window.location.hash = hrefs.gateCredential('gk-1');
+    try {
+      const http = scriptedHttp({
+        list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+      });
+      renderPage(http);
+      const row = await screen.findByTestId('available-gate-stock');
+      const button = within(row).getByTestId('gate-credential-token-button');
+      await waitFor(() => expect(document.activeElement).toBe(button));
+      expect(window.location.hash).toBe(hrefs.systems());
+      expect(screen.queryByTestId('available-gates-credential-missing')).toBeNull();
+    } finally {
+      window.location.hash = '';
+    }
+  });
+
+  it('legacy 520: a gate with no 「录入我的凭证」 here says so instead', async () => {
+    window.location.hash = hrefs.gateCredential('gk-elsewhere');
+    try {
+      const http = scriptedHttp({
+        list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+      });
+      renderPage(http);
+      const notice = await screen.findByTestId('available-gates-credential-missing');
+      expect(notice.textContent).toContain('不在下面的平台实例里');
+      expect(document.activeElement).not.toBe(screen.getByTestId('gate-credential-token-button'));
+    } finally {
+      window.location.hash = '';
+    }
+  });
+
   it('legacy 247 (review #501 on #661): an address masked in place inside its path is still said to be hidden', async () => {
     const http = scriptedHttp({
       list_connection_requests: () => ({

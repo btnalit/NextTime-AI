@@ -440,11 +440,15 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     // Approving stays possible: the notice informs, it does not decide.
     expect(screen.getByTestId('approval-approve')).toBeTruthy();
     cleanup();
-    // The requester reads it about their own account.
+    // The requester reads it about their own account, with a link to that gate's own
+    // 「录入我的凭证」 (legacy 520), not the top of 系统与授权.
     renderDetail({ onBehalfOfAccount: 'not_connected' }, { callerPrincipalId: 'principal-a' });
     expect(screen.getByTestId('approval-requester-account').textContent).toMatch(
       /^你还没有在这个门上连接自己的账户/,
     );
+    const own = screen.getByTestId('approval-requester-account-connect');
+    expect(own.getAttribute('href')).toBe(hrefs.gateCredential('gk-1'));
+    expect(own.textContent).toBe('去给这个门录入我的凭证');
     cleanup();
     for (const overrides of [
       { onBehalfOfAccount: 'connected' as const },
