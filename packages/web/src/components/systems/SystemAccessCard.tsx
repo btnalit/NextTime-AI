@@ -1026,12 +1026,16 @@ function heldBackText(
 ): string[] {
   const names = (list: readonly string[]) =>
     list.map((name) => actionKindTagText(name)).join(t('、', ', '));
+  // UX acceptance of #1492 P3: one draft reads in the singular in English.
+  const one = (list: readonly string[]) => list.length === 1;
   const lines: string[] = [];
   if (held.gateOwned.length > 0) {
     lines.push(
       t(
         `${names(held.gateOwned)} 留作草稿：声明了只能由门自己设置的参数，要等门的维护者去掉后才能发布`,
-        `${names(held.gateOwned)} stay drafts: they declare params only the gate sets, and can be published only once the gate's maintainer drops them`,
+        one(held.gateOwned)
+          ? `${names(held.gateOwned)} stays a draft: it declares params only the gate sets, and can be published only once the gate's maintainer drops them`
+          : `${names(held.gateOwned)} stay drafts: they declare params only the gate sets, and can be published only once the gate's maintainer drops them`,
       ),
     );
   }
@@ -1039,7 +1043,9 @@ function heldBackText(
     lines.push(
       t(
         `${names(held.credentials)} 留作草稿：定义里疑似带凭据，要人在能力目录里核对后发布`,
-        `${names(held.credentials)} stay drafts: their definitions look like they carry credentials, so a person checks and publishes them in the catalog`,
+        one(held.credentials)
+          ? `${names(held.credentials)} stays a draft: its definition looks like it carries credentials, so a person checks and publishes it in the catalog`
+          : `${names(held.credentials)} stay drafts: their definitions look like they carry credentials, so a person checks and publishes them in the catalog`,
       ),
     );
   }
@@ -1047,7 +1053,9 @@ function heldBackText(
     lines.push(
       t(
         `${names(held.absentAnswers)} 留作草稿：声明了表示不存在的回答，要人在能力目录里确认门用的凭据看得到要查的东西后发布`,
-        `${names(held.absentAnswers)} stay drafts: they declare answers that mean absent, so a person confirms in the catalog that the gate's credentials can see what they look up, then publishes them`,
+        one(held.absentAnswers)
+          ? `${names(held.absentAnswers)} stays a draft: it declares answers that mean absent, so a person confirms in the catalog that the gate's credentials can see what it looks up, then publishes it`
+          : `${names(held.absentAnswers)} stay drafts: they declare answers that mean absent, so a person confirms in the catalog that the gate's credentials can see what they look up, then publishes them`,
       ),
     );
   }

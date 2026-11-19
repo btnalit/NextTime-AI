@@ -1559,6 +1559,53 @@ describe('SystemsPage', () => {
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true));
   });
 
+  it('UX acceptance of #1492 P3: in English one held draft reads in the singular', async () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    const draftRow = (name: string, extra: Record<string, unknown> = {}) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      status: 'draft',
+      origin: 'import',
+      draftDigest: `d-${name}`,
+      ...extra,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => ({
+        items: [
+          draftRow('stock.get'),
+          draftRow('stock.exists', { absentAnswers: { statuses: [404] } }),
+          draftRow('stock.a', { suspectedSecretValues: 1 }),
+          draftRow('stock.b', { suspectedSecretValues: 1 }),
+        ],
+      }),
+    });
+    try {
+      render(
+        <LangProvider>
+          <PermissionsProvider>
+            <SystemsPage http={http} platformAdmin={false} trialWorkspace={false} />
+          </PermissionsProvider>
+        </LangProvider>,
+      );
+      const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+      fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+      fireEvent.click(await screen.findByTestId('gatekeeper-publish-manifest'));
+      const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
+      expect(confirm.textContent).toContain(
+        'stock.exists stays a draft: it declares answers that mean absent',
+      );
+      expect(confirm.textContent).toContain(
+        'stock.a, stock.b stay drafts: their definitions look like',
+      );
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
+  });
+
   it('UX acceptance of #620 (P2-3) and legacy 385: a refused duplicate connection finds the card of the system already at that address, and focus moves to it', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
