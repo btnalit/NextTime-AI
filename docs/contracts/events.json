@@ -599,6 +599,10 @@
                 "delta": {
                   "type": "string"
                 },
+                "paused": {
+                  "const": true,
+                  "type": "boolean"
+                },
                 "streamKind": {
                   "const": "textDelta",
                   "type": "string"

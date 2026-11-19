@@ -1600,14 +1600,32 @@ describe('ChatPage persisted tool calls', () => {
   });
 });
 
-describe('live output paused by the stream scrubber (#520)', () => {
-  it('says so while the live text ends at a redaction, and stops saying it when text resumes', async () => {
+describe('live output paused by the stream scrubber (#520, legacy 162)', () => {
+  it('says so after the delta the kernel marks paused, and stops saying it when text resumes', async () => {
     const fake = fakeClient();
     renderChat(fake.client, scriptedHttp({}));
     await startRunningTurn(fake);
-    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'running env: [redacted]' }));
+    act(() =>
+      fake.stream('turn-1', {
+        streamKind: 'textDelta',
+        delta: 'running env: [redacted]',
+        paused: true,
+      }),
+    );
     expect(screen.getByTestId('chat-stream-paused').textContent).toContain('实时输出已暂停');
     act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: ' and done.' }));
+    expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
+  });
+
+  it('does not show it while a tool runs after a value scrubbed at the end of the text', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await startRunningTurn(fake);
+    // What the kernel flushes before a tool call when the text ended on a secret: not a pause.
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'the key is [redacted]' }));
+    act(() =>
+      fake.stream('turn-1', { streamKind: 'toolCallStarted', toolCallId: 'c1', name: 'search' }),
+    );
     expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
   });
 

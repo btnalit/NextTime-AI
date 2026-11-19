@@ -259,7 +259,16 @@ const ChatMessageEvent = z.object({
   }),
 });
 
-const ChatStreamTextDelta = z.object({ streamKind: z.literal('textDelta'), delta: z.string() });
+const ChatStreamTextDelta = z.object({
+  streamKind: z.literal('textDelta'),
+  delta: z.string(),
+  // Legacy 162: the kernel's live-text scrubber (governance/redaction/secret-stream.ts) held back
+  // more than its bound while waiting to see whether the text was a secret, so it dropped what it
+  // held: this delta ends with the one `[redacted]` that stands for it, and no more of the Turn's
+  // text streams until its next event. The Turn's stored reply, scrubbed, replaces the live text
+  // when it arrives. Absent on every other delta — a `[redacted]` without it is one value scrubbed.
+  paused: z.literal(true).optional(),
+});
 const ChatStreamToolCallStarted = z.object({
   streamKind: z.literal('toolCallStarted'),
   toolCallId: z.string(),

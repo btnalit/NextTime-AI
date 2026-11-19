@@ -30,6 +30,16 @@ export interface TurnState {
   readonly turnId: string | null;
   readonly status: TurnStatus;
   readonly streamingText: string;
+  /**
+   * Legacy 162: the live text has paused. The kernel scrubs secret-looking values from the live
+   * stream (kernel governance/redaction/secret-stream.ts) and holds back the end of the text while
+   * it could still be part of one; past its bound it drops what it held, sends one `[redacted]` in
+   * its place on a delta marked `paused`, and streams no more text until the Turn's next event —
+   * the stored reply, scrubbed, replaces the live text when it arrives. Set by that delta, cleared
+   * by the next text. Read from the kernel's mark, not from the text: a value scrubbed at the end of
+   * the text before a tool call ends it in `[redacted]` too, and is no pause.
+   */
+  readonly streamPaused: boolean;
   readonly toolCalls: readonly ToolCallRow[];
 }
 
@@ -37,8 +47,14 @@ export const initialTurnState: TurnState = {
   turnId: null,
   status: 'idle',
   streamingText: '',
+  streamPaused: false,
   toolCalls: [],
 };
+
+/** A Turn that has just started running, with nothing streamed yet. */
+function runningTurn(turnId: string): TurnState {
+  return { turnId, status: 'running', streamingText: '', streamPaused: false, toolCalls: [] };
+}
 
 export type StreamAction =
   /** Dispatched locally when `send_chat_message` succeeds (result.turnId); nothing on the wire
@@ -65,7 +81,11 @@ function isKnownTurnStatus(value: unknown): value is TurnStatus {
 function applyStreamPayload(state: TurnState, payload: ChatStreamPayload): TurnState {
   switch (payload.streamKind) {
     case 'textDelta':
-      return { ...state, streamingText: state.streamingText + payload.delta };
+      return {
+        ...state,
+        streamingText: state.streamingText + payload.delta,
+        streamPaused: payload.paused === true,
+      };
 
     case 'toolCallStarted': {
       const row: ToolCallRow = {
@@ -104,7 +124,7 @@ export function streamReducer(state: TurnState, action: StreamAction): TurnState
     case 'turnStarted':
       // Already following it (its first pushes came before the send's answer): keep what came.
       if (state.turnId === action.turnId && state.status === 'running') return state;
-      return { turnId: action.turnId, status: 'running', streamingText: '', toolCalls: [] };
+      return runningTurn(action.turnId);
 
     case 'stream':
       if (action.turnId !== state.turnId) {
@@ -113,10 +133,7 @@ export function streamReducer(state: TurnState, action: StreamAction): TurnState
         // ran (legacy 673, its message landed late), or one another tab started. Follow it, so
         // the page shows it and can stop it. While one is running here, another's is stale.
         if (state.status === 'running') return state;
-        return applyStreamPayload(
-          { turnId: action.turnId, status: 'running', streamingText: '', toolCalls: [] },
-          action.payload,
-        );
+        return applyStreamPayload(runningTurn(action.turnId), action.payload);
       }
       return applyStreamPayload(state, action.payload);
 

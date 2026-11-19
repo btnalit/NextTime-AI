@@ -1,3 +1,4 @@
+import type { ChatStreamPayload } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import { initialTurnState, streamReducer } from './streaming-reducer.js';
 
@@ -7,13 +8,20 @@ describe('streamReducer', () => {
       turnId: null,
       status: 'idle',
       streamingText: '',
+      streamPaused: false,
       toolCalls: [],
     });
   });
 
   it('turnStarted resets to a running Turn with empty text/tool calls', () => {
     const state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
-    expect(state).toEqual({ turnId: 't1', status: 'running', streamingText: '', toolCalls: [] });
+    expect(state).toEqual({
+      turnId: 't1',
+      status: 'running',
+      streamingText: '',
+      streamPaused: false,
+      toolCalls: [],
+    });
   });
 
   it('assembles textDelta chunks in order', () => {
@@ -51,6 +59,7 @@ describe('streamReducer', () => {
       turnId: 'turn-late',
       status: 'running',
       streamingText: 'On it',
+      streamPaused: false,
       toolCalls: [],
     });
     const ended = streamReducer(state, {
@@ -82,6 +91,36 @@ describe('streamReducer', () => {
     });
     state = streamReducer(state, { kind: 'turnStarted', turnId: 't1' });
     expect(state).toMatchObject({ turnId: 't1', status: 'running', streamingText: 'echo' });
+  });
+
+  it('legacy 162: paused from the delta the kernel marks until the next text, whatever the text ends with', () => {
+    let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
+    const step = (payload: ChatStreamPayload) => {
+      state = streamReducer(state, { kind: 'stream', turnId: 't1', payload });
+      return state.streamPaused;
+    };
+    // A value scrubbed at the end of the text: the text ends in `[redacted]`, but no pause.
+    expect(step({ streamKind: 'textDelta', delta: 'token: [redacted]' })).toBe(false);
+    expect(step({ streamKind: 'toolCallStarted', toolCallId: 'c1', name: 'search' })).toBe(false);
+    // The kernel dropped held text: paused, and a tool call meanwhile does not end it.
+    expect(step({ streamKind: 'textDelta', delta: ' then [redacted]', paused: true })).toBe(true);
+    expect(step({ streamKind: 'toolCallEnded', toolCallId: 'c1' })).toBe(true);
+    expect(step({ streamKind: 'textDelta', delta: ' and done.' })).toBe(false);
+    expect(state.streamingText).toBe('token: [redacted] then [redacted] and done.');
+  });
+
+  it('a new Turn starts unpaused', () => {
+    let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: { streamKind: 'textDelta', delta: '[redacted]', paused: true },
+    });
+    state = streamReducer(state, {
+      kind: 'metadata',
+      metadata: { turnId: 't1', turnStatus: 'completed' },
+    });
+    expect(streamReducer(state, { kind: 'turnStarted', turnId: 't2' }).streamPaused).toBe(false);
   });
 
   it('adds a toolCallStarted row and updates it on toolCallEnded', () => {

@@ -270,9 +270,27 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     expect(scrubber.push(`start ${'A'.repeat(STREAM_HOLD_MAX_CHARS + 1)}`)).toEqual({
       value: `start ${REDACTED}`,
       redactedValues: 1,
+      paused: true,
     });
-    expect(scrubber.push(' more text ').value).toBe('');
+    // Legacy 162: only the piece that dropped says it paused — not the empty ones after it.
+    expect(scrubber.push(' more text ')).toEqual({ value: '', redactedValues: 0 });
     expect(scrubber.flush().value).toBe('');
-    expect(scrubber.push('next ').value).toBe('next ');
+    expect(scrubber.push('next ')).toEqual({ value: 'next ', redactedValues: 0 });
+  });
+
+  it('a value scrubbed at the end of the text is no pause (legacy 162)', () => {
+    // The text ends on a secret, then a tool call flushes it: the live text ends in `[redacted]`
+    // though nothing was dropped — the case a console reading the text alone took for a pause.
+    const scrubber = createSecretStreamScrubber();
+    const pushed = scrubber.push(`token: ${HANDLE}`);
+    expect(pushed).toEqual({ value: '', redactedValues: 0 });
+    expect(scrubber.flush()).toEqual({ value: `token: ${REDACTED}`, redactedValues: 1 });
+  });
+
+  it('a piece that drops part-way through says it paused, after what it emitted before (legacy 162)', () => {
+    const scrubber = createSecretStreamScrubber();
+    // Released words, then a run with no break longer than the bound: one piece, one pause.
+    const out = scrubber.push(`first words ${'B'.repeat(STREAM_HOLD_MAX_CHARS * 5)}`);
+    expect(out).toEqual({ value: `first words ${REDACTED}`, redactedValues: 1, paused: true });
   });
 });
