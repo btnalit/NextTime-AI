@@ -41,7 +41,9 @@ export interface Session {
  * platform plane even with no workspace data access (§2 "平台管理员在业务工作区没有任何数据权限").
  */
 export type PreSessionState =
-  | { readonly kind: 'boot' }
+  /** Legacy 868 (UX on #1504): `reconnecting` once the first read of `/api/auth/me` failed and
+   *  is being tried again — the page then says it is connecting instead of staying blank. */
+  | { readonly kind: 'boot'; readonly reconnecting?: true }
   | {
       readonly kind: 'login';
       /** Legacy 658: why the console is back at sign-in when it did not start there — the

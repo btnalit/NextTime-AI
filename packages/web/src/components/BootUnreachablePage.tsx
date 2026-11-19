@@ -76,3 +76,19 @@ export function BootUnreachablePage({
     </div>
   );
 }
+
+/**
+ * Legacy 868 (UX on #1504): opening the console, the first read of who is signed in failed and is
+ * being tried again (up to 3.5 s). Rather than a blank frame, one calm line says it is connecting —
+ * shown only once a try failed, so an ordinary load still shows nothing before the console.
+ */
+export function BootConnecting() {
+  const t = useT();
+  return (
+    <div className="login-screen">
+      <output className="text-3" data-testid="boot-connecting">
+        {t('正在连接平台…', 'Connecting to the platform…')}
+      </output>
+    </div>
+  );
+}

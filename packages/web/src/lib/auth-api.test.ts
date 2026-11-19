@@ -233,15 +233,19 @@ describe('getMeRetrying / isSignedOutError (legacy 868)', () => {
       .mockRejectedValueOnce(new HttpError('invalid_response', 'HTTP 502'))
       .mockResolvedValueOnce(ME);
     const sleep = vi.fn(async () => undefined);
-    await expect(getMeRetrying(read, [10, 20, 30], sleep)).resolves.toEqual(ME);
+    const onRetry = vi.fn();
+    await expect(getMeRetrying(read, { delaysMs: [10, 20, 30], sleep, onRetry })).resolves.toEqual(
+      ME,
+    );
     expect(read).toHaveBeenCalledTimes(3);
     expect(sleep.mock.calls).toEqual([[10], [20]]);
+    expect(onRetry).toHaveBeenCalledTimes(2);
   });
 
   it('a signed-out answer is thrown at once', async () => {
     const read = vi.fn<() => Promise<typeof ME>>().mockRejectedValue(SIGNED_OUT);
     const sleep = vi.fn(async () => undefined);
-    await expect(getMeRetrying(read, [10, 20], sleep)).rejects.toBe(SIGNED_OUT);
+    await expect(getMeRetrying(read, { delaysMs: [10, 20], sleep })).rejects.toBe(SIGNED_OUT);
     expect(read).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -253,7 +257,7 @@ describe('getMeRetrying / isSignedOutError (legacy 868)', () => {
       .mockRejectedValueOnce(new HttpError('network', 'down'))
       .mockRejectedValueOnce(last);
     const sleep = vi.fn(async () => undefined);
-    await expect(getMeRetrying(read, [10], sleep)).rejects.toBe(last);
+    await expect(getMeRetrying(read, { delaysMs: [10], sleep })).rejects.toBe(last);
     expect(read).toHaveBeenCalledTimes(2);
   });
 

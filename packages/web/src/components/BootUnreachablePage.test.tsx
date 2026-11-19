@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HttpError } from '../lib/http-client.js';
-import { BootUnreachablePage } from './BootUnreachablePage.js';
+import { BootConnecting, BootUnreachablePage } from './BootUnreachablePage.js';
 
 afterEach(cleanup);
 
@@ -40,5 +40,12 @@ describe('BootUnreachablePage (legacy 868)', () => {
     expect((screen.getByRole('button', { name: '去登录' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it('while a failed read is tried again, one line says it is connecting', () => {
+    render(<BootConnecting />);
+    const line = screen.getByTestId('boot-connecting');
+    expect(line.tagName).toBe('OUTPUT');
+    expect(line.textContent).toBe('正在连接平台…');
   });
 });

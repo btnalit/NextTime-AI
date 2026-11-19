@@ -171,18 +171,27 @@ export const GET_ME_RETRY_DELAYS_MS: readonly number[] = [500, 1000, 2000];
 
 /** Legacy 868: `read` (the session machine passes {@link getMe}), tried again after each of
  *  `delaysMs` while the failure is not a signed-out answer ({@link isSignedOutError}); a
- *  signed-out answer, or the last failure, is thrown. */
+ *  signed-out answer, or the last failure, is thrown. `onRetry` is told before each wait. */
 export async function getMeRetrying(
   read: () => Promise<MeResult>,
-  delaysMs: readonly number[] = GET_ME_RETRY_DELAYS_MS,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  options: {
+    readonly delaysMs?: readonly number[];
+    readonly sleep?: (ms: number) => Promise<void>;
+    readonly onRetry?: () => void;
+  } = {},
 ): Promise<MeResult> {
+  const {
+    delaysMs = GET_ME_RETRY_DELAYS_MS,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    onRetry,
+  } = options;
   for (let tried = 0; ; tried += 1) {
     try {
       return await read();
     } catch (err) {
       const delay = delaysMs[tried];
       if (isSignedOutError(err) || delay === undefined) throw err;
+      onRetry?.();
       await sleep(delay);
     }
   }

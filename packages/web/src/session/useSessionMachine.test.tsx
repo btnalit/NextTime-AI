@@ -55,7 +55,10 @@ vi.mock('../lib/auth-api.js', async (importOriginal) => {
   return {
     ...original,
     // Legacy 868: the same tries, without waiting between them.
-    getMeRetrying: (read: () => Promise<MeResult>) => original.getMeRetrying(read, [0, 0, 0]),
+    getMeRetrying: (
+      read: () => Promise<MeResult>,
+      options?: Parameters<typeof original.getMeRetrying>[1],
+    ) => original.getMeRetrying(read, { ...options, delaysMs: [0, 0, 0] }),
     getMe: stubs.getMe,
     logout: stubs.logout,
     setWorkspaceCookie: stubs.setWorkspaceCookie,
@@ -440,15 +443,19 @@ describe('useSessionMachine: boot when /api/auth/me is not reached (legacy 868)'
       .mockRejectedValueOnce(new HttpError('invalid_response', 'HTTP 502'))
       .mockResolvedValueOnce({ user: BOB, memberships: [membership('ws-1')] });
     const kinds: string[] = [];
+    let reconnecting = false;
     const { result } = renderHook(() => {
       const machine = useSessionMachine({ syncRoute: () => undefined });
       kinds.push(machine.preSession.kind);
+      if (machine.preSession.kind === 'boot' && machine.preSession.reconnecting)
+        reconnecting = true;
       return machine;
     });
     await waitFor(() => expect(result.current.session?.selectedWorkspaceId).toBe('ws-1'));
     expect(stubs.getMe).toHaveBeenCalledTimes(3);
     expect(kinds).not.toContain('login');
     expect(kinds).not.toContain('unreachable');
+    expect(reconnecting).toBe(true);
   });
 
   it('the kernel’s 401 lands on sign-in at once, without trying again', async () => {

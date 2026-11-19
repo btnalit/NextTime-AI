@@ -427,7 +427,14 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     const myAttempt = attempt.current;
     let me: MeResult;
     try {
-      me = await getMeRetrying(() => getMe());
+      me = await getMeRetrying(() => getMe(), {
+        // Legacy 868 (UX on #1504): the blank boot frame says it is connecting once a try failed.
+        onRetry: () => {
+          if (preSessionRef.current.kind === 'boot' && attempt.current === myAttempt) {
+            setPreSession({ kind: 'boot', reconnecting: true });
+          }
+        },
+      });
     } catch (err) {
       // A sign-in or API-key connect started meanwhile owns what is shown now.
       if (attempt.current !== myAttempt) return;
