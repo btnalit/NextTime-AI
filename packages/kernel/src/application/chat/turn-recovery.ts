@@ -129,7 +129,7 @@ export function turnNotStartedContent(
     text:
       reason === 'evaluation_paused'
         ? 'The agent was not started for this message: the evaluation seal has paused the agents acting for you. A workspace owner can review and release the pause under Govern → Evaluation.'
-        : 'The agent was not started for this message: what it starts with (its system prompt or a Skill it mounts) carries content reserved for evaluation. Your own prompt addendum and the Skills you exclude are yours to change under My Agent; for anything else, ask a workspace owner or builder.',
+        : 'The agent was not started for this message: what it starts with (its system prompt, the platform’s appended instructions or a Skill it mounts) carries content reserved for evaluation. Your own prompt addendum and the Skills you exclude are yours to change under My Agent; the platform’s appended instructions are a platform administrator’s, under Platform settings; for anything else, ask a workspace owner or builder.',
     turnId,
     reason,
   };

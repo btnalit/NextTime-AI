@@ -79,6 +79,9 @@ interface FakePublishedSkill {
 let sealCounts: { suites: number; holdout: number } | 'throw' = { suites: 0, holdout: 0 };
 /** S10 E3-2c: whether the seal has paused the person's agents (`hasActiveSealHold`). */
 let sealHeld = false;
+/** Legacy 515: when set, the hold read waits for `release` after calling `reached` — a stop can
+ *  land while the seal check runs. */
+let sealHoldGate: { readonly reached: () => void; readonly release: Promise<void> } | null = null;
 /** S10 E3-2c: the audit rows the fake pool was asked to write (action, payload). */
 const auditWrites: { action: string; payload: unknown }[] = [];
 
@@ -359,6 +362,10 @@ function createFakePool(
 
     // S10 E3-2c: application/eval-seal's hasActiveSealHold, called by startWithheld first.
     if (sql.startsWith('select 1 from eval_seal_holds')) {
+      if (sealHoldGate) {
+        sealHoldGate.reached();
+        await sealHoldGate.release;
+      }
       return sealHeld ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
 
@@ -540,6 +547,7 @@ describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
   afterEach(() => {
     sealCounts = { suites: 0, holdout: 0 };
     sealHeld = false;
+    sealHoldGate = null;
     auditWrites.length = 0;
   });
 
@@ -595,6 +603,60 @@ describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
       },
     ]);
     expect(JSON.stringify(auditWrites)).not.toContain('entry agent of this workspace');
+  });
+
+  it('legacy 515 (review #493/#501 of #1498): a stop that lands while the seal check runs ends the Turn interrupted, and the chat is told no seal reason', async () => {
+    const workspaceId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          workspaceId,
+          { systemPrompt: 'You are the entry agent of this workspace, answer plainly.' },
+        ],
+      ]),
+    );
+    const { sink, events } = createFakeSink();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    sealHeld = true;
+    let release = () => {};
+    let reached = () => {};
+    const atCheck = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    sealHoldGate = {
+      reached,
+      release: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+
+    const input = startTurnInput({ workspaceId });
+    const startPromise = runtime.startTurn(input);
+    await atCheck; // the hold read is running
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    release();
+    await startPromise;
+
+    expect(sent).toEqual([]);
+    // Exact: no `notStarted` — the person ended it, so nothing of the seal is said.
+    expect(events).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'interrupted',
+        workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    ]);
   });
 
   it('fails closed: a seal check that cannot run ends the Turn failed, sends nothing, and logs no prompt — and tells the chat no reason it did not find', async () => {

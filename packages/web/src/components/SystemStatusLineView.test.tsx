@@ -64,6 +64,25 @@ describe('SystemStatusLineView', () => {
     );
     expect(screen.getByTestId('system-status-failure').textContent).toBe('智能体没有启动');
     expect(screen.getByTestId('system-status-line').textContent).toContain('kernel text');
+    cleanup();
+
+    // Review #493 of #1498: in an admin agent's chat, the places it reads — never My Agent.
+    const withheld = {
+      variant: 'turn_not_started',
+      text: 'kernel text',
+      turnId: 'turn-1',
+      reason: 'evaluation_withheld',
+    } as const;
+    render(<SystemStatusLineView agentKind="admin_agent" line={withheld} />);
+    expect(screen.getByTestId('system-status-failure').textContent).toBe('含评测保留的内容');
+    expect(screen.getByTestId('system-status-line').textContent).toContain(
+      '管理员智能体要读的内容',
+    );
+    expect(screen.getByTestId('system-status-line').textContent).not.toContain('我的智能体');
+    cleanup();
+    render(<SystemStatusLineView line={withheld} />);
+    expect(screen.getByTestId('system-status-line').textContent).toContain('「我的智能体」');
+    expect(screen.getByTestId('system-status-line').textContent).toContain('「平台设置」');
   });
 
   it('renders status badge and text for an action_update line', () => {

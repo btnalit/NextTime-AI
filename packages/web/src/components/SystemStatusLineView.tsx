@@ -1,3 +1,4 @@
+import type { ChatAgentKind } from '@nexttime/shared';
 import { failureReading } from '../lib/action-outcome.js';
 import { goalMilestoneText } from '../lib/goals.js';
 import { useT } from '../lib/i18n.js';
@@ -17,6 +18,9 @@ export interface SystemStatusLineViewProps {
   /** S11 GO5e-2 (#737 UX P2-2): for a goal's milestone or a goal step's Task, which goal it is —
    *  its statement on one line, or that it cannot be read (`chatGoalLabel`); `null` while read. */
   readonly goalLabel?: string | null;
+  /** Legacy 515: whose chat the line is in — an admin agent reads no addendum and no Skills, so a
+   *  Turn the evaluation seal kept from starting names other places to change. */
+  readonly agentKind?: ChatAgentKind;
 }
 
 const OPEN_TITLE = {
@@ -34,7 +38,12 @@ const OPEN_TITLE = {
  *  language (`goalMilestoneText`) and, unlike the kernel's one-line tail, never cut: it wraps on a
  *  narrow screen (pages.css). A Task run for a goal's step shows a tag naming the step in place of
  *  the kernel's line. */
-export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLineViewProps) {
+export function SystemStatusLineView({
+  line,
+  onOpen,
+  goalLabel,
+  agentKind,
+}: SystemStatusLineViewProps) {
   const t = useT();
   // Legacy 589: no chip and nothing to open — what happened and what to do, in the reader's
   // language, after a short warning label that is never cut.
@@ -66,7 +75,7 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
         <span className="system-status-failure text-danger" data-testid="system-status-failure">
           {label}
         </span>
-        <span className="system-status-text">{turnNotStartedText(line, t)}</span>
+        <span className="system-status-text">{turnNotStartedText(line, t, agentKind)}</span>
       </div>
     );
   }

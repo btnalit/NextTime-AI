@@ -506,8 +506,8 @@ export const TASK_FAILURE_REASON_LABELS: Readonly<
   evaluation_withheld: {
     short: { zh: '含评测保留的内容', en: 'Reserved for evaluation' },
     detail: {
-      zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分，所以 Worker 没有启动。在任务输入里的话，去掉那一段再试；在系统提示词或 Skill 里的话，请找工作区的所有者或构建者修改。',
-      en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing, so the Worker was not started. If it is in the task input, remove that part and try again; if it is in the system prompt or a Skill, ask a workspace owner or builder to change it.',
+      zh: 'Worker 要读的内容（任务输入、系统提示词、平台的附加指令或挂载的 Skill）里有评测用例集留作测试的部分，所以 Worker 没有启动。在任务输入里的话，去掉那一段再试；在平台的附加指令里的话，平台管理员可以在「平台设置」里修改；在系统提示词或 Skill 里的话，请找工作区的所有者或构建者修改。',
+      en: 'What the Worker would read (the task input, its system prompt, the platform’s appended instructions or a mounted Skill) holds text an evaluation suite keeps for testing, so the Worker was not started. If it is in the task input, remove that part and try again; if it is in the platform’s appended instructions, a platform administrator can change them in Platform settings; if it is in the system prompt or a Skill, ask a workspace owner or builder to change it.',
     },
   },
   evaluation_paused: {

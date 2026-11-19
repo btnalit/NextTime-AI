@@ -59,12 +59,18 @@ describe('presentError', () => {
       });
       expect(shown.message).toContain('Worker 没有启动');
       expect(shown.message).toContain('去掉那一段再试');
+      // Review #493 of #1498: the platform's appended instructions are in every Worker's prompt,
+      // and a platform administrator's to change.
+      expect(shown.message).toContain('平台管理员可以在「平台设置」里修改');
       expect(shown.message).not.toContain('权限');
       expect(shown.message).not.toContain('消息');
       expect(shown.message).not.toContain('审计');
       expect(shown.raw).toBe(message);
       expect(presentError(err, en).title).toBe('Reserved for evaluation');
-      expect(presentError(err, en).message).toContain('Remove that part and try again');
+      expect(presentError(err, en).message).toContain('remove that part and try again');
+      expect(presentError(err, en).message).toContain(
+        'a platform administrator can change them in Platform settings',
+      );
     }
   });
 

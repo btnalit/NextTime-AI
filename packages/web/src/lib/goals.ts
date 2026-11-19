@@ -222,8 +222,8 @@ const SEAL_REFUSED_FAILURE: Readonly<
   evaluation_withheld: {
     short: ['含评测保留的内容', 'Reserved for evaluation'],
     detail: [
-      'Worker 没有启动：它要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试沿用这次的 Worker 版本和 Skill，会被同样拦下，所以平台不自动重试；要修订计划或取消目标。',
-      'The Worker was not started: what it would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry keeps this attempt’s Worker version and Skills and is refused the same way, so the platform does not retry it; revise the plan or cancel the goal.',
+      'Worker 没有启动：它要读的内容（这一步的输入、Worker 的系统提示词、平台的附加指令或挂载的 Skill）里有评测用例集留作测试的部分。重试沿用这次的 Worker 版本和 Skill，会被同样拦下，所以平台不自动重试；要修订计划或取消目标。在平台的附加指令里的话，平台管理员可以在「平台设置」里修改，之后再重试这一步。',
+      'The Worker was not started: what it would read (the step’s input, the Worker’s system prompt, the platform’s appended instructions or a mounted Skill) holds text an evaluation suite keeps for testing. A retry keeps this attempt’s Worker version and Skills and is refused the same way, so the platform does not retry it; revise the plan or cancel the goal. If it is in the platform’s appended instructions, a platform administrator can change them in Platform settings, and then the step can be retried.',
     ],
   },
   evaluation_paused: {
@@ -294,8 +294,8 @@ function sealRefusedPauseText(
         `A person must decide: ${attempt} did not start, because the evaluation seal has paused the agents acting for the requester. Once a workspace owner reviews and releases the pause under Govern → Evaluation, the step can be retried; until then a retry is refused too. You can also cancel the goal.`,
       )
     : t(
-        `需要人决定：${attempt}没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；也可以取消目标。`,
-        `A person must decide: ${attempt} did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.`,
+        `需要人决定：${attempt}没有启动，因为 Worker 要读的内容（这一步的输入、Worker 的系统提示词、平台的附加指令或挂载的 Skill）里有评测用例集留作测试的部分。重试会被同样拦下，因为重试沿用这次的 Worker 版本和 Skill。请修订计划，去掉这一步输入里的那段，或让这一步改用不含它的 Worker 版本（由工作区所有者或构建者发布）；在平台的附加指令里的话，平台管理员可以在「平台设置」里修改，之后再重试这一步；也可以取消目标。`,
+        `A person must decide: ${attempt} did not start, because what its Worker would read (the step’s input, the Worker’s system prompt, the platform’s appended instructions or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); if it is in the platform’s appended instructions, a platform administrator can change them in Platform settings, then retry the step; or cancel the goal.`,
       );
 }
 
@@ -311,8 +311,8 @@ function agentsPausedPauseText(steps: readonly StepRunWire[] | undefined, t: Tra
   const withheld =
     refused?.reason === 'evaluation_withheld'
       ? t(
-          '另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后重试也会被同样拦下，要修订计划去掉它，见下面这一步的说明。',
-          ' Besides, what this step’s Worker would read holds text an evaluation suite keeps for testing, so even after the release a retry is refused the same way: revise the plan to leave it out (see the step’s note below).',
+          '另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后直接重试也会被同样拦下，怎么处理见下面这一步的说明。',
+          ' Besides, what this step’s Worker would read holds text an evaluation suite keeps for testing, so even after the release a plain retry is refused the same way: see the step’s note below for what to do.',
         )
       : '';
   return t(

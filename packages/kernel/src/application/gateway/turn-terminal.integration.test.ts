@@ -913,7 +913,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           text: expect.stringMatching(
             reason === 'evaluation_paused'
               ? /^The agent was not started for this message: the evaluation seal has paused the agents acting for you\./
-              : /^The agent was not started for this message: .*content reserved for evaluation\. Your own prompt addendum .*under My Agent; for anything else, ask a workspace owner or builder\.$/,
+              : /^The agent was not started for this message: .*content reserved for evaluation\. Your own prompt addendum .*under My Agent; the platform’s appended instructions are a platform administrator’s, under Platform settings; for anything else, ask a workspace owner or builder\.$/,
           ),
           turnId,
           reason,
