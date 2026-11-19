@@ -295,6 +295,7 @@ const DETAIL = {
   trialApprovals: [],
   planner: null,
   planningRounds: [],
+  requesterAgentsPaused: false,
 };
 
 const UNRESOLVED = [

@@ -547,11 +547,20 @@ describe('lib/goals', () => {
     expect(goalStateNote(withheld, undefined, budget, en)?.text).toBe(
       'A person must decide: step fetch’s attempt 1 did not start, because what its Worker would read (the step’s input, the Worker’s system prompt or a mounted Skill) holds text an evaluation suite keeps for testing. A retry is refused the same way, since it keeps this attempt’s Worker version and Skills. Revise the plan so the step’s input leaves it out, or so the step uses a Worker version without it (a workspace owner or builder publishes one); or cancel the goal.',
     );
+    // UX P2 on #1486: get_goal says whether that pause holds now. Released: the step can be
+    // retried; not read (another caller of the note): what a person does either way.
     const pausedAgents = paused([refused('evaluation_paused')]);
     expect(goalStateNote(pausedAgents, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为当时评测防泄漏暂停了代请求人行动的智能体。这个暂停已经解除，可以重试这一步，也可以修订计划或取消目标。',
+    );
+    expect(goalStateNote(pausedAgents, undefined, budget, en)?.text).toBe(
+      'A person must decide: step fetch’s attempt 1 did not start, because the evaluation seal had paused the agents acting for the requester. That pause has been released: the step can be retried now, or revise the plan or cancel the goal.',
+    );
+    const { requesterAgentsPaused: _read, ...notRead } = pausedAgents;
+    expect(goalStateNote(notRead, undefined, budget, zh)?.text).toBe(
       '需要人决定：步骤「fetch」第 1 次尝试没有启动，因为评测防泄漏暂停了代请求人行动的智能体。工作区所有者在「治理 → 评测」查看并解除暂停后，可以重试这一步；在此之前重试也会被拒。也可以取消目标。',
     );
-    expect(goalStateNote(pausedAgents, undefined, budget, en)?.text).toMatch(
+    expect(goalStateNote(notRead, undefined, budget, en)?.text).toMatch(
       /^A person must decide: step fetch’s attempt 1 did not start, because the evaluation seal has paused the agents acting for the requester\. Once a workspace owner reviews and releases the pause under Govern → Evaluation/,
     );
     // The planner's round under this pause (which the seal may refuse too) does not hide it.
@@ -600,6 +609,100 @@ describe('lib/goals', () => {
     ]);
     expect(goalStateNote(superseded, undefined, budget, zh)?.text).toMatch(
       /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+  });
+
+  it('UX P2 on #1486: while the evaluation seal pauses the requester’s agents, the goal says nothing starts until it is released', () => {
+    const budget = goalBudgetRows(goalRun(), zh);
+    const held = (extra: Partial<GoalDetailWire> = {}): GoalDetailWire => ({
+      ...goalDetail(),
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      requesterAgentsPaused: true,
+      // The attempt was refused before its Task was made: the step is still ready.
+      steps: [stepRun({ status: 'ready', attemptCount: 0, attempts: [] })],
+      ...extra,
+    });
+    expect(goalStateNote(held(), undefined, budget, zh)?.text).toBe(
+      '需要人决定：评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。',
+    );
+    expect(goalStateNote(held(), undefined, budget, en)?.text).toBe(
+      'A person must decide: The evaluation seal has paused the agents acting for the requester: until the pause is released no step of this goal starts, and resuming it only stops it again. It can go on once a workspace owner reviews and releases the pause under Govern → Evaluation; you can also revise the plan or end the goal.',
+    );
+    // Its step reads as held back, as the pause says — not 「可以开始」.
+    expect(stepHeldLabel(held(), 'fetch', zh)).toBe('没有开始（被拦下）');
+    expect(stepHeldLabel(held({ requesterAgentsPaused: false }), 'fetch', zh)).toBeNull();
+    // Released: back to what the run says without it.
+    expect(goalStateNote(held({ requesterAgentsPaused: false }), undefined, budget, zh)?.text).toBe(
+      '需要人决定：现在没有失败的步骤要处理。可以继续、修订计划或结束目标。',
+    );
+
+    // A step refused for content reserved for evaluation needs a revision as well.
+    const withheld = held({
+      steps: [
+        stepRun({
+          status: 'failed',
+          failureCategory: 'transient',
+          attemptCount: 1,
+          attempts: [
+            {
+              attempt: 1,
+              taskId: 'task-fetch-1',
+              status: 'failed',
+              createdAt: '2026-10-20T00:01:00.000Z',
+              failureReason: 'evaluation_withheld',
+              rework: false,
+              outputProblems: null,
+              outputProblemCount: 0,
+            },
+          ],
+        }),
+      ],
+    });
+    expect(goalStateNote(withheld, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「fetch」第 1 次尝试没有启动。评测防泄漏暂停了代请求人行动的智能体，暂停解除之前这个目标的步骤都不会启动，按「继续」也会再停下。工作区所有者在「治理 → 评测」查看并解除暂停后才能继续；也可以修订计划或结束目标。另外，这一步的 Worker 要读的内容里有评测用例集留作测试的部分，解除暂停后重试也会被同样拦下，要修订计划去掉它，见下面这一步的说明。',
+    );
+    expect(goalStateNote(withheld, undefined, budget, en)?.text).toMatch(
+      /^A person must decide: step fetch’s attempt 1 did not start\. The evaluation seal has paused .* Besides, what this step’s Worker would read holds text an evaluation suite keeps for testing/,
+    );
+
+    // A planner proposal waiting under the pause does not hide it: nothing starts either way.
+    const proposal = held({
+      currentRevision: 1,
+      revisions: [
+        {
+          ...goalDetail().revisions[0],
+          revision: 2,
+          status: 'proposed',
+          proposer: 'planner',
+          basedOnRevision: 1,
+        } as GoalDetailWire['revisions'][number],
+      ],
+    });
+    expect(goalStateNote(proposal, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：评测防泄漏暂停了/,
+    );
+    expect(
+      goalStateNote({ ...proposal, requesterAgentsPaused: false }, undefined, budget, zh)?.text,
+    ).toBe(
+      '需要人决定：目标规划器为这次失败提了第 2 版修订，在下面「目标规划器」里决定接受还是拒绝。',
+    );
+
+    // Before it stops: a running goal, and one waiting for its confirmation.
+    const running = { ...goalDetail(), status: 'running' as const, requesterAgentsPaused: true };
+    expect(goalStateNote(running, undefined, budget, zh)).toEqual({
+      tone: 'warn',
+      text: '评测防泄漏暂停了代请求人行动的智能体：暂停解除之前，这个目标的步骤都不会启动，目标会停下等人决定。工作区所有者在「治理 → 评测」查看并解除暂停。',
+    });
+    expect(
+      goalStateNote({ ...running, requesterAgentsPaused: false }, undefined, budget, zh),
+    ).toBeNull();
+    const proposed = { ...goalDetail(), status: 'proposed' as const, requesterAgentsPaused: true };
+    expect(goalStateNote(proposed, undefined, budget, zh)?.text).toBe(
+      '等请求人确认计划、验收检查和预算；确认之后才开始。另外，评测防泄漏暂停了代请求人行动的智能体：确认之后步骤也不会启动，要等工作区所有者在「治理 → 评测」解除暂停。',
+    );
+    expect(goalStateNote(proposed, undefined, budget, en)?.text).toBe(
+      'Waiting for the requester to confirm the plan, its checks and budget; nothing starts before that. Besides, the evaluation seal has paused the agents acting for the requester: even once confirmed, no step starts until a workspace owner releases the pause under Govern → Evaluation.',
     );
   });
 

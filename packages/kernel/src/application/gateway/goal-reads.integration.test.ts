@@ -22,6 +22,7 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
+import { EvaluationProbeHoldError } from '../eval-seal/index.js';
 import { advanceGoalRun } from '../goal/advance.js';
 import { cancelGoalRun } from '../goal/control.js';
 import {
@@ -611,6 +612,69 @@ describe.runIf(DATABASE_URL !== undefined)(
             { goalRunId },
           ),
         ).rejects.toBeInstanceOf(ForbiddenError);
+      });
+    });
+
+    describe('get_goal: the evaluation seal’s pause of the requester’s agents (UX P2 on #1486)', () => {
+      it('says, read live, whether the seal pauses the agents acting for the requester — to the requester and the owner; the requester’s agent is refused while it holds', async () => {
+        const goalRunId = await startGoal(requesterId, ['a']);
+        const read = async (caller: ResolvedCaller) =>
+          GoalDetailWireSchema.parse(await call(caller, 'get_goal', { goalRunId }))
+            .requesterAgentsPaused;
+        expect(await read(human(requesterId, 'member'))).toBe(false);
+
+        // Another person's pause is not the requester's.
+        await admin((client) =>
+          client.query(
+            `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+             values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')`,
+            [workspaceId, otherMemberId],
+          ),
+        );
+        expect(await read(human(requesterId, 'member'))).toBe(false);
+
+        const [hold] = await admin(
+          async (client) =>
+            (
+              await client.query<{ id: string }>(
+                `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+               values ($1, $2, 5, '{"capabilityResult": 0, "capabilityError": 0, "workerStart": 5}')
+               returning id`,
+                [workspaceId, requesterId],
+              )
+            ).rows,
+        );
+        expect(await read(human(requesterId, 'member'))).toBe(true);
+        expect(await read(human(ownerId, 'owner'))).toBe(true);
+        // No agent reads it: every call of an agent acting for the requester is refused meanwhile.
+        const scope: CapabilityScope = { capabilities: ['get_goal'], resources: {} };
+        await expect(
+          call(handleCaller(workspaceId, requesterId, scope), 'get_goal', { goalRunId }),
+        ).rejects.toBeInstanceOf(EvaluationProbeHoldError);
+
+        // Released: it reads false at once, and the agent reads the run again.
+        await admin((client) =>
+          client.query(
+            `update eval_seal_holds
+                set status = 'released', released_at = now(), released_by = $3,
+                    release_reason = 'cleared in a test'
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, hold?.id, ownerId],
+          ),
+        );
+        expect(await read(human(requesterId, 'member'))).toBe(false);
+        expect(await read(human(ownerId, 'owner'))).toBe(false);
+        expect(await read(handleCaller(workspaceId, requesterId, scope))).toBe(false);
+        // Leave no pause for the tests after this one.
+        await admin((client) =>
+          client.query(
+            `update eval_seal_holds
+                set status = 'released', released_at = now(), released_by = $2,
+                    release_reason = 'cleared in a test'
+              where workspace_id = $1 and status = 'active'`,
+            [workspaceId, ownerId],
+          ),
+        );
       });
     });
 
