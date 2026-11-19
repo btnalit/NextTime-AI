@@ -69,6 +69,21 @@ export { GatekeeperNotFoundError };
 
 export type GatekeeperHealth = 'ok' | 'unreachable' | 'unauthorized';
 
+/** Legacy 215: whether a gate says it checks each call against the definition the platform
+ *  approved (`operationDigest`, legacy K) — `declared` when its health answer says so
+ *  (`checksOperationDigest`, `@nexttime/gatekeeper-base` since legacy 215), `undeclared` when it
+ *  answered without saying so. That is two kinds of gate the platform cannot tell apart: one on
+ *  `gatekeeper-base` from v0.46.0 up to legacy 215 checks without saying so; one on an earlier
+ *  base, or not built on it, does not check and may run its own definition whatever was approved.
+ *  Nothing is refused for it; it is shown. */
+export type OperationDigestCheck = 'declared' | 'undeclared';
+
+export interface GatekeeperProbe {
+  readonly health: GatekeeperHealth;
+  /** `null` when the gate gave no answer to read it from. */
+  readonly operationDigestCheck: OperationDigestCheck | null;
+}
+
 const HEALTH_PROBE_TIMEOUT_MS = 3_000;
 
 export interface GatekeeperReadHandlerDeps {
@@ -122,12 +137,26 @@ async function platformPolicyFor(
 }
 
 export async function probeGatekeeperHealth(gate: GateTarget): Promise<GatekeeperHealth> {
+  return (await probeGatekeeper(gate)).health;
+}
+
+/** `probeGatekeeperHealth`, with what the same answer says about digest checks (legacy 215). The
+ *  client does not parse the answer: only a literal `true` declares. Never throws. */
+export async function probeGatekeeper(gate: GateTarget): Promise<GatekeeperProbe> {
   try {
-    const response = await resolveClient().health(gate);
-    return response.status === 'ok' ? 'ok' : 'unreachable';
+    const response: unknown = await resolveClient().health(gate);
+    const answer =
+      typeof response === 'object' && response !== null
+        ? (response as { readonly status?: unknown; readonly checksOperationDigest?: unknown })
+        : {};
+    return {
+      health: answer.status === 'ok' ? 'ok' : 'unreachable',
+      operationDigestCheck: answer.checksOperationDigest === true ? 'declared' : 'undeclared',
+    };
   } catch (err) {
-    if (err instanceof GatekeeperClientError && err.status === 401) return 'unauthorized';
-    return 'unreachable';
+    const health =
+      err instanceof GatekeeperClientError && err.status === 401 ? 'unauthorized' : 'unreachable';
+    return { health, operationDigestCheck: null };
   }
 }
 
@@ -346,7 +375,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
 
   // The health probe is a network call, so it may overlap the reads; the two reads share one
   // client and run one after the other (S5.5 leftover 34).
-  const healthProbe = probeGatekeeperHealth(await resolveGateTarget(client, workspaceId, record));
+  const healthProbe = probeGatekeeper(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
   const revisionChanges = revisionChangesForDrafts(allOperations);
   const platformPolicy = await platformPolicyFor(client, workspaceId, gatekeeperId);
@@ -367,7 +396,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const lastAddressChangeOutcome = ownerOfSelfConnection
     ? await lastGateAddressChangeOutcomeWire(client, workspaceId, gatekeeperId)
     : null;
-  const health = await healthProbe;
+  const { health, operationDigestCheck } = await healthProbe;
   const operations = allOperations.filter((op) => {
     if (!operationVisibleTo(viewer, op)) return false;
     const platform = operationPlatformStatus(platformPolicy, op.name);
@@ -390,6 +419,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
       ...summary,
       operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
       health,
+      ...(operationDigestCheck !== null ? { operationDigestCheck } : {}),
       ...(ownerOfSelfConnection
         ? { endpoint: redactConnectionAddress('endpoint', record.endpoint) }
         : {}),

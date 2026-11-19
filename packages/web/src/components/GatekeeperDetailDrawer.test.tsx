@@ -49,6 +49,48 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByText('docker.restart')).toBeTruthy();
   });
 
+  describe('legacy 215: whether the gate checks the definition the platform approved', () => {
+    function gateWith(operationDigestCheck?: 'declared' | 'undeclared') {
+      return callerReturning({
+        id: 'gk-1',
+        name: 'notes',
+        kind: 'http',
+        status: 'active',
+        operationCount: 0,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        operations: [],
+        health: 'ok',
+        ...(operationDigestCheck ? { operationDigestCheck } : {}),
+      });
+    }
+
+    it('a gate that does not say it checks is marked 未声明校验摘要 as a warning, with the two kinds it can be and who changes it', async () => {
+      renderDrawer(gateWith('undeclared'));
+      const row = await screen.findByTestId('gatekeeper-digest-check');
+      expect(row.querySelector('.tag.text-warn')?.textContent).toBe('未声明校验摘要');
+      expect(row.querySelector('.text-danger')).toBeNull();
+      // Not "does not check": a gate on gatekeeper-base from v0.46.0 checks without declaring it.
+      expect(row.textContent).not.toContain('不校验摘要');
+      expect(row.textContent).toContain('v0.46.0 起');
+      expect(row.textContent).toContain('会校验，只是不声明');
+      expect(row.textContent).toContain('平台照常调用它');
+      expect(row.textContent).toContain('重建后');
+    });
+
+    it('a gate that says it checks reads as its own word, unmarked', async () => {
+      renderDrawer(gateWith('declared'));
+      const row = await screen.findByTestId('gatekeeper-digest-check');
+      expect(row.textContent).toBe('门声明会校验摘要：调用带来的定义和门运行的不一致时拒绝执行');
+      expect(row.querySelector('.tag')).toBeNull();
+    });
+
+    it('no row when the gate gave no answer', async () => {
+      renderDrawer(gateWith());
+      await screen.findByTestId('gatekeeper-health');
+      expect(screen.queryByTestId('gatekeeper-digest-check')).toBeNull();
+    });
+  });
+
   it('legacy 674: a self-connected gate the platform suspended says so, why, and who lifts it, and keeps its operations listed', async () => {
     const http = callerReturning({
       id: 'gk-1',
