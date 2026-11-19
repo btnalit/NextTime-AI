@@ -56,7 +56,8 @@ import { resolveAvailableResources } from './agent-profile-handlers.js';
  *     `find_workers` / `invoke_worker` use.
  *
  * A gate's own `status` is `direct` when at least one of its observe-class Operations is; otherwise
- * `reason` names the first unmet condition, in the order a person fixes them: nothing published →
+ * `reason` names the first unmet condition, in the order a person fixes them, after a platform
+ * suspension of the whole gate (legacy 675 — nothing below helps while it lasts): nothing published →
  * disabled by the platform's connector deny list → the gate runs another definition than every
  * remaining one (legacy K) → (only for a gate with nothing left to observe) not granted → excluded by the workspace AgentPolicy cap → excluded by the member's own
  * AgentProfile → no Worker covers it. `not_granted` is therefore an execute-path reason only: a
@@ -80,6 +81,7 @@ import { resolveAvailableResources } from './agent-profile-handlers.js';
 export type ReachabilityStatus = 'direct' | 'via_worker' | 'unreachable';
 
 export type UnreachableReason =
+  | 'suspended_by_platform'
   | 'no_published_operation'
   | 'disabled_by_platform'
   | 'definition_mismatch'
@@ -103,6 +105,11 @@ export interface GateReachability {
   /** In the entry Handle's `resources.gatekeeper` (Grants ∩ AgentProfile / policy) — the gates a
    *  Worker it delegates to may carry execute authority for. Not what decides observation. */
   readonly inEntryScope: boolean;
+  /** Legacy 675: the platform suspended this gate the workspace connected itself
+   *  (`suspend_self_connection`) — every Operation of it is refused (`operationPlatformStatus`'s
+   *  `self_connection_suspended`, so all of them are in `disabledOperations` too). Ranked ahead of
+   *  every other reason. */
+  readonly platformSuspended: boolean;
   /** Total published Operations on this gate, whatever the platform's connector deny list says —
    *  `disabledOperations` below names the platform-disabled subset; a consumer that wants a
    *  "callable" count subtracts it. Kept as the plain published total (not narrowed) so
@@ -339,6 +346,7 @@ export async function computeCapabilityReachability(
       excludedByPolicy: exclusion === 'excluded_by_policy',
       excludedByProfile: exclusion === 'excluded_by_profile',
       inEntryScope: inEntry.has(gateId),
+      platformSuspended: platformPolicy?.origin === 'self' && platformPolicy.suspended,
       observeOperationCount: published.length - executeCount,
       executeOperationCount: executeCount,
       disabledOperations,
@@ -372,6 +380,7 @@ export async function computeCapabilityReachability(
  *  by `observeRefusal` for an exclusion, never for a missing Grant. */
 function firstGap(
   gate: {
+    readonly platformSuspended: boolean;
     readonly granted: boolean;
     readonly excludedByPolicy: boolean;
     readonly excludedByProfile: boolean;
@@ -382,6 +391,10 @@ function firstGap(
   },
   enabledObserveCount: number,
 ): UnreachableReason | undefined {
+  // Legacy 675: the whole connection is cut off — publishing, granting or aligning anything below
+  // brings no call through until a platform administrator resumes it, so it is said first (before
+  // this, it read `disabled_by_platform`, whose copy sends the reader to the connector deny list).
+  if (gate.platformSuspended) return 'suspended_by_platform';
   const publishedCount = gate.observeOperationCount + gate.executeOperationCount;
   if (publishedCount === 0) return 'no_published_operation';
   // Every published Operation this gate has is platform-disabled — `disabledOperations` is always a
@@ -409,7 +422,10 @@ function firstGap(
  *     `request_action`; otherwise `unreachable` with the first gap (platform deny list, not
  *     granted, policy cap, profile exclusion) or `no_worker`.
  *
- * `operationName` is checked against the gate's own `disabledOperations` first — a platform-disabled
+ * A gate the platform suspended (legacy 675) answers `suspended_by_platform` for every Operation on
+ * it, before anything else — the same reason the gate itself reads.
+ *
+ * `operationName` is then checked against the gate's own `disabledOperations` — a platform-disabled
  * Operation is `unreachable`/`disabled_by_platform` even when the gate itself still reads `direct`/
  * `via_worker` because one of its *other* Operations is still enabled (production incident
  * 2026-09-26: `find_operations` must flag exactly the Operation a real `request_action`/
@@ -424,6 +440,7 @@ export function operationReachability(
 ): { readonly status: ReachabilityStatus; readonly reason?: UnreachableReason } {
   const gate = reachability.gates.find((entry) => entry.gateId === gatekeeperId);
   if (!gate) return { status: 'unreachable', reason: 'not_granted' };
+  if (gate.platformSuspended) return { status: 'unreachable', reason: 'suspended_by_platform' };
   if (gate.disabledOperations.includes(operationName)) {
     return { status: 'unreachable', reason: 'disabled_by_platform' };
   }

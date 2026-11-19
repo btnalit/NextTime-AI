@@ -181,6 +181,8 @@ function missingFix(
     case 'disabled_by_platform':
       return PLATFORM_FIX;
     case 'definition_mismatch':
+    // Legacy 675: the gate's own drawer says when, why, and that a platform administrator lifts it.
+    case 'suspended_by_platform':
       return EXPLAINED_FIX;
   }
 }
@@ -204,6 +206,7 @@ function gateReasonFix(reason: GateUnreachableReason, about: ReasonSubject): Fix
     case 'disabled_by_platform':
       return PLATFORM_FIX;
     case 'definition_mismatch':
+    case 'suspended_by_platform':
       return EXPLAINED_FIX;
   }
 }
@@ -302,6 +305,18 @@ export function missingCauseText(
             'A system’s operations were disabled by a platform administrator — a workspace cannot fix this.',
           );
     }
+    case 'suspended_by_platform': {
+      const name = item.gateId ? gateNames.get(item.gateId) : undefined;
+      return name
+        ? t(
+            `平台管理员暂停了门「${name}」，对它的每次调用都被拒绝。工作区里解除不了，要请平台管理员恢复。`,
+            `A platform administrator suspended the “${name}” gate, so every call to it is refused. Nothing in this workspace lifts it; ask a platform administrator to resume it.`,
+          )
+        : t(
+            '平台管理员暂停了一个系统，对它的每次调用都被拒绝。工作区里解除不了，要请平台管理员恢复。',
+            'A platform administrator suspended a system, so every call to it is refused. Nothing in this workspace lifts it; ask a platform administrator to resume it.',
+          );
+    }
     case 'definition_mismatch': {
       const name = item.gateId ? gateNames.get(item.gateId) : undefined;
       const kind = item.gateId ? refusalKinds?.get(item.gateId) : undefined;
@@ -374,6 +389,8 @@ function missingDestination(
       return undefined;
     // The system's own drawer says which Operations and whose step it is.
     case 'definition_mismatch':
+    // Legacy 675: the drawer says when the platform suspended it and the reason it gave.
+    case 'suspended_by_platform':
       return item.gateId ? hrefs.gatekeeper(item.gateId) : hrefs.systems();
   }
 }
@@ -404,6 +421,8 @@ export function missingLinkLabel(
       return undefined;
     case 'definition_mismatch':
       return t('看下一步', 'See what to do');
+    case 'suspended_by_platform':
+      return t('看暂停原因', 'See why it is suspended');
   }
 }
 
@@ -457,6 +476,12 @@ export function gateReasonText(
         '平台管理员在「平台 · 集成」停用了这个系统的操作，这不是工作区能修复的。',
         'A platform administrator disabled operations on this system under Platform · Integrations — a workspace cannot fix this.',
       );
+    // Legacy 675: the gate's own drawer says when and why (`platformSuspension`).
+    case 'suspended_by_platform':
+      return t(
+        '门被平台暂停：对它的每次调用都被拒绝，暂停原因在门详情里。工作区里解除不了，要请平台管理员恢复。',
+        'The gate is suspended by the platform: every call to it is refused, and its details say why. Nothing in this workspace lifts it; ask a platform administrator to resume it.',
+      );
     case 'definition_mismatch':
       if (refusal === 'dropped') {
         return t(
@@ -481,16 +506,22 @@ export function gateReasonText(
 
 /** `undefined` for `disabled_by_platform` — see `missingLinkHref`'s own doc comment: 平台 · 集成
  *  refuses anyone who is not a platform admin, so a member or workspace owner reading this has
- *  nowhere useful to click through to. */
+ *  nowhere useful to click through to. `definition_mismatch` and `suspended_by_platform` link to
+ *  the gate's own details only when `gateId` names it (the readiness strip, which lists every gate
+ *  apart from its page); the system's own row and drawer, which already show them, pass none. */
 export function gateReasonHref(
   reason: GateUnreachableReason,
   reader?: ReadinessReader,
   about: ReasonSubject = 'me',
+  gateId?: string,
 ): string | undefined {
-  return linkFor(gateReasonDestination(reason), gateReasonFix(reason, about), reader);
+  return linkFor(gateReasonDestination(reason, gateId), gateReasonFix(reason, about), reader);
 }
 
-function gateReasonDestination(reason: GateUnreachableReason): string | undefined {
+function gateReasonDestination(
+  reason: GateUnreachableReason,
+  gateId: string | undefined,
+): string | undefined {
   switch (reason) {
     case 'no_published_operation':
       return hrefs.systems();
@@ -504,9 +535,11 @@ function gateReasonDestination(reason: GateUnreachableReason): string | undefine
       return hrefs.catalog(CATALOG_WORKERS_TAB);
     case 'disabled_by_platform':
       return undefined;
-    // Said on the system's own row and drawer (`DefinitionMismatchNotice`), not another page.
+    // Said on the system's own row and drawer (`DefinitionMismatchNotice`; legacy 675: the
+    // 「平台已暂停」 tag and the suspension notice), so only a list of every gate links there.
     case 'definition_mismatch':
-      return undefined;
+    case 'suspended_by_platform':
+      return gateId !== undefined ? hrefs.gatekeeper(gateId) : undefined;
   }
 }
 
@@ -523,8 +556,11 @@ export function gateReasonLink(reason: GateUnreachableReason, t: Translate): str
     case 'no_worker':
       return t('去能力目录', 'Go to Catalog');
     case 'disabled_by_platform':
-    case 'definition_mismatch':
       return undefined;
+    case 'definition_mismatch':
+      return t('看下一步', 'See what to do');
+    case 'suspended_by_platform':
+      return t('看暂停原因', 'See why it is suspended');
   }
 }
 

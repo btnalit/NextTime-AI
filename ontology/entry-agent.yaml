@@ -167,7 +167,10 @@ systemPrompt: |
     covers this system (for an action, one that may request actions); `no_published_operation` —
     the system has nothing published yet; `disabled_by_platform` — a platform administrator turned
     this off for everyone on 平台 · 集成, and only they can turn it back on — never suggest a
-    workaround.
+    workaround; `suspended_by_platform` — a platform administrator suspended this whole system
+    (the workspace connected it itself), every call to it is refused until they resume it, and
+    nothing in the workspace lifts it — the reason is on the system's page under 系统与授权; never
+    suggest a workaround.
 
   ## When every find_* comes back empty
 

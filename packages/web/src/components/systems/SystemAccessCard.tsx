@@ -82,8 +82,12 @@ export interface SystemAccessGranteeRow {
 
 export interface SystemAccessHealth {
   /** Linked to a platform gate instance (`list_available_gate_instances`) — `false` for a gate
-   *  registered directly (`create_connection`/`直接注册门`), which carries no health signal. */
+   *  registered directly (`create_connection`/`直接注册门`). */
   readonly linked: boolean;
+  /** A linked gate's instance health (the catalog's stored value); legacy 253: for a gate the
+   *  workspace connected itself, its live probe (`execution_readiness` with `includeGateHealth`)
+   *  once that read is back — given only for a gate the reader's agent can reach (its reachability
+   *  chip says why for any other), never for one the platform suspended. Absent while unknown. */
   readonly health?: string;
   /** `AvailableGateInstanceWire.transportKind` (`ssh`/`http`/`mcp`/`cli`) — `undefined` for a
    *  legacy (`!linked`) registration, which carries no transport signal either. */
@@ -559,6 +563,20 @@ export function SystemAccessCard({
               {t('自己接入', 'Self-connected')}
             </span>
           ) : null}
+          {/* Legacy 675: the platform suspended this gate — said on the row itself, not only as
+              「你：用不了」; the drawer (「健康与操作」) says when and the reason it gave. */}
+          {gate.reason === 'suspended_by_platform' ? (
+            <span
+              className="tag text-warn"
+              data-testid="gatekeeper-platform-suspended-tag"
+              title={t(
+                '平台管理员暂停了这个门：对它的每次调用都被拒绝，暂停原因在「健康与操作」里。工作区里解除不了，要请平台管理员恢复',
+                'A platform administrator suspended this gate: every call to it is refused, and “Health & operations” says why. Nothing in this workspace lifts it; ask a platform administrator to resume it',
+              )}
+            >
+              {t('平台已暂停', 'Suspended by the platform')}
+            </span>
+          ) : null}
         </div>
         <div className="data-row-meta" data-testid="gatekeeper-ops-summary">
           <span>
@@ -569,8 +587,13 @@ export function SystemAccessCard({
               ` · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
             )}
           </span>
-          {healthInfo.linked && healthInfo.health !== undefined ? (
-            <StatusChip machine="gateHealth" status={healthInfo.health} size="s" />
+          {healthInfo.health !== undefined ? (
+            <StatusChip
+              machine="gateHealth"
+              status={healthInfo.health}
+              size="s"
+              testId="gatekeeper-card-health"
+            />
           ) : null}
           <a href={hrefs.catalog('operations')} className="link-inline">
             {t('去能力目录看 Operation', 'See in Catalog')}

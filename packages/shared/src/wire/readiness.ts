@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ObjectWireSchema } from './graph.js';
-import { GateOwnedParamWireSchema } from './platform.js';
+import { GateHealthWireSchema, GateOwnedParamWireSchema } from './platform.js';
 
 /**
  * wire/readiness: `execution_readiness`'s result shape (S8 W1-C, docs/development-tasks.md §5e
@@ -35,6 +35,11 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
    *  gate because it runs another definition than the published one — `gates[].definitionMismatch`
    *  says which and whose step it is. */
   'definition_mismatch',
+  /** Legacy 675: a gate the workspace connected itself that a platform administrator suspended
+   *  (`suspend_self_connection`, legacy 118) — every call to it is refused until it is resumed,
+   *  and nothing in the workspace lifts it. `get_gatekeeper`'s `platformSuspension` says when and
+   *  why. */
+  'suspended_by_platform',
 ]);
 export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMissingCodeSchema>;
 
@@ -42,8 +47,12 @@ export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMis
 export const GateReachabilityStatusSchema = z.enum(['direct', 'via_worker', 'unreachable']);
 export type GateReachabilityStatus = z.infer<typeof GateReachabilityStatusSchema>;
 
-/** The first unmet condition, in the order a person fixes them. */
+/** The first unmet condition, in the order a person fixes them — except `suspended_by_platform`,
+ *  which comes first: while the platform suspends the gate nothing else on the list brings a call
+ *  through. */
 export const GateUnreachableReasonSchema = z.enum([
+  /** Legacy 675: see `ExecutionReadinessMissingCodeSchema`'s own identical value above. */
+  'suspended_by_platform',
   'no_published_operation',
   /** Production incident 2026-09-26: every published Operation on this gate is disabled by the
    *  platform's connector deny list (平台 · 集成) — see `ExecutionReadinessMissingCodeSchema`'s own
@@ -148,6 +157,17 @@ export const ExecutionReadinessGateWireSchema = z
      *  `unreachable`: `reason` names the first missing condition. */
     status: GateReachabilityStatusSchema,
     reason: GateUnreachableReasonSchema.optional(),
+    /** Legacy 253: whether the gate answers right now — on `execution_readiness` called with
+     *  `includeGateHealth: true` only, and only for a gate whose `status` is `direct` or
+     *  `via_worker` (for any other, `reason` already says why no call goes through; a gate the
+     *  platform suspended is never probed). The same two sources as
+     *  `AvailableGatekeeperWire.health` (legacy 200): a gate enabled from the platform catalog
+     *  gives its instance's stored health (`unknown` until it has announced); any other is probed
+     *  live through its own health endpoint (3 s timeout, all gates at once, after the read's
+     *  transaction has ended) — `ok`, `unreachable` or `unauthorized`. It changes neither
+     *  `status`, `reason` nor `ready`: those say what the agent may reach; this says whether a
+     *  call would get an answer now. */
+    health: GateHealthWireSchema.optional(),
   })
   .strict();
 export type ExecutionReadinessGateWire = z.infer<typeof ExecutionReadinessGateWireSchema>;
