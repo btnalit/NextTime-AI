@@ -557,7 +557,7 @@ export function WorkerDefinitionEditor({
                 {unresolvedFields.map((field) => (
                   <KitButton
                     key={field}
-                    variant="ghost"
+                    variant="secondary"
                     size="s"
                     onClick={() => goToUnresolvedField(field)}
                     data-testid={`worker-unresolved-go-${field}`}
