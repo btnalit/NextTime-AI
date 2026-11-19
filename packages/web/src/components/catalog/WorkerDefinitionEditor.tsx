@@ -1,6 +1,7 @@
 import {
   type AvailableGateInstanceWire,
   WORKER_DEFINITION_KIND_VALUES,
+  WORKER_DEFINITION_NAME_MAX_LENGTH,
   type WorkerDefinitionKind,
 } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
@@ -38,6 +39,7 @@ import type {
 } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../../lib/labels.js';
+import { nameOverflow, nameTooLongText } from '../../lib/name-input.js';
 import { hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
 import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
@@ -298,6 +300,20 @@ export function WorkerDefinitionEditor({
       : { ...current, egressDeny: normalized.text };
   }
 
+  /** #1476 follow-up: how far the name is past its cap. A new version may keep the name its
+   *  definition already has, which the kernel does not check again; a new definition may not. */
+  function nameOverFor(asNewDefinition: boolean): number {
+    const kept =
+      newVersionOf && !asNewDefinition
+        ? definitionName([newVersionOf], newVersionOf.id, newVersionOf.version)
+        : undefined;
+    return form.name.trim() === kept
+      ? 0
+      : nameOverflow(form.name, WORKER_DEFINITION_NAME_MAX_LENGTH);
+  }
+  const nameOver = nameOverFor(false);
+  const focusName = useFocusAfterRender();
+
   function update<K extends keyof WorkerDefinitionForm>(key: K, value: WorkerDefinitionForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
     if (errors[key]) setErrors((prev) => ({ ...prev, [key]: '' }));
@@ -335,9 +351,11 @@ export function WorkerDefinitionEditor({
     const normalizedForm = normalizeEgressDeny(form);
     if (normalizedForm !== form) setForm(normalizedForm);
     const validated = validateWorkerDefinition(normalizedForm, t);
-    if (!validated.ok) {
-      setErrors(validated.errors);
+    const nameTooLong = nameOverFor(asNewDefinition) > 0;
+    if (!validated.ok || nameTooLong) {
+      setErrors(validated.ok ? {} : validated.errors);
       setView('form');
+      if (nameTooLong) focusName(() => document.getElementById('wd-name'));
       return;
     }
     setErrors({});
@@ -534,13 +552,20 @@ export function WorkerDefinitionEditor({
                 ))}
               </Select>
             </Field>
-            <Field id="wd-name" label={t('名称', 'Name')} error={fieldError('name')}>
+            <Field
+              id="wd-name"
+              label={t('名称', 'Name')}
+              error={
+                fieldError('name') ??
+                nameTooLongText(nameOver, WORKER_DEFINITION_NAME_MAX_LENGTH, t)
+              }
+            >
               <Input
                 id="wd-name"
                 value={form.name}
                 onChange={(event) => update('name', event.target.value)}
                 disabled={busy}
-                invalid={!!errors.name}
+                invalid={!!errors.name || nameOver > 0}
               />
             </Field>
             <Field

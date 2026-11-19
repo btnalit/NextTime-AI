@@ -326,6 +326,36 @@ describe('MembersPage', () => {
     expect(create.disabled).toBe(false);
   });
 
+  it('#1476 follow-up: a service credential display name past 128 characters is flagged in place and not sent', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [principal()] }),
+      create_principal: () => {
+        throw new Error('create_principal must not run for a name past the cap');
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+
+    openMembersHeaderMenu();
+    fireEvent.click(screen.getByTestId('members-service-credential-trigger'));
+    const form = await screen.findByTestId('create-principal-form');
+    const name = within(form).getByLabelText(/显示名/);
+    fireEvent.change(name, { target: { value: 'b'.repeat(131) } });
+    expect(form.textContent).toContain('最多 128 个字符，现在多了 3 个。');
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    const create = within(form).getByRole('button', { name: '创建' }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(within(form).getByTestId('create-principal-missing').textContent).toContain(
+      '缩短显示名',
+    );
+    fireEvent.submit(form);
+    expect(http.calls.some((call) => call.name === 'create_principal')).toBe(false);
+
+    fireEvent.change(name, { target: { value: 'b'.repeat(128) } });
+    expect(form.textContent).not.toContain('最多 128 个字符');
+    expect(create.disabled).toBe(false);
+  });
+
   it('R-06: choosing owner for a new service credential opens the irreversible confirm; cancelling creates nothing', async () => {
     const http = scriptedHttp({
       list_principals: () => ({ items: [principal()] }),

@@ -1,5 +1,6 @@
 import {
   type CreateUserResultWire,
+  DISPLAY_NAME_MAX_LENGTH,
   type PlatformRoleWire,
   ROLE_VALUES,
   type Role,
@@ -15,6 +16,7 @@ import {
   normalizeLoginInput,
   suggestLoginFromDisplayName,
 } from '../../lib/login-input.js';
+import { nameOverflow, nameTooLongText } from '../../lib/name-input.js';
 import { passwordLengthNeed, passwordLengthProblem } from '../../lib/password-rule.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
@@ -93,14 +95,20 @@ export function CreateUserForm({
   const passwordProblem = passwordMode === 'custom' ? passwordLengthProblem(password, t) : null;
   const passwordTooShort = passwordProblem !== null;
   const joinsAWorkspace = workspaceChoice !== NO_WORKSPACE;
+  const displayNameOver = nameOverflow(displayName, DISPLAY_NAME_MAX_LENGTH);
   const ready =
     trimmedLogin.length > 0 &&
     !loginInvalid &&
     displayName.trim().length > 0 &&
+    displayNameOver === 0 &&
     (passwordMode === 'auto' || (password.length > 0 && passwordProblem === null));
   // DoD item 4: a disabled 创建 says what it still waits for (the field labels' own words).
   const missing = [
-    displayName.trim().length > 0 ? null : t('填写显示名', 'enter a display name'),
+    displayName.trim().length === 0
+      ? t('填写显示名', 'enter a display name')
+      : displayNameOver > 0
+        ? t('缩短显示名', 'shorten the display name')
+        : null,
     trimmedLogin.length === 0
       ? t('填写登录名', 'enter a login')
       : loginInvalid
@@ -149,12 +157,18 @@ export function CreateUserForm({
       noValidate
       data-testid="create-user-form"
     >
-      <Field id="cu-display-name" label={t('显示名', 'Display name')} required>
+      <Field
+        id="cu-display-name"
+        label={t('显示名', 'Display name')}
+        required
+        error={nameTooLongText(displayNameOver, DISPLAY_NAME_MAX_LENGTH, t)}
+      >
         <Input
           id="cu-display-name"
           value={displayName}
           onChange={(event) => changeDisplayName(event.target.value)}
           disabled={submitting}
+          invalid={displayNameOver > 0}
           autoFocus
         />
       </Field>

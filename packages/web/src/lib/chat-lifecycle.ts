@@ -1,4 +1,4 @@
-import type { ChatWire } from '@nexttime/shared';
+import { CHAT_TITLE_MAX_LENGTH, type ChatWire } from '@nexttime/shared';
 import type { CapabilityCaller } from './clients.js';
 import type { Translate } from './i18n.js';
 
@@ -22,8 +22,8 @@ import type { Translate } from './i18n.js';
 /** The list row / open chat's identity — the full wire shape, no local subset (S6-A). */
 export type ChatSummary = ChatWire;
 
-/** `rename_chat`'s ceiling (`packages/shared/src/capabilities.ts` `rename_chat.paramsSchema`). */
-export const CHAT_TITLE_MAX_CHARS = 200;
+/** `rename_chat`'s ceiling (`CHAT_TITLE_MAX_LENGTH`, packages/shared/src/name-limits.ts). */
+export const CHAT_TITLE_MAX_CHARS = CHAT_TITLE_MAX_LENGTH;
 
 /** What a chat with no title yet reads as: the kernel writes the auto-title when the first user
  *  message lands, so `title: null` means "nothing said yet", not "untitled forever". S8 W1-A9: a
@@ -41,16 +41,18 @@ export function isArchived(chat: Pick<ChatWire, 'archivedAt'>): boolean {
 }
 
 /** Client-side mirror of the kernel's `normalizeChatTitle` (application/chat/service.ts): one
- *  line, trimmed, inner whitespace collapsed, cut to `CHAT_TITLE_MAX_CHARS` *code points*;
- *  `null` when nothing printable is left — the rename form then refuses to submit rather than
- *  sending what the kernel's `regex(/\S/)` would 400. */
+ *  line, trimmed, inner whitespace collapsed; `null` when nothing printable is left — the rename
+ *  form then refuses to submit rather than sending what the kernel's `regex(/\S/)` would 400.
+ *  #1476 follow-up: cut to `CHAT_TITLE_MAX_CHARS` UTF-16 code units, the way `rename_chat`'s
+ *  `.max()` counts what it is sent — the kernel cuts to that many code points only after, so a
+ *  title cut by code points could still be refused (200 emoji are 400 units). A cut never splits
+ *  a surrogate pair. */
 export function normalizeChatTitle(raw: string): string | null {
   const collapsed = raw.replace(/\s+/g, ' ').trim();
   if (collapsed.length === 0) return null;
-  const chars = Array.from(collapsed);
-  return chars.length <= CHAT_TITLE_MAX_CHARS
-    ? collapsed
-    : chars.slice(0, CHAT_TITLE_MAX_CHARS).join('').trimEnd();
+  if (collapsed.length <= CHAT_TITLE_MAX_CHARS) return collapsed;
+  const cut = collapsed.slice(0, CHAT_TITLE_MAX_CHARS);
+  return (/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut).trimEnd();
 }
 
 /** Replaces the entry with `chat.id` in place (list order is the kernel's, newest first — a

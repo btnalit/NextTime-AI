@@ -1,4 +1,4 @@
-import type { OutputSchema } from '@nexttime/shared';
+import { NAME_MAX_LENGTH, type OutputSchema } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { byData, firstProblem, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
@@ -28,6 +28,7 @@ import { reviewFieldNames } from '../../lib/credential-review.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { nameOverflow, nameTooLongText } from '../../lib/name-input.js';
 import { type ParamProblem, paramProblemText } from '../../lib/operation-params.js';
 import {
   parsedProcedureParameters,
@@ -130,6 +131,13 @@ export function ProcedureEditor({
   );
   const [view, setView] = useState<View>('form');
   const [errors, setErrors] = useState<FieldErrors>({});
+  // #1476 follow-up: a new version may keep the name its Procedure already has (the kernel does
+  // not check it again); any other name, and a copy's, is held to the cap.
+  const nameOver =
+    nextVersionOf && form.name.trim() === nextVersionOf.name
+      ? 0
+      : nameOverflow(form.name, NAME_MAX_LENGTH);
+  const nameTooLong = nameTooLongText(nameOver, NAME_MAX_LENGTH, t);
   // #1296 UX P2-1 (legacy 775): by step key, its check's params fields that cannot be sent as
   // they are — not form data (nothing to keep or send), but the form refuses to submit over them.
   const [paramProblems, setParamProblems] = useState<
@@ -262,7 +270,7 @@ export function ProcedureEditor({
     const entryStep = form.steps.findIndex(
       (step) => step.kind === 'worker' && kindOf(step.definitionId) === 'entry',
     );
-    if (!validated.ok || entryStep !== -1 || blocked) {
+    if (!validated.ok || entryStep !== -1 || blocked || nameOver > 0) {
       setErrors({ ...(validated.ok ? {} : validated.errors), ...fieldProblems });
       setView('form');
       // Legacy 776: focus (and so the view) moves to the first problem said, not left on 保存
@@ -395,14 +403,19 @@ export function ProcedureEditor({
         />
       ) : (
         <>
-          <Field id="procedure-name" label={t('名称', 'Name')} required error={errors.name || null}>
+          <Field
+            id="procedure-name"
+            label={t('名称', 'Name')}
+            required
+            error={errors.name || nameTooLong}
+          >
             <Input
               id="procedure-name"
               value={form.name}
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
               disabled={busy}
-              invalid={!!errors.name}
-              aria-describedby={describedBy('procedure-name', false, !!errors.name)}
+              invalid={!!errors.name || nameOver > 0}
+              aria-describedby={describedBy('procedure-name', false, !!errors.name || nameOver > 0)}
             />
           </Field>
           <Field

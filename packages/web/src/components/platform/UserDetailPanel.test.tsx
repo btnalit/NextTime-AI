@@ -119,6 +119,28 @@ describe('UserDetailPanel', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, platformRole: 'admin' }));
   });
 
+  it('#1476 follow-up: a display name saved before the 128 cap saves back unchanged; a new one past it is held', async () => {
+    const row = user({ displayName: 'n'.repeat(200) });
+    const http = scriptedHttp({
+      update_user: (params) => {
+        expect(params).toEqual({ userId: 'u-1', platformRole: 'admin' });
+        return { ...row, platformRole: 'admin' };
+      },
+    });
+    const { onChanged } = renderPanel(http, row);
+    const name = screen.getByLabelText(/显示名/);
+    expect(screen.queryByText(/最多 128 个字符/)).toBeNull();
+    fireEvent.change(name, { target: { value: 'm'.repeat(130) } });
+    expect(screen.getByText('最多 128 个字符，现在多了 2 个。')).toBeTruthy();
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByRole('button', { name: '保存' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.change(name, { target: { value: row.displayName } });
+    fireEvent.change(screen.getByLabelText(/平台角色/), { target: { value: 'admin' } });
+    expect(screen.queryByText(/最多 128 个字符/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, platformRole: 'admin' }));
+  });
+
   it('budget: validates non-negative integers, empty = inherit (null), then set_user_budget', async () => {
     const row = user();
     const http = scriptedHttp({
