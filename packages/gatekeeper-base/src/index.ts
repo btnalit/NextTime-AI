@@ -128,6 +128,7 @@ export type { NetworkFailureDelivery } from './network-failure.js';
 export { failedAfterAnswer, failedBeforeAnswer } from './kinds/call-failure.js';
 
 export {
+  canonicalBinding,
   canonicalJson,
   operationDefinition,
   operationDefinitionDigest,

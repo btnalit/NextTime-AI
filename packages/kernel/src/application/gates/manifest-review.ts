@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { canonicalJson } from '@nexttime/gatekeeper-base';
+import { canonicalBinding, canonicalJson } from '@nexttime/gatekeeper-base';
 import {
   type GateOperationSummaryWire,
   OPERATION_BINDING_KEYS,
@@ -23,7 +23,9 @@ import {
  *   - `isReviewedManifestChange`: does the announcement change the Operation set or any reviewed
  *     field of an Operation? Every field counts except `description` (documentation, editable in
  *     the catalog anyway), so a gate restart that re-announces the same manifest — the normal
- *     case — is never a change, whatever the order of its Operations or keys.
+ *     case — is never a change, whatever the order of its Operations or keys, or of the answers an
+ *     Operation reads as "does not exist" (a set: `canonicalBinding`, the form the Operation digest
+ *     hashes — UX acceptance of #1490).
  *   - `manifestDigest`: a stable digest of a stored manifest (`gate_instances.operations` or
  *     `pending_operations`), the version token a confirm carries back. Computed over the stored
  *     JSON with object keys sorted, so the same stored value always digests the same.
@@ -42,10 +44,11 @@ export function manifestDigest(storedManifest: unknown): string {
     .digest('hex');
 }
 
-/** An Operation minus the fields a change to which needs no review. */
+/** An Operation minus the fields a change to which needs no review, its binding in canonical form
+ *  (`canonicalBinding`). */
 function reviewedFields(operation: Operation): Record<string, unknown> {
   const { description: _description, ...reviewed } = operation;
-  return reviewed;
+  return { ...reviewed, binding: canonicalBinding(operation.binding) };
 }
 
 function reviewedKey(operations: readonly Operation[]): string {
@@ -72,11 +75,23 @@ function absentAnswersOf(operation: Operation): OperationAbsentAnswersWire | nul
     : { exitCodes: [...answers.exitCodes] };
 }
 
+/** `answers` in ascending order — how two declarations are compared (`canonicalBinding`). */
+function ascendingAnswers(
+  answers: OperationAbsentAnswersWire | null,
+): OperationAbsentAnswersWire | null {
+  if (answers === null) return null;
+  const ascending = (values: readonly number[]) => [...values].sort((a, b) => a - b);
+  return 'statuses' in answers
+    ? { statuses: ascending(answers.statuses) }
+    : { exitCodes: ascending(answers.exitCodes) };
+}
+
 /** The keys of the binding that differ between `before` and `after`, sorted — names from the
- *  binding schema only (a key one kind has and the other lacks counts as changed). */
+ *  binding schema only (a key one kind has and the other lacks counts as changed), compared in
+ *  canonical form, so a declaration only reordered is not one of them. */
 function bindingChangedFields(before: Operation, after: Operation): string[] {
-  const previous: Record<string, unknown> = before.binding;
-  const next: Record<string, unknown> = after.binding;
+  const previous: Record<string, unknown> = canonicalBinding(before.binding);
+  const next: Record<string, unknown> = canonicalBinding(after.binding);
   return OPERATION_BINDING_KEYS.filter(
     (key) => canonicalJson(previous[key]) !== canonicalJson(next[key]),
   ).sort();
@@ -151,7 +166,9 @@ export function diffAnnouncedManifest(
             gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),
           }
         : {}),
-      ...(canonicalJson(absentBefore) !== canonicalJson(absentAfter)
+      // Shown as each side declares it, only when the answers themselves differ (not their order).
+      ...(canonicalJson(ascendingAnswers(absentBefore)) !==
+      canonicalJson(ascendingAnswers(absentAfter))
         ? { absentAnswers: { before: absentBefore, after: absentAfter } }
         : {}),
     });

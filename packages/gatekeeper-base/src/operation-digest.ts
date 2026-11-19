@@ -30,6 +30,14 @@ import type { z } from 'zod';
  * unknown keys. They are then serialized with sorted object keys, and `undefined` members are
  * left out. The kernel's copy comes back from jsonb with its keys reordered and its `undefined`s
  * gone, and still hashes the same as the gate's in-memory one.
+ *
+ * The answers an observe call reads as "does not exist" are a set, not a list: the gate checks
+ * whether the target's answer is one of them, never where it stands (`operationAbsentAnswers`,
+ * `isDeclaredAbsence`). So they are hashed in ascending order (`canonicalBinding`). A gate that
+ * re-announces `[410, 404]` for `[404, 410]` runs the same Operation, and neither its manifest is
+ * held for review nor its calls refused for it (UX acceptance of #1490). A base before this one
+ * hashed them as written, so for an Operation that declares them out of ascending order the two
+ * digests differ: listing them in ascending order hashes the same in every version.
  */
 
 const OperationDefinitionSchema = OperationFieldsSchema.pick({
@@ -60,13 +68,33 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-/** The fields the digest covers, from `operation` (see the module comment). Throws a `ZodError`
- *  when one of them is missing or malformed. */
+type OperationBinding = OperationDefinition['binding'];
+
+const ascending = (values: readonly number[]): number[] => [...values].sort((a, b) => a - b);
+
+/** `binding` with the answers it reads as "does not exist" (`absent_statuses` /
+ *  `absent_exit_codes`) in ascending order — the one canonical form of a declaration whose order
+ *  carries no meaning (module comment). Everything else is left as it is. */
+export function canonicalBinding<B extends OperationBinding>(binding: B): B {
+  if (binding.kind === 'http' && binding.absent_statuses !== undefined) {
+    return { ...binding, absent_statuses: ascending(binding.absent_statuses) };
+  }
+  if (
+    (binding.kind === 'cli' || binding.kind === 'ssh') &&
+    binding.absent_exit_codes !== undefined
+  ) {
+    return { ...binding, absent_exit_codes: ascending(binding.absent_exit_codes) };
+  }
+  return binding;
+}
+
+/** The fields the digest covers, from `operation` (see the module comment), its binding in
+ *  canonical form. Throws a `ZodError` when one of them is missing or malformed. */
 export function operationDefinition(operation: unknown): OperationDefinition {
   const parsed = OperationDefinitionSchema.parse(operation);
   return {
     name: parsed.name,
-    binding: parsed.binding,
+    binding: canonicalBinding(parsed.binding),
     params_schema: parsed.params_schema,
     ...(parsed.result_mapping !== undefined ? { result_mapping: parsed.result_mapping } : {}),
     mode: parsed.mode,
