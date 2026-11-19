@@ -161,8 +161,9 @@ export async function startCaseTrial(
 
 /**
  * After the transaction that started the run commits: starts its trial's Task — the spawn, then
- * `running`; a start that fails fails the Task `spawn_failed` (or the seal stopped it), and the
- * runner records the trial `errored` — and returns the run as it is then.
+ * `running`; a start that fails fails the Task `spawn_failed` (`evaluation_withheld` or
+ * `evaluation_paused` when the seal stopped it), and the runner records the trial `errored` — and
+ * returns the run as it is then.
  */
 export async function startCaseTrialTask(
   pool: PoolLike,

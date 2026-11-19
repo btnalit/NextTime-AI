@@ -707,7 +707,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, created.prepared.task.id],
         ),
       );
-      expect(task.rows[0]).toEqual({ status: 'failed', failure_reason: 'spawn_failed' });
+      expect(task.rows[0]).toEqual({ status: 'failed', failure_reason: 'evaluation_paused' });
       expect((await auditRows(SEAL_HOLD_REFUSED_ACTION)).at(-1)).toMatchObject({
         actor_principal_id: evaluationPrincipalId,
         resource_type: 'task',

@@ -1,4 +1,9 @@
-import { IllegalTransition, TASK_TRANSITIONS, storableText } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  TASK_TRANSITIONS,
+  type TaskFailureReason,
+  storableText,
+} from '@nexttime/shared';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type {
@@ -119,6 +124,17 @@ export interface SpawnWorkerRunInput {
   readonly upstream?: readonly TaskUpstreamFilesInput[];
 }
 
+/** Legacy 515: the reason a Task whose run `spawnWorkerRun` could not start fails with — its own
+ *  when the evaluation seal refused the start (`evaluation_withheld`: what the Worker would start
+ *  with carries content reserved for evaluation; `evaluation_paused`: the seal has paused the
+ *  agents acting for the Principal it runs for), so it reads as something the person who started
+ *  it cannot fix by retrying; otherwise `fallback`, the caller's reason for a failed start. */
+export function failedStartReason(err: unknown, fallback: TaskFailureReason): TaskFailureReason {
+  if (err instanceof EvaluationContentWithheldError) return 'evaluation_withheld';
+  if (err instanceof EvaluationProbeHoldError) return 'evaluation_paused';
+  return fallback;
+}
+
 /** Creates one WorkerRun row (`provisioning`), its `kind='worker_run'` Activity (S2.7 egress
  *  attribution seam), and its child Handle, all in one transaction; then — *outside* any
  *  transaction — calls the supervisor's `/task/spawn` and records the outcome in a second short
@@ -126,7 +142,8 @@ export interface SpawnWorkerRunInput {
  *  Returns the final `WorkerRunRow` (already `running` on success). Throws whatever the supervisor
  *  client throws (`TaskSupervisorError`) after marking the WorkerRun `terminated` and revoking its
  *  Handle on a spawn failure — the caller decides what "failed to even start" means for the Task
- *  (initial spawn: `spawn_failed`; requeue: `worker_failed`, no further retry) and fails it through
+ *  (initial spawn: `spawn_failed`; requeue: `worker_failed`, no further retry; either way the
+ *  seal's own reason when it refused the start, `failedStartReason`) and fails it through
  *  `lifecycle.ts`'s `failTaskAndReapWorkerRuns` (R-09), which also best-effort stops a container
  *  the supervisor may have started after the client gave up. Throws `IllegalTransition` before
  *  creating anything when the Task is already terminal (R-58). */

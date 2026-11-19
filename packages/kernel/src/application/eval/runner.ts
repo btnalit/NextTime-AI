@@ -401,9 +401,14 @@ async function pausedWhileRunning(
 }
 
 /** How a failed Task's trial reads otherwise: its failure reason, or `worker_failed` for one
- *  outside the known set. */
+ *  outside the known set. A start the evaluation seal refused (legacy 515) is read by the checks
+ *  before this one (`startWithheld`, `pausedWhileRunning`); mapping its reason to the trial's own
+ *  words, `withheld` or `paused`, is only the fallback should they miss it — so a stage counts it
+ *  the same way however the Task's failure was found. */
 function failureOf(task: { readonly failure_reason: string | null }): EvalTrialError {
   const reason = task.failure_reason;
+  if (reason === 'evaluation_withheld') return 'withheld';
+  if (reason === 'evaluation_paused') return 'paused';
   return reason !== null &&
     KNOWN_ERRORS.has(reason) &&
     reason !== 'cancelled' &&

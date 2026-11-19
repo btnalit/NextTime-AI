@@ -36,7 +36,7 @@ import { failTaskAndReapWorkerRuns, reactToSupervisorStatus } from './lifecycle.
 import { narrowObserveScope, readTaskObserveScope } from './observe-scope.js';
 import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
-import { spawnWorkerRun } from './spawn.js';
+import { failedStartReason, spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
   InvokeWorkerDefinitionNotEnabledError,
@@ -714,7 +714,13 @@ export async function invokeWorkerCreate(
     // best-effort stopped. The Task write stays status-guarded (leftover 67, `failTaskRow`): the
     // Task this function just inserted is `queued` here, but a concurrent `cancelTask` may have
     // moved it on — that status is left as is, with no `task.fail` audit row.
-    await failTaskAndReapWorkerRuns(deps, workspaceId, caller.principalId, task.id, 'spawn_failed');
+    await failTaskAndReapWorkerRuns(
+      deps,
+      workspaceId,
+      caller.principalId,
+      task.id,
+      failedStartReason(err, 'spawn_failed'),
+    );
     throw err;
   }
 

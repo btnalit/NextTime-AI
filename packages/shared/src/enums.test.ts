@@ -186,6 +186,8 @@ const enumsUnderTest = [
       'budget_exhausted',
       'terminated',
       'model_refused',
+      'evaluation_withheld',
+      'evaluation_paused',
     ],
   ],
   [

@@ -159,8 +159,8 @@ function sealNote(
       };
     case 'worker_start':
       return {
-        zh: '这个任务的 Worker 要拿到的内容（任务输入、系统提示词或技能）里有评测用例集保留的内容，Worker 没有启动，任务记为启动失败。',
-        en: 'What this task’s Worker would have started with (its input, system prompt or Skills) held content an evaluation suite keeps back, so the Worker was not started and the task failed to start.',
+        zh: '这个任务的 Worker 要拿到的内容（任务输入、系统提示词或技能）里有评测用例集保留的内容，Worker 没有启动，任务失败了。',
+        en: 'What this task’s Worker would have started with (its input, system prompt or Skills) held content an evaluation suite keeps back, so the Worker was not started and the task failed.',
       };
     case 'entry_turn':
       return {

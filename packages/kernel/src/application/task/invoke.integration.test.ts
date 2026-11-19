@@ -1179,6 +1179,47 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
     });
 
+    it('legacy 515: a retry the evaluation seal pauses fails the Task with evaluation_paused, not worker_failed', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('l515-retry-paused');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      // The agents of whom the Task is on behalf are paused between the first start and the retry.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+           values ($1, $2, 3, '{"capabilityResult": 0, "capabilityError": 0, "workerStart": 3}')`,
+          [workspaceId, principalId],
+        ),
+      );
+      try {
+        await reactToSupervisorStatus(
+          runtimeDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+
+        expect(supervisorClient.spawnCalls).toHaveLength(1); // the retry never reached a container
+        const task = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(task?.status).toBe('failed');
+        expect(task?.failureReason).toBe('evaluation_paused');
+        expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+      } finally {
+        // A pause is never deleted (worker/0011); it is released.
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `update eval_seal_holds
+                set status = 'released', released_at = now(), released_by = $2,
+                    release_reason = 'cleared in a test'
+              where workspace_id = $1 and principal_id = $2 and status = 'active'`,
+            [workspaceId, principalId],
+          ),
+        );
+      }
+    });
+
     /** The scope of `workerRunId`'s own Handle. */
     async function runHandleScope(principalId: string, workerRunId: string) {
       return inTx(principalId, async (client) => {
