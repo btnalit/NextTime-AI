@@ -507,3 +507,98 @@ describe('TasksPage: a Task on a deprecated Worker version (legacy 264)', () => 
     expect(within(detail).getByTestId('task-definition-deprecated').textContent).toBe('v1 已弃用');
   });
 });
+
+// Legacy 550 / 551: a planning Task's row showed the planner's raw JSON input as its title and the
+// planner's stored English name 「Goal planner」 as its definition.
+describe('TasksPage: a goal planner’s or reviewer’s Task (legacy 550, 551)', () => {
+  it('names the goal it works for and the planner in the reader’s language; the detail keeps the input', async () => {
+    const plannerInput = {
+      goal: { statement: '清理主机上的旧镜像', pauseReason: 'step_failure' },
+      steps: [{ key: 'list', status: 'failed', attempts: 2 }],
+    };
+    const http = scriptedHttp({
+      list_tasks: () => ({
+        items: [
+          task({
+            id: 'task-plan',
+            purpose: 'planning',
+            workerDefinitionId: 'wd-planner',
+            input: plannerInput,
+          }),
+          task({
+            id: 'task-review',
+            purpose: 'review',
+            workerDefinitionId: 'wd-reviewer',
+            input: { goal: { statement: '清理主机上的旧镜像' }, criteria: [] },
+          }),
+        ],
+      }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-planner',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            goalPlanner: true,
+            definition: { name: 'Goal planner' },
+          },
+        ],
+      }),
+      list_action_requests: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <TasksPage
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            selectedId="task-plan"
+            onSelect={vi.fn()}
+            onOpenApproval={vi.fn()}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    const rows = await screen.findAllByTestId('task-row');
+    const [plan, review] = rows as [HTMLElement, HTMLElement];
+    await waitFor(() => expect(plan.textContent).toContain('目标规划器'));
+    expect(plan.textContent).toContain('目标：清理主机上的旧镜像');
+    expect(plan.textContent).not.toContain('{');
+    expect(plan.textContent).not.toContain('Goal planner');
+    expect(review.textContent).toContain('目标评审器');
+    expect(review.textContent).toContain('目标：清理主机上的旧镜像');
+
+    const detail = await screen.findByTestId('task-detail');
+    expect(within(detail).getByTestId('task-goal-statement').textContent).toBe(
+      '目标：清理主机上的旧镜像',
+    );
+    expect(within(detail).getByTestId('task-definition').textContent).toContain('目标规划器');
+    // The planner's input itself is still there to read.
+    expect(detail.textContent).toContain('step_failure');
+  });
+
+  it('an ordinary Task keeps its own request as the title', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [task({ input: { need: 'restart web' } })] }),
+      list_action_requests: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <TasksPage
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            onSelect={vi.fn()}
+            onOpenApproval={vi.fn()}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    const row = await screen.findByTestId('task-row');
+    expect(row.textContent).toContain('restart web');
+    expect(row.textContent).not.toContain('目标：');
+  });
+});
