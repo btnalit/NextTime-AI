@@ -3817,6 +3817,36 @@ function definitionItems(row: WorkerDefinitionSummary, t: Translate): KeyValueIt
   return items;
 }
 
+/** Legacy 541: a superseded draft can never be published again (legacy 742), so its 「我的草稿」
+ *  row offers 「丢弃」 itself — still behind the same confirmation as the detail's, never on its
+ *  own. Nothing for a draft that is not superseded: discarding a live draft stays in its detail. */
+function SupersededDraftDiscard({
+  row,
+  head,
+  busy,
+  onDiscard,
+}: {
+  readonly row: WorkerDefinitionSummary;
+  /** The family's newest published version, above this draft. */
+  readonly head: number;
+  readonly busy: boolean;
+  readonly onDiscard: (reason: string | undefined) => Promise<void>;
+}) {
+  const t = useT();
+  return (
+    <DiscardDraftConfirm
+      busy={busy}
+      target={`${workerLabel(row, t)} v${row.version}`}
+      description={t(
+        `这个定义已经发布了更新的 v${head}，这份草稿 v${row.version} 不能再发布。丢弃后草稿会被删除，无法恢复；已发布的版本不受影响。`,
+        `This definition already has a newer published version, v${head}, so this draft (v${row.version}) can no longer be published. Discarding deletes the draft permanently; the published versions are not affected.`,
+      )}
+      onConfirm={onDiscard}
+      testId={`workers-my-draft-discard-${workerKey(row)}`}
+    />
+  );
+}
+
 /**
  * Legacy 481: every published version of a definition stays `published`, so the status chip alone
  * does not say which one matters. On an entry version: whether the entry agent runs with it (the
@@ -4412,9 +4442,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: `${workerLabel(row, t)} ${t('已丢弃', 'discarded')}`,
+        // UX on #1508: the version too — another draft of the same name may be open.
+        title: `${workerLabel(row, t)} v${row.version} ${t('已丢弃', 'discarded')}`,
       });
-      selectRow(null);
+      // Legacy 541: a 「我的草稿」 row discards its draft without opening it — the detail open
+      // beside it (another row) stays.
+      if (itemId === workerKey(row)) selectRow(null);
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('discard_draft');
@@ -4648,35 +4681,48 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           <span className="section-title">{t('我的草稿', 'My drafts')}</span>
           <DraftExpiryNote testId="workers-my-drafts-expiry-note" />
           <List ariaLabel="My drafts" testId="workers-my-drafts-list">
-            {myDraftRows.map((row) => (
-              <ListRow
-                key={workerKey(row)}
-                testId="workers-my-draft-row"
-                selected={workerKey(row) === itemId}
-                onSelect={() => selectRow(workerKey(row))}
-              >
-                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="row-wrap">
-                    <span className="truncate">{workerLabel(row, t)}</span>
-                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
-                    <AgentDraftMark origin={row.origin} status={row.status} />
-                    <SupersededDraftMark head={supersededByOf(row)} />
+            {myDraftRows.map((row) => {
+              const supersededBy = supersededByOf(row);
+              return (
+                <ListRow
+                  key={workerKey(row)}
+                  testId="workers-my-draft-row"
+                  selected={workerKey(row) === itemId}
+                  onSelect={() => selectRow(workerKey(row))}
+                  trailing={
+                    canDiscard && supersededBy !== undefined ? (
+                      <SupersededDraftDiscard
+                        row={row}
+                        head={supersededBy}
+                        busy={busy === workerKey(row)}
+                        onDiscard={(reason) => discardWorkerDraft(row, reason)}
+                      />
+                    ) : undefined
+                  }
+                >
+                  <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                    <span className="row-wrap">
+                      <span className="truncate">{workerLabel(row, t)}</span>
+                      <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                      <AgentDraftMark origin={row.origin} status={row.status} />
+                      <SupersededDraftMark head={supersededBy} />
+                    </span>
+                    <StatusChip machine="publishable" status={row.status} size="s" />
                   </span>
-                  <StatusChip machine="publishable" status={row.status} size="s" />
-                </span>
-                <span className="truncate text-3">
-                  v{row.version}
-                  {sameName.has(row.id) ? (
-                    <>
-                      {' · '}
-                      <span className="mono" title={row.id} data-volatile="">
-                        {shortId(row.id)}
-                      </span>
-                    </>
-                  ) : null}
-                </span>
-              </ListRow>
-            ))}
+                  <span className="truncate text-3">
+                    v{row.version}
+                    {sameName.has(row.id) ? (
+                      <>
+                        {' · '}
+                        <span className="mono" title={row.id} data-volatile="">
+                          {shortId(row.id)}
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
+                </ListRow>
+              );
+            })}
           </List>
         </div>
       ) : null}

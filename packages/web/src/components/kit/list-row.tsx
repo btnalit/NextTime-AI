@@ -49,6 +49,9 @@ export interface ListRowProps {
   /** A 4px left accent border — the row's own emphasis colour (approvals: blast radius), never a
    *  fill on the whole row (design system v2: colour is a mark, not a background). */
   readonly accent?: ListRowAccent;
+  /** An action of the row's own (legacy 541: 「丢弃」 on a superseded draft), rendered beside the
+   *  row's button rather than inside it — a button may not hold another one. */
+  readonly trailing?: ReactNode;
   readonly testId?: string;
   readonly className?: string;
 }
@@ -65,12 +68,21 @@ export function ListRow({
   selected = false,
   onSelect,
   accent,
+  trailing,
   testId,
   className,
 }: ListRowProps) {
   const interactive = onSelect !== undefined;
   return (
-    <li className="border-b border-border last:border-b-0">
+    <li
+      className={cn(
+        'border-b border-border last:border-b-0',
+        trailing !== undefined && 'flex items-center gap-2 pr-4 transition-colors duration-150',
+        // The hover and selected surface spans the trailing action too (UX on #1508).
+        trailing !== undefined && interactive && 'hover:bg-surface-2',
+        trailing !== undefined && selected && 'bg-accent-soft',
+      )}
+    >
       {/* ux-lint-allow-disabled: a read-only row, not an action. */}
       <button
         type="button"
@@ -79,7 +91,7 @@ export function ListRow({
         onClick={onSelect}
         data-testid={testId}
         className={cn(
-          'flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors duration-150',
+          'flex w-full min-w-0 items-start gap-3 px-4 py-2.5 text-left transition-colors duration-150',
           accent !== undefined ? ACCENT_BORDER[accent] : 'border-l-4 border-l-transparent',
           interactive ? 'cursor-pointer hover:bg-surface-2' : 'cursor-default',
           selected && 'bg-accent-soft',
@@ -89,6 +101,7 @@ export function ListRow({
         {leading !== undefined ? <span className="mt-0.5 shrink-0">{leading}</span> : null}
         <span className="flex min-w-0 flex-1 flex-col gap-1 text-text">{children}</span>
       </button>
+      {trailing !== undefined ? <span className="shrink-0">{trailing}</span> : null}
     </li>
   );
 }
