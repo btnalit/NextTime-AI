@@ -31,6 +31,8 @@ const EXPECTED_CAPABILITY_NAMES = [
   'stop_agent',
   'get_chat_history',
   'subscribe_chat',
+  // legacy 255
+  'get_turn_tool_calls',
   // ontology
   'publish_ontology_version',
   'propose_ontology_change',

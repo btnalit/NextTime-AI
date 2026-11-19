@@ -58,3 +58,16 @@ export const ChatMessageWireSchema = z
   })
   .strict();
 export type ChatMessageWire = z.infer<typeof ChatMessageWireSchema>;
+
+/** Legacy 255: `get_turn_tool_calls` — one agent Turn's tool-call records: the Turn's Chat and the
+ *  `role: 'tool'` messages stored for it, exactly as `get_chat_history` returns them (redacted when
+ *  they were stored), oldest first. `truncated`: the Turn has more than the ones listed (at most
+ *  100 are returned). */
+export const TurnToolCallsWireSchema = z
+  .object({
+    chatId: z.string(),
+    items: z.array(ChatMessageWireSchema),
+    truncated: z.literal(true).optional(),
+  })
+  .strict();
+export type TurnToolCallsWire = z.infer<typeof TurnToolCallsWireSchema>;

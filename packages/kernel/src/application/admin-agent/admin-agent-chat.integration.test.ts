@@ -459,7 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const trial = await newTrial();
       const chat = await newAdminChat(trial);
       const entry = await call<ChatWire>(person(trial), 'new_chat', {});
-      await send(trial, chat.id);
+      const sent = await send(trial, chat.id);
       await call(person(trial), 'stop_agent', { chatId: chat.id });
       const listIds = async () =>
         (await call<{ items: ChatWire[] }>(person(trial), 'list_chats', {})).items.map(
@@ -473,6 +473,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         () => call(person(trial), 'rename_chat', { chatId: chat.id, title: 'renamed' }),
         // #937 C06: subscribing reads the Chat too.
         () => call(person(trial), 'subscribe_chat', { chatId: chat.id }),
+        // Legacy 255: so does reading one of its Turns' tool calls.
+        () => call(person(trial), 'get_turn_tool_calls', { turnId: sent.turnId }),
       ];
 
       await withSwitchOff(async () => {

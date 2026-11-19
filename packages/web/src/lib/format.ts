@@ -148,6 +148,20 @@ export function formatTimeSeconds(iso: string | null | undefined): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+/** `HH:mm:ss` on `now`'s local day, `MM-DD HH:mm:ss` on any other (`YYYY-MM-DD HH:mm:ss` in another
+ *  year) — for a time read long after it happened, where the clock alone could be any day (legacy
+ *  255, UX review on #1517: the audit page's tool calls of a Turn that may be days old or cross
+ *  midnight). */
+export function formatTimeSecondsDated(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  const ms = parse(iso);
+  if (ms === undefined) return '—';
+  const clock = formatTimeSeconds(iso);
+  return localDayStart(ms) === localDayStart(now) ? clock : `${formatShortDate(ms, now)} ${clock}`;
+}
+
 /** `MM-DD HH:mm:ss – HH:mm:ss (UTC+8)` — a span that usually starts and ends within a minute, to the
  *  second (legacy 164 ③: a tool call's hover). The end repeats its date (and the zone label shows
  *  on both sides) only when it falls on another day or in another offset; with no end it is the

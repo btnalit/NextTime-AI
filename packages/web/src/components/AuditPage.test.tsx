@@ -755,6 +755,71 @@ describe('AuditPage entry points', () => {
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
+  it('legacy 255: explaining an agent Turn lists the tool calls it made; any other chain reads none', async () => {
+    const turn = factExplain();
+    const http = scriptedHttp({
+      explain: () => ({
+        nodeType: 'activity',
+        activity: { ...turn.activity, id: 'turn-1', kind: 'agent_turn', metadata: {} },
+      }),
+      get_turn_tool_calls: () => ({
+        chatId: 'chat-1',
+        items: [
+          {
+            id: 'm2',
+            role: 'tool',
+            text: 'list_facts',
+            createdAt: '2026-11-19T00:00:00.000Z',
+            sequence: 2,
+            turnId: 'turn-1',
+            kind: 'tool_call',
+            content: {
+              kind: 'tool_call',
+              text: 'list_facts',
+              toolCallId: 'call-1',
+              name: 'list_facts',
+              outcome: 'done',
+              args: { text: '{}', totalChars: 2, truncated: false },
+              result: { text: '{"items":[]}', totalChars: 12, truncated: false },
+              redactedValues: 0,
+              startedAt: '2026-11-19T00:00:01.000Z',
+              endedAt: '2026-11-19T00:00:02.000Z',
+            },
+          },
+        ],
+      }),
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http, { nodeId: 'turn-1' });
+    const result = await screen.findByTestId('explain-result');
+    const calls = await within(result).findByTestId('explain-turn-tool-calls-list');
+    expect(http.calls.find((c) => c.name === 'get_turn_tool_calls')?.params).toEqual({
+      turnId: 'turn-1',
+    });
+    expect(
+      within(calls)
+        .getAllByTestId('tool-call-record')
+        .map((row) => row.getAttribute('data-tool-call-id')),
+    ).toEqual(['call-1']);
+    expect(within(result).getByTestId('explain-turn-tool-calls-chat').getAttribute('href')).toBe(
+      '#/work/chats/chat-1',
+    );
+    cleanup();
+
+    const other = scriptedHttp({
+      explain: () => factExplain(),
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(other, { nodeId: 'fact-1' });
+    await screen.findByTestId('explain-result');
+    expect(screen.queryByTestId('explain-turn-tool-calls')).toBeNull();
+    expect(other.calls.some((c) => c.name === 'get_turn_tool_calls')).toBe(false);
+  });
+
   it('reads the entry from the hash when the route table does not pass one', async () => {
     window.location.hash = '#/govern/audit?nodeId=fact-1';
     const http = scriptedHttp({

@@ -1102,3 +1102,51 @@ export async function getChatHistory(
 
   return nextCursor === undefined ? { messages } : { messages, nextCursor };
 }
+
+// -------------------------------------------------------------------------------------------
+// Turn tool calls (legacy 255)
+// -------------------------------------------------------------------------------------------
+
+/** The most tool-call records `getTurnToolCalls` returns for one Turn. */
+export const MAX_TURN_TOOL_CALLS = 100;
+
+/** The Chat an agent Turn ran in: `activities.chat_id` of an Activity of kind `agent_turn`, under
+ *  RLS (`activities_visibility` mirrors `chats_visibility`). `null` when `activityId` is not such
+ *  an Activity the caller can see. */
+export async function findTurnChatId(
+  client: PoolClient,
+  workspaceId: string,
+  activityId: string,
+): Promise<string | null> {
+  const result = await client.query<{ chat_id: string | null }>(
+    `select chat_id from activities
+     where workspace_id = $1 and id = $2 and kind = 'agent_turn'`,
+    [workspaceId, activityId],
+  );
+  return result.rows[0]?.chat_id ?? null;
+}
+
+/**
+ * Legacy 255: the tool-call records stored for one Turn (`role='tool'`, `insertToolCallMessage`),
+ * oldest first, at most `limit` (`truncated` when there are more). The rows are read as
+ * `getChatHistory` reads them — the same Chat access check first, RLS on `chat_messages` — and
+ * returned as stored: they were redacted when written. The (chat, turn) pair is matched on the
+ * `(workspace_id, chat_id, sequence)` index; a Turn's rows all live in its own Chat.
+ */
+export async function getTurnToolCalls(
+  client: PoolClient,
+  workspaceId: string,
+  input: { readonly chatId: string; readonly turnId: string; readonly limit?: number },
+): Promise<{ readonly messages: readonly ChatMessageRow[]; readonly truncated: boolean }> {
+  await requireChatAccess(client, workspaceId, input.chatId);
+  const limit = input.limit ?? MAX_TURN_TOOL_CALLS;
+  const result = await client.query<ChatMessageDbRow>(
+    `select ${CHAT_MESSAGE_COLUMNS} from chat_messages
+     where workspace_id = $1 and chat_id = $2 and turn_id = $3 and role = 'tool'
+     order by sequence asc
+     limit $4`,
+    [workspaceId, input.chatId, input.turnId, limit + 1],
+  );
+  const rows = result.rows.map(mapChatMessageRow);
+  return { messages: rows.slice(0, limit), truncated: rows.length > limit };
+}
