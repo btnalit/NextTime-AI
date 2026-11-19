@@ -93,7 +93,9 @@ const EffectiveAgentProfileWireSchema = z
  *      `unknown` until one has been seen;
  *    - a gate the workspace connected itself: probed live, as `get_gatekeeper` probes it (the gate's
  *      own `/gate/health`, 3 s timeout, all gates at once, after the read's transaction has
- *      ended) — `ok`, `unreachable` or `unauthorized`, never `unknown`. */
+ *      ended) — `ok`, `unreachable` or `unauthorized`, never `unknown`.
+ *  Legacy 872: absent for a gate the workspace connected itself that the platform suspended — it is
+ *  not probed then, and no call to it gets through whatever it would answer. */
 export const AvailableGatekeeperWireSchema = z
   .object({
     gatekeeperId: z.string(),

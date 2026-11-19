@@ -26480,8 +26480,7 @@
         "status",
         "operationCount",
         "createdAt",
-        "operations",
-        "health"
+        "operations"
       ],
       "type": "object"
     },

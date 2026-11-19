@@ -44,13 +44,14 @@ import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
 import {
   type ReadinessReader,
   type ReasonSubject,
+  gateDownText,
   gateReasonAsk,
   gateReasonHref,
   gateReasonLink,
   gateReasonText,
   refusalKind,
 } from '../readiness/readiness-copy.js';
-import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
+import { announceReadinessChange, gateHealthDown } from '../readiness/useExecutionReadiness.js';
 import { GateAddressChangeSheet } from './GateAddressChangeSheet.js';
 import { GovernanceDriftNotice } from './GovernanceDriftNotice.js';
 
@@ -204,6 +205,20 @@ function isSelfPageHref(href: string | undefined): boolean {
   return href !== undefined && SELF_PAGE_HREFS.has(href);
 }
 
+/** Legacy 872: the gate's health when it makes an access that reads usable (`direct` /
+ *  `via_worker`) fail now — the gate does not answer or refuses the platform's credentials — the
+ *  same rule the readiness strip counts a gate as unusable by (`gateHealthDown`). `undefined` when
+ *  the access already reads unusable (its reason says why) or the gate is not known to be down. */
+function downNow(
+  status: ExecutionReadinessGateWire['status'],
+  health: string | undefined,
+):
+  | { readonly health: 'unreachable' | 'unauthorized'; readonly status: 'direct' | 'via_worker' }
+  | undefined {
+  if (status === 'unreachable' || !gateHealthDown(health)) return undefined;
+  return { health, status };
+}
+
 /** "Reachability for me" (V5): the viewing principal's own status is already on `gate` itself
  *  (`execution_readiness`'s baseline, self read) — no extra lookup, unlike a grantee row's, which
  *  needs a per-principal `execution_readiness` read (`readinessByPrincipal`, see `GranteeRow`).
@@ -212,22 +227,34 @@ function isSelfPageHref(href: string | undefined): boolean {
  * — the full reason sentence is the chip's own `title` tooltip, and the fully-spelled-out
  * version (+ fix-it link) moved into the "谁能用" detail sheet (`SystemAccessCard`'s own "你的
  * 可达性" section) so it is available on demand without crowding the row. */
-function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+function MyReachability({
+  gate,
+  health,
+}: {
+  readonly gate: ExecutionReadinessGateWire;
+  readonly health: string | undefined;
+}) {
   const t = useT();
-  const reason =
-    gate.status === 'unreachable'
+  // Legacy 872: a gate that is down now reads 「用不了」 here too, as on the readiness strip — the
+  // health chip beside it says which, the title why and that the access itself is unchanged.
+  const down = downNow(gate.status, health);
+  const shown = down ? 'unreachable' : gate.status;
+  const reason = down
+    ? gateDownText(down.health, down.status, t)
+    : gate.status === 'unreachable'
       ? gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))
       : undefined;
   return (
     <span
-      className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}
+      className={`chip chip-s ${GATE_STATUS_TONE[shown]}`}
       data-testid="gatekeeper-reachability"
       data-status={gate.status}
+      data-health={down?.health}
       title={reason}
     >
       {/* Legacy 245 e: it sits right after 「谁能用」's summary (「张三等 2 人」), so it says whose it
        *  is — never reads as 「张三 可直接调用」. */}
-      {t(`你：${gateStatusLabel(gate.status, t)}`, `You: ${gateStatusLabel(gate.status, t)}`)}
+      {t(`你：${gateStatusLabel(shown, t)}`, `You: ${gateStatusLabel(shown, t)}`)}
     </span>
   );
 }
@@ -278,19 +305,23 @@ function RefusedOperationsChip({ gate }: { readonly gate: ExecutionReadinessGate
  *  fix, else who to ask (audit P1-5). */
 function MyReachabilityDetail({
   gate,
+  health,
   reader,
 }: {
   readonly gate: ExecutionReadinessGateWire;
+  readonly health: string | undefined;
   readonly reader: ReadinessReader;
 }) {
   const t = useT();
   const href = gate.reason !== undefined ? gateReasonHref(gate.reason, reader) : undefined;
+  const down = downNow(gate.status, health);
+  const shown = down ? 'unreachable' : gate.status;
   return (
     <div className="row-wrap" data-testid="system-access-my-reachability">
-      <span className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}>
-        {gateStatusLabel(gate.status, t)}
-      </span>
-      {gate.status === 'unreachable' ? (
+      <span className={`chip chip-s ${GATE_STATUS_TONE[shown]}`}>{gateStatusLabel(shown, t)}</span>
+      {down ? (
+        <span className="text-3 text-small">{gateDownText(down.health, down.status, t)}</span>
+      ) : gate.status === 'unreachable' ? (
         <>
           <span className="text-3 text-small">
             {gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))}
@@ -610,7 +641,7 @@ export function SystemAccessCard({
         >
           {whoCanUseSummary(rows, directory, t)}
         </Button>
-        <MyReachability gate={gate} />
+        <MyReachability gate={gate} health={healthInfo.health} />
         <RefusedOperationsChip gate={gate} />
         {canRotateSecret && addressChangePending ? (
           <Button
@@ -802,7 +833,7 @@ export function SystemAccessCard({
             />
             <div className="stack-s">
               <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
-              <MyReachabilityDetail gate={gate} reader={reader} />
+              <MyReachabilityDetail gate={gate} health={healthInfo.health} reader={reader} />
             </div>
 
             <div className="stack-s" data-testid="system-access-list">
@@ -835,6 +866,7 @@ export function SystemAccessCard({
                       readinessLoading && !readinessByPrincipal.has(row.principalId)
                     }
                     gateId={gate.gateId}
+                    health={healthInfo.health}
                     isSelf={row.principalId === selfPrincipalId}
                     canRevoke={canManage && directory}
                     onRevoke={onRevoke}
@@ -918,6 +950,7 @@ function GranteeRow({
   readiness,
   readinessPending,
   gateId,
+  health,
   isSelf,
   canRevoke,
   onRevoke,
@@ -927,6 +960,9 @@ function GranteeRow({
   readonly readiness: ExecutionReadinessWire | undefined;
   readonly readinessPending: boolean;
   readonly gateId: string;
+  /** Legacy 872: the gate's own health (the card's) — a gate that is down fails every member's
+   *  calls, whatever their access reads. */
+  readonly health: string | undefined;
   readonly isSelf: boolean;
   readonly canRevoke: boolean;
   readonly onRevoke: (grantId: string) => Promise<void>;
@@ -938,6 +974,7 @@ function GranteeRow({
   // #541 review R2: another member's reasons are about their entry agent, not the reader's — a
   // setting only they change gets no link to the reader's own page.
   const about: ReasonSubject = isSelf ? 'me' : 'them';
+  const down = gateStatus !== undefined ? downNow(gateStatus.status, health) : undefined;
   const approver = row.principalRole !== undefined && gateGrantMakesApprover(row.principalRole);
 
   return (
@@ -970,6 +1007,15 @@ function GranteeRow({
         </span>
       ) : gateStatus === undefined ? (
         <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
+      ) : down ? (
+        <>
+          <span className="chip chip-warn chip-s" data-health={down.health}>
+            {t('用不了', 'Not usable')}
+          </span>
+          <span className="text-3 text-small">
+            {gateDownText(down.health, down.status, t, about)}
+          </span>
+        </>
       ) : gateStatus.status === 'direct' ? (
         <span className="chip chip-ok chip-s">{t('可直接调用', 'Callable directly')}</span>
       ) : gateStatus.status === 'via_worker' ? (

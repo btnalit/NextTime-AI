@@ -426,6 +426,39 @@ export function missingLinkLabel(
   }
 }
 
+/** Legacy 253 / 872: a gate the entry agent may reach (`direct` / `via_worker`) that does not answer
+ *  now (`unreachable`) or refuses the platform's credentials (`unauthorized`) — calls to it fail,
+ *  while the access itself is unchanged and works again once the gate does. One sentence for the
+ *  readiness strip and the system card (the reader's chip and every member's row in 「谁能用」), so
+ *  the two never disagree on a gate that is down. */
+export function gateDownText(
+  health: 'unreachable' | 'unauthorized',
+  status: 'direct' | 'via_worker',
+  t: Translate,
+  about: ReasonSubject = 'me',
+): string {
+  const back =
+    about === 'them'
+      ? status === 'direct'
+        ? t('这位成员的智能体照常可以直接调用它', 'their agent can call it directly again')
+        : t(
+            '这位成员的智能体照常可以委派 Worker 用它',
+            'their agent can use it through a Worker again',
+          )
+      : status === 'direct'
+        ? t('你的智能体照常可以直接调用它', 'your agent can call it directly again')
+        : t('你的智能体照常可以委派 Worker 用它', 'your agent can use it through a Worker again');
+  return health === 'unreachable'
+    ? t(
+        `门现在没有回应，调用它会失败；门恢复后，${back}。`,
+        `The gate is not answering right now, so calls to it fail; once it is back, ${back}.`,
+      )
+    : t(
+        `门拒绝了平台调用它用的凭据，调用它会失败；凭据对上后，${back}。`,
+        `The gate rejects the credentials the platform calls it with, so calls to it fail; once they match again, ${back}.`,
+      );
+}
+
 /** Console redesign M2: why one system is not usable by the entry agent (`gates[].reason`) — the
  *  same reason code `find_operations` hands the agent, so both say the same thing. `about` is whose
  *  entry agent: the reader's own (`me`, the default) or another member's row on 系统与授权's

@@ -232,15 +232,12 @@ export const executionReadinessHandler: CapabilityHandler = async (
 
   // Legacy 253: stored healths now; live probes only after this transaction has committed. Only
   // the gates the agent can reach (`direct` / `via_worker`) — health answers "would a call get
-  // through now", and for any other gate `reason` already says why none does. That leaves out a
-  // gate the platform suspended (`suspended_by_platform`): the kernel does not contact it on the
-  // workspace's behalf for a read.
+  // through now", and for any other gate `reason` already says why none does. A gate the platform
+  // suspended reads `suspended_by_platform` here, and `planGateHealths` never asks about one.
   const { stored, probes } = await planGateHealths(
     client,
     workspaceId,
-    reach.gates
-      .filter((gate) => gate.status !== 'unreachable' && !gate.platformSuspended)
-      .map((gate) => gate.gateId),
+    reach.gates.filter((gate) => gate.status !== 'unreachable').map((gate) => gate.gateId),
   );
   const withStored = { ...result, gates: withGateHealths(gates, stored) };
   if (probes.length === 0) return { ...done, result: withStored };

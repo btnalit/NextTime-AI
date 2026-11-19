@@ -216,14 +216,17 @@ export type GatekeeperPlatformSuspensionWire = z.infer<
 /** `get_gatekeeper`'s result: the summary plus its Operations and a live health probe. */
 export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   operations: z.array(OperationSummaryWireSchema),
-  health: z.enum(['ok', 'unreachable', 'unauthorized']),
+  /** The gate's own `/gate/health`, probed for this read. Legacy 872: absent while the platform
+   *  suspends this self-connected gate (`platformSuspension`) — the kernel does not contact it on
+   *  the workspace's behalf then, and no call to it gets through whatever it would answer. */
+  health: z.enum(['ok', 'unreachable', 'unauthorized']).optional(),
   /** Legacy 215: from the same live probe — `declared` when the gate says it refuses every call
    *  whose `operationDigest` is not its own definition's (legacy K; the gate's own word);
    *  `undeclared` when it answered without saying so — either a gate on `gatekeeper-base` from
    *  v0.46.0 up to legacy 215, which checks without saying so, or one on an earlier base or not
    *  built on it, which does not check and may run its own definition whatever was approved; the
    *  platform cannot tell which. Calls to it are not refused for it. Absent when the gate gave no
-   *  answer. */
+   *  answer, or was not asked (`health` absent). */
   operationDigestCheck: z.enum(['declared', 'undeclared']).optional(),
   /** Legacy 674: present only while the platform suspends this self-connected gate. Its
    *  Operations stay listed — kept, and refused on every call until it is resumed. */

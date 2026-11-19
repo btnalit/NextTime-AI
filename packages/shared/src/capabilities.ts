@@ -1323,7 +1323,8 @@ const connectionCapabilities = [
       'is listed only to its proposer, a builder or the owner (D-26, I16). Operations the ' +
       'connector deny list refuses are left out. Legacy 674: while the platform suspends a gate ' +
       'the workspace connected itself, platformSuspension says when and the reason given (never ' +
-      'who), and its Operations stay listed — kept, refused on every call until resumed. ' +
+      'who), and its Operations stay listed — kept, refused on every call until resumed; the ' +
+      'gate is not probed then, so health is absent (legacy 872). ' +
       'Legacy 701 / 715: for a workspace owner, a gate the workspace connected itself also ' +
       'carries its address, its open proposal to move (pendingAddressChange) and how its latest ' +
       'proposal that is no longer open ended (lastAddressChangeOutcome: applied — account ' +
@@ -3480,7 +3481,7 @@ const agentProfileCapabilities = [
       .strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Read one Principal’s AgentProfile — raw fields (scalars: null = inherit; lists: what the member excluded) plus the resolved `effective` values: everything currently granted / published minus the exclusions, capped by the workspace AgentPolicy. Omit principalId for the caller’s own; naming another principal requires owner. Legacy 200: with includeGateHealth true, each availableGatekeepers row carries health — for a gate enabled from the platform catalog, its instance’s stored health (unknown until the gate has announced); for a gate the workspace connected itself, a live probe of the gate’s own health endpoint (3 s timeout, all gates at once, after the read’s transaction has ended; ok, unreachable or unauthorized). Without it (the default) no gate is probed and no row carries health.',
+      'Read one Principal’s AgentProfile — raw fields (scalars: null = inherit; lists: what the member excluded) plus the resolved `effective` values: everything currently granted / published minus the exclusions, capped by the workspace AgentPolicy. Omit principalId for the caller’s own; naming another principal requires owner. Legacy 200: with includeGateHealth true, each availableGatekeepers row carries health — for a gate enabled from the platform catalog, its instance’s stored health (unknown until the gate has announced); for a gate the workspace connected itself, a live probe of the gate’s own health endpoint (3 s timeout, all gates at once, after the read’s transaction has ended; ok, unreachable or unauthorized); a gate the workspace connected itself that the platform suspended carries none and is not probed (legacy 872). Without it (the default) no gate is probed and no row carries health.',
   },
   {
     name: 'set_agent_profile',

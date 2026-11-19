@@ -152,12 +152,20 @@ export function GatekeeperDetailDrawer({
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>
         <dd>
-          <StatusChip
-            machine="gateHealth"
-            status={gate.health}
-            size="s"
-            testId="gatekeeper-health"
-          />
+          {gate.health !== undefined ? (
+            <StatusChip
+              machine="gateHealth"
+              status={gate.health}
+              size="s"
+              testId="gatekeeper-health"
+            />
+          ) : (
+            // Legacy 872: the platform suspended it — the kernel does not contact it then, and no
+            // call gets through whatever it would answer (the notice above says so).
+            <span className="text-3 text-small" data-testid="gatekeeper-health-not-checked">
+              {t('平台暂停期间不检查', 'Not checked while the platform suspends it')}
+            </span>
+          )}
         </dd>
         {gate.operationDigestCheck !== undefined ? (
           <>

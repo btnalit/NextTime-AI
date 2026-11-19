@@ -104,7 +104,7 @@ export function useReadinessGateHealth(
  *  (`unauthorized`) — calls to it fail now, whatever its reachability says. `unknown` (a catalog
  *  gate that has not announced yet) and no health at all say nothing. */
 export function gateHealthDown(
-  health: GateHealthWire | undefined,
+  health: GateHealthWire | string | undefined,
 ): health is 'unreachable' | 'unauthorized' {
   return health === 'unreachable' || health === 'unauthorized';
 }

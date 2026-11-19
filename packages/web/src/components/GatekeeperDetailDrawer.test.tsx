@@ -103,7 +103,7 @@ describe('GatekeeperDetailDrawer', () => {
         { name: 'notes.list', status: 'published', mode: 'observe' },
         { name: 'notes.archive', status: 'published', mode: 'execute' },
       ],
-      health: 'ok',
+      // Legacy 872: the kernel does not probe a suspended gate, so the read carries no health.
       platformSuspension: { suspendedAt: '2026-11-07T09:00:00.000Z', reason: '安全审查中' },
     });
     renderDrawer(http);
@@ -111,6 +111,10 @@ describe('GatekeeperDetailDrawer', () => {
     expect(notice.textContent).toContain('平台暂停了这个门');
     expect(notice.textContent).toContain('原因：安全审查中');
     expect(notice.textContent).toContain('请找平台管理员恢复它');
+    expect(screen.getByTestId('gatekeeper-health-not-checked').textContent).toBe(
+      '平台暂停期间不检查',
+    );
+    expect(screen.queryByTestId('gatekeeper-health')).toBeNull();
     expect(screen.getByText('notes.list')).toBeTruthy();
     expect(screen.getByText('notes.archive')).toBeTruthy();
     expect(screen.queryByText('这个门没有 Operation')).toBeNull();
@@ -125,7 +129,6 @@ describe('GatekeeperDetailDrawer', () => {
       operationCount: 0,
       createdAt: '2026-09-01T00:00:00.000Z',
       operations: [],
-      health: 'ok',
       platformSuspension: {
         suspendedAt: '2026-11-07T09:00:00.000Z',
         reason: 'token [redacted] leaked',
@@ -148,7 +151,6 @@ describe('GatekeeperDetailDrawer', () => {
       operationCount: 0,
       createdAt: '2026-09-01T00:00:00.000Z',
       operations: [],
-      health: 'ok',
       platformSuspension: { suspendedAt: '2026-11-07T09:00:00.000Z' },
     });
     renderDrawer(http);
