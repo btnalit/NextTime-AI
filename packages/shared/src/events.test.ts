@@ -220,6 +220,20 @@ describe('PlatformEventSchema', () => {
     ).toBe(false);
   });
 
+  it('legacy 162: chat.stream textDelta.paused is true or absent', () => {
+    const delta = (payload: Record<string, unknown>) =>
+      PlatformEventSchema.safeParse({
+        type: 'chat.stream',
+        chatId: 'chat1',
+        turnId: 'turn1',
+        payload: { streamKind: 'textDelta', delta: 'env: [redacted]', ...payload },
+      }).success;
+    expect(delta({ paused: true })).toBe(true);
+    expect(delta({})).toBe(true);
+    expect(delta({ paused: false })).toBe(false);
+    expect(delta({ paused: 'yes' })).toBe(false);
+  });
+
   it('rejects a chat.stream payload with an unknown streamKind', () => {
     expect(() =>
       PlatformEventSchema.parse({

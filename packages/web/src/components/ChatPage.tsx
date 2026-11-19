@@ -16,7 +16,6 @@ import {
   unstorableCharacterOf,
 } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
-import { liveOutputPaused } from '../lib/live-stream.js';
 import { hrefs } from '../lib/router.js';
 import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
@@ -281,7 +280,7 @@ export function ChatPage({
                     text={turn.streamingText}
                     trailing={<span className="streaming-caret" aria-hidden />}
                   />
-                  {liveOutputPaused(turn.streamingText) ? (
+                  {turn.streamPaused ? (
                     <p className="text-3 text-small" data-testid="chat-stream-paused">
                       {t(
                         '实时输出已暂停：这段内容可能含凭据，回复完成后会显示完整内容（凭据已替换）。',

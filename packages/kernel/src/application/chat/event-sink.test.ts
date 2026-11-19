@@ -1,6 +1,7 @@
 import { ToolCallMessageContentSchema } from '@nexttime/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { STREAM_HOLD_MAX_CHARS } from '../../governance/redaction/index.js';
 import type { AgentRuntimeEvent } from '../host-bridge/index.js';
 import { MAX_TOOL_CALL_RECORDS_PER_TURN, createChatEventSink } from './event-sink.js';
 import { _resetChatPushEventsForTests, subscribeToChatPushEvents } from './push.js';
@@ -346,6 +347,59 @@ describe('createChatEventSink — live text is scrubbed across deltas', () => {
     expect(liveText(received).join('')).toBe(
       'env says CAPABILITY_HANDLE=[redacted]\nHOME=/workspace',
     );
+  });
+
+  /** The live text deltas, with whether each said the stream paused. */
+  function deltas(received: readonly ChatPushEvent[]) {
+    return received.flatMap((e) =>
+      e.type === 'chat.stream' && e.payload.streamKind === 'textDelta'
+        ? [{ delta: e.payload.delta, paused: e.payload.paused }]
+        : [],
+    );
+  }
+
+  it('legacy 162: the delta that drops held text past the bound says the stream paused; none other does', async () => {
+    const { pool } = toolRecordPool([]);
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents('chat1', (e) => received.push(e));
+    const sink = createChatEventSink({ pool, log: () => {} });
+
+    await sink.handle(delta('here it is: '));
+    await sink.handle(delta('A'.repeat(STREAM_HOLD_MAX_CHARS + 1)));
+    await sink.handle(delta(' more that is not streamed'));
+    await sink.handle({
+      ...correlation(),
+      type: 'toolCallStarted',
+      toolCallId: 'tc1',
+      name: 'list_facts',
+      args: {},
+    });
+    await sink.handle(delta('after the tool '));
+
+    expect(deltas(received)).toEqual([
+      { delta: 'here it is: ', paused: undefined },
+      { delta: '[redacted]', paused: true },
+      { delta: 'after the tool ', paused: undefined },
+    ]);
+  });
+
+  it('legacy 162: a value scrubbed at the end of the text before a tool call is no pause', async () => {
+    const { pool } = toolRecordPool([]);
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents('chat1', (e) => received.push(e));
+    const sink = createChatEventSink({ pool, log: () => {} });
+
+    await sink.handle(delta(`token: ${HANDLE}`));
+    await sink.handle({
+      ...correlation(),
+      type: 'toolCallStarted',
+      toolCallId: 'tc1',
+      name: 'list_facts',
+      args: {},
+    });
+
+    expect(deltas(received)).toEqual([{ delta: 'token: [redacted]', paused: undefined }]);
+    expect(JSON.stringify(received)).not.toContain('"paused"');
   });
 });
 

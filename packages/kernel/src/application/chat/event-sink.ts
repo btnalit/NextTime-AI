@@ -175,10 +175,11 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
   const textStreamsByTurn = new Map<string, SecretStreamScrubber>();
 
   /** Publishes scrubbed live text, logging a replacement — the agent printed something that
-   *  looks like a secret. */
+   *  looks like a secret. A piece that paused the stream says so on its delta (legacy 162), so the
+   *  console shows the pause only then, not for every `[redacted]` that ends the live text. */
   function publishText(
     event: AgentRuntimeEvent,
-    text: { readonly value: string; readonly redactedValues: number },
+    text: { readonly value: string; readonly redactedValues: number; readonly paused?: true },
   ): void {
     if (text.redactedValues > 0) {
       log(
@@ -195,7 +196,11 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
       type: 'chat.stream',
       chatId: event.chatId,
       turnId: event.turnId,
-      payload: { streamKind: 'textDelta', delta: text.value },
+      payload: {
+        streamKind: 'textDelta',
+        delta: text.value,
+        ...(text.paused ? { paused: true as const } : {}),
+      },
     });
   }
 
