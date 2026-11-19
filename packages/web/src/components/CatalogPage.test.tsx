@@ -3938,6 +3938,14 @@ describe('CatalogPage — the editor’s success screen, Publish refused for nam
       'v3 引用了不存在的东西',
     );
     expect(reopened.textContent).toContain('这个工作区没有「gk-gone」这个门');
+    // UX P3 on #1512: focus starts at why, and the field it names is a button to that field.
+    const notice = within(reopened).getByTestId('worker-unresolved-notice');
+    await waitFor(() => expect(document.activeElement?.contains(notice)).toBe(true));
+    fireEvent.click(within(notice).getByTestId('worker-unresolved-go-gates'));
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toContain('这个工作区没有「gk-gone」这个门'),
+    );
+    expect(within(reopened).getByTestId('wd-gates').contains(document.activeElement)).toBe(true);
     // Saving replaces that draft (legacy 680), as the draft's own 「按这份草稿改一版」 does.
     fireEvent.click(within(reopened).getByTestId('worker-submit'));
     await waitFor(() =>
@@ -3980,9 +3988,10 @@ describe('CatalogPage — the editor’s success screen, Publish refused for nam
     expect(again.textContent).toContain('这个工作区没有「gk-gone」这个门');
     fireEvent.click(within(again).getByTestId('worker-publish-references-fix'));
     const reopened = await screen.findByTestId('worker-editor-drawer');
-    expect(within(reopened).getByTestId('worker-unresolved-notice').textContent).toContain(
-      'v3 引用了不存在的东西',
-    );
+    const notice = within(reopened).getByTestId('worker-unresolved-notice');
+    expect(notice.textContent).toContain('v3 引用了不存在的东西');
+    // From the detail too, focus starts at why (UX P3 on #1512), not on the tab above.
+    await waitFor(() => expect(document.activeElement?.contains(notice)).toBe(true));
   });
 });
 

@@ -4,9 +4,9 @@ import {
   WORKER_DEFINITION_NAME_MAX_LENGTH,
   type WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
-import { useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
+import { firstProblem, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
@@ -27,7 +27,9 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   DEFINITION_REFERENCE_FIELDS,
+  type DefinitionReferenceField,
   type DefinitionReferenceRefusal,
+  definitionReferenceFieldLabel,
   definitionReferenceFieldText,
 } from '../../lib/definition-reference.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
@@ -52,6 +54,7 @@ import {
   workerDraftPendingOf,
   workerDraftPendingText,
 } from '../../lib/worker-draft-pending.js';
+import { Button as KitButton } from '../kit/button.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { ModelHealthNote, ModelOption, withModelHealthNote } from '../kit/model-health.js';
 import { SameNameId } from '../kit/same-name-id.js';
@@ -317,6 +320,34 @@ export function WorkerDefinitionEditor({
   }
   const nameOver = nameOverFor(false);
   const focusName = useFocusAfterRender();
+  const focusAfterRender = useFocusAfterRender();
+  const formRef = useRef<HTMLFormElement>(null);
+  const unresolvedRef = useRef<HTMLDivElement>(null);
+  const unresolvedFields: readonly DefinitionReferenceField[] = unresolved
+    ? DEFINITION_REFERENCE_FIELDS.filter((field) => (unresolved[field]?.length ?? 0) > 0)
+    : [];
+  // Legacy 542 UX P3: opened on a refused publish, the reader starts at why — not at the page top.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, when the editor opens.
+  useEffect(() => {
+    if (unresolved) unresolvedRef.current?.focus();
+  }, []);
+  /** The named field's control (or its error, made focusable) — focused, so it scrolls into view. */
+  function goToUnresolvedField(field: DefinitionReferenceField): void {
+    const find = () => {
+      const container =
+        field === 'model'
+          ? document.getElementById('wd-model')?.closest<HTMLElement>('.field')
+          : formRef.current?.querySelector<HTMLElement>(`[data-testid="wd-${field}"]`);
+      return firstProblem(container) ?? container?.querySelector<HTMLElement>('input, select');
+    };
+    if (view === 'form') {
+      find()?.focus();
+      return;
+    }
+    // The JSON view has no fields: back to the form first, then to the field once it shows.
+    setView('form');
+    focusAfterRender(find);
+  }
 
   function update<K extends keyof WorkerDefinitionForm>(key: K, value: WorkerDefinitionForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -461,6 +492,7 @@ export function WorkerDefinitionEditor({
 
   return (
     <form
+      ref={formRef}
       className="stack"
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="worker-definition-editor"
@@ -508,12 +540,35 @@ export function WorkerDefinitionEditor({
         </Notice>
       )}
       {unresolved ? (
-        <Notice tone="warn" testId="worker-unresolved-notice">
-          {t(
-            `v${newVersionOf?.version ?? ''} 引用了不存在的东西，没能发布。下面标出了要改的字段：改好后保存，新草稿替换 v${newVersionOf?.version ?? ''}，再发布。`,
-            `v${newVersionOf?.version ?? ''} names what is not there and was not published. The fields to change are marked below: fix them and save (the new draft replaces v${newVersionOf?.version ?? ''}), then publish it.`,
-          )}
-        </Notice>
+        // Legacy 542 UX P3: opened on a refused publish, focus starts here (not at the top of the
+        // page), and each field it names is a button to that field — the gates may sit below a
+        // long list.
+        <div ref={unresolvedRef} tabIndex={-1}>
+          <Notice tone="warn" testId="worker-unresolved-notice">
+            <span className="stack-s">
+              <span>
+                {t(
+                  `v${newVersionOf?.version ?? ''} 引用了不存在的东西，没能发布。改好下面标出的字段后保存，新草稿替换 v${newVersionOf?.version ?? ''}，再发布。`,
+                  `v${newVersionOf?.version ?? ''} names what is not there and was not published. Fix the fields marked below and save (the new draft replaces v${newVersionOf?.version ?? ''}), then publish it.`,
+                )}
+              </span>
+              <span className="row-wrap">
+                {t('要改的字段：', 'Fields to change:')}
+                {unresolvedFields.map((field) => (
+                  <KitButton
+                    key={field}
+                    variant="ghost"
+                    size="s"
+                    onClick={() => goToUnresolvedField(field)}
+                    data-testid={`worker-unresolved-go-${field}`}
+                  >
+                    {definitionReferenceFieldLabel(field, t)}
+                  </KitButton>
+                ))}
+              </span>
+            </span>
+          </Notice>
+        </div>
       ) : null}
 
       <Tabs<View>
