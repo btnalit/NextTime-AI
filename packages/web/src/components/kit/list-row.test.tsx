@@ -85,4 +85,31 @@ describe('kit/list-row', () => {
     expect(screen.getByTestId('row-danger').className).toContain('border-l-danger');
     expect(screen.getByTestId('row-warn').className).toContain('border-l-warn');
   });
+
+  it('puts a trailing action beside the row button, not inside it (legacy 541)', () => {
+    const onSelect = vi.fn();
+    const onAction = vi.fn();
+    render(
+      <List ariaLabel="行列表">
+        <ListRow
+          testId="row-1"
+          onSelect={onSelect}
+          trailing={
+            <button type="button" data-testid="row-1-action" onClick={onAction}>
+              丢弃
+            </button>
+          }
+        >
+          <span>标题</span>
+        </ListRow>
+      </List>,
+    );
+    const row = screen.getByTestId('row-1');
+    const action = screen.getByTestId('row-1-action');
+    expect(row.contains(action)).toBe(false);
+    expect(row.parentElement?.contains(action)).toBe(true);
+    fireEvent.click(action);
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });
