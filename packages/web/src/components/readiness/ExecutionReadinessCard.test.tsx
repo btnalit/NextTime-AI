@@ -449,6 +449,43 @@ describe('ExecutionReadinessCard', () => {
   });
 });
 
+describe('ExecutionReadinessCard in a trial workspace (legacy 624)', () => {
+  it('with no system yet, says the admin agent asks to connect one, not that the entry agent has nothing', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ ready: false, gates: [], missing: [{ code: 'no_enabled_gate' }] }),
+    });
+    render(<ExecutionReadinessCard http={http} trialWorkspace={true} />);
+    const missing = await screen.findByTestId('execution-readiness-missing');
+    expect(missing.textContent).toContain('这个试验工作区还没有接入系统');
+    expect(missing.textContent).toContain('管理员智能体会在对话里申请接入');
+    expect(missing.textContent).not.toContain('还没有任何可以作用的系统');
+    // Enabling a gate by hand is still offered.
+    expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/systems');
+    expect(screen.getByTestId('execution-readiness-body').className).not.toContain('notice-warn');
+  });
+
+  it('with systems, names the entry agent in the summary', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ ready: false, gates: [gate({ gateId: 'g-1', name: 'CRM' })] }),
+    });
+    render(<ExecutionReadinessCard http={http} trialWorkspace={true} />);
+    const summary = await screen.findByTestId('execution-readiness-summary');
+    expect(summary.textContent).toBe('入口 agent（新对话）能用 1/1 个系统');
+  });
+
+  it('elsewhere the strip reads as before', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ ready: false, gates: [gate({ gateId: 'g-1', name: 'CRM' })] }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const summary = await screen.findByTestId('execution-readiness-summary');
+    expect(summary.textContent).toBe('我的智能体能用 1/1 个系统');
+  });
+});
+
 describe('ExecutionReadinessCard — by role (#541 acceptance must-fix 2)', () => {
   it('an auditor, who may not read readiness, gets no card and no request', async () => {
     const http = scriptedHttp({

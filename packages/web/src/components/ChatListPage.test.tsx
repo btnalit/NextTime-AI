@@ -97,6 +97,32 @@ function rowTitles(): string[] {
     .map((row) => row.querySelector('.data-row-title')?.textContent ?? '');
 }
 
+describe('ChatListPage for a platform administrator in a trial workspace (legacy 624)', () => {
+  it('passes the trial workspace to the readiness strip', async () => {
+    const http = scriptedClient({
+      execution_readiness: () => ({
+        principalId: 'p-1',
+        ready: false,
+        missing: [{ code: 'no_enabled_gate' }],
+        gates: [],
+        workers: [],
+      }),
+    });
+    render(
+      <ToastProvider>
+        <ChatListPage
+          client={scriptedClient({ list_chats: () => ({ items: [] }) })}
+          http={http}
+          onSelectChat={vi.fn()}
+          adminAgent={true}
+        />
+      </ToastProvider>,
+    );
+    const missing = await screen.findByTestId('execution-readiness-missing');
+    expect(missing.textContent).toContain('这个试验工作区还没有接入系统');
+  });
+});
+
 describe('ChatListPage filter (W1)', () => {
   it('loads once with includeArchived and shows only active chats by default, with the new-chat placeholder', async () => {
     const client = scriptedClient({ list_chats: () => ({ items: FIXTURE }) });
