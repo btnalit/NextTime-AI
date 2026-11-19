@@ -151,6 +151,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
     trialApprovals: [],
     planner: null,
     planningRounds: [],
+    requesterAgentsPaused: false,
     ...overrides,
   };
 }

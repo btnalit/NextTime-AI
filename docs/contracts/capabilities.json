@@ -30168,6 +30168,9 @@
           },
           "type": "array"
         },
+        "requesterAgentsPaused": {
+          "type": "boolean"
+        },
         "revisions": {
           "items": {
             "additionalProperties": false,
@@ -30956,7 +30959,8 @@
         "leftovers",
         "trialApprovals",
         "planner",
-        "planningRounds"
+        "planningRounds",
+        "requesterAgentsPaused"
       ],
       "type": "object"
     },

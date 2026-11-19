@@ -18,6 +18,7 @@ import {
   listStepsActionOutcomes,
   readActionRequestFailureReasons,
 } from '../../governance/approval/index.js';
+import { hasActiveSealHold } from '../eval-seal/index.js';
 import {
   type GoalStepAttempt,
   type RunConfigSnapshot,
@@ -666,6 +667,12 @@ export interface GoalRunDetail extends GoalRunSummary {
    *  every planning round of the run, oldest first (`planning-rounds.ts`). */
   readonly planner: GoalPlannerMode | null;
   readonly planningRounds: readonly PlanningRoundRow[];
+  /** UX P2 on #1486: whether the evaluation seal pauses the agents acting for the requester now
+   *  (an active `eval_seal_holds` row, S10 E3-2c) — then no Worker of this run starts, whatever the
+   *  plan, until the workspace owner releases it. Read live, so a released pause reads `false` at
+   *  once. Never tells an agent anything: while it is `true`, every call of an agent acting for the
+   *  requester — the only principal a Handle reads runs of — is refused (`assertNoSealHold`). */
+  readonly requesterAgentsPaused: boolean;
 }
 
 /** `get_goal`: everything the goal page shows of a run `viewer` may read. */
@@ -748,6 +755,7 @@ export async function readGoalRunDetail(
     ),
     planner: await readGoalPlannerMode(client, workspaceId, goalRunId),
     planningRounds: await listPlanningRounds(client, workspaceId, goalRunId),
+    requesterAgentsPaused: await hasActiveSealHold(client, workspaceId, goal.onBehalfOf),
   };
 }
 

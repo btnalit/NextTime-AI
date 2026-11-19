@@ -667,6 +667,10 @@ export const GoalDetailWireSchema = GoalRunWireSchema.extend({
   trialApprovals: z.array(StepTrialApprovalWireSchema),
   planner: GoalPlannerModeSchema.nullable(),
   planningRounds: z.array(PlanningRoundWireSchema),
+  /** UX P2 on #1486: whether the evaluation seal pauses the agents acting for the requester now
+   *  (`list_eval_seal_holds`, S10 E3-2c) — then no Worker of the run starts until the workspace
+   *  owner releases the pause (`release_eval_seal_hold`); a resumed run pauses again. Read live. */
+  requesterAgentsPaused: z.boolean(),
 }).strict();
 export type GoalDetailWire = z.infer<typeof GoalDetailWireSchema>;
 

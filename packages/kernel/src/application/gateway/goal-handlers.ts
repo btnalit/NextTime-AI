@@ -463,6 +463,7 @@ function toWireGoalDetail(detail: GoalRunDetail): GoalDetailWire {
     trialApprovals: detail.trialApprovals.map(toWireTrialApproval),
     planner: detail.planner,
     planningRounds: detail.planningRounds.map(toWirePlanningRound),
+    requesterAgentsPaused: detail.requesterAgentsPaused,
   };
 }
 
