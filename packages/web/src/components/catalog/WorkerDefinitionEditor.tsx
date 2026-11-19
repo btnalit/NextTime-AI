@@ -98,6 +98,9 @@ export interface WorkerDefinitionEditorProps {
   readonly onDone: () => void;
   /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
   readonly onPublished?: () => void;
+  /** Legacy 542: the success screen's publish was refused for naming what is not there — the host
+   *  opens the editor again on this draft, the named fields marked. Absent: no 「按这份草稿改一版」. */
+  readonly onFixReferences?: (draft: ProposedDraft, refusal: DefinitionReferenceRefusal) => void;
 }
 
 type View = 'form' | 'json';
@@ -242,6 +245,7 @@ export function WorkerDefinitionEditor({
   onProposed,
   onDone,
   onPublished,
+  onFixReferences,
 }: WorkerDefinitionEditorProps) {
   // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
   const guardedClose = useGuardedClose();
@@ -408,6 +412,9 @@ export function WorkerDefinitionEditor({
         }
         onDone={onDone}
         onPublished={onPublished}
+        onFixReferences={
+          onFixReferences ? (refusal) => onFixReferences(proposed, refusal) : undefined
+        }
         unpublishedConsequence={t(
           '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它，且 30 天未更新会被自动清理（也可以随时手动丢弃）——确认无误就现在点击「发布」。',
           'Left unpublished, this draft only sits under “My drafts” on the Workers tab — no one ' +

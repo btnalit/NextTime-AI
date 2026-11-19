@@ -3877,6 +3877,115 @@ describe('CatalogPage — a Worker draft naming what is not there (legacy 302)',
   });
 });
 
+// Legacy 542: the editor's own success screen refuses the same way, and its 「按这份草稿改一版」
+// opens the editor again on the draft just proposed, the named fields marked — not a trip back to
+// the draft's detail to press Publish once more.
+describe('CatalogPage — the editor’s success screen, Publish refused for naming what is not there (legacy 542)', () => {
+  const published = {
+    id: 'wd-1',
+    version: 2,
+    kind: 'worker',
+    status: 'published',
+    definition: { name: 'Runner', systemPrompt: 'Run.', gates: ['gk-gone'] },
+  };
+  const proposed = { ...published, version: 3, status: 'draft' };
+  const refused = () =>
+    Promise.reject(
+      new HttpError(
+        'capability_error',
+        'WorkerDefinition wd-1@3 names what is not there, so it is not published (...)',
+        'unresolved_references',
+        { unresolved: { gates: ['gk-gone'] } },
+      ),
+    );
+
+  it('the fix opens the editor on the proposed draft with the field marked', async () => {
+    let drafted = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items:
+          (params as { includeOwnDrafts?: boolean }).includeOwnDrafts && drafted
+            ? [proposed]
+            : [published],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => {
+        drafted = true;
+        return proposed;
+      },
+      publish_worker_definition: refused,
+    });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    const success = await within(drawer).findByTestId('draft-proposed');
+    // The lists are read again once it is proposed — the draft is there before Publish is pressed.
+    await screen.findByTestId('workers-my-drafts-section');
+    fireEvent.click(within(success).getByTestId('draft-publish'));
+
+    const problem = await within(success).findByTestId('worker-publish-references');
+    expect(within(problem).getByTestId('worker-publish-references-gates').textContent).toContain(
+      '这个工作区没有「gk-gone」这个门',
+    );
+    fireEvent.click(within(problem).getByTestId('worker-publish-references-fix'));
+
+    await waitFor(() => expect(screen.queryByTestId('draft-proposed')).toBeNull());
+    const reopened = await screen.findByTestId('worker-editor-drawer');
+    expect(reopened.textContent).toMatch(/修改草稿 v3/);
+    expect(within(reopened).getByTestId('worker-unresolved-notice').textContent).toContain(
+      'v3 引用了不存在的东西',
+    );
+    expect(reopened.textContent).toContain('这个工作区没有「gk-gone」这个门');
+    // Saving replaces that draft (legacy 680), as the draft's own 「按这份草稿改一版」 does.
+    fireEvent.click(within(reopened).getByTestId('worker-submit'));
+    await waitFor(() =>
+      expect(
+        http.calls.filter((c) => c.name === 'propose_worker_definition').at(-1)?.params,
+      ).toMatchObject({ definitionId: 'wd-1', replacesDraft: 3 }),
+    );
+  });
+
+  it('a draft the lists do not hold yet: its detail opens with the refusal and the same fix', async () => {
+    let listed = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => ({
+        items:
+          (params as { includeOwnDrafts?: boolean }).includeOwnDrafts && listed
+            ? [proposed]
+            : [published],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => proposed,
+      publish_worker_definition: () => {
+        // The lists read after the proposal did not have it yet; the next read does.
+        listed = true;
+        return refused();
+      },
+    });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    const success = await within(drawer).findByTestId('draft-proposed');
+    fireEvent.click(within(success).getByTestId('draft-publish'));
+    const problem = await within(success).findByTestId('worker-publish-references');
+    fireEvent.click(within(problem).getByTestId('worker-publish-references-fix'));
+
+    await waitFor(() => expect(screen.queryByTestId('worker-editor-drawer')).toBeNull());
+    const shown = await screen.findByTestId('worker-detail');
+    const again = await within(shown).findByTestId('worker-publish-references');
+    expect(again.textContent).toContain('这个工作区没有「gk-gone」这个门');
+    fireEvent.click(within(again).getByTestId('worker-publish-references-fix'));
+    const reopened = await screen.findByTestId('worker-editor-drawer');
+    expect(within(reopened).getByTestId('worker-unresolved-notice').textContent).toContain(
+      'v3 引用了不存在的东西',
+    );
+  });
+});
+
 // S11 「门确认不存在」 B-a: an observe draft that declares answers meaning "does not exist" publishes
 // only with the person's confirmation that the gate's credentials can see what it looks up. The
 // row says the draft declares some, so the question is in front of Publish before the first click.

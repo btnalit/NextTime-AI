@@ -4524,6 +4524,29 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           refresh();
         }}
         onPublished={refresh}
+        onFixReferences={
+          canPropose
+            ? (draft, refusal) => {
+                // Legacy 542: the success screen's publish was refused for naming what is not
+                // there — the editor opens again on that draft, the named fields marked, as the
+                // draft's detail does (legacy 302). Not in the lists yet: its detail, the refusal
+                // said there, with the same way to fix it.
+                const row = allRows.find(
+                  (candidate) => candidate.id === draft.id && candidate.version === draft.version,
+                );
+                if (row !== undefined) {
+                  // A proposal is always a new id@version (a replaced draft goes, legacy 680), so
+                  // the editor's key changes and it starts over on that draft.
+                  openEditor({ kind: 'copy', row, unresolved: refusal });
+                  return;
+                }
+                setPublishRefusal({ key: workerKey(draft), refusal });
+                refresh();
+                setFocusKey(workerKey(draft));
+                selectRow(workerKey(draft));
+              }
+            : undefined
+        }
       />
     </div>
   ) : null;
