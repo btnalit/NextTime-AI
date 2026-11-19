@@ -6316,6 +6316,7 @@ describe('CatalogPage — discard a superseded Worker draft from its row (legacy
       ).toHaveLength(1),
     );
     expect(screen.getByTestId('worker-detail').getAttribute('data-worker-key')).toBe('wd-7@4');
+    expect((await screen.findByTestId('toast')).textContent).toContain('Runner v2');
   });
 });
 

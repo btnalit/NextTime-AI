@@ -4442,7 +4442,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: `${workerLabel(row, t)} ${t('已丢弃', 'discarded')}`,
+        // UX on #1508: the version too — another draft of the same name may be open.
+        title: `${workerLabel(row, t)} v${row.version} ${t('已丢弃', 'discarded')}`,
       });
       // Legacy 541: a 「我的草稿」 row discards its draft without opening it — the detail open
       // beside it (another row) stays.

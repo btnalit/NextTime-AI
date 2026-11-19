@@ -77,7 +77,9 @@ export function ListRow({
     <li
       className={cn(
         'border-b border-border last:border-b-0',
-        trailing !== undefined && 'flex items-center gap-2 pr-4',
+        trailing !== undefined && 'flex items-center gap-2 pr-4 transition-colors duration-150',
+        // The hover and selected surface spans the trailing action too (UX on #1508).
+        trailing !== undefined && interactive && 'hover:bg-surface-2',
         trailing !== undefined && selected && 'bg-accent-soft',
       )}
     >
