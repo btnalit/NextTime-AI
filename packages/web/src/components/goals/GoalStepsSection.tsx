@@ -37,6 +37,7 @@ import {
   reconcileCheckSentence,
   reconciliationLabel,
   retriedStepKeys,
+  sealRefusedReasonOf,
   stepAcceptanceLabel,
   stepFailureText,
   stepHeldLabel,
@@ -366,7 +367,10 @@ function StepItem({
   const { planStep, run } = view;
   const dependsOn = planStep?.dependsOn ?? [];
   const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const failure = run?.failureCategory ? stepFailureText(run.failureCategory, t) : null;
+  // Legacy 515: a start the evaluation seal refused reads as that refusal, not its category.
+  const failure = run?.failureCategory
+    ? stepFailureText(run.failureCategory, t, sealRefusedReasonOf(run))
+    : null;
   // Legacy 582: a step the pause says did not start does not read 「可以开始」.
   const held = detail && run ? stepHeldLabel(detail, view.key, t) : null;
   return (
@@ -696,7 +700,11 @@ function Attempts({
               </span>
             ) : null}
             {attempt.status === 'failed' && attempt.failureReason ? (
-              <span className="text-danger" data-testid="goal-step-attempt-failure">
+              <span
+                className="text-danger"
+                data-testid="goal-step-attempt-failure"
+                title={taskFailureReasonText(attempt.failureReason, t).detail}
+              >
                 {taskFailureReasonText(attempt.failureReason, t).short}
               </span>
             ) : null}
