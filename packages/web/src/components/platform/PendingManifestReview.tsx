@@ -1,13 +1,15 @@
 import type {
   GateInstanceWire,
   GateOperationSummaryWire,
+  PendingGateManifestChangeWire,
   PendingGateManifestWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
+import { absentAnswersChangeText, absentAnswersWhenText } from '../../lib/governance.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
-import { operationFieldLabel } from '../../lib/labels.js';
+import { bindingFieldLabel, operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { gateOwnedParamsText } from '../connect/GateOwnedParams.js';
 import {
@@ -89,14 +91,22 @@ export function PendingManifestReview({
       t(`移除 ${actionKindTagText(op.name)}`, `Removes ${actionKindTagText(op.name)}`),
     ),
     ...governed.map((change) => governanceChangeSummary(change, t)),
-    ...pending.changed
-      .filter((change) => change.otherChangedFields.length > 0)
-      .map((change) =>
+    ...pending.changed.flatMap((change) => {
+      const fields = changedFieldsText(change, t);
+      if (fields === null) return [];
+      return [
         t(
-          `${actionKindTagText(change.name)} 的定义变了：${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join('、')}`,
-          `${actionKindTagText(change.name)} definition changed: ${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join(', ')}`,
+          `${actionKindTagText(change.name)} 的定义变了：${fields}`,
+          `${actionKindTagText(change.name)} definition changed: ${fields}`,
         ),
-      ),
+      ];
+    }),
+    // Legacy 477: what an Operation reads as "does not exist" is part of its binding, so a change
+    // to it is said before and after, not only as 「调用目标」.
+    ...pending.changed.flatMap((change) => {
+      const line = absentAnswersChangeLine(change, t);
+      return line === null ? [] : [line];
+    }),
     // Review #501 on #571 ③: a changed entry that now declares a gate-owned param is the costliest
     // case — every enabling workspace's revision of it would be held back — so it is said before
     // adopting, like an added one.
@@ -245,6 +255,47 @@ export function PendingManifestReview({
   );
 }
 
+/** The fields a changed Operation's new definition differs in, in plain words — 「调用目标」 with
+ *  the keys of it that changed (legacy 477, `bindingChangedFields`) when the kernel names them.
+ *  The answers that mean "does not exist" have a line of their own when `absentAnswers` is there,
+ *  so they are left out here (UX acceptance of #1490 P3-2: a reordered declaration read 「定义变了」
+ *  beside 「含义不变」); `null` when nothing else changed. */
+function changedFieldsText(change: PendingGateManifestChangeWire, t: Translate): string | null {
+  const ownLine = change.absentAnswers !== undefined;
+  const parts = change.otherChangedFields.flatMap((field) => {
+    const text = operationFieldLabel(field, t);
+    if (field !== 'binding') return [text];
+    const named = change.bindingChangedFields ?? [];
+    const keys = ownLine ? named.filter((key) => !ABSENT_BINDING_KEYS.has(key)) : named;
+    if (named.length > 0 && keys.length === 0) return [];
+    if (keys.length === 0) return [text];
+    const inner = keys.map((key) => bindingFieldLabel(key, t)).join(t('、', ', '));
+    return [t(`${text}（${inner}）`, `${text} (${inner})`)];
+  });
+  return parts.length === 0 ? null : parts.join(t('、', ', '));
+}
+
+const ABSENT_BINDING_KEYS: ReadonlySet<string> = new Set(['absent_statuses', 'absent_exit_codes']);
+
+/** Legacy 477: a changed Operation's answers that mean "does not exist", before and after
+ *  (`PendingGateManifestChangeWire.absentAnswers`, present only when they differ). */
+function absentAnswersChangeLine(
+  change: PendingGateManifestChangeWire,
+  t: Translate,
+): string | null {
+  if (change.absentAnswers === undefined) return null;
+  const text = absentAnswersChangeText(change.absentAnswers.before, change.absentAnswers.after, t);
+  if (text === null) return null;
+  const name = actionKindTagText(change.name);
+  // Review #501 on #1490 (optional): every automatic path leaves a version that declares them a
+  // draft, so adopting this one changes no workspace until a person there confirms it.
+  if (change.absentAnswers.after === null) return t(`${name} ${text}`, `${name}: ${text}`);
+  return t(
+    `${name} ${text}；采用后，各工作区为它打开的修订会停在草稿，要那里有人确认后才发布`,
+    `${name}: ${text}; once adopted, each workspace's revision of it stays a draft until someone there confirms it`,
+  );
+}
+
 /** One announced Operation in a line: its name and how it is classified (the 新清单 review here,
  *  and a connector preset's Operations on 新建门宿主实例, S11 P1-F). */
 export function gateOperationLine(op: GateOperationSummaryWire, t: Translate): string {
@@ -262,6 +313,11 @@ export function gateOperationLine(op: GateOperationSummaryWire, t: Translate): s
         `cannot be published: declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams, t)}`,
       ),
     );
+  }
+  // Legacy 477: what it would read as "does not exist", as the enable preview says it.
+  if (op.absentAnswers) {
+    const when = absentAnswersWhenText(op.absentAnswers, t);
+    parts.push(t(`${when}记为“不存在”`, `recorded as “not there” ${when}`));
   }
   return `${actionKindTagText(op.name)} (${parts.join(' · ')})`;
 }

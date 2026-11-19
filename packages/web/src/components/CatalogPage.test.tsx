@@ -604,6 +604,89 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('legacy 475: a revision that changes the answers that mean absent says them before and after', async () => {
+    const fields = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+    const lines = async (
+      published: Record<string, unknown>,
+      draft: Record<string, unknown>,
+      withPublished = true,
+    ) => {
+      const view = renderPage(
+        scriptedHttp({
+          list_operations: () => ({
+            items: [
+              ...(withPublished
+                ? [
+                    {
+                      gatekeeperId: 'gk-1',
+                      name: 'stock.get',
+                      status: 'published',
+                      mode: 'observe',
+                      blastRadius: 'low',
+                      autoApprovable: true,
+                      version: 1,
+                      ...published,
+                    },
+                  ]
+                : []),
+              {
+                gatekeeperId: 'gk-1',
+                name: 'stock.get',
+                status: 'draft',
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+                version: 2,
+                governanceChange: { before: fields, after: fields, direction: 'neutral' },
+                definitionChange: {
+                  changedFields: ['binding'],
+                  paramsAdded: [],
+                  paramsRemoved: [],
+                  paramsChanged: [],
+                },
+                ...draft,
+              },
+            ],
+          }),
+          get_operation_stats: () => ({ items: [] }),
+        }),
+        'operations',
+        'gk-1::stock.get@draft',
+      );
+      const diff = await screen.findByTestId('operation-revision-diff');
+      const said = within(diff)
+        .getAllByTestId('operation-revision-diff-line')
+        .map((line) => line.textContent);
+      view.unmount();
+      return said;
+    };
+    expect(await lines({}, { absentAnswers: { statuses: [404, 410] } })).toEqual([
+      '调用目标变了',
+      '新声明：目标系统回答 404 或 410 时，表示要查的东西不存在，观察记为“不存在”，不算调用失败',
+    ]);
+    expect(
+      await lines(
+        { absentAnswers: { statuses: [404] } },
+        { absentAnswers: { statuses: [404, 410] } },
+      ),
+    ).toEqual([
+      '调用目标变了',
+      '表示不存在的回答变了：原来是目标系统回答 404 时，现在是目标系统回答 404 或 410 时',
+    ]);
+    expect(await lines({ absentAnswers: { exitCodes: [4] } }, {})).toEqual([
+      '调用目标变了',
+      '不再声明表示不存在的回答：原来命令以退出码 4 结束时记为“不存在”，按新定义算调用失败',
+    ]);
+    // The path changed, the declaration did not: the call-target line alone.
+    expect(
+      await lines({ absentAnswers: { statuses: [404] } }, { absentAnswers: { statuses: [404] } }),
+    ).toEqual(['调用目标变了']);
+    // No published version listed to compare with: the call-target line alone.
+    expect(await lines({}, { absentAnswers: { statuses: [404] } }, false)).toEqual([
+      '调用目标变了',
+    ]);
+  });
+
   it('legacy K (UX acceptance of #538): a revision draft shows what it changes against the published version before Publish', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

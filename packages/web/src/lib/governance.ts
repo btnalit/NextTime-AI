@@ -281,6 +281,56 @@ export function absentAnswersWhenText(answers: OperationAbsentAnswersWire, t: Tr
   return t(`命令以退出码 ${codes} 结束时`, `when the command exits with ${codes}`);
 }
 
+/** The same answers in any order: a declaration is a set, so a reordered one means the same
+ *  (review #501 on #1485 O2 — the kernel reports it as a change, since the digest moved). */
+export function sameAbsentAnswers(
+  a: OperationAbsentAnswersWire,
+  b: OperationAbsentAnswersWire,
+): boolean {
+  if ('statuses' in a !== 'statuses' in b) return false;
+  const values = (answers: OperationAbsentAnswersWire) =>
+    'statuses' in answers ? answers.statuses : answers.exitCodes;
+  const sorted = (list: readonly number[]) => [...list].sort((x, y) => x - y).join(',');
+  return sorted(values(a)) === sorted(values(b));
+}
+
+/** Legacy 477 / 475: how an Operation's answers that mean "does not exist" change from `before`
+ *  to `after` (`null`: none declared), as a clause its caller puts after the Operation's name or on
+ *  a revision's own line; `null` when there is nothing to say (none either side, or the same). */
+export function absentAnswersChangeText(
+  before: OperationAbsentAnswersWire | null,
+  after: OperationAbsentAnswersWire | null,
+  t: Translate,
+): string | null {
+  if (before === null && after === null) return null;
+  if (before === null && after !== null) {
+    const when = absentAnswersWhenText(after, t);
+    return t(
+      `新声明：${when}，表示要查的东西不存在，观察记为“不存在”，不算调用失败`,
+      `now declares that ${when}, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call`,
+    );
+  }
+  if (before !== null && after === null) {
+    const when = absentAnswersWhenText(before, t);
+    return t(
+      `不再声明表示不存在的回答：原来${when}记为“不存在”，按新定义算调用失败`,
+      `no longer declares answers that mean absent, so what it recorded as “not there” (${when}) is a failed call under the new definition`,
+    );
+  }
+  if (before === null || after === null) return null;
+  if (JSON.stringify(before) === JSON.stringify(after)) return null;
+  if (sameAbsentAnswers(before, after)) {
+    return t(
+      `表示不存在的回答只换了顺序（${absentAnswersWhenText(after, t)}），含义不变`,
+      `the answers that mean absent were only reordered (${absentAnswersWhenText(after, t)}); the meaning is unchanged`,
+    );
+  }
+  return t(
+    `表示不存在的回答变了：原来是${absentAnswersWhenText(before, t)}，现在是${absentAnswersWhenText(after, t)}`,
+    `the answers that mean absent changed: before, ${absentAnswersWhenText(before, t)}; now, ${absentAnswersWhenText(after, t)}`,
+  );
+}
+
 /** The publisher's side of it: the target gives those answers only when the thing is not there —
  *  「只有它不存在时，目标系统才会回答 404」, 「只有它不存在时，命令才会以退出码 4 结束」. */
 export function absentAnswersOnlyWhenText(
