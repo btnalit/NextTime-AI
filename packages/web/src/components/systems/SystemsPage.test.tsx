@@ -1392,7 +1392,7 @@ describe('SystemsPage', () => {
     expect(notice.textContent).not.toContain('docker.status');
     // UX acceptance of #1495 P2: the published counts are the card's, docker.restart included.
     expect(within(drawer).getByTestId('gatekeeper-op-counts').textContent).toBe(
-      '已发布 1 个只读 · 1 个写（其中 1 个被平台停用，下面没有列出）',
+      '已发布 1 个只读 · 1 个写；其中 1 个被平台停用，下面没有列出',
     );
   });
 

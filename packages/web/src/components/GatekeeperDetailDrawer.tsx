@@ -249,7 +249,7 @@ const NO_NAMES: readonly string[] = [];
 
 /** Legacy 383: the drawer's Operation count, split the way the system card splits it — the
  *  card's own published read and write counts (which include the published ones the platform
- *  disabled, left out of the list below, said in brackets) — then the drafts and the old versions
+ *  disabled, left out of the list below, said after them) — then the drafts and the old versions
  *  still listed. Without the card's read, the published ones listed are counted. */
 function operationCountsText(
   operations: readonly GatekeeperDetailOperation[],
@@ -266,8 +266,8 @@ function operationCountsText(
   let head = t(`已发布 ${read} 个只读 · ${write} 个写`, `Published: ${read} read · ${write} write`);
   if (hiddenDisabled > 0) {
     head += t(
-      `（其中 ${hiddenDisabled} 个被平台停用，下面没有列出）`,
-      ` (${hiddenDisabled} of them disabled by the platform, not listed below)`,
+      `；其中 ${hiddenDisabled} 个被平台停用，下面没有列出`,
+      `; ${hiddenDisabled} of them disabled by the platform, not listed below`,
     );
   }
   const parts = [head];

@@ -475,7 +475,7 @@ describe('GatekeeperDetailDrawer', () => {
       );
       const counts = await screen.findByTestId('gatekeeper-op-counts');
       expect(counts.textContent).toBe(
-        '已发布 2 个只读 · 1 个写（其中 2 个被平台停用，下面没有列出）',
+        '已发布 2 个只读 · 1 个写；其中 2 个被平台停用，下面没有列出',
       );
       const notice = screen.getByTestId('gatekeeper-platform-disabled');
       expect(notice.textContent).toContain('平台停用了这个门上已发布的 2 个');
@@ -488,7 +488,7 @@ describe('GatekeeperDetailDrawer', () => {
       renderDrawer(gate([]), card(1, 0, ['stock.list']));
       const counts = await screen.findByTestId('gatekeeper-op-counts');
       expect(counts.textContent).toBe(
-        '已发布 1 个只读 · 0 个写（其中 1 个被平台停用，下面没有列出）',
+        '已发布 1 个只读 · 0 个写；其中 1 个被平台停用，下面没有列出',
       );
       const notice = screen.getByTestId('gatekeeper-platform-disabled').textContent ?? '';
       expect(notice).toContain('平台停用了这个门上已发布的 1 个');
@@ -530,7 +530,7 @@ describe('GatekeeperDetailDrawer', () => {
         );
         const counts = await screen.findByTestId('gatekeeper-op-counts');
         expect(counts.textContent).toBe(
-          'Published: 1 read · 1 write (1 of them disabled by the platform, not listed below) · 1 draft',
+          'Published: 1 read · 1 write; 1 of them disabled by the platform, not listed below · 1 draft',
         );
         expect(screen.getByTestId('gatekeeper-platform-disabled').textContent).toContain(
           'The platform disabled a published Operation on this gate: stock.sell. It is not listed below',
