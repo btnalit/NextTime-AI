@@ -1435,7 +1435,60 @@ describe('SystemsPage', () => {
     const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
     expect(confirm.textContent).toContain('将发布 1 个');
     expect(confirm.textContent).toContain('stock.adjust');
-    expect(confirm.textContent).not.toContain('stock.login');
+    // Legacy 490: the held draft is named as held, not among what it publishes.
+    expect(confirm.textContent).toContain('再列出留作草稿、不会发布的');
+    expect(confirm.textContent).toContain(
+      'stock.login 留作草稿：定义里疑似带凭据，要人在能力目录里核对后发布',
+    );
+    expect(confirm.textContent).not.toContain('stock.login 会');
+  });
+
+  it('legacy 490: 「发布清单」 names the drafts it leaves unpublished before the click, even with no first version to confirm', async () => {
+    const draftRow = (name: string, extra: Record<string, unknown> = {}) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      status: 'draft',
+      origin: 'import',
+      draftDigest: `d-${name}`,
+      ...extra,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => ({
+        items: [
+          draftRow('stock.get'),
+          draftRow('stock.token', {
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          }),
+          draftRow('stock.exists', { absentAnswers: { statuses: [404] } }),
+        ],
+      }),
+      publish_manifest: () => ({
+        gatekeeperId: 'gk-1',
+        publishedOperationNames: ['stock.get'],
+        skippedDraftOperationNames: [],
+        gateOwnedParamDrafts: [],
+        absentAnswerDrafts: [],
+      }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-publish-manifest'));
+    const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
+    expect(confirm.textContent).toContain('将发布 1 个 Operation；下面这些留作草稿，不会发布。');
+    expect(confirm.textContent).toContain(
+      'stock.token 留作草稿：声明了只能由门自己设置的参数，要等门的维护者去掉后才能发布',
+    );
+    expect(confirm.textContent).toContain(
+      'stock.exists 留作草稿：声明了表示不存在的回答，要人在能力目录里确认门用的凭据看得到要查的东西后发布',
+    );
+    expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(false);
+    fireEvent.click(within(confirm).getByRole('button', { name: '发布' }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true));
   });
 
   it('UX acceptance of #1377 (P3): with only drafts left for a person, 「发布清单」 is greyed and the menu opens the held draft in the catalog', async () => {

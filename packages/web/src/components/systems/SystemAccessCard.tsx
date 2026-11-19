@@ -10,7 +10,7 @@ import { useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import type { DraftAsRead } from '../../lib/connections.js';
+import type { DraftAsRead, ManifestPublishPlan } from '../../lib/connections.js';
 import { isDraftChangedError } from '../../lib/errors.js';
 import { actionKindTagText, shortId } from '../../lib/format.js';
 import {
@@ -113,6 +113,9 @@ export interface SystemAccessCardProps {
    *  in the catalog (suspected credentials, answers that mean "does not exist") — named in the
    *  menu, so a greyed 「发布清单」 does not leave them unmentioned. */
   readonly heldForAPerson?: readonly string[];
+  /** Legacy 490: the gate's own drafts 「发布清单」 leaves as drafts, by why (`manifestPublishPlan`)
+   *  — named in its confirm before the click, not only in the result after it. */
+  readonly heldBack?: Pick<ManifestPublishPlan, 'gateOwned' | 'credentials' | 'absentAnswers'>;
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -327,6 +330,7 @@ export function SystemAccessCard({
   publishableCount,
   firstPublishes = [],
   heldForAPerson = [],
+  heldBack = NO_HELD_BACK,
   canPublish,
   onPublished,
   workerNames,
@@ -362,7 +366,10 @@ export function SystemAccessCard({
   // One confirm hangs off the ⋯ menu; which one is open — the secret rotation, or (legacy 349)
   // 「发布清单」 when it would publish a first version that writes or is high impact.
   const [menuConfirm, setMenuConfirm] = useState<'rotate' | 'publish' | null>(null);
-  const confirmsPublish = firstPublishes.length > 0;
+  // Legacy 490: what 「发布清单」 leaves as drafts is said before the click too — so it confirms
+  // whenever there are some, not only for a first version that writes or is high impact.
+  const heldBackLines = heldBackText(heldBack, t);
+  const confirmsPublish = firstPublishes.length > 0 || heldBackLines.length > 0;
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
   // Legacy 701: moving the same gate to a new address — the same owner, the same gates as a
   // secret rotation (a catalog gate's address is the platform instance's).
@@ -623,12 +630,27 @@ export function SystemAccessCard({
             }}
             anchor={moreMenu()}
             title={t('发布清单', 'Publish manifest')}
-            description={t(
-              `将发布 ${draftCount} 个 Operation。其中下面这些是第一次发布，会写入系统或影响高；发布后马上可以被调用，请先核对它们的分类。`,
-              `Publishes ${draftCount} operation(s). These are published for the first time and write to the system or are high impact; they can be called as soon as they are published — check how they are classified first.`,
-            )}
+            description={
+              firstPublishes.length > 0 && heldBackLines.length > 0
+                ? t(
+                    `将发布 ${draftCount} 个 Operation。下面先列出其中第一次发布、会写入系统或影响高的，发布后马上可以被调用，请先核对它们的分类；再列出留作草稿、不会发布的。`,
+                    `Publishes ${draftCount} operation(s). Listed below first are the ones published for the first time that write to the system or are high impact — they can be called as soon as they are published, so check how they are classified; then the ones that stay drafts and are not published.`,
+                  )
+                : firstPublishes.length > 0
+                  ? t(
+                      `将发布 ${draftCount} 个 Operation。其中下面这些是第一次发布，会写入系统或影响高；发布后马上可以被调用，请先核对它们的分类。`,
+                      `Publishes ${draftCount} operation(s). These are published for the first time and write to the system or are high impact; they can be called as soon as they are published — check how they are classified first.`,
+                    )
+                  : t(
+                      `将发布 ${draftCount} 个 Operation；下面这些留作草稿，不会发布。`,
+                      `Publishes ${draftCount} operation(s); the ones below stay drafts and are not published.`,
+                    )
+            }
             target={gate.name}
-            impact={firstPublishes.map((op) => firstPublishConsequence(op.name, op.fields, t))}
+            impact={[
+              ...firstPublishes.map((op) => firstPublishConsequence(op.name, op.fields, t)),
+              ...heldBackLines,
+            ]}
             confirmLabel={t('发布', 'Publish')}
             onConfirm={publish}
             testId="gatekeeper-publish-manifest-confirm"
@@ -988,4 +1010,46 @@ function GranteeRow({
       ) : null}
     </div>
   );
+}
+
+const NO_HELD_BACK: Pick<ManifestPublishPlan, 'gateOwned' | 'credentials' | 'absentAnswers'> = {
+  gateOwned: [],
+  credentials: [],
+  absentAnswers: [],
+};
+
+/** Legacy 490: one line per reason 「发布清单」 leaves a draft unpublished, naming the drafts — the
+ *  same reasons, in the kernel's order, as its result lists them afterwards. */
+function heldBackText(
+  held: Pick<ManifestPublishPlan, 'gateOwned' | 'credentials' | 'absentAnswers'>,
+  t: Translate,
+): string[] {
+  const names = (list: readonly string[]) =>
+    list.map((name) => actionKindTagText(name)).join(t('、', ', '));
+  const lines: string[] = [];
+  if (held.gateOwned.length > 0) {
+    lines.push(
+      t(
+        `${names(held.gateOwned)} 留作草稿：声明了只能由门自己设置的参数，要等门的维护者去掉后才能发布`,
+        `${names(held.gateOwned)} stay drafts: they declare params only the gate sets, and can be published only once the gate's maintainer drops them`,
+      ),
+    );
+  }
+  if (held.credentials.length > 0) {
+    lines.push(
+      t(
+        `${names(held.credentials)} 留作草稿：定义里疑似带凭据，要人在能力目录里核对后发布`,
+        `${names(held.credentials)} stay drafts: their definitions look like they carry credentials, so a person checks and publishes them in the catalog`,
+      ),
+    );
+  }
+  if (held.absentAnswers.length > 0) {
+    lines.push(
+      t(
+        `${names(held.absentAnswers)} 留作草稿：声明了表示不存在的回答，要人在能力目录里确认门用的凭据看得到要查的东西后发布`,
+        `${names(held.absentAnswers)} stay drafts: they declare answers that mean absent, so a person confirms in the catalog that the gate's credentials can see what they look up, then publishes them`,
+      ),
+    );
+  }
+  return lines;
 }
