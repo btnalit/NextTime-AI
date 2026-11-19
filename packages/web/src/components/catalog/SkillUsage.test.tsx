@@ -225,7 +225,6 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
     fireEvent.click(within(segments).getByText(/按运行环境/));
     const known = within(v2).getByTestId(`skill-usage-version-2-segment-${ENV_A}`);
     expect(known.textContent).toContain('v1:aaaaaaaaaaaa');
-    expect(known.textContent).not.toContain('a'.repeat(13));
     expect(within(known).getByTestId(`skill-usage-version-2-segment-${ENV_A}-review`)).toBeTruthy();
     const unknown = within(v2).getByTestId('skill-usage-version-2-segment-unknown');
     expect(unknown.textContent).toContain('环境未知');
@@ -233,6 +232,28 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
       within(unknown).queryByTestId('skill-usage-version-2-segment-unknown-review'),
     ).toBeNull();
     expect(unknown.textContent).toContain('还没有结果');
+  });
+
+  it('legacy 495: the reason for 「建议复核」, what 「环境未知」 means and the whole fingerprint are in words, not only on hover', async () => {
+    show(scriptedHttp('builder', () => stats()));
+    const v2 = await screen.findByTestId('skill-usage-version-2');
+    const reason = within(v2).getByTestId('skill-usage-version-2-review-reason');
+    expect(reason.textContent).toBe('同一运行环境下最近 3 个结果都未达成');
+    expect(within(v2).getByTestId('skill-usage-version-2-review').getAttribute('title')).toBeNull();
+
+    fireEvent.click(within(v2).getByText(/按运行环境/));
+    expect(within(v2).getByTestId('skill-usage-version-2-segments-note').textContent).toContain(
+      '定义版本、模型、镜像、平台版本和系统提示都相同',
+    );
+    const known = within(v2).getByTestId(`skill-usage-version-2-segment-${ENV_A}`);
+    expect(within(known).getByTestId('usage-environment-digest').textContent).toBe(ENV_A);
+    expect(
+      within(known).getByTestId(`skill-usage-version-2-segment-${ENV_A}-review-reason`).textContent,
+    ).toBe('同一运行环境下最近 3 个结果都未达成');
+    const unknown = within(v2).getByTestId('skill-usage-version-2-segment-unknown');
+    expect(within(unknown).getByTestId('usage-environment-unknown').textContent).toContain(
+      '没有上报环境',
+    );
   });
 
   it('failed Tasks grouped by version, Worker definition, category and what refused them', async () => {
