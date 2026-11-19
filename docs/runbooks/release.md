@@ -3497,6 +3497,36 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：上一版本的代码不认这两个索引，直接跑在新 schema 上（见 §6 那一行），回退代码即可。要删索引：`drop index links_workspace_type_active_idx; drop index links_workspace_recorded_active_idx;`，再 `delete from schema_migrations where module = 'core' and version = 63`。
 - 下一次主机升级的提示要带上本节。
 
+### 3.204 门把「表示不存在的回答」按集合算摘要（#1493，遗留 860，0.69.2 之后的下一版）
+
+- **行为变化**：门声明的「表示不存在的回答」（`absent_statuses` / `absent_exit_codes`）只换顺序时不再算定义变化：清单不进待采用，调用不被拒，清单审核里也不列。门和内核的 Operation 摘要都按从小到大的顺序计算这两项；已经按从小到大写的声明，摘要和以前逐字节相同。没有迁移，不改线上契约，不改写存着的 Operation 定义、门清单和摘要。
+- **升级影响**：平台的门随本版一起升级，不用处理。工作区自己接入、基于旧版 gatekeeper-base 的门，如果清单里这项声明不是从小到大写的，升级后门算的摘要和内核的对不上，这个 Operation 的调用会被门拒绝（409 `operation_definition_mismatch`）。这时在控制台「采用」或「与门公告对齐」都恢复不了，因为门那边算的摘要还是旧的。
+- **升级前只读预检**（以表的属主运行，和前面几节的预检一样；结果记 `docs/private/`）：查有没有声明乱序的 Operation，已发布的和草稿都查（草稿发布后同样会对不上）。
+
+  ```sql
+  select o.workspace_id,
+         o.identity_key ->> 'gatekeeperId' as gatekeeper_id,
+         o.identity_key ->> 'name' as operation,
+         o.properties ->> 'status' as status,
+         o.properties -> 'binding' as binding
+    from objects o
+    cross join lateral (
+      select coalesce(o.properties -> 'binding' -> 'absent_statuses',
+                      o.properties -> 'binding' -> 'absent_exit_codes') as declared
+    ) d
+   where o.object_type = 'Operation'
+     and o.properties ->> 'status' in ('published', 'draft')
+     and jsonb_typeof(d.declared) = 'array'
+     and d.declared <> (select jsonb_agg(v order by v) from jsonb_array_elements(d.declared) v);
+  ```
+
+  没有结果就什么都不用做。有结果时：
+  - 对应的是平台的门：不用处理。
+  - 对应的是工作区自己接入、基于旧版 gatekeeper-base 的门：维护者把清单里这项声明改成从小到大写，或者用新版 gatekeeper-base 重建。
+- **升级后排查**：出现 409 `operation_definition_mismatch`、但这个门的清单没有待采用的改动时，先看这项声明是不是从小到大写的。
+- **回滚**：回退代码即可，没有迁移，存着的数据没有改写。回滚后，按新版重建、且声明乱序的自接门会和回滚后的内核对不上，情形同上；按从小到大写的声明在任何版本组合下都对得上。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
