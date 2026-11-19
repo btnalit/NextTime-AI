@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFocusWhenKeyLost } from '../../hooks/useFocusWhenLost.js';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
-import { definitionReferenceRefusalOf } from '../../lib/definition-reference.js';
+import {
+  type DefinitionReferenceRefusal,
+  definitionReferenceRefusalOf,
+} from '../../lib/definition-reference.js';
 import { errorToast } from '../../lib/errors.js';
 import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
@@ -57,6 +60,10 @@ export interface DraftProposedProps {
   /** The editor's names for the content's top-level fields, so a flagged path reads as its label
    *  (`lib/credential-review.ts` `reviewFieldNames`). */
   readonly fieldNames?: Readonly<Record<string, string>>;
+  /** Legacy 542: a Worker draft's publish refused for naming what is not there — opens the editor
+   *  on a version proposed from this draft, the named fields marked (`PublishReferenceProblem`'s
+   *  「按这份草稿改一版」, as on the draft's detail). Absent where the reader cannot propose. */
+  readonly onFixReferences?: (refusal: DefinitionReferenceRefusal) => void;
 }
 
 /**
@@ -76,6 +83,7 @@ export function DraftProposed({
   reviewersSeeDraft = false,
   detailHref,
   fieldNames,
+  onFixReferences,
 }: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
@@ -162,7 +170,10 @@ export function DraftProposed({
           : ''}
       </Notice>
       {references !== null ? (
-        <PublishReferenceProblem refusal={references} />
+        <PublishReferenceProblem
+          refusal={references}
+          onFix={onFixReferences ? () => onFixReferences(references) : undefined}
+        />
       ) : error !== null ? (
         <ErrorBanner error={error} testId="draft-publish-error" />
       ) : null}
