@@ -1,11 +1,17 @@
+import { OPERATION_BINDING_KEYS, type PendingGateManifestWire } from '@nexttime/shared';
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { LangProvider } from '../../lib/i18n.js';
+import { BINDING_FIELD_LABELS } from '../../lib/labels.js';
 import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { PendingManifestReview } from './PendingManifestReview.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 describe('PendingManifestReview', () => {
   it('UX acceptance of #567 P3: an added entry that declares a gate-owned param says it cannot be published, before it is adopted', () => {
@@ -255,5 +261,131 @@ describe('PendingManifestReview', () => {
     expect(screen.getByTestId('gate-instance-pending-manifest-notice').textContent).toContain(
       '门已经在按新清单运行。门已经不再提供',
     );
+  });
+
+  describe('legacy 477: the answers that mean "does not exist"', () => {
+    type Change = PendingGateManifestWire['changed'][number];
+    const observe = governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+    function renderChange(change: Partial<Change>, added: PendingGateManifestWire['added'] = []) {
+      render(
+        <LangProvider>
+          <PendingManifestReview
+            http={{ call: vi.fn() } as unknown as CapabilityCaller}
+            gateId="gate-1"
+            displayName="Orders"
+            pending={{
+              digest: 'digest-477',
+              announcedAt: '2026-10-15T00:00:00.000Z',
+              operationCount: 1,
+              added,
+              removed: [],
+              changed:
+                Object.keys(change).length === 0
+                  ? []
+                  : [
+                      {
+                        name: 'orders.lookup',
+                        before: observe,
+                        after: observe,
+                        direction: 'neutral',
+                        otherChangedFields: ['binding'],
+                        ...change,
+                      },
+                    ],
+              refusedOperations: [],
+            }}
+            enablingWorkspaces={[]}
+            enabledWorkspaceCount={0}
+            onConfirmed={vi.fn()}
+          />
+        </LangProvider>,
+      );
+      return screen.getByTestId('gate-instance-pending-manifest').textContent ?? '';
+    }
+
+    it('an added Operation says what it would read as absent', () => {
+      const text = renderChange({}, [
+        {
+          name: 'orders.get',
+          mode: 'observe',
+          blastRadius: 'low',
+          autoApprovable: true,
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          absentAnswers: { statuses: [404] },
+        },
+      ]);
+      expect(text).toMatch(/orders\.get \(.*目标系统回答 404 时记为“不存在”\)/);
+    });
+
+    it('a changed one names the keys of its call target that changed, and the declaration before and after', () => {
+      const text = renderChange({
+        bindingChangedFields: ['absent_statuses', 'path'],
+        absentAnswers: { before: null, after: { statuses: [404, 410] } },
+      });
+      // The declaration has a line of its own, so the call target names only the path here.
+      expect(text).toContain('orders.lookup 的定义变了：调用目标（路径）');
+      expect(text).toContain(
+        'orders.lookup 新声明：目标系统回答 404 或 410 时，表示要查的东西不存在，观察记为“不存在”，不算调用失败；采用后，各工作区为它打开的修订会停在草稿，要那里有人确认后才发布',
+      );
+    });
+
+    it('a dropped declaration says such an answer now fails the call', () => {
+      const text = renderChange({
+        bindingChangedFields: ['absent_exit_codes'],
+        absentAnswers: { before: { exitCodes: [4] }, after: null },
+      });
+      expect(text).toContain(
+        'orders.lookup 不再声明表示不存在的回答：原来命令以退出码 4 结束时记为“不存在”，按新定义算调用失败',
+      );
+      // Nothing is declared any more, so no revision waits on a person for it.
+      expect(text).not.toContain('停在草稿');
+    });
+
+    it('a changed declaration says both', () => {
+      const text = renderChange({
+        bindingChangedFields: ['absent_statuses'],
+        absentAnswers: { before: { statuses: [404] }, after: { statuses: [404, 410] } },
+      });
+      expect(text).toContain(
+        'orders.lookup 表示不存在的回答变了：原来是目标系统回答 404 时，现在是目标系统回答 404 或 410 时',
+      );
+    });
+
+    it('review #501 on #1485 O2: a reordered declaration is said to mean the same', () => {
+      const text = renderChange({
+        bindingChangedFields: ['absent_statuses'],
+        absentAnswers: { before: { statuses: [404, 410] }, after: { statuses: [410, 404] } },
+      });
+      expect(text).toContain(
+        'orders.lookup 表示不存在的回答只换了顺序（目标系统回答 410 或 404 时），含义不变',
+      );
+      expect(text).not.toContain('变了：原来是');
+      // UX acceptance of #1490 P3-2: nothing else changed, so no 「定义变了」 beside 「含义不变」.
+      expect(text).not.toContain('的定义变了');
+    });
+
+    it('a call-target change without the keys keeps the plain field name', () => {
+      const text = renderChange({ otherChangedFields: ['binding', 'params_schema'] });
+      expect(text).toContain('orders.lookup 的定义变了：调用目标、参数定义');
+    });
+
+    it('in English the keys go in parentheses, lower-case', () => {
+      localStorage.setItem('nexttime.lang', 'en');
+      const text = renderChange({
+        bindingChangedFields: ['absent_statuses', 'path'],
+        absentAnswers: { before: { statuses: [404] }, after: null },
+      });
+      expect(text).toContain('orders.lookup definition changed: Call target (path)');
+      expect(text).toContain(
+        'orders.lookup: no longer declares answers that mean absent, so what it recorded as “not there” (when the target answers 404) is a failed call under the new definition',
+      );
+    });
+
+    it('every key a binding can carry has words', () => {
+      for (const key of OPERATION_BINDING_KEYS)
+        expect(Object.hasOwn(BINDING_FIELD_LABELS, key)).toBe(true);
+    });
   });
 });

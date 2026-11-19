@@ -52,6 +52,7 @@ import {
   type OperationStatsRow,
   type ProcedureRow,
   type SkillRow,
+  absentAnswersChangeText,
   absentAnswersText,
   operationKey,
   operationStatsKey,
@@ -900,6 +901,17 @@ function RevisionDiff({
       lines.push(
         t(`${operationFieldLabel(field, t)}变了`, `${operationFieldLabel(field, t)} changed`),
       );
+      // Legacy 475: what it reads as "does not exist" is part of the call target, so a revision
+      // that changes it says so before and after — compared with the published version listed
+      // here (without it, the call-target line stands alone).
+      if (field === 'binding' && published !== undefined) {
+        const absent = absentAnswersChangeText(
+          published.absentAnswers ?? null,
+          row.absentAnswers ?? null,
+          t,
+        );
+        if (absent !== null) lines.push(absent.charAt(0).toUpperCase() + absent.slice(1));
+      }
     }
   } else {
     // Legacy 848 (#501's review of #1459): `definitionChange` is absent when either side does not
