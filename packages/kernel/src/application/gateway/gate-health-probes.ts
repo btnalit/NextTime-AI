@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type { GateHealth } from '../gates/index.js';
-import { readCatalogGateHealths } from '../gates/index.js';
+import {
+  readCatalogGateHealths,
+  readGatekeeperPlatformPolicies,
+  selfConnectionSuspended,
+} from '../gates/index.js';
 import { type ResolvedGateTarget, resolveGateTarget } from './gate-target.js';
 import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
 
@@ -20,8 +24,10 @@ import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
  *     `probeGateHealths` after the transaction (review of #1389: a probe can wait 3 s, and must
  *     not hold a pooled connection and an open transaction meanwhile).
  *
- * The caller decides which gates to ask about; `execution_readiness` leaves out a gate the platform
- * suspended (legacy 675), which is not contacted on the workspace's behalf.
+ * The caller decides which gates to ask about. A gate the platform suspended (legacy 675) gets
+ * neither, whoever asks: the kernel does not contact it on the workspace's behalf while every call
+ * to it is refused, and an old stored or probed "ok" next to the suspension would say it works
+ * (legacy 872, review of #1510). `get_gatekeeper` leaves it unprobed the same way.
  */
 
 /** The gates `planGateHealths` found to probe, each with the target and credential every call to
@@ -32,7 +38,8 @@ export type GateHealthProbes = readonly {
 }[];
 
 /** Only reads the database; the gates are not called here. `stored` names only gates of
- *  `gatekeeperIds`; a listed id that is no registered Gatekeeper gets neither. */
+ *  `gatekeeperIds`; a listed id that is no registered Gatekeeper, or whose connection the platform
+ *  suspended, gets neither. */
 export async function planGateHealths(
   client: PoolClient,
   workspaceId: string,
@@ -42,9 +49,11 @@ export async function planGateHealths(
   readonly probes: GateHealthProbes;
 }> {
   const catalog = await readCatalogGateHealths(client, workspaceId);
+  const policies = await readGatekeeperPlatformPolicies(client, workspaceId);
   const stored = new Map<string, GateHealth>();
   const probes: { readonly gatekeeperId: string; readonly target: ResolvedGateTarget }[] = [];
   for (const gatekeeperId of gatekeeperIds) {
+    if (selfConnectionSuspended(policies.get(gatekeeperId))) continue;
     const health = catalog.get(gatekeeperId);
     if (health !== undefined) {
       stored.set(gatekeeperId, health);

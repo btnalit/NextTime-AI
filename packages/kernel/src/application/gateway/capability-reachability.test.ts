@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { entryScope } from '../../governance/capability/index.js';
 import type { CapabilityReachability, GateReachability } from './capability-reachability.js';
-import { operationReachability } from './capability-reachability.js';
+import { firstGap, operationReachability } from './capability-reachability.js';
 
 /**
  * capability-reachability.test: `operationReachability` — the per-Operation annotation
@@ -223,5 +223,48 @@ describe('operationReachability', () => {
       reason: 'definition_mismatch',
     });
     expect(operationReachability(r, 'g', 'observe', 'op')).toEqual({ status: 'direct' });
+  });
+});
+
+// Review of #1510 (#493 optional 1): the order the gate-level reasons are said in. A suspension
+// comes first whatever else is missing — nothing below it brings a call through until a platform
+// administrator resumes the gate.
+describe('firstGap', () => {
+  const open = {
+    platformSuspended: false,
+    granted: true,
+    excludedByPolicy: false,
+    excludedByProfile: false,
+    observeOperationCount: 1,
+    executeOperationCount: 1,
+    disabledOperations: [] as string[],
+    definitionMismatch: [],
+  };
+
+  it('a gate the platform suspended reads suspended_by_platform ahead of every other gap', () => {
+    for (const gap of [
+      { observeOperationCount: 0, executeOperationCount: 0 },
+      { disabledOperations: ['op', 'write_op'] },
+      {
+        definitionMismatch: [
+          { operation: 'op', awaiting: 'platform_adoption' as const },
+          { operation: 'write_op', awaiting: 'platform_adoption' as const },
+        ],
+      },
+      { granted: false },
+      { excludedByPolicy: true },
+      { excludedByProfile: true },
+    ]) {
+      expect(firstGap({ ...open, ...gap, platformSuspended: true }, 0), JSON.stringify(gap)).toBe(
+        'suspended_by_platform',
+      );
+    }
+  });
+
+  it('without a suspension, a gate with nothing published reads no_published_operation first', () => {
+    expect(
+      firstGap({ ...open, observeOperationCount: 0, executeOperationCount: 0, granted: false }, 0),
+    ).toBe('no_published_operation');
+    expect(firstGap(open, 1)).toBeUndefined();
   });
 });

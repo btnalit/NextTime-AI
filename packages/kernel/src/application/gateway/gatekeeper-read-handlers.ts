@@ -35,6 +35,7 @@ import {
   operationPlatformStatus,
   readGatekeeperPlatformPolicies,
   readGatekeeperPlatformPolicy,
+  selfConnectionSuspended,
 } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import {
@@ -373,18 +374,20 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const record = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
 
-  // The health probe is a network call, so it may overlap the reads; the two reads share one
-  // client and run one after the other (S5.5 leftover 34).
-  const healthProbe = probeGatekeeper(await resolveGateTarget(client, workspaceId, record));
+  const platformPolicy = await platformPolicyFor(client, workspaceId, gatekeeperId);
+  const suspended = selfConnectionSuspended(platformPolicy);
+  // The health probe is a network call, so it may overlap the reads; the reads share one client
+  // and run one after the other (S5.5 leftover 34). Legacy 872: never for a gate the platform
+  // suspended — the kernel does not contact it on the workspace's behalf, and its health is left
+  // out (`platformSuspension` below says why no call gets through).
+  const healthProbe = suspended
+    ? null
+    : probeGatekeeper(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
   const revisionChanges = revisionChangesForDrafts(allOperations);
-  const platformPolicy = await platformPolicyFor(client, workspaceId, gatekeeperId);
   // Legacy 674: a suspension is the whole connection's, not a deny list on some Operations — they
   // stay listed under it, so the owner sees what is kept and why none of it runs.
-  const suspension =
-    platformPolicy?.origin === 'self' && platformPolicy.suspended
-      ? await findSelfConnection(client, workspaceId, gatekeeperId)
-      : null;
+  const suspension = suspended ? await findSelfConnection(client, workspaceId, gatekeeperId) : null;
   // Legacy 701: a self-connected gate's address, and its open proposal to move, for an owner — the
   // one who may propose a change (`propose_gate_address_change`).
   const ownerOfSelfConnection = platformPolicy?.origin === 'self' && viewer.role === 'owner';
@@ -396,7 +399,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const lastAddressChangeOutcome = ownerOfSelfConnection
     ? await lastGateAddressChangeOutcomeWire(client, workspaceId, gatekeeperId)
     : null;
-  const { health, operationDigestCheck } = await healthProbe;
+  const probed = healthProbe !== null ? await healthProbe : null;
   const operations = allOperations.filter((op) => {
     if (!operationVisibleTo(viewer, op)) return false;
     const platform = operationPlatformStatus(platformPolicy, op.name);
@@ -418,8 +421,10 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
     result: {
       ...summary,
       operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
-      health,
-      ...(operationDigestCheck !== null ? { operationDigestCheck } : {}),
+      ...(probed !== null ? { health: probed.health } : {}),
+      ...(probed !== null && probed.operationDigestCheck !== null
+        ? { operationDigestCheck: probed.operationDigestCheck }
+        : {}),
       ...(ownerOfSelfConnection
         ? { endpoint: redactConnectionAddress('endpoint', record.endpoint) }
         : {}),

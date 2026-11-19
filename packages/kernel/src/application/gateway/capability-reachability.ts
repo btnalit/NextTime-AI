@@ -26,6 +26,7 @@ import {
   operationPlatformStatus,
   readGateDefinitionsForWorkspace,
   readGatekeeperPlatformPolicies,
+  selfConnectionSuspended,
 } from '../gates/index.js';
 import { listWorkerDefinitions } from '../worker/index.js';
 import { resolveAvailableResources } from './agent-profile-handlers.js';
@@ -346,7 +347,7 @@ export async function computeCapabilityReachability(
       excludedByPolicy: exclusion === 'excluded_by_policy',
       excludedByProfile: exclusion === 'excluded_by_profile',
       inEntryScope: inEntry.has(gateId),
-      platformSuspended: platformPolicy?.origin === 'self' && platformPolicy.suspended,
+      platformSuspended: selfConnectionSuspended(platformPolicy),
       observeOperationCount: published.length - executeCount,
       executeOperationCount: executeCount,
       disabledOperations,
@@ -377,8 +378,9 @@ export async function computeCapabilityReachability(
  *  `not_granted` applies only when nothing observable is left on the gate (`enabledObserveCount`
  *  — observe-class Operations not on the platform deny list — is 0, so only the execute path
  *  remains): a gate that still has an enabled observe-class Operation and is not direct was refused
- *  by `observeRefusal` for an exclusion, never for a missing Grant. */
-function firstGap(
+ *  by `observeRefusal` for an exclusion, never for a missing Grant. Exported for its unit test
+ *  (the ranking, review of #1510). */
+export function firstGap(
   gate: {
     readonly platformSuspended: boolean;
     readonly granted: boolean;

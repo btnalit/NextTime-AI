@@ -932,6 +932,107 @@ describe('SystemsPage', () => {
     ).toHaveLength(1);
   });
 
+  // Legacy 872 (UX acceptance of #1510, P3 ①): the card used to show the gate's 「不可达」 next to
+  // 「你：可直接调用」 while the readiness strip counted it unusable. The card reads the same gate
+  // state now: on the row, in the drawer, and on every member's row.
+  it('legacy 872: a gate that does not answer reads 「用不了」 on its card, in the drawer and on each member’s row — never 「可直接调用」', async () => {
+    const http = scriptedHttp({
+      execution_readiness: (params) => {
+        const { principalId, includeGateHealth } = params as {
+          principalId?: string;
+          includeGateHealth?: boolean;
+        };
+        if (principalId === 'p-2') {
+          return readiness({ principalId: 'p-2', gates: [gate({ status: 'via_worker' })] });
+        }
+        return readiness({
+          principalId: 'p-self',
+          gates: [gate({ ...(includeGateHealth === true ? { health: 'unreachable' } : {}) })],
+        });
+      },
+      list_principals: () => ({
+        items: [principal(), principal({ id: 'p-self', displayName: 'Alice', role: 'owner' })],
+      }),
+      list_grants: () => ({ items: [grant(), grant({ id: 'grant-self', principalId: 'p-self' })] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    await waitFor(() => expect(chip.getAttribute('data-health')).toBe('unreachable'));
+    expect(chip.textContent).toBe('你：用不了');
+    expect(chip.className).toContain('chip-warn');
+    // The access itself is unchanged: the chip keeps it, and its title says it comes back.
+    expect(chip.getAttribute('data-status')).toBe('direct');
+    expect(chip.getAttribute('title')).toBe(
+      '门现在没有回应，调用它会失败；门恢复后，你的智能体照常可以直接调用它。',
+    );
+    expect(within(card).getByTestId('gatekeeper-card-health').textContent).toBe('不可达');
+    expect(card.textContent).not.toContain('可直接调用');
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const mine = within(drawer).getByTestId('system-access-my-reachability');
+    expect(mine.textContent).toBe(
+      '用不了门现在没有回应，调用它会失败；门恢复后，你的智能体照常可以直接调用它。',
+    );
+    const list = within(drawer).getByTestId('system-access-list');
+    await waitFor(() => expect(within(list).getByText('Bob')).toBeTruthy());
+    const rows = within(list).getAllByTestId('system-access-row');
+    const rowOf = (principalId: string) =>
+      rows.find((row) => row.getAttribute('data-principal-id') === principalId) as HTMLElement;
+    // Another member's row says it about them, with their own access (via a Worker).
+    await waitFor(() =>
+      expect(rowOf('p-2').textContent).toContain(
+        '用不了门现在没有回应，调用它会失败；门恢复后，这位成员的智能体照常可以委派 Worker 用它。',
+      ),
+    );
+    expect(rowOf('p-self').textContent).toContain('你的智能体照常可以直接调用它');
+    expect(list.textContent).not.toContain('可直接调用');
+    expect(list.textContent).not.toContain('需委派');
+  });
+
+  it('legacy 872: a gate that answers keeps 「你：可直接调用」, and one refusing the platform’s credentials reads 「用不了」 too', async () => {
+    let health: 'ok' | 'unauthorized' = 'ok';
+    const http = scriptedHttp({
+      execution_readiness: (params) =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              ...((params as { includeGateHealth?: boolean }).includeGateHealth === true
+                ? { health }
+                : {}),
+            }),
+          ],
+        }),
+    });
+    const first = renderPage(http);
+    const chipOf = async () =>
+      within((await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement).getByTestId(
+        'gatekeeper-reachability',
+      );
+    await waitFor(async () =>
+      expect(
+        within((await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement).getByTestId(
+          'gatekeeper-card-health',
+        ).textContent,
+      ).toBe('健康'),
+    );
+    expect((await chipOf()).textContent).toBe('你：可直接调用');
+    expect((await chipOf()).hasAttribute('data-health')).toBe(false);
+    first.unmount();
+
+    health = 'unauthorized';
+    renderPage(http);
+    await waitFor(async () =>
+      expect((await chipOf()).getAttribute('data-health')).toBe('unauthorized'),
+    );
+    expect((await chipOf()).textContent).toBe('你：用不了');
+    expect((await chipOf()).getAttribute('title')).toBe(
+      '门拒绝了平台调用它用的凭据，调用它会失败；凭据对上后，你的智能体照常可以直接调用它。',
+    );
+  });
+
   it('legacy K (UX acceptance of #538): a gate refusing every call reads 「用不了」, never 「可直接调用」, and the drawer sends a platform admin to adopt the new manifest first', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
