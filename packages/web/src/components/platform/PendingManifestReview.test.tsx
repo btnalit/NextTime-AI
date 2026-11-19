@@ -376,7 +376,7 @@ describe('PendingManifestReview', () => {
         'orders.lookup definition changed: Call target (answers that mean absent, path)',
       );
       expect(text).toContain(
-        'orders.lookup no longer declares answers that mean absent: what it recorded as “not there” (when the target answers 404) is a failed call under the new definition',
+        'orders.lookup: no longer declares answers that mean absent, so what it recorded as “not there” (when the target answers 404) is a failed call under the new definition',
       );
     });
 

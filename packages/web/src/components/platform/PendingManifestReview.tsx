@@ -1,14 +1,13 @@
 import type {
   GateInstanceWire,
   GateOperationSummaryWire,
-  OperationAbsentAnswersWire,
   PendingGateManifestChangeWire,
   PendingGateManifestWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
-import { absentAnswersWhenText } from '../../lib/governance.js';
+import { absentAnswersChangeText, absentAnswersWhenText } from '../../lib/governance.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { bindingFieldLabel, operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
@@ -103,7 +102,7 @@ export function PendingManifestReview({
     // Legacy 477: what an Operation reads as "does not exist" is part of its binding, so a change
     // to it is said before and after, not only as 「调用目标」.
     ...pending.changed.flatMap((change) => {
-      const line = absentAnswersChangeText(change, t);
+      const line = absentAnswersChangeLine(change, t);
       return line === null ? [] : [line];
     }),
     // Review #501 on #571 ③: a changed entry that now declares a gate-owned param is the costliest
@@ -268,52 +267,17 @@ function changedFieldsText(change: PendingGateManifestChangeWire, t: Translate):
     .join(t('、', ', '));
 }
 
-/** The same answers in any order: a declaration is a set, so a reordered one means the same
- *  (review #501 on #1485 O2 — the kernel reports it as a change, since the digest moved). */
-function sameAnswers(a: OperationAbsentAnswersWire, b: OperationAbsentAnswersWire): boolean {
-  const values = (answers: OperationAbsentAnswersWire) =>
-    'statuses' in answers ? answers.statuses : answers.exitCodes;
-  if ('statuses' in a !== 'statuses' in b) return false;
-  const sorted = (list: readonly number[]) => [...list].sort((x, y) => x - y).join(',');
-  return sorted(values(a)) === sorted(values(b));
-}
-
 /** Legacy 477: a changed Operation's answers that mean "does not exist", before and after
  *  (`PendingGateManifestChangeWire.absentAnswers`, present only when they differ). */
-export function absentAnswersChangeText(
+function absentAnswersChangeLine(
   change: PendingGateManifestChangeWire,
   t: Translate,
 ): string | null {
-  const answers = change.absentAnswers;
-  if (answers === undefined) return null;
+  if (change.absentAnswers === undefined) return null;
+  const text = absentAnswersChangeText(change.absentAnswers.before, change.absentAnswers.after, t);
+  if (text === null) return null;
   const name = actionKindTagText(change.name);
-  const { before, after } = answers;
-  if (before === null && after === null) return null;
-  if (before === null && after !== null) {
-    const when = absentAnswersWhenText(after, t);
-    return t(
-      `${name} 新声明：${when}，表示要查的东西不存在，观察记为“不存在”，不算调用失败`,
-      `${name} now declares that ${when}, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call`,
-    );
-  }
-  if (before !== null && after === null) {
-    const when = absentAnswersWhenText(before, t);
-    return t(
-      `${name} 不再声明表示不存在的回答：原来${when}记为“不存在”，按新定义算调用失败`,
-      `${name} no longer declares answers that mean absent: what it recorded as “not there” (${when}) is a failed call under the new definition`,
-    );
-  }
-  if (before === null || after === null) return null;
-  if (sameAnswers(before, after)) {
-    return t(
-      `${name} 表示不存在的回答只换了顺序（${absentAnswersWhenText(after, t)}），含义不变`,
-      `${name}: the answers that mean absent were only reordered (${absentAnswersWhenText(after, t)}); the meaning is unchanged`,
-    );
-  }
-  return t(
-    `${name} 表示不存在的回答变了：原来是${absentAnswersWhenText(before, t)}，现在是${absentAnswersWhenText(after, t)}`,
-    `${name} answers that mean absent changed: before, ${absentAnswersWhenText(before, t)}; now, ${absentAnswersWhenText(after, t)}`,
-  );
+  return t(`${name} ${text}`, `${name}: ${text}`);
 }
 
 /** One announced Operation in a line: its name and how it is classified (the 新清单 review here,
