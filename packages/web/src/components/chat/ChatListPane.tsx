@@ -67,6 +67,7 @@ export function ChatListPane({
   initialHash,
 }: ChatListPaneProps) {
   const t = useT();
+  const ListTitle = selectedChatId ? 'h2' : 'h1';
   const load = useCallback(
     () =>
       client
@@ -147,7 +148,9 @@ export function ChatListPane({
     <aside className="chat-list-pane" data-testid="chat-list-pane">
       <header className="chat-list-pane-header">
         <div className="chat-list-pane-title-row">
-          <h1 className="chat-list-pane-title">{t('对话', 'Chats')}</h1>
+          {/* Legacy 668: beside an open chat the page's one h1 is that chat's title
+              (`ChatHeader`); the list is a section of it. */}
+          <ListTitle className="chat-list-pane-title">{t('对话', 'Chats')}</ListTitle>
           <Button
             variant="primary"
             size="s"

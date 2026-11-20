@@ -427,6 +427,37 @@ export function governanceConsequences(
  *  about one Operation
  *  that already names it in its target — the heading drops the count and the item its name
  *  (legacy 400: the name and the change were each said twice in that confirm). */
+/** One classification field of a governance change: old → new when it changed; when it did not
+ *  (legacy 668: 「执行 → 执行」 read as a change), the one value and 「不变」. */
+function ClassificationRow({
+  machine,
+  before,
+  after,
+  testId,
+}: {
+  readonly machine: 'operationMode' | 'blastRadius' | 'autoApprovable';
+  readonly before: string;
+  readonly after: string;
+  readonly testId?: string;
+}) {
+  const t = useT();
+  if (before === after) {
+    return (
+      <div className="row-wrap" data-testid={testId} data-unchanged="true">
+        <StatusChip machine={machine} status={after} size="s" />
+        <span className="text-12 text-text-3">{t('不变', 'unchanged')}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="row-wrap" data-testid={testId}>
+      <StatusChip machine={machine} status={before} size="s" />
+      <span aria-hidden="true">→</span>
+      <StatusChip machine={machine} status={after} size="s" />
+    </div>
+  );
+}
+
 export function GovernanceChangeList({
   items,
   testId = 'governance-diff-list',
@@ -462,29 +493,22 @@ export function GovernanceChangeList({
             )}
             {classificationChanged(item.before, item.after) ? (
               <>
-                <div className="row-wrap" data-testid={`${testId}-classification`}>
-                  <StatusChip machine="operationMode" status={item.before.mode} size="s" />
-                  <span aria-hidden="true">→</span>
-                  <StatusChip machine="operationMode" status={item.after.mode} size="s" />
-                </div>
-                <div className="row-wrap">
-                  <StatusChip machine="blastRadius" status={item.before.blastRadius} size="s" />
-                  <span aria-hidden="true">→</span>
-                  <StatusChip machine="blastRadius" status={item.after.blastRadius} size="s" />
-                </div>
-                <div className="row-wrap">
-                  <StatusChip
-                    machine="autoApprovable"
-                    status={String(item.before.autoApprovable)}
-                    size="s"
-                  />
-                  <span aria-hidden="true">→</span>
-                  <StatusChip
-                    machine="autoApprovable"
-                    status={String(item.after.autoApprovable)}
-                    size="s"
-                  />
-                </div>
+                <ClassificationRow
+                  machine="operationMode"
+                  before={item.before.mode}
+                  after={item.after.mode}
+                  testId={`${testId}-classification`}
+                />
+                <ClassificationRow
+                  machine="blastRadius"
+                  before={item.before.blastRadius}
+                  after={item.after.blastRadius}
+                />
+                <ClassificationRow
+                  machine="autoApprovable"
+                  before={String(item.before.autoApprovable)}
+                  after={String(item.after.autoApprovable)}
+                />
               </>
             ) : null}
             {otherFieldChanges(item.before, item.after, t).map((change) => (

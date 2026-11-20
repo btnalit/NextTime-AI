@@ -19,6 +19,9 @@ export interface ErrorBannerProps {
   /** A fix the page can apply itself (legacy 335: the composer's 「移除看不见的字符」), shown beside
    *  Retry. */
   readonly action?: ReactNode;
+  /** `warn` (legacy 668): not a failure but an outcome not known yet — the composer unsure whether
+   *  a message went out — drawn amber, as a warning, rather than red. */
+  readonly tone?: 'danger' | 'warn';
   readonly testId?: string;
 }
 
@@ -36,12 +39,19 @@ export function ErrorBanner({
   title,
   overrides,
   action,
+  tone = 'danger',
   testId,
 }: ErrorBannerProps) {
   const t = useT();
   const shown = presentError(error, t, overrides);
   return (
-    <div className="error-banner" role="alert" data-testid={testId} data-error-code={shown.code}>
+    <div
+      className={tone === 'warn' ? 'error-banner error-banner-warn' : 'error-banner'}
+      role="alert"
+      data-testid={testId}
+      data-error-code={shown.code}
+      data-tone={tone}
+    >
       <Icon name="alert" />
       <div className="error-banner-body">
         <div className="error-banner-title">

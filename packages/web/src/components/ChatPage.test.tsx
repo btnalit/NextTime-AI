@@ -815,6 +815,8 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     const fake = fakeClient();
     const banner = await timeOutOneSend(fake, 'restart web-1');
     expect(banner.textContent).toContain('不确定消息发出没有');
+    // Legacy 668: an outcome not known yet is a warning (amber), not a failure (red).
+    expect(banner.getAttribute('data-tone')).toBe('warn');
     expect(banner.textContent).toContain('可能已经发出，也可能没有');
     expect(banner.textContent).not.toContain('重试');
     expect(within(banner).getByRole('button', { name: '再发一次' })).toBeTruthy();
@@ -918,6 +920,8 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('和第一次发出的消息不一样'),
     );
+    // A refusal is known: red again (legacy 668).
+    expect(screen.getByRole('alert').getAttribute('data-tone')).toBe('danger');
     expect(
       within(screen.getByRole('alert')).queryByRole('button', { name: '再发一次' }),
     ).toBeNull();

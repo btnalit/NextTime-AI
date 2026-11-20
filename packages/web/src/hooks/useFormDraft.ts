@@ -33,7 +33,8 @@ export interface FormDraftOptions<T> {
  * The keys a restored form carries are reserved (`lib/client-uids.ts`), so a row added after a
  * reload cannot take one.
  *
- * Kept only while `edited`; an editor set back to what it opened with keeps nothing. `forget`
+ * Kept only while `edited`; an editor set back to what it opened with keeps nothing, and is no
+ * longer `restored` (legacy 668). `forget`
  * ends it: after a submit, or a discard the person confirmed.
  */
 export function useFormDraft<T>({
@@ -48,6 +49,9 @@ export function useFormDraft<T>({
   const [restored, setRestored] = useState(false);
   const checkedFor = useRef<string | null>(null);
   const done = useRef(false);
+  // A restore just ran and its value has not reached a render yet (legacy 668, UX on #1527: under
+  // StrictMode the effect runs again first, still seeing the form as it opened).
+  const awaitingRestored = useRef(false);
   const parseRef = useRef(parse);
   parseRef.current = parse;
   const restoreRef = useRef(restore);
@@ -62,12 +66,22 @@ export function useFormDraft<T>({
       if (parsed !== null) {
         reserveClientUidsIn(parsed);
         restoreRef.current(parsed);
+        awaitingRestored.current = true;
         setRestored(true);
         return;
       }
     }
+    if (awaitingRestored.current) {
+      if (!edited) return;
+      awaitingRestored.current = false;
+    }
     if (edited) saveDraftValue(scope, value);
-    else forgetDraft(scope);
+    else {
+      forgetDraft(scope);
+      // Legacy 668: set back to what the editor opened with, the restored draft is gone — its
+      // notice (「已恢复…还没有保存」) with it.
+      setRestored(false);
+    }
   }, [scope, value, edited]);
 
   const forget = useCallback(() => {
