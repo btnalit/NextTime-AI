@@ -307,3 +307,11 @@ export {
   workerGateAccess,
   workerRefKey,
 } from './worker-discovery.js';
+
+export {
+  type StoredToolCallCounts,
+  type TaskToolCallsPage,
+  type WorkerToolCallRow,
+  listTaskToolCalls,
+  storeWorkerToolCalls,
+} from './tool-calls.js';

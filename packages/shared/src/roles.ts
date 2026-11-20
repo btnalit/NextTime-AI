@@ -109,6 +109,8 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'get_agent_policy',
   'list_tasks',
   'get_task',
+  // Legacy 155: the tool calls a Task's Worker reported, read as `get_task` reads the Task.
+  'get_task_tool_calls',
   // S11 GO5a: the goal reads, under the rule the Task reads follow — an auditor sees the runs it
   // requested (none: it cannot propose one), never anyone else's.
   'list_goals',

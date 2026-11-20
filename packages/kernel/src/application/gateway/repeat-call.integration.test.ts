@@ -2306,6 +2306,31 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  report_tool_calls: {
+    // Legacy 155: the run keeps the first record of each call id, so the same report again stores
+    // nothing (and its second call is audited like the first).
+    'a running Task, its Worker reporting a finished call': {
+      first: { workerRunId: expect.any(String), stored: 1, alreadyStored: 0, overLimit: 0 },
+      second: { workerRunId: expect.any(String), stored: 0, alreadyStored: 1, overLimit: 0 },
+      by: workerHandle,
+      setUp: async (ctx) => {
+        await as(ctx, 'invoke_worker', await workerCall(ctx));
+        return {
+          calls: [
+            {
+              toolCallId: 'call-1',
+              name: 'bash',
+              outcome: 'done',
+              args: { command: 'uptime' },
+              result: { content: [{ type: 'text', text: 'up 3 days' }] },
+              startedAt: null,
+              endedAt: null,
+            },
+          ],
+        };
+      },
+    },
+  },
   report_task_outcome: {
     // A finished Task the owner delegated, graded from the owner's agent session; the same grade
     // again is a no-op (a different one is the one correction allowed).
@@ -3467,6 +3492,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'create_connection',
   'refresh_operation_governance',
   'report_task_result',
+  'report_tool_calls',
   'report_task_outcome',
   'request_action',
   'observe_operation',

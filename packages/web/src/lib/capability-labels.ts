@@ -722,6 +722,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '读取一个任务及其 Worker 运行记录。',
     enHint: 'Reads one task and its Worker runs.',
   },
+  get_task_tool_calls: {
+    zh: '查看任务的工具调用',
+    en: "Read a task's tool calls",
+    zhHint: '列出任务的 Worker 调用过的工具和结果（存下时已遮蔽），只给能读这个任务的人。',
+    enHint:
+      "Lists the tools a task's Worker called and their results (redacted when stored), for people who can read the task.",
+  },
   list_allowed_operations: {
     zh: '查看可调用操作',
     en: 'List allowed operations',
@@ -733,6 +740,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Submit task result',
     zhHint: 'Worker 提交结果契约，任务随之完成。',
     enHint: 'A Worker posts its result contract and completes the task.',
+  },
+  report_tool_calls: {
+    zh: '记录运行中的工具调用',
+    en: "Record a Worker's tool calls",
+    zhHint: 'Worker 报告这次运行里调用过的工具和结果，平台遮蔽后存下，只能写自己这次运行的。',
+    enHint:
+      'A Worker reports the tools it called in its run and their results; the platform redacts and keeps them, for its own run only.',
   },
   list_tasks: {
     zh: '查看我的任务',

@@ -62,6 +62,7 @@ import { OntologyDefinitionSchema } from './ontology-definition.js';
 import { GoalFromProcedureSchema } from './procedure.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
+import { MAX_TASK_TOOL_CALLS_LIMIT, ReportToolCallsParamsSchema } from './worker-tool-calls.js';
 
 /**
  * `resultSchema` reuse note (docs/wire-contract-conventions.md §5, S3.7): every schema below that
@@ -2811,6 +2812,60 @@ const taskCapabilities = [
       '(rejectedOutput) — fix the output and report again. An accepted report answers with the ' +
       'entries refused one by one (factsRejected, proposedOperationsRejected, evidenceDropped): ' +
       'recorded on the Task, never written, and the Task still completes.',
+  },
+  {
+    // Legacy 155 (worker-tool-calls.ts): a Worker's tool calls, reported by worker mode as they
+    // finish — a chat Turn's reach the kernel through agent-host instead (#520). Worker
+    // infrastructure like `report_task_result`, and authenticated the same way
+    // (application/gateway/worker-tool-calls-handler.ts): the WorkerRun is the calling Handle's own
+    // session's, never one the body names, and one that has ended is refused. The calls are content
+    // the run already produced, so U+0000 in them is
+    // stored as `\u{0}` (dispatch.ts `HANDLERS_SETTLING_UNSTORABLE_TEXT`); they are kept out of the
+    // call's audit row, which counts them — the records are in their own table, and the run's gate
+    // calls have audit rows of their own.
+    name: 'report_tool_calls',
+    group: 'task',
+    mode: 'write',
+    channel: 'handle',
+    paramsSchema: ReportToolCallsParamsSchema,
+    resultSchema: wire.ReportToolCallsWireSchema,
+    auditWithheldParamKeys: ['calls'],
+    description:
+      'Report tool calls this Worker made in its run (each: toolCallId, name, outcome done / ' +
+      'failed / not_finished, args?, result?, startedAt, endedAt — the Worker’s clock), at most ' +
+      '50 per call. Stored for the WorkerRun of the calling Handle’s ' +
+      'own session (workerRunId) while it runs, redacted and cut to a preview as a chat Turn’s ' +
+      'tool calls are; a ' +
+      'toolCallId already stored is kept as first written (alreadyStored), and a run keeps at most ' +
+      '200 (overLimit counts the rest). A record is the Worker ' +
+      'runtime’s own account, not what the gates did — that is in the audit trail.',
+  },
+  {
+    // Legacy 155: the console's Task view reads the tool calls a Task's Worker reported, under the
+    // rule `get_task` reads the Task by (`taskVisibleTo`): its requester, and the workspace owner
+    // in the console. Human channel only, as `get_turn_tool_calls` is for a Turn's.
+    name: 'get_task_tool_calls',
+    group: 'task',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        taskId: id,
+        limit: z.number().int().positive().max(MAX_TASK_TOOL_CALLS_LIMIT).optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: wire.TaskToolCallsWireSchema,
+    description:
+      'The tool calls a Task’s Worker reported for its WorkerRuns (report_tool_calls), redacted ' +
+      'and cut when stored: each with its workerRunId, its place in that run (sequence), when it ' +
+      'was received (reportedAt) and the record (content: name, outcome, args and result ' +
+      'previews, the Worker’s start and end times). Runs in the order they started, each run’s ' +
+      'calls in the order reported; at most limit (default 100, at ' +
+      'most 200) per page, nextCursor for the rest. Visible to whoever ' +
+      'may read the Task (get_task); for anyone else the Task is not found. What the Worker ' +
+      'reported, not what the gates did — that is in the audit trail.',
   },
   {
     // S2.10 addition (docs/development-tasks.md S2.10 deliverable 4): §9.3 never defined a list

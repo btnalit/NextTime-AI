@@ -1010,4 +1010,120 @@ describe('registerWorkerMode', () => {
     expect(kernel.requests.filter((r) => r.capability === 'report_task_result')).toHaveLength(1);
     expect(exitSpy).toHaveBeenCalledTimes(1);
   });
+
+  describe('tool-call records (legacy 155)', () => {
+    async function readTask(callerCapabilities: readonly string[] | undefined): Promise<void> {
+      kernel.setHandler('get_task', () => ({
+        ok: true,
+        result: {
+          input: 'restart web-1',
+          ...(callerCapabilities ? { callerCapabilities } : {}),
+        },
+      }));
+      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+      const contextHandler = fake.handlers.get('context');
+      if (!contextHandler) throw new Error('context handler not registered');
+      await contextHandler({ messages: [] }, fakeCtx());
+    }
+
+    function runTool(id: string, toolName = 'bash'): void {
+      const start = fake.handlers.get('tool_execution_start');
+      const end = fake.handlers.get('tool_execution_end');
+      if (!start || !end) throw new Error('tool execution handlers not registered');
+      start({ type: 'tool_execution_start', toolCallId: id, toolName, args: { command: id } });
+      end({
+        type: 'tool_execution_end',
+        toolCallId: id,
+        toolName,
+        result: { content: [{ type: 'text', text: `${id} ok` }] },
+        isError: false,
+      });
+    }
+
+    const order = () =>
+      kernel.requests
+        .filter(
+          (r) => r.capability === 'report_tool_calls' || r.capability === 'report_task_result',
+        )
+        .map((r) =>
+          r.capability === 'report_tool_calls'
+            ? (r.params as { calls: { toolCallId: string }[] }).calls.map((c) => c.toolCallId)
+            : 'result',
+        );
+
+    it('sends every finished call before the result, and none after it', async () => {
+      kernel.setHandler('report_tool_calls', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return {
+          ok: true,
+          result: { workerRunId: 'run-1', stored: 1, alreadyStored: 0, overLimit: 0 },
+        };
+      });
+      kernel.setHandler('report_task_result', () => ({
+        ok: true,
+        result: { status: 'completed' },
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      await readTask(['get_task', 'report_task_result', 'report_tool_calls']);
+      runTool('call-1');
+      runTool('call-2');
+
+      const tool = fake.tools.get('report_result');
+      if (!tool) throw new Error('report_result tool not registered');
+      runTool('call-3');
+      await tool.execute('call-report', { summary: 'done' }, undefined, undefined, fakeCtx());
+      // The accepted report_result call's own end, after its Handle was revoked: not sent.
+      runTool('call-after');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      const seen = order();
+      expect(seen.at(-1)).toBe('result');
+      expect(seen.slice(0, -1).flat()).toEqual(['call-1', 'call-2', 'call-3']);
+      logSpy.mockRestore();
+    });
+
+    it('sends none when get_task does not list report_tool_calls', async () => {
+      kernel.setHandler('report_task_result', () => ({
+        ok: true,
+        result: { status: 'completed' },
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      await readTask(['get_task', 'report_task_result']);
+      runTool('call-1');
+      const agentSettled = fake.handlers.get('agent_settled');
+      if (!agentSettled) throw new Error('agent_settled handler not registered');
+      await agentSettled({}, fakeCtx());
+      await flushImmediate();
+      expect(order()).toEqual(['result']);
+      logSpy.mockRestore();
+    });
+
+    it('at agent_settled, reports the calls still open as not finished, before the fallback result', async () => {
+      kernel.setHandler('report_tool_calls', () => ({
+        ok: true,
+        result: { workerRunId: 'run-1', stored: 1, alreadyStored: 0, overLimit: 0 },
+      }));
+      kernel.setHandler('report_task_result', () => ({
+        ok: true,
+        result: { status: 'completed' },
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      await readTask(['report_tool_calls']);
+      const start = fake.handlers.get('tool_execution_start');
+      start?.({ type: 'tool_execution_start', toolCallId: 'hung', toolName: 'bash', args: {} });
+
+      const agentSettled = fake.handlers.get('agent_settled');
+      if (!agentSettled) throw new Error('agent_settled handler not registered');
+      await agentSettled({}, fakeCtx());
+      await flushImmediate();
+
+      expect(order()).toEqual([['hung'], 'result']);
+      const report = kernel.requests.find((r) => r.capability === 'report_tool_calls');
+      expect((report?.params as { calls: { outcome: string }[] }).calls[0]?.outcome).toBe(
+        'not_finished',
+      );
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      logSpy.mockRestore();
+    });
+  });
 });

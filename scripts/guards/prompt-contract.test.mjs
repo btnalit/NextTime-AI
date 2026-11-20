@@ -522,22 +522,28 @@ test('checkAdminToolsWithinCeiling', async (t) => {
     assert.match(missing[0], /needs "list_allowed_operations"/);
   });
 
-  // S11 AA5a-1
+  // S11 AA5a-1; legacy 155 adds report_tool_calls
   await t.test(
-    'catches report_task_result registered as a tool, or missing from the ceiling',
+    'catches report_task_result or report_tool_calls registered as a tool, or missing from the ceiling',
     () => {
-      const raw = checkAdminToolsWithinCeiling(
-        ['get_object', 'propose_admin_proposal', 'report_task_result'],
-        ceiling,
+      assert.deepEqual(
+        [...ADMIN_CEILING_FOR_ITS_WORKERS],
+        ['report_task_result', 'report_tool_calls'],
       );
-      assert.equal(raw.length, 1);
-      assert.match(raw[0], /only for a Worker the admin agent starts/);
-      const missing = checkAdminToolsWithinCeiling(
-        ['get_object', 'propose_admin_proposal'],
-        ceiling.filter((name) => name !== 'report_task_result'),
-      );
-      assert.equal(missing.length, 1);
-      assert.match(missing[0], /a Worker the admin agent starts needs "report_task_result"/);
+      for (const name of ADMIN_CEILING_FOR_ITS_WORKERS) {
+        const raw = checkAdminToolsWithinCeiling(
+          ['get_object', 'propose_admin_proposal', name],
+          ceiling,
+        );
+        assert.equal(raw.length, 1);
+        assert.match(raw[0], /only for a Worker the admin agent starts/);
+        const missing = checkAdminToolsWithinCeiling(
+          ['get_object', 'propose_admin_proposal'],
+          ceiling.filter((other) => other !== name),
+        );
+        assert.equal(missing.length, 1);
+        assert.match(missing[0], new RegExp(`a Worker the admin agent starts needs "${name}"`));
+      }
     },
   );
 });

@@ -13,6 +13,7 @@ import {
   gateToolName,
   truncateToolResult,
 } from './gate-tools.js';
+import { ToolCallReporter } from './worker-tool-calls.js';
 
 /**
  * `worker` mode (design doc §7.3, §7.4, S2.9 scope): the pi extension registered inside a
@@ -445,6 +446,8 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   /** Fixable kernel rejections already thrown back to the model — see
    *  `MAX_FIXABLE_REJECTIONS_SURFACED`. */
   let fixableRejectionsSurfaced = 0;
+  /** Legacy 155: the run's tool calls, reported as they finish (worker-tool-calls.ts). */
+  const toolCalls = new ToolCallReporter(options.kernelClient, logKernelError);
 
   async function postResultContract(
     contract: WorkerResultContract,
@@ -454,11 +457,15 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
       ...contract,
       ...(sessionJsonlPath ? { sessionJsonlPath } : {}),
     };
+    // Legacy 155: accepting the result ends the run and revokes its Handle — every finished tool
+    // call goes first, and none after.
+    await toolCalls.flush();
     const outcome = await options.kernelClient.call<ReportTaskResultOutcome>(
       'report_task_result',
       payload,
     );
     resultPosted = true;
+    toolCalls.close();
     console.log('nexttime-worker check=report_task_result result=ok');
     return outcome ?? {};
   }
@@ -624,6 +631,8 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
             logKernelError(error, 'search');
           }
         }
+        // Legacy 155: and whether its Handle may report the run's tool calls.
+        toolCalls.setCallerCapabilities(task.callerCapabilities);
         taskContext = {
           taskInput: task.input,
           facts,
@@ -649,6 +658,14 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     return { messages: withWorkerContextFirst(event.messages, contextMessage) };
   });
 
+  // Legacy 155: each tool call's start and end, for the run's records (worker-tool-calls.ts).
+  pi.on('tool_execution_start', (event) => {
+    toolCalls.started(event);
+  });
+  pi.on('tool_execution_end', (event) => {
+    toolCalls.ended(event);
+  });
+
   pi.on('agent_end', (event) => {
     const summary = latestAssistantSummary(event.messages);
     if (summary) latestTurnSummary = summary;
@@ -664,6 +681,9 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     // turn without a corrected one (re-sent as-is: a transient cause may have cleared; a
     // repeated rejection is logged and the reaper's `no_result` path handles the Task).
     if (!resultPosted) {
+      // Legacy 155: calls still open did not finish; reported so before the result (whose
+      // acceptance revokes the Handle the report is made with).
+      await toolCalls.settle(REPORT_RESULT_TOOL_NAME);
       const contract: WorkerResultContract = pendingResultContract ?? {
         summary:
           latestTurnSummary ||

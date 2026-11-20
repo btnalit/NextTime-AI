@@ -579,8 +579,9 @@ const ENTRY_PROMPT_CONTENT_CHECKS = [
 //
 // S11 AA5a-1: one more kind of ceiling capability has no tool on purpose — what the ceiling holds
 // only so a Worker the admin agent starts keeps it (handles.ts `ADMIN_AGENT_CEILING_FOR_ITS_WORKERS`:
-// a child Handle keeps only what its parent holds). `report_task_result` is the one: its handler
-// refuses any session but a WorkerRun's, so the admin agent's own call could only answer 403. Named
+// a child Handle keeps only what its parent holds). `report_task_result` is one, and
+// `report_tool_calls` (legacy 155) the other: their handlers refuse any session but a WorkerRun's,
+// so the admin agent's own call could only answer 403. Named
 // here as well as in the kernel, so adding to either alone fails this guard; registering one as a
 // tool fails it too.
 // -------------------------------------------------------------------------------------------
@@ -590,7 +591,7 @@ export const ADMIN_CEILING_REACHED_BY_PROJECTION = new Set([
   'observe_operation',
 ]);
 
-export const ADMIN_CEILING_FOR_ITS_WORKERS = new Set(['report_task_result']);
+export const ADMIN_CEILING_FOR_ITS_WORKERS = new Set(['report_task_result', 'report_tool_calls']);
 
 export function checkAdminToolsWithinCeiling(adminToolNames, ceilingNames) {
   const violations = [];

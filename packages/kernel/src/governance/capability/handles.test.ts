@@ -935,6 +935,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
         'request_connection',
         // S11 AA5a-1: only so a Worker it starts can hand its result back (refused for itself).
         'report_task_result',
+        // Legacy 155: likewise its tool calls (refused for itself: no WorkerRun is its session's).
+        'report_tool_calls',
         'search',
         'state_at',
         'traverse',
@@ -979,8 +981,14 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
       'request_connection',
     ];
     // S11 AA5a-1: the Task records the admin agent session that started it; and the report of a
-    // Worker it starts, which its own session is refused (no WorkerRun is its).
-    const writes = ['agent_withdraw_admin_proposal', 'invoke_worker', 'report_task_result'];
+    // Worker it starts, which its own session is refused (no WorkerRun is its) — the report of
+    // that Worker's tool calls too since legacy 155, refused for itself the same way.
+    const writes = [
+      'agent_withdraw_admin_proposal',
+      'invoke_worker',
+      'report_task_result',
+      'report_tool_calls',
+    ];
     for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
       const capability = getCapability(name);
       expect(capability, name).toBeDefined();

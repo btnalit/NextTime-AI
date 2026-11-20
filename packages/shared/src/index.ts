@@ -43,6 +43,7 @@ export * from './goal-review.js';
 export * from './goal-precedents.js';
 export * from './ontology-definition.js';
 export * from './worker-result.js';
+export * from './worker-tool-calls.js';
 export * from './image-ref.js';
 export * from './correlation.js';
 export * from './metrics.js';

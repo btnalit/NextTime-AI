@@ -44,6 +44,8 @@ describe('computeChildHandleScope', () => {
       'get_object',
       'list_allowed_operations',
       'report_task_result',
+      // Legacy 155: a Worker reports its run's tool calls — its own run only, by `claims.sid`.
+      'report_tool_calls',
       // S2.12 host run: a Worker reads its own Task on `context` — infrastructure, not a need.
       'get_task',
       // Leftover 98: worker mode's observe-class gate tools call it.

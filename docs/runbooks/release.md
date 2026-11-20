@@ -3586,6 +3586,25 @@ select 'reconcile', count(*) from action_requests r
      - 0047：删两条平台策略、两个索引、四个约束和三列，把 `target` 设回 `not null`（第 2 步之后所有行都有 `target`），再删 governance 47 那一行。
 - 下一次主机升级的提示要带上本节。
 
+### 3.206 Worker 运行中的工具调用落库（#PR，遗留 155 内核一半，task 0016，0.69.2 之后的下一版）
+
+**迁移 task 0016**：新表 `worker_run_tool_calls`，随 `--pull` 自动执行，不回填，不动已有的表。
+
+- **表**：每行是一个 WorkerRun 的一次工具调用记录。主键（工作区、WorkerRun、调用 id），同一个调用 id 只存第一次；`sequence` 1–200，同一个运行内唯一，一个运行最多 200 条；`content` 必须是 `kind = 'tool_call'` 且调用 id 与行一致的记录；外键指向 `worker_runs`。
+- **权限**：工作区行级隔离（和 `tasks`、`worker_runs` 一样）；应用角色只有 `select`、`insert`，记录写下后不能改、不能删。删除工作区时按外键自动一起删。
+- **行为变化**：
+  - Worker 在运行中把每次工具调用报给新能力 `report_tool_calls`（只能写自己这次运行的；调用结束就报，交结果之前全部报完，交结果之后不再报；回合结束时还没结束的调用记为「没有结束」）。内核按对话里工具调用的同一套规则遮蔽、截成预览再存；每次报告一条审计行，只记运行、条数和遮蔽数，不记调用内容。
+  - 能读这个 Task 的人（所有者、请求人）用新能力 `get_task_tool_calls` 按 Task 读，按运行开始先后、每个运行内按报告顺序分页；别人读得到的是和不存在的 Task 一样的 404。控制台的显示由控制台一半接着做。
+  - 只有 Handle 带 `report_tool_calls` 的 Worker 才报（`get_task` 的 `callerCapabilities` 里有它）：升级前签发的 Handle、评测运行的封闭 Handle 都不报，照旧只有会话文件里有。
+  - 记录是 Worker 运行时自己的说法；它在门上做了什么，仍以审计里的 `observe_operation` / `request_action` 行为准。
+- **升级影响**：只建一张空表和它的策略、授权，很快，不锁已有的表。升级前已经开始的运行没有记录。没有需要手工执行的步骤。
+- **升级后只读核对**（以表的属主运行，结果记 `docs/private/`）：
+  - `select version from schema_migrations where module = 'task' and version = 16;` 返回一行。
+  - `select privilege_type from information_schema.role_table_grants where table_name = 'worker_run_tool_calls' and grantee = 'nexttime_app' order by 1;` 只有 `INSERT`、`SELECT`。
+  - 升级后第一个跑完、用过工具的 Worker 之后，`select count(*) from worker_run_tool_calls;` 大于 0。
+- **回滚**（见 §6 一行）：只需回退代码，上一版从不读写这张表。还在用新运行时镜像的 Worker 遇到上一版内核时，Handle 里没有 `report_tool_calls`，不会去报。要连 schema 一起撤：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失，它们只在这张表里）。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3785,6 +3804,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | core `0063_links_active_read_indexes`（#1471，遗留 146）：`links` 加两个只含活跃 Fact 的部分索引 `links_workspace_type_active_idx`（类型 + UTC 毫秒键 + id，降序）与 `links_workspace_recorded_active_idx`（`recorded_at` + id，降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它们，照常运行（`list_facts` 照旧排序）；#1471 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index links_workspace_type_active_idx; drop index links_workspace_recorded_active_idx;`，再删 `schema_migrations` 里 core 63 那一行 |
 | 0.69.2 之后的下一版 | governance `0047_connection_request_gate_instance`（#1521，遗留 254）：`connection_requests` 加 `gate_instance_id`、`cancel_reason`、`cancelled_at` 三列，`target` 可为空，加四个约束、部分唯一索引 `connection_requests_one_open_gate_enable`、索引 `connection_requests_gate_instance_idx` 和平台平面的两条策略；不回填 | 有条件可逆 | 上一版只认自接申请。它插入的行总带 `target`，取消时不写原因，这在新约束下都合法；但它把 `target` 当字符串读，有门实例申请（`gate_instance_id is not null`）时，它的所有者队列会出错。只有这类申请为 0 条时才能只回退代码；#1521 的 CI rehearsal 与可逆性探针通过 | 回退代码前按 §3.205 先删门实例申请，之后只回退代码。要撤 schema：先撤 0048，再删两条策略、两个索引、四个约束和三列，`target` 设回 `not null`，再删 `schema_migrations` 里 governance 47 那一行 |
 | 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
+| 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#PR，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
