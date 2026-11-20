@@ -90,7 +90,7 @@ export function SystemStatusLineView({
         data-variant={line.variant}
       >
         <span className="system-status-failure text-warn" data-testid="system-status-failure">
-          {t('智能体正在重新连接平台', 'Agent reconnecting')}
+          {t('智能体正在重新连接平台', 'The agent is reconnecting to the platform')}
         </span>
         <span className="system-status-text">
           {t(
