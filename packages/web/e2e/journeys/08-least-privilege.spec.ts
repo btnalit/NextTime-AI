@@ -17,6 +17,9 @@ import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from
  *   3. 这个人用临时密码登录、改密，切到这个工作区。
  *   4. 依次打开侧栏「使用」和「治理」里这个角色看得到的每一页。
  *   5. 每页上的"下一步"提示：给了链接的，跟着点过去；没给链接的，说清楚该找谁。
+ *   6. 在「系统与授权 → 接入一个系统」里选 CI 的备用门实例（`ci-spare-mcp`，平台已启用、没有工作区
+ *      启用过它），走到「在本工作区启用」这一步：这个角色看到的是「申请启用」或「由工作区所有者完成」，
+ *      不是一个点了会被拒的按钮（遗留 260）。不点申请——申请的一生由 integrations.spec.ts 走。
  * 状态覆盖:
  *   - 空: 新成员第一次进来，我的智能体、系统与授权里自己的那一行都还是空的——就是本旅程看的状态。
  *   - 错: 本旅程的"错"就是越权——这个角色打开任何一页、点任何一个提示，内核都不应回 403。
@@ -31,7 +34,27 @@ import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from
  *     且 testid 以 `-forbidden` 结尾）——那样的页不该出现在这个角色的侧栏里；
  *   - 每个"下一步"提示要么这个角色点得动（点过去也不 403），要么写明该找工作区所有者 / 平台管理员 /
  *     这位成员自己。
+ *   - 「在本工作区启用」这一步没有替这个角色去要它拿不到的东西，也没有给它启用按钮。
+ *
+ * 准备工作在页面外做：平台管理员把 `ci-spare-mcp` 在平台上启用、把它的连接器设为平台预置
+ * （`update_gate_instance`、`set_connector_mode`，平台侧由 integrations.spec.ts 在控制台里走过）。
+ * 这个实例只有本旅程用，任何 spec 都不在工作区里启用它，所以每个角色走到这一步时它都还没启用。
  */
+
+/** The CI stack's second announced instance (`.github/workflows/e2e.yml`, "Seed a discovered gate
+ *  instance"): same connector as `ci-fixture-mcp`, never enabled in a workspace. */
+const SPARE_GATE_ID = 'ci-spare-mcp';
+const SPARE_CONNECTOR = 'fixture-mcp';
+
+/** A platform capability as the signed-in administrator, from Node — setup only. */
+async function adminCap(page: Page, name: string, data: unknown): Promise<void> {
+  const res = await page.request.post(`/api/cap/${name}`, {
+    headers: { 'x-requested-with': 'nexttime' },
+    data,
+  });
+  const body = (await res.json()) as { ok: boolean; error?: unknown };
+  if (!body.ok) throw new Error(`capability ${name} failed: ${JSON.stringify(body.error)}`);
+}
 
 const ROLES = ['operator', 'builder', 'member', 'auditor'] as const;
 
@@ -87,8 +110,14 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       const suffix = Date.now().toString(36);
       const displayName = `Journey ${role} ${suffix}`;
 
-      // Step 1: admin creates the platform user.
+      // Step 1: admin creates the platform user (and makes the spare instance available to
+      // workspaces — step 6's setup; both calls leave an already-enabled instance as it is).
       await asAdmin(page);
+      await adminCap(page, 'update_gate_instance', { gateId: SPARE_GATE_ID, status: 'enabled' });
+      await adminCap(page, 'set_connector_mode', {
+        name: SPARE_CONNECTOR,
+        mode: 'platform_preset',
+      });
       const { login, temporaryPassword } = await createPlatformUser(page, displayName);
       await page.getByTestId('sign-out').click();
       await expect(page.getByTestId('login-submit')).toBeVisible();
@@ -188,6 +217,26 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
           expect(
             await localRefusals.take(),
             '接入一个系统: asked for what this role cannot have',
+          ).toEqual([]);
+          // Step 6 (legacy 260): an instance still waiting for 在本工作区启用 — the step asks this
+          // role for nothing it cannot have, and offers it no enable button.
+          // Choosing an instance moves the wizard to its policy step at once, so the radio is
+          // gone before `check()` could confirm it: click it, as journey 17 does.
+          const drawer = page.getByTestId('connect-system-drawer');
+          await drawer.getByRole('radio', { name: /CI spare MCP/ }).click({ timeout: 15_000 });
+          const enableStep = drawer.getByTestId('launcher-workspace-enable');
+          await expect(enableStep).toBeVisible({ timeout: 15_000 });
+          await expect(
+            enableStep
+              .getByTestId('launcher-workspace-enable-request')
+              .or(enableStep.getByTestId('launcher-workspace-enable-owner-only'))
+              .first(),
+          ).toBeVisible({ timeout: 15_000 });
+          await expect(enableStep.getByTestId('launcher-workspace-enable-button')).toHaveCount(0);
+          await settled();
+          expect(
+            await localRefusals.take(),
+            '在本工作区启用: asked for what this role cannot have',
           ).toEqual([]);
           await page.keyboard.press('Escape');
           await expect(page.getByTestId('connect-system-drawer')).toBeHidden({ timeout: 15_000 });
