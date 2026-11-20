@@ -16,7 +16,12 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
-import { insertGateLink, manifestDigest, upsertAnnouncement } from '../gates/index.js';
+import {
+  insertGateLink,
+  manifestDigest,
+  readAwaitingWorkspaces,
+  upsertAnnouncement,
+} from '../gates/index.js';
 import { findOperations } from '../task/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -823,6 +828,10 @@ describe.runIf(DATABASE_URL !== undefined)(
             gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
           },
         ]);
+        // Legacy 223: no revision of it can be published, so the platform's list of workspaces
+        // a gate awaits leaves it out — it awaits the gate's maintainer, not this workspace.
+        const awaiting = await asAdmin((client) => readAwaitingWorkspaces(client, [gateId]));
+        expect(awaiting.get(gateId)).toEqual({ items: [], count: 0 });
       });
     });
 

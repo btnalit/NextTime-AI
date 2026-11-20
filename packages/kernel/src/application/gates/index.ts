@@ -146,6 +146,8 @@ export {
   observeRefusal,
   readObserveExclusions,
 } from './observe-access.js';
+export type { GateAwaitingWorkspaces } from './awaiting-workspaces.js';
+export { readAwaitingWorkspaces } from './awaiting-workspaces.js';
 export type { DefinitionAwaiting, GateRunningDefinitions } from './definition-drift.js';
 export {
   definitionRefusal,
