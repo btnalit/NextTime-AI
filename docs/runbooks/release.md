@@ -3605,7 +3605,7 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §6 一行）：只需回退代码，上一版从不读写这张表。还在用新运行时镜像的 Worker 遇到上一版内核时，Handle 里没有 `report_tool_calls`，不会去报。要连 schema 一起撤：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失，它们只在这张表里）。
 - 下一次主机升级的提示要带上本节。
 
-### 3.207 签发 Handle 时可写备注，列表带会话短编号（#PR，遗留 168 补充，governance 0049，0.69.2 之后的下一版）
+### 3.207 签发 Handle 时可写备注，列表带会话短编号（#1549，遗留 168 补充，governance 0049，0.69.2 之后的下一版）
 
 **迁移 governance 0049**：`sessions` 加一列 `note`（可空）和约束 `sessions_note_bounded`，随 `--pull` 自动执行，不回填。
 
@@ -3824,7 +3824,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | governance `0047_connection_request_gate_instance`（#1521，遗留 254）：`connection_requests` 加 `gate_instance_id`、`cancel_reason`、`cancelled_at` 三列，`target` 可为空，加四个约束、部分唯一索引 `connection_requests_one_open_gate_enable`、索引 `connection_requests_gate_instance_idx` 和平台平面的两条策略；不回填 | 有条件可逆 | 上一版只认自接申请。它插入的行总带 `target`，取消时不写原因，这在新约束下都合法；但它把 `target` 当字符串读，有门实例申请（`gate_instance_id is not null`）时，它的所有者队列会出错。只有这类申请为 0 条时才能只回退代码；#1521 的 CI rehearsal 与可逆性探针通过 | 回退代码前按 §3.205 先删门实例申请，之后只回退代码。要撤 schema：先撤 0048，再删两条策略、两个索引、四个约束和三列，`target` 设回 `not null`，再删 `schema_migrations` 里 governance 47 那一行 |
 | 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
 | 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#1531，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
-| 0.69.2 之后的下一版 | governance `0049_session_note`（#PR，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
+| 0.69.2 之后的下一版 | governance `0049_session_note`（#1549，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
