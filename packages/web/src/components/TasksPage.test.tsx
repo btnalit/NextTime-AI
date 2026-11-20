@@ -68,7 +68,10 @@ function scriptedHttp(
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push(name);
-      const handler = handlers[name];
+      // Legacy 155: every detail with a run reads its Worker's tool calls — none unless scripted.
+      const handler =
+        handlers[name] ??
+        (name === 'get_task_tool_calls' ? () => ({ taskId: 'task-1', items: [] }) : undefined);
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],

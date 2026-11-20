@@ -26,11 +26,13 @@ import {
   type WorkerRunSummary,
   asResultContract,
   isCancellable,
+  isTerminalTaskStatus,
   taskFinishedAt,
   taskGoalStatement,
   taskNeed,
 } from '../lib/tasks.js';
 import { ProxyOutcomeNote } from './ProxyOutcomeNote.js';
+import { TaskToolCalls } from './TaskToolCalls.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
 import { AdminAgentActingMark } from './audit/AdminAgentActingChip.js';
@@ -567,6 +569,15 @@ export function TaskDetail({
             definitionId={task.workerDefinitionId}
             definitionName={definitionName}
             t={t}
+          />
+        ) : null}
+        {task.workerRuns.length > 0 ? (
+          <TaskToolCalls
+            http={http}
+            pushes={pushes}
+            taskId={task.id}
+            runs={task.workerRuns}
+            running={!isTerminalTaskStatus(task.status)}
           />
         ) : null}
       </div>
