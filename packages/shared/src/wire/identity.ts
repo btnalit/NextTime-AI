@@ -47,6 +47,31 @@ export const RotateApiKeyResultWireSchema = z
   })
   .strict();
 
+/** Legacy 150: how many users `lookup_users` returns at most; more matches set `truncated`. */
+export const LOOKUP_USERS_LIMIT = 20;
+
+/** Legacy 150: one platform user a workspace owner may add (`lookup_users`) — the login
+ *  `add_member` takes and the name to show beside it. Never the user id, the platform role or
+ *  anything about the user's other workspaces: the workspace plane does not carry platform user
+ *  ids. */
+export const LookedUpUserWireSchema = z
+  .object({
+    login: z.string(),
+    displayName: z.string(),
+  })
+  .strict();
+export type LookedUpUserWire = z.infer<typeof LookedUpUserWireSchema>;
+
+/** `lookup_users`'s result: at most {@link LOOKUP_USERS_LIMIT} users, best match first;
+ *  `truncated: true` when more matched (narrow the query). Not paginated. */
+export const LookupUsersResultWireSchema = z
+  .object({
+    items: z.array(LookedUpUserWireSchema),
+    truncated: z.literal(true).optional(),
+  })
+  .strict();
+export type LookupUsersResultWire = z.infer<typeof LookupUsersResultWireSchema>;
+
 export const WorkspaceWireSchema = z
   .object({
     id: z.string(),

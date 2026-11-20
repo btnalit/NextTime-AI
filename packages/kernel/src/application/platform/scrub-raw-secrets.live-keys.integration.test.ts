@@ -150,13 +150,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         LIVE_API_KEY_COMPARE_WINDOW + 50,
         JSON.stringify({ headers: { [memberKey]: true } }),
       ]);
-      // A key in a text array. Primary keys holding a key, alone or inside a longer run (listed for
-      // the key the row also holds alone), or a Handle: listed masked.
+      // A key in a text array. Primary keys holding a key, alone, inside a longer run, or next to
+      // `/`, `+` or `=` where no value rule sees it (listed for the key the row also holds alone),
+      // or a Handle: listed masked.
       await pool.query(`create table ${named} (name text primary key, tags text[])`);
       await pool.query(
         `insert into ${named} values
            ('tagged', $1::text[]), ($2, '{}'), ($3, $4::text[]), ($5, $6::text[]), ($7, $4::text[]),
-           ('plain', '{collector}')`,
+           ($8, $6::text[]), ($9, $4::text[]), ($10, $6::text[]), ('plain', '{collector}')`,
         [
           ['collector', serviceKey],
           memberKey,
@@ -165,6 +166,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           `call_${memberKey}`,
           [memberKey],
           `${serviceKey}x`,
+          `team/${memberKey}`,
+          `${serviceKey}=`,
+          `x+${memberKey}`,
         ],
       );
       await admin(async (client) => {
@@ -312,6 +316,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       `chat_messages ${ids.userMessage} ${ids.member}`,
       `named [redacted] ${ids.member}`,
       `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.service}`,
       `named [redacted] ${ids.service}`,
       `named [redacted] ${ids.service}`,
       `named tagged ${ids.service}`,
@@ -342,8 +349,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       expect(
         ours.filter((row) => row.table === named && row.row[0] !== 'tagged').map((row) => row.row),
-      ).toEqual([['[redacted]'], ['[redacted]'], ['[redacted]'], ['[redacted]']]);
-      // Two Principals, fifteen copies: the keys to rotate are counted once each.
+      ).toEqual(Array.from({ length: 7 }, () => ['[redacted]']));
+      // Two Principals, eighteen copies: the keys to rotate are counted once each.
       expect(new Set(ours.map((row) => row.principalId)).size).toBe(2);
       expect(result.liveApiKeys.keys).toBeGreaterThanOrEqual(2);
       expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);

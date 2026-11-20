@@ -360,6 +360,7 @@ import {
   disablePrincipalHandler,
   getWorkspaceHandler,
   listPrincipalsHandler,
+  lookupUsersHandler,
   rotateApiKeyHandler,
   setPrincipalRoleHandler,
 } from './members-handlers.js';
@@ -3200,6 +3201,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_principals', listPrincipalsHandler],
   ['create_principal', createPrincipalHandler],
   ['add_member', addMemberHandler],
+  // Legacy 150: the users an owner may add with add_member.
+  ['lookup_users', lookupUsersHandler],
   ['set_principal_role', setPrincipalRoleHandler],
   ['rotate_api_key', rotateApiKeyHandler],
   ['disable_principal', disablePrincipalHandler],

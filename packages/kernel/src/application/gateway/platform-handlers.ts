@@ -268,6 +268,8 @@ function decodeCursor(cursor: string): { createdAt: string; id: string } | null 
  * leave with their workspace (`purge_workspace`, §4 edge (b)) and the page hides them by default
  * until then. A user with no membership at all, or with a membership somewhere real, is never
  * residual whatever their password state. Expressed as SQL so the keyset cursor stays exact.
+ * `lookup_users_for_owner` (core 0064, `lookup_users`) leaves out the same users with the same
+ * condition written into the function: a change here is a change there, in a new migration.
  */
 const RESIDUAL_USER_CONDITION = `
   (u.has_password = false
