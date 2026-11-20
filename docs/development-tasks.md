@@ -3889,6 +3889,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 同 PR 修的超线性正则：`interfaces/mcp/index.ts` 的 Bearer 解析改为前缀检查加切片；`identity/users.ts` 的 `derivedLogin` 去首尾 `-` 改为 `/^-|-$/g`；gatekeeper-base `kinds/http.ts` 路径模板改为 `[^{}]`、base URL 去尾 `/` 改为循环。Zod 3 的 `.max()` 不阻止 `.regex()` 执行，参数正则看到的输入上限是传输层的 1 MiB。
 - 控制台应显示什么（PR 描述"控制台（前端）应显示什么"，归「控制台前端易用性整改」）：持久化工具行与实时 `ToolCallRowView` 同形、按 Turn 归组、运行中按 `toolCallId` 去重、标注"agent 报告的工具调用"、按关系浏览（遗留 147）；扣留超限提示与审计页 `redactedValues` 提示（遗留 159）。
 - 遗留：155（Worker 运行中的工具调用）、156（Handle 对模型 shell 可读，P1 根因）、157（Worker 提议只计数）、158（流式增量扫描）、159（控制台脱敏提示）。
+- 实现说明（遗留 155 内核一半：Worker 运行中的工具调用落库，#1531，2026-11-20 合入，7e8b760；迁移 task/0016）：写入——Worker 用自己 Handle 的会话报 `report_tool_calls`，运行由会话决定，已结束的运行 403。存储——和对话工具调用同一套 `buildToolCallRecord` + `storableValue`，表 `worker_run_tool_calls` 行级隔离，应用角色只有 select / insert，同一调用 id 只存第一次，每个运行最多 200 条。审计——不记 `calls`，只记计数。读取——`get_task_tool_calls` 可见性同 `get_task`（工作区所有者能读每个 Task 的记录，协调 2026-11-20 定，以后可改），按运行开始先后分页。秘密值——扩展截短参数时，内核要收集的秘密字段的值照原位置发出；`secretFieldLiterals` 与 `toolCallSecretKeyRule` 移到 shared，内核和扩展共用同一个收集函数和键规则；一条调用补回后超过 512 KiB 时不带结果发送、也不补秘密值。扩展——只在 `callerCapabilities` 带这个能力时上报，交结果前发完，单串只在 32768 以上切，整体预算整项省略。控制台一半（任务详情里显示 Worker 的工具调用，能力矩阵 console 由 none 改 required）由控制台负责人另开 PR。
 
 **llm-proxy 管理接口限流、上游响应体上限与密钥检查（#521，2026-10-09 合入，遗留 138 关闭、151 部分关闭）**
 
@@ -4624,6 +4625,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **升级路径**：已启用 / 已禁用的门重新 announce 时新清单挂起待采用（R-18），分类不进定义摘要，待采用期间调用不被拒；平台采用后各工作区已部署副本仍是旧分类，所有者在「已部署 Operation 的治理字段」对齐一次（收紧直接生效）；对齐不更新描述。集成测试 `connector-presets` 用例 g 覆盖全程，并锁住工作区显式打开自动批准时策略引擎仍 `require_approval`（`operation_not_auto_approvable`）。
   - **文档**：`gatekeepers/ragflow/README.md`（分类理由、核对版本、历史 S2.5 → S3.4 → S11 P1-F）、`host-gatekeepers.md` §13、`operations.md` §14.9；knowledge 包 Worker 提示词与 Skill 不改。
   - **不在本 PR**：分类与最新清单不一致的主动提示（遗留 456）；已决定门的描述变化不进待采用变化、不进已部署副本（遗留 457）。
+- 实现说明（遗留 223 内核一半：平台门实例列出还要对齐的工作区，#1536，2026-11-20 合入，d36a00f；无迁移）：`application/gates/awaiting-workspaces.ts` 的 `readAwaitingWorkspaces` 在平台事务里逐个进入启用这个门实例的工作区（`setWorkspaceContext`，全零 principal），读已发布的 Operation，读完 `set_config(…, '', true)` 清回平台平面，有测试钉住；语句失败时尽力清回、吞掉清回错误并重抛原错误，中止的事务靠 `is_local` 随回滚撤销。列入条件和工作区就绪检查（`computeCapabilityReachability`）相同：`definitionRefusal` 为 `workspace_revision` 才算，跳过被接入包禁用的、等平台采用的（`platform_adoption`）和门运行的定义带门自设参数的。出工作区的只有工作区 id、名字和门运行清单里的 Operation 名，不带定义、摘要和发布人；wire 用 `.strict()`。最多 20 个（与 `enablingWorkspaces` 同一常量），按工作区名排，Operation 名排序，另给总数 `awaitingWorkspaceCount`。平台 scope 的五个门实例能力（列表、详情、建、改、`confirm_gate_manifest`）的结果带这两个字段；dispatch 的平台审计只记参数和 auditPayload，不含结果；工作区所有者的 `list_available_gate_instances` 不带。2026-11-20 定为只读字段。设计文档 §7.11「审计」把三处跨平面读取并列，`platform-admin-design.md` §6.3 同步。截断、总数和排序的用例随控制台一半补（遗留 895）。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）

@@ -9071,6 +9071,36 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "awaitingWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "awaitingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "connector": {
           "type": "string"
         },
@@ -11121,6 +11151,36 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "awaitingWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "awaitingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "connector": {
           "type": "string"
         },
@@ -24829,6 +24889,36 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "awaitingWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "awaitingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "connector": {
           "type": "string"
         },
@@ -44165,6 +44255,36 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "awaitingWorkspaceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "awaitingWorkspaces": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "operations": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "operations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "connector": {
                 "type": "string"
               },
@@ -83204,6 +83324,36 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "awaitingWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "awaitingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "connector": {
           "type": "string"
         },
