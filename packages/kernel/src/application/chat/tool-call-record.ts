@@ -3,13 +3,12 @@ import {
   type ToolCallMessageContent,
   type ToolCallOutcome,
   type ToolCallPayloadPreview,
-  getCapability,
   sliceKeepingPairs,
+  toolCallSecretKeyRule,
 } from '@nexttime/shared';
 import {
   type RedactedValue,
   type Scrubbed,
-  namesASecretField,
   redactSecretFieldsInJsonText,
   redactSecrets,
   safeStringify,
@@ -63,18 +62,11 @@ export const MESSAGE_TEXT_MAX_CHARS = 262_144;
 const ARGS_READ_CHARS = TOOL_CALL_ARGS_PREVIEW_CHARS + SECRET_MARGIN_CHARS;
 const RESULT_READ_CHARS = TOOL_CALL_RESULT_PREVIEW_CHARS + SECRET_MARGIN_CHARS;
 
-/** The keys a capability declares secret (`Capability.redactedParamKeys`), when `toolName` is a
- *  capability tool — entry and interactive mode name each capability tool after its capability. */
-function capabilitySensitiveKeys(toolName: string | null | undefined): ReadonlySet<string> {
-  const keys = toolName ? getCapability(toolName)?.redactedParamKeys : undefined;
-  return new Set(keys ?? []);
-}
-
 /** The key rule for one tool's payloads: a key the capability declares secret, or one whose name
- *  names a secret. */
+ *  names a secret (`@nexttime/shared`'s `toolCallSecretKeyRule` — worker mode applies the same
+ *  rule to a call before it sends it, legacy 155). */
 function secretKeyRule(toolName: string | null | undefined): (key: string) => boolean {
-  const declared = capabilitySensitiveKeys(toolName);
-  return (key) => declared.has(key) || namesASecretField(key);
+  return toolCallSecretKeyRule(toolName);
 }
 
 function redactPayload(value: unknown, toolName: string | null | undefined, maxChars: number) {

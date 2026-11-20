@@ -5,8 +5,10 @@ import {
   type ReportedToolCall,
   WORKER_TOOL_CALL_ID_MAX_CHARS,
   WORKER_TOOL_CALL_NAME_MAX_CHARS,
-  boundToolCallPayload,
+  boundToolCallArgs,
+  boundToolCallResult,
   sliceKeepingPairs,
+  toolCallSecretKeyRule,
 } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 
@@ -26,8 +28,11 @@ import { type KernelClient, KernelError } from '../kernel-client.js';
  *   is accepted (`close`): the `report_result` call that was accepted is not among the records — the
  *   Task's result is its record. When the turn settles, calls still open are reported
  *   `not_finished` (`settle`), before the fallback report.
- * - **Bounded.** Each payload is sent only as far as the kernel reads it (`boundToolCallPayload`);
- *   a report holds at most 50 calls and 512 KiB; a run reports at most the 200 its records hold.
+ * - **Bounded.** Each payload is sent only as far as the kernel reads it (`boundToolCallArgs`,
+ *   `boundToolCallResult`), with every secret value of the arguments the kernel hides in the
+ *   result; a report holds at most 50 calls and 512 KiB, and a call that alone would not fit is
+ *   sent without its result (then nothing needs those values); a run reports at most the 200 its
+ *   records hold.
  * - **Never in the way.** A report that fails is logged; one the kernel could not take for now (no
  *   answer, a 5xx) is sent again with the next, one it refused as malformed is dropped, and any
  *   other refusal stops reporting for the run. The Worker's work and its result never wait on it
@@ -180,18 +185,33 @@ export class ToolCallReporter {
       readonly endedAt: Date;
     },
   ): ReportedToolCall {
-    const name = opened?.name ?? (toolName || null);
-    return {
+    const named = opened?.name ?? (toolName || null);
+    const name = named === null ? null : cut(named, WORKER_TOOL_CALL_NAME_MAX_CHARS);
+    const args = opened?.args;
+    const call = (withResult: boolean): ReportedToolCall => ({
       toolCallId: cut(toolCallId, WORKER_TOOL_CALL_ID_MAX_CHARS) || '(no id)',
-      name: name === null ? null : cut(name, WORKER_TOOL_CALL_NAME_MAX_CHARS),
+      name,
       outcome: end.outcome,
-      ...(opened !== undefined && opened.args !== undefined
-        ? { args: boundToolCallPayload(opened.args) }
+      ...(args !== undefined
+        ? {
+            // The values the kernel hides in the result are needed only beside it — and the rule
+            // is the kernel's own, by the tool's name as sent.
+            args: boundToolCallArgs(
+              args,
+              withResult ? { isSecretKey: toolCallSecretKeyRule(name) } : {},
+            ),
+          }
         : {}),
-      ...(end.result !== undefined ? { result: boundToolCallPayload(end.result) } : {}),
+      ...(withResult && end.result !== undefined
+        ? { result: boundToolCallResult(end.result) }
+        : {}),
       startedAt: opened?.startedAt.toISOString() ?? null,
       endedAt: end.endedAt.toISOString(),
-    };
+    });
+    const whole = call(true);
+    // Only the kept secret values can make one call outgrow a report (64 of up to 4 096
+    // characters, written as JSON); without its result the call needs none of them.
+    return bodyBytes(whole) <= REPORT_TOOL_CALLS_MAX_BODY_BYTES ? whole : call(false);
   }
 
   /** The longest run of pending calls that fits one report. */

@@ -65,7 +65,8 @@ const TOKEN_COUNT_AFTER = new Set([
 ]);
 
 /** Names longer than this are judged on their first this-many characters. */
-const MAX_NAME_CHARS = 256;
+export const SECRET_FIELD_NAME_JUDGED_CHARS = 256;
+const MAX_NAME_CHARS = SECRET_FIELD_NAME_JUDGED_CHARS;
 
 /** `apiKey0` → `api key`, `X-Api-Key` → `x api key`, `GITHUB_TOKEN` → `github token`,
  *  `HTTPHeader` → `http header`: lower-case words, split at case changes and at anything that is
@@ -150,4 +151,116 @@ export function maskSecretFields(value: unknown, underSecretField = false): unkn
     );
   }
   return underSecretField && isSecretFieldValue(value) ? SECRET_FIELD_MASK : value;
+}
+
+/** A secret value shorter than this is not hidden as a literal: a 1–3 character value (`0`, `on`)
+ *  would hide ordinary text wherever it appears. The kernel's value patterns still run. */
+export const MIN_SECRET_LITERAL_CHARS = 4;
+/** At most this many literals are collected, and none longer than `MAX_SECRET_LITERAL_CHARS` —
+ *  longer ones (a PEM key) are what the kernel's value patterns find on their own. */
+export const MAX_SECRET_LITERALS = 64;
+export const MAX_SECRET_LITERAL_CHARS = 4_096;
+/** Objects and arrays `secretFieldLiterals` visits before it stops. */
+export const SECRET_LITERAL_WALK_NODES = 5_000;
+
+/** Where a value's collected literals are (`secretFieldLiteralSites`): for every object or array on
+ *  the way from the value to a collected literal, the keys (an array's indices) of its children
+ *  on that way — the literal's own key included. */
+export type SecretLiteralSites = ReadonlyMap<object, ReadonlySet<string | number>>;
+
+interface LiteralWalkEntry {
+  readonly value: unknown;
+  readonly secret: boolean;
+  /** The entry of the object or array this one is a child of (only when sites are kept). */
+  readonly parent: LiteralWalkEntry | undefined;
+  readonly key: string | number | undefined;
+}
+
+function markSite(sites: Map<object, Set<string | number>>, leaf: LiteralWalkEntry): void {
+  let child = leaf;
+  while (child.parent !== undefined) {
+    const parent = child.parent;
+    const container = parent.value as object;
+    let keys = sites.get(container);
+    if (keys === undefined) {
+      keys = new Set();
+      sites.set(container, keys);
+    }
+    // The way up from here is marked already.
+    if (keys.has(child.key as string | number)) return;
+    keys.add(child.key as string | number);
+    child = parent;
+  }
+}
+
+function walkSecretFieldLiterals(
+  value: unknown,
+  isSecretKey: (key: string) => boolean,
+  sites: Map<object, Set<string | number>> | undefined,
+): string[] {
+  const found = new Set<string>();
+  const stack: LiteralWalkEntry[] = [{ value, secret: false, parent: undefined, key: undefined }];
+  let nodes = SECRET_LITERAL_WALK_NODES;
+  while (stack.length > 0 && found.size < MAX_SECRET_LITERALS) {
+    const next = stack.pop() as LiteralWalkEntry;
+    const current = next.value;
+    if (next.secret && isSecretFieldValue(current)) {
+      const text = String(current);
+      if (
+        text.length >= MIN_SECRET_LITERAL_CHARS &&
+        text.length <= MAX_SECRET_LITERAL_CHARS &&
+        !found.has(text)
+      ) {
+        found.add(text);
+        if (sites !== undefined) markSite(sites, next);
+      }
+      continue;
+    }
+    if (current === null || typeof current !== 'object') continue;
+    nodes -= 1;
+    if (nodes < 0) break;
+    const parent = sites === undefined ? undefined : next;
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        stack.push({ value: current[index], secret: next.secret, parent, key: index });
+      }
+    } else {
+      for (const [key, inner] of Object.entries(current as Record<string, unknown>)) {
+        stack.push({ value: inner, secret: next.secret || isSecretKey(key), parent, key });
+      }
+    }
+  }
+  return [...found].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * The secret values `value` holds under a key `isSecretKey` names — every string or number at any
+ * depth below one (`isSecretFieldValue`), as text, longest first. These are the values the field
+ * rule hides in a structured copy; text that *quotes* them — a gate's error, a URL or command a
+ * gate rendered from the params, a tool result that repeats an argument — must hide them too, as
+ * literals (the kernel's `scrubSecretLiterals`): no pattern can tell `mysql -phunter2`'s password
+ * from any other word. Walks at most `SECRET_LITERAL_WALK_NODES` objects and arrays, with an
+ * explicit stack — last child first, so values are met in the reverse of their written order —
+ * and stops at `MAX_SECRET_LITERALS`.
+ *
+ * The kernel's one walk (it lived in its substrate/redaction until legacy 155): worker mode runs it
+ * too, on a call's whole arguments, to send the kernel every value it collects from them
+ * (`boundToolCallArgs`).
+ */
+export function secretFieldLiterals(
+  value: unknown,
+  isSecretKey: (key: string) => boolean,
+): string[] {
+  return walkSecretFieldLiterals(value, isSecretKey, undefined);
+}
+
+/** `secretFieldLiterals`, with where each literal it collects was first met (`SecretLiteralSites`):
+ *  the walk is the same one, so these are exactly the values it collects. */
+export function secretFieldLiteralSites(
+  value: unknown,
+  isSecretKey: (key: string) => boolean,
+): { readonly literals: string[]; readonly sites: SecretLiteralSites } {
+  const sites = new Map<object, Set<string | number>>();
+  const literals = walkSecretFieldLiterals(value, isSecretKey, sites);
+  return { literals, sites };
 }

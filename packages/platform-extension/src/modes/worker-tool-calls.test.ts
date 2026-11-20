@@ -1,8 +1,11 @@
 import {
+  MAX_SECRET_LITERALS,
+  MAX_SECRET_LITERAL_CHARS,
   MAX_WORKER_RUN_TOOL_CALL_RECORDS,
   REPORT_TOOL_CALLS_MAX_BODY_BYTES,
   REPORT_TOOL_CALLS_MAX_CALLS,
   type ReportedToolCall,
+  TOOL_CALL_PAYLOAD_LEFT_OUT,
   WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS,
 } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -137,6 +140,49 @@ describe('ToolCallReporter', () => {
     expect(call?.result).toEqual({
       content: [{ type: 'text', text: 'y'.repeat(WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS) }],
     });
+  });
+
+  it("sends the arguments' secret values past the bound beside the result, so the kernel hides them in it (#501 F1)", async () => {
+    reporter.setCallerCapabilities(['report_tool_calls']);
+    const blob = 'b'.repeat(WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS + 10);
+    finish(reporter, 'call-1', {
+      args: { blob, note: 'left out', headers: { authorization: 'Basic dXNlcjpwYXNz' } },
+      result: { content: [{ type: 'text', text: 'refused: Basic dXNlcjpwYXNz' }] },
+    });
+    await reporter.flush();
+    const [call] = reportedCalls(kernel)[0] ?? [];
+    expect(call?.args).toEqual({
+      blob: 'b'.repeat(WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS),
+      [TOOL_CALL_PAYLOAD_LEFT_OUT]: TOOL_CALL_PAYLOAD_LEFT_OUT,
+      headers: { authorization: 'Basic dXNlcjpwYXNz' },
+    });
+    expect(call?.result).toEqual({
+      content: [{ type: 'text', text: 'refused: Basic dXNlcjpwYXNz' }],
+    });
+  });
+
+  it('sends a call that those values would make too big for a report without its result, and then without them', async () => {
+    reporter.setCallerCapabilities(['report_tool_calls']);
+    // 64 values of 4 096 characters, each written as JSON six bytes a character: past 512 KiB.
+    const secrets = Array.from(
+      { length: MAX_SECRET_LITERALS },
+      (_, i) => `${String(i).padStart(2, '0')}${'\u0001'.repeat(MAX_SECRET_LITERAL_CHARS - 2)}`,
+    );
+    finish(reporter, 'call-1', {
+      args: { blob: 'b'.repeat(WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS), secrets },
+      result: { content: [{ type: 'text', text: 'done' }] },
+    });
+    await reporter.flush();
+    const [call] = reportedCalls(kernel)[0] ?? [];
+    expect(call?.outcome).toBe('done');
+    expect(call?.result).toBeUndefined();
+    expect(call?.args).toEqual({
+      blob: 'b'.repeat(WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS),
+      [TOOL_CALL_PAYLOAD_LEFT_OUT]: TOOL_CALL_PAYLOAD_LEFT_OUT,
+    });
+    expect(Buffer.byteLength(JSON.stringify(call), 'utf8')).toBeLessThan(
+      REPORT_TOOL_CALLS_MAX_BODY_BYTES,
+    );
   });
 
   it(`sends at most ${REPORT_TOOL_CALLS_MAX_CALLS} calls and about ${REPORT_TOOL_CALLS_MAX_BODY_BYTES / 1024} KiB in one report`, async () => {

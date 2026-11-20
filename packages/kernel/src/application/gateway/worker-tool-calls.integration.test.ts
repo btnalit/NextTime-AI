@@ -464,5 +464,61 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(/permission denied/);
       }
     });
+
+    // #501 T1: the table's row-level security, as the application role of another workspace.
+    it('is another workspace’s to neither read nor write', async () => {
+      const { sessionId, workerRunId } = await seedTask(requesterId);
+      await report(handleCaller(requesterId, sessionId), [call('call-1')]);
+      const otherWorkspaceId = randomUUID();
+      const otherOwnerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: otherWorkspaceId, principalId: otherOwnerId },
+        async (client) => {
+          await client.query('insert into workspaces (id, name) values ($1, $2)', [
+            otherWorkspaceId,
+            'worker-tool-calls-other-workspace',
+          ]);
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'other owner')`,
+            [otherWorkspaceId, otherOwnerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      const asOther = <T>(fn: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId: otherWorkspaceId, principalId: otherOwnerId }, fn);
+
+      const seen = await asOther((client) =>
+        client.query<{ count: string }>(
+          'select count(*)::text as count from worker_run_tool_calls where worker_run_id = $1',
+          [workerRunId],
+        ),
+      );
+      expect(seen.rows[0]?.count).toBe('0');
+      // Written into this workspace's run from the other one: the policy's check refuses it.
+      await expect(
+        asOther((client) =>
+          client.query(
+            `insert into worker_run_tool_calls
+               (workspace_id, worker_run_id, tool_call_id, sequence, content)
+             values ($1, $2, 'planted', 99, $3::jsonb)`,
+            [
+              workspaceId,
+              workerRunId,
+              JSON.stringify({ kind: 'tool_call', toolCallId: 'planted', text: 'planted' }),
+            ],
+          ),
+        ),
+      ).rejects.toThrow(/row-level security/);
+      const kept = await admin((client) =>
+        client.query<{ tool_call_id: string }>(
+          'select tool_call_id from worker_run_tool_calls where worker_run_id = $1',
+          [workerRunId],
+        ),
+      );
+      expect(kept.rows.map((row) => row.tool_call_id)).toEqual(['call-1']);
+    });
   },
 );
