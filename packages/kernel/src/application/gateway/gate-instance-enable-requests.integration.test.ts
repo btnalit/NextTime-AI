@@ -972,6 +972,78 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(cancelled.rowCount).toBe(1);
         expect((await requestRow(ws.id, open.id))?.cancel_reason).toBe('gate_unavailable');
       });
+
+      // #501 on #1521 (N1): `completed` and `cancelled` are the I6 machine's terminal states, and
+      // governance 0048 holds them so for every writer — no reopening, no new enabler or time, no
+      // new reason. For a request the platform ended, that reason is all the workspace reads.
+      it('governance 0048: a request that has ended never changes — not its completion, not why it was cancelled, not back to requested', async () => {
+        const completedGate = await platformGate();
+        const completed = await ask(member(ws), completedGate);
+        await enable(owner(ws), completedGate);
+        const withdrawnGate = await platformGate();
+        const withdrawn = await ask(member(ws), withdrawnGate);
+        await call(member(ws), 'cancel_connection_request', { connectionRequestId: withdrawn.id });
+        const unavailableGate = await platformGate();
+        const unavailable = await ask(member(ws), unavailableGate);
+        await platform('update_gate_instance', { gateId: unavailableGate, status: 'disabled' });
+
+        const fullRow = (id: string) =>
+          withAdminClient(pool, async (client) => {
+            const result = await client.query(
+              'select * from connection_requests where workspace_id = $1 and id = $2',
+              [ws.id, id],
+            );
+            return result.rows[0] as Record<string, unknown>;
+          });
+        const before = new Map<string, Record<string, unknown>>();
+        for (const id of [completed.id, withdrawn.id, unavailable.id]) {
+          before.set(id, await fullRow(id));
+        }
+        expect(before.get(completed.id)).toMatchObject({ status: 'completed' });
+        expect(before.get(withdrawn.id)).toMatchObject({ cancel_reason: 'withdrawn' });
+        expect(before.get(unavailable.id)).toMatchObject({ cancel_reason: 'gate_unavailable' });
+
+        const rewrites: readonly [string, string, unknown[]][] = [
+          [completed.id, 'completed_by = $2', [ws.otherMemberId]],
+          [completed.id, "completed_at = now() - interval '1 day'", []],
+          // Reopened, still naming who completed it.
+          [completed.id, "status = 'requested', gatekeeper_id = null, completed_at = null", []],
+          [withdrawn.id, "cancel_reason = 'declined'", []],
+          [withdrawn.id, "status = 'requested', cancel_reason = null, cancelled_at = null", []],
+          [unavailable.id, "cancel_reason = 'withdrawn'", []],
+          [unavailable.id, "cancelled_at = now() - interval '1 day'", []],
+        ];
+        for (const [id, change, extra] of rewrites) {
+          const sql = `update connection_requests set ${change} where id = $1`;
+          const workspaceWrite = await withWorkspace(
+            pool,
+            { workspaceId: ws.id, principalId: ws.ownerId },
+            (client) => client.query(sql, [id, ...extra]),
+          ).then(
+            () => 'written',
+            (err: { code?: string }) => err.code,
+          );
+          expect(workspaceWrite, `workspace: ${change}`).toBe('23514');
+          const unguarded = await withAdminClient(pool, (client) =>
+            client.query(sql, [id, ...extra]),
+          ).then(
+            () => 'written',
+            (err: { code?: string }) => err.code,
+          );
+          expect(unguarded, `no RLS: ${change}`).toBe('23514');
+        }
+        // The platform plane's edge starts from `requested` only: an ended row is not even its to
+        // read for an update.
+        const platformWrite = await withPlatform(pool, { userId: admin.id }, (client: PoolClient) =>
+          client.query('update connection_requests set cancelled_at = now() where id = $1', [
+            unavailable.id,
+          ]),
+        );
+        expect(platformWrite.rowCount).toBe(0);
+        for (const [id, row] of before) {
+          expect(await fullRow(id), id).toEqual(row);
+        }
+      });
     });
   },
 );

@@ -31,15 +31,16 @@
 --   * `connection_requests_platform_cancel` (+ `_platform_read`): the platform plane
 --     (`app_platform()`, core 0019) reads gate-instance requests and moves an open one to
 --     `cancelled` / `gate_unavailable` — that edge and nothing else (its `with check`). It is how
---     `update_gate_instance` / `delete_gate_instance` / `set_connector_mode` end the requests for a
---     gate no workspace can enable any more, in the same transaction, instead of leaving them open.
+--     `update_gate_instance` / `delete_gate_instance` / `set_connector_mode` and a rolled-back
+--     platform change (`roll_back_platform_change_segment`) end the requests for a gate no
+--     workspace can enable any more, in the same transaction, instead of leaving them open.
 --
 -- `gate_instance_id` has no foreign key: a gate-host instance can be deleted
 -- (`delete_gate_instance`), and a request that asked for it keeps saying which one it was — the
 -- deletion first cancels the open ones (above). The display name is read live
 -- (`list_connection_requests`), none once the instance is gone.
 --
--- Rolling back (docs/runbooks/release.md §6): the previous release never writes these columns and
+-- Rolling back (docs/runbooks/release.md §3.205 and §6): the previous release never writes these columns and
 -- reads `target` as a string, so a gate-instance request (null `target`) breaks its owner queue —
 -- before rolling back, `delete from connection_requests where gate_instance_id is not null`
 -- (requests only; nothing else refers to them), then the columns, index, constraints and policies

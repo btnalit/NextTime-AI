@@ -254,8 +254,9 @@ export async function completeGateInstanceEnableRequests(
 
 /**
  * The platform's half (legacy 254, the coordinator's requirement 3): `update_gate_instance`
- * (→ disabled), `delete_gate_instance` and `set_connector_mode` (out of platform-preset) end every
- * open request, in any workspace, to enable a gate no workspace can enable any more — `cancelled`
+ * (→ disabled), `delete_gate_instance`, `set_connector_mode` (out of platform-preset) and
+ * `roll_back_platform_change_segment` (an instance it disables) end every open request, in any
+ * workspace, to enable a gate no workspace can enable any more — `cancelled`
  * with `cancel_reason = 'gate_unavailable'` — in the platform's own transaction (`app_platform()`;
  * governance/0047's `connection_requests_platform_read` / `_platform_cancel` are what let it read
  * those rows and take that one edge). The platform audit row of the call lists them (the handlers'
