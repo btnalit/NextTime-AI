@@ -11,9 +11,8 @@ import {
   holderForSessionKind,
   lockSessions,
 } from '../../governance/capability/index.js';
-import { findSuspectedSecrets } from '../../governance/redaction/index.js';
+import { refuseCredentialText, shownFreeText } from '../../governance/redaction/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
-import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { isInternalPrincipalDisplayName } from './members-handlers.js';
 
 /**
@@ -59,23 +58,32 @@ export class HandleRevokeError extends Error {
  * (governance 0049) and shown beside it in `list_handles`, so two rows that read alike — two
  * clients of the same person, two service accounts of the same name — can be told apart before
  * one is revoked. Trimmed; blank is no note (`null`). The registered schema caps its length
- * (`HANDLE_NOTE_MAX_LENGTH`). Never a credential: the note is shown to the workspace's owners and
- * kept after the session ends, so a note holding anything the audit copy of the call would redact
+ * (`HANDLE_NOTE_MAX_LENGTH`). Never a credential: the note is listed beside the session, written
+ * into the audit record of the call (which the workspace's owners and auditors read) and kept
+ * after the session ends, so a note holding anything the audit copy of the call would redact
  * (`findSuspectedSecrets` — a token, a platform API key, a `password: …`, a URL's password;
- * review #501 on #1549) is refused with 400 before anything is written, and what is kept and
- * listed is always what the audit row says. The refusal names the field, never the value.
+ * review #501 on #1549) is refused before anything is written, and what is kept and listed is
+ * always what the audit row says. The refusal is the one every free text carrying a credential
+ * gets (`refuseCredentialText`: 400 `credentials_in_text`, `details.field = 'note'`), so a client
+ * tells it apart from a malformed call; it names the field, never the value. Read back as
+ * {@link shownHandleNote} shows it.
  */
-export function handleNoteFrom(capability: string, raw: string | undefined): string | null {
+export function handleNoteFrom(raw: string | undefined): string | null {
   const note = raw?.trim() ?? '';
   if (note === '') return null;
-  if (findSuspectedSecrets({ note }).count > 0) {
-    throw new InvalidCapabilityParamsError(
-      capability,
-      [{ path: ['note'], message: 'looks like a credential' }],
-      'note looks like a credential (a token, a key or a password) — a note is shown to the workspace owners and kept after the Handle ends; describe what the client is for instead',
-    );
-  }
+  refuseCredentialText('note', note);
   return note;
+}
+
+/**
+ * A session's note as every read shows it — `list_handles` and the result of the call that issued
+ * it: as `shownFreeText` shows free text the kernel keeps as written (legacy 420), so a character
+ * a reader cannot see (a bidi override, a zero-width space) reads as `\u{XXXX}` and two notes
+ * that look alike can be told apart, and a note stored before the write-time check reads with the
+ * credential masked. The stored row stays the record (review #501 on #1558).
+ */
+export function shownHandleNote(note: string | null): string | null {
+  return shownFreeText(note);
 }
 
 export const DEFAULT_LIST_HANDLES_LIMIT = 100;
@@ -157,7 +165,7 @@ function toWireHandle(row: HandleRow): HandleWire {
     jti: row.jti,
     sessionId: row.session_id,
     sessionShortId: sessionShortId(row.session_id),
-    sessionNote: row.note,
+    sessionNote: shownHandleNote(row.note),
     sessionKind: row.session_kind,
     holder,
     onBehalfOf: row.on_behalf_of,
