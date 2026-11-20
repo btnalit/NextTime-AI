@@ -413,7 +413,7 @@ describe('UserDetailPanel', () => {
       const confirm = await screen.findByTestId('user-merge-confirm');
       const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
       const line =
-        '已停用：合并后，下面没有停用的成员资格会以 bob 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」';
+        '已停用：合并后，下面没有移出的成员资格会以 bob 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」';
       if (says) expect(impact).toContain(line);
       else expect(impact).not.toContain('恢复可用');
       expect(impact).toContain('Acme');
@@ -484,11 +484,11 @@ describe('UserDetailPanel', () => {
     const confirm = await screen.findByTestId('user-merge-confirm');
     const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
     expect(impact).toContain(
-      '工作区 Acme · 成员（已停用）：carol 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）',
+      '工作区 Acme · 成员（已移出）：carol 在这里已有成员资格，这一条不再属于任何账户（平台审计记下它原来属于谁）',
     );
     // Legacy 725 (UX on #1189): the target is a member there again.
     expect(impact).toContain(
-      '工作区 Beta · 成员 → carol：carol 曾被移出这里，合并后以这一条的角色重新成为这里的成员；carol 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）',
+      '工作区 Beta · 成员 → carol：carol 曾被移出这里，合并后以这一条的角色重新成为这里的成员；carol 已移出的那条不再属于任何账户（平台审计记下它原来属于谁）',
     );
     const to = 'carol';
     expect(impact).toContain(`工作区 Gamma · 成员 → ${to}`);

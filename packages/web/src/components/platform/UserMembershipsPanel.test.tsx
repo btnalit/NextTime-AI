@@ -260,11 +260,11 @@ describe('UserMembershipsPanel', () => {
     expect(within(active).getByRole('combobox')).toBeTruthy();
     expect(within(active).getByRole('button', { name: '移出' })).toBeTruthy();
 
-    expect(within(removed).getByText('已停用')).toBeTruthy();
+    expect(within(removed).getByText('已移出')).toBeTruthy();
     expect(within(removed).queryByRole('combobox')).toBeNull();
     expect(within(removed).queryByRole('button', { name: '移出' })).toBeNull();
     const note = within(removed).getByTestId('user-membership-removed');
-    expect(note.textContent).toContain('停用时的角色操作员');
+    expect(note.textContent).toContain('移出时的角色操作员');
     expect(note.textContent).toContain('在下面「加入工作区」里重新加入，会新建一条成员资格');
     await screen.findByTestId('user-memberships-workspace-empty');
     expect(http.calls.map((call) => call.name)).toEqual(['list_workspaces']);
@@ -453,7 +453,7 @@ describe('UserMembershipsPanel', () => {
       }),
     );
     const row = screen.getByTestId('user-membership-row');
-    expect(within(row).queryByText('已停用')).toBeNull();
+    expect(within(row).queryByText('已移出')).toBeNull();
     expect(within(row).getByText('工作区已停用')).toBeTruthy();
     const rowRole = within(row).getByLabelText(/角色/) as HTMLSelectElement;
     const addRole = screen.getByLabelText(/^角色/, { selector: '#um-role' }) as HTMLSelectElement;

@@ -640,7 +640,7 @@ export function SystemsPage({
                   data-testid="register-gate-button"
                   onSelect={() => setDrawer({ kind: 'complete', request: null })}
                 >
-                  {t('直接注册门（旧路径）', 'Register a gate directly (legacy)')}
+                  {t('直接注册门（不经申请）', 'Register a gate directly (no request)')}
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setDrawer({ kind: 'wizard' })}>
                   {t('接入向导', 'Onboarding wizard')}
@@ -1005,6 +1005,13 @@ export function SystemsPage({
                 '注册一个已在跑的门实例、把清单导入为草稿；凭证只存在门里。',
                 'Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only.',
               )}
+              {drawer.kind === 'complete' && !drawer.request
+                ? // Legacy 668 (UX acceptance of #1046): the menu's 「不经申请」 says what is left out.
+                  t(
+                    '结果和「申请连接」后再「完成连接」相同，只是不留申请记录。',
+                    ' The result is the same as requesting a connection and then completing it; only no request is recorded.',
+                  )
+                : null}
             </SheetDescription>
           </SheetHeader>
           {drawer.kind === 'complete' ? (

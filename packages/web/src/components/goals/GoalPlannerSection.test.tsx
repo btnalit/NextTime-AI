@@ -287,10 +287,25 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
         }),
       ],
     });
-    const http = scriptedHttp(handlers(detail, workspace('p-alice', 'member')));
+    const http = scriptedHttp(
+      handlers(detail, workspace('p-alice', 'member'), {
+        // The planner's Task resolves to its Worker's English name (legacy 668).
+        resolve_refs: () => ({
+          items: [{ id: 'task-plan-1', kind: 'task', name: 'Goal planner' }],
+        }),
+      }),
+    );
     renderPage(http);
     const running = await screen.findByTestId('goal-planner-running');
     expect(running.textContent).toContain('步骤 fetch 第 3 次尝试');
+    // Legacy 668: the planning Task reads as what it is, in the page's language.
+    expect(screen.getByTestId('goal-planner-running-task').textContent).toContain('目标规划器');
+    expect(screen.getByTestId('goal-planner-running-task').textContent).not.toContain(
+      'Goal planner',
+    );
+    expect(screen.getAllByTestId('goal-planner-round-task')[0]?.textContent).toContain(
+      '目标规划器',
+    );
     expect(screen.queryByTestId('goal-planner-proposal')).toBeNull();
     const items = screen.getAllByTestId('goal-planner-round');
     expect(items.map((item) => item.getAttribute('data-status'))).toEqual([

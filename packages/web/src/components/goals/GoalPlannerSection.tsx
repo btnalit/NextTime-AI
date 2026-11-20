@@ -252,6 +252,9 @@ function RunningRound({
             <RefChip
               kind="task"
               id={round.taskId}
+              // Legacy 668: the platform's planner Worker is named in English; say what the Task
+              // is in the page's language, as the review's chip does (`ReviewCheck`).
+              name={t('目标规划器', 'Goal planner')}
               http={http}
               href={hrefs.task(round.taskId)}
               size="s"
@@ -458,9 +461,11 @@ function RoundItem({
           <RefChip
             kind="task"
             id={round.taskId}
+            name={t('目标规划器', 'Goal planner')}
             http={http}
             href={hrefs.task(round.taskId)}
             size="s"
+            testId="goal-planner-round-task"
           />
         ) : null}
       </span>

@@ -345,6 +345,7 @@ export function ChatPage({
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
+                  tone={composer.sendUncertain ? 'warn' : 'danger'}
                   title={
                     composer.sendUncertain
                       ? t('不确定消息发出没有', 'Not sure the message went out')

@@ -378,7 +378,10 @@ describe('SkillEditor draft across an unmount (legacy 662)', () => {
     await waitFor(() => expect(bodyField().value).toBe('v2 body, half rewritten'));
     answer({ markdown: 'v2 body' });
     await waitFor(() => expect(bodyField().disabled).toBe(false));
+    expect(screen.getByTestId('restored-draft')).toBeTruthy();
     fill(/SKILL.md 正文/, 'v2 body');
+    // Legacy 668: nothing restored is left to save, so the notice goes in this same opening.
+    await waitFor(() => expect(screen.queryByTestId('restored-draft')).toBeNull());
     second.unmount();
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
   });

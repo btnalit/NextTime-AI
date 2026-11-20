@@ -290,7 +290,7 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
 
     await goToByLabel(page, '系统与授权');
     await page.getByRole('button', { name: '更多接入方式', exact: true }).click();
-    await page.getByRole('menuitem', { name: '直接注册门（旧路径）', exact: true }).click();
+    await page.getByRole('menuitem', { name: '直接注册门（不经申请）', exact: true }).click();
     const form = page.getByRole('dialog', { name: '直接注册门' });
     await expect(form.getByText(/^这把连接密钥只显示一次/)).toBeVisible({ timeout: 15_000 });
     const secret = (await form.getByTestId('connection-secret-value').textContent())?.trim() ?? '';

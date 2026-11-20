@@ -586,15 +586,15 @@ export function UserDetailPanel({
                     ...(user.status === 'disabled' && user.memberships.some((m) => !m.disabled)
                       ? [
                           t(
-                            `${user.login} 已停用：合并后，下面没有停用的成员资格会以 ${mergeTarget?.login ?? ''} 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」`,
-                            `${user.login} is disabled: after the merge, the memberships below that are not disabled are usable again as ${mergeTarget?.login ?? ''}, and the platform audit records each one as “Membership usable again”`,
+                            `${user.login} 已停用：合并后，下面没有移出的成员资格会以 ${mergeTarget?.login ?? ''} 的身份恢复可用，平台审计逐条记为「成员身份恢复可用」`,
+                            `${user.login} is disabled: after the merge, the memberships below that were not removed are usable again as ${mergeTarget?.login ?? ''}, and the platform audit records each one as “Membership usable again”`,
                           ),
                         ]
                       : []),
                     ...user.memberships.map((membership) => {
                       const line = t(
-                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''}`,
-                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''}`,
+                        `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已移出）' : ''}`,
+                        `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (removed)' : ''}`,
                       );
                       const theirs = pairs.find(({ ours }) => ours === membership)?.theirs;
                       const to = mergeTarget?.login ?? '';
@@ -609,8 +609,8 @@ export function UserDetailPanel({
                             `${line}: ${to} already holds a membership here, so this one no longer belongs to any account (the platform audit records whose it was)`,
                           )
                         : t(
-                            `${line} → ${to}：${to} 曾被移出这里，合并后以这一条的角色重新成为这里的成员；${to} 已停用的那条不再属于任何账户（平台审计记下它原来属于谁）`,
-                            `${line} → ${to}: ${to} was removed from here, and after the merge is a member here again with this membership's role; ${to}'s disabled one no longer belongs to any account (the platform audit records whose it was)`,
+                            `${line} → ${to}：${to} 曾被移出这里，合并后以这一条的角色重新成为这里的成员；${to} 已移出的那条不再属于任何账户（平台审计记下它原来属于谁）`,
+                            `${line} → ${to}: ${to} was removed from here, and after the merge is a member here again with this membership's role; ${to}'s removed one no longer belongs to any account (the platform audit records whose it was)`,
                           );
                     }),
                   ]

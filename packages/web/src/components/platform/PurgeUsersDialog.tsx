@@ -260,7 +260,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                             .map(
                               (membership) =>
                                 `${membership.workspaceName}@${roleLabel(membership.role, t)}${
-                                  membership.disabled ? ` (${t('已停用', 'disabled')})` : ''
+                                  membership.disabled ? ` (${t('已移出', 'removed')})` : ''
                                 }`,
                             )
                             .join(', ')}

@@ -1215,7 +1215,9 @@ function SelectionPlaceholder({
   readonly emptyBody?: string;
 }) {
   const t = useT();
-  if (itemId === undefined) {
+  // Legacy 668: the editor's address with no editor open (one who may not propose here followed a
+  // link to it) is not a row that went missing.
+  if (itemId === undefined || itemId === NEW_ITEM_ID) {
     return <EmptyState title={emptyTitle} body={emptyBody} testId="catalog-detail-empty" />;
   }
   if (!ready) {
@@ -2630,6 +2632,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     editor,
     setEditor,
     rows: skills.state.status === 'ready' ? rows : null,
+    canPropose: can('propose_skill'),
   });
 
   function refresh(): void {
@@ -3257,6 +3260,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     editor,
     setEditor,
     rows: procedures.state.status === 'ready' ? rows : null,
+    canPropose: can('propose_procedure'),
   });
 
   function refresh(): void {
@@ -4494,6 +4498,18 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const canDeprecate = can('deprecate_worker_definition') !== false;
 
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+  // Legacy 668: `…/new` opened from a link, a bookmark or a new tab, with no editor open — a new
+  // draft for one who may propose (nothing else is kept to bring back: `useEditorReopen` covers the
+  // Skill and Procedure editors only); for one who may not, nothing selected
+  // (`SelectionPlaceholder`).
+  const mayPropose = can('propose_worker_definition');
+  const newAddressChecked = useRef(false);
+  useEffect(() => {
+    if (newAddressChecked.current || itemId !== NEW_ITEM_ID || editor !== null) return;
+    if (workers.state.status !== 'ready' || mayPropose === null) return;
+    newAddressChecked.current = true;
+    if (mayPropose) setEditor({ kind: 'new' });
+  }, [workers.state.status, mayPropose, itemId, editor]);
 
   const editorPane = editor ? (
     <div className="stack">

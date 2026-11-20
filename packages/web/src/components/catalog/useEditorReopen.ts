@@ -55,7 +55,9 @@ function parseMark(raw: unknown): OpenEditorMark | null {
  * editor its draft. Closing the editor — finished, cancelled, another row picked — drops the mark.
  * The form's draft goes when the editor is finished, cancelled or closed from the drawer
  * (`forgetEditorDraft`); picking another row in the list while it is open keeps it, so 新建草稿
- * (or the same copy / next version) later opens with it again, saying so.
+ * (or the same copy / next version) later opens with it again, saying so. Legacy 668: the address
+ * opened with nothing to bring back (a link, a bookmark, a new tab) opens a new draft for a caller
+ * who may propose one; for one who may not, the tab shows nothing selected (`CatalogPage`).
  */
 export function useEditorReopen<Row extends { readonly id: string }>({
   principalId,
@@ -64,6 +66,7 @@ export function useEditorReopen<Row extends { readonly id: string }>({
   editor,
   setEditor,
   rows,
+  canPropose,
 }: {
   readonly principalId: string | null;
   readonly tab: 'skills' | 'procedures';
@@ -73,6 +76,10 @@ export function useEditorReopen<Row extends { readonly id: string }>({
   readonly setEditor: (next: EditorState<Row>) => void;
   /** The tab's rows once read; `null` while loading. */
   readonly rows: readonly Row[] | null;
+  /** Whether the caller may propose a draft here (`useRoleCan`; `null` until the role is read).
+   *  Legacy 668: the address opened with no editor to bring back — a link or a bookmark to it —
+   *  opens a new draft for one who may. */
+  readonly canPropose: boolean | null;
 }): void {
   const scope = principalId === null ? null : draftScope(principalId, `catalog-editor:${tab}`);
 
@@ -93,17 +100,17 @@ export function useEditorReopen<Row extends { readonly id: string }>({
 
   const checked = useRef(false);
   useEffect(() => {
-    if (checked.current || scope === null || rows === null) return;
+    if (checked.current || scope === null || rows === null || canPropose === null) return;
     checked.current = true;
     if (!editorAddressed || editor !== null) return;
     const mark = parseMark(loadDraftValue(scope));
-    if (mark === null) return;
-    if (mark.kind === 'new') {
-      setEditor({ kind: 'new' });
+    if (mark !== null && mark.kind !== 'new') {
+      const row = rows.find((candidate) => candidate.id === mark.rowId);
+      if (row) setEditor({ kind: mark.kind, row });
+      else forgetDraft(scope);
       return;
     }
-    const row = rows.find((candidate) => candidate.id === mark.rowId);
-    if (row) setEditor({ kind: mark.kind, row });
-    else forgetDraft(scope);
-  }, [scope, rows, editorAddressed, editor, setEditor]);
+    // A new draft's mark, or none at all (legacy 668: `…/new` opened from a link read 「未找到」).
+    if (mark !== null || canPropose) setEditor({ kind: 'new' });
+  }, [scope, rows, editorAddressed, editor, setEditor, canPropose]);
 }

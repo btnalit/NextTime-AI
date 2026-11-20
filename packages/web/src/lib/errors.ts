@@ -755,8 +755,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The proposal was not decided within 24 hours and has expired. The workspace owner can propose again with a new connection secret.',
   },
   gate_address_change_blocked: {
-    zh: '这个门还有升级前发起、没有结束的请求，它们没有记录发起时的地址。等它们结束（或处理掉）后再批准。',
-    en: 'The gate still has requests made before the upgrade that have not finished, and they do not record the address they were made for. Approve once they have finished or been dealt with.',
+    zh: '这个门还有升级前发起、没有结束的请求，它们没有记录发起时的地址。这些请求在申请换地址的工作区里，要由那里的工作区所有者在「审批」页处理，或等它们结束，之后再批准。',
+    en: 'The gate still has requests made before the upgrade that have not finished, and they do not record the address they were made for. They are in the workspace that proposed the move: its owner deals with them on the Approvals page, or they finish; approve after that.',
   },
   gate_address_change_not_found: {
     zh: '找不到这个申请。刷新列表再试。',
