@@ -476,7 +476,11 @@ function userColumns(
               <span
                 key={membership.workspaceId}
                 className={`chip chip-s ${membership.disabled ? 'chip-neutral' : 'chip-info'}`}
-                title={membership.disabled ? t('成员资格已停用', 'Membership disabled') : undefined}
+                title={
+                  membership.disabled
+                    ? t('已移出这个工作区', 'Removed from this workspace')
+                    : undefined
+                }
                 data-testid="platform-user-workspace-chip"
               >
                 {`${workspaceNameWithPurpose(membership.workspaceName, membership.workspacePurpose, t)}@${roleLabel(membership.role, t)}`}

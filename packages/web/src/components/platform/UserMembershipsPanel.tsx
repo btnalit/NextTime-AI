@@ -282,7 +282,8 @@ function MembershipRow({
               testId="user-membership-trial"
             />
           ) : null}
-          {membership.disabled ? <span className="tag">{t('已停用', 'Disabled')}</span> : null}
+          {/* Legacy 668: the action is 「移出」, so is what it leaves. */}
+          {membership.disabled ? <span className="tag">{t('已移出', 'Removed')}</span> : null}
           {membership.workspaceStatus === 'disabled' ? (
             <span className="tag text-danger">{t('工作区已停用', 'Workspace disabled')}</span>
           ) : null}
@@ -301,13 +302,13 @@ function MembershipRow({
               </Notice>
             ) : null}
             <div className="row-wrap">
-              <span className="field-label">{t('停用时的角色', 'Role when disabled')}</span>
+              <span className="field-label">{t('移出时的角色', 'Role when removed')}</span>
               <span>{roleLabel(membership.role, t)}</span>
             </div>
             <p className="field-hint">
               {t(
-                '这条成员资格已停用（被移出），只留作审计溯源：角色不能再改，也没有可移出的了。要让这位用户回到这个工作区，在下面「加入工作区」里重新加入，会新建一条成员资格。',
-                'This membership is disabled (removed) and kept only for audit lineage: its role cannot change, and there is nothing left to remove. To bring the user back to this workspace, add them under “Add to a workspace” below, which makes a new membership.',
+                '这条成员资格已移出，只留作审计溯源：角色不能再改，也没有可移出的了。要让这位用户回到这个工作区，在下面「加入工作区」里重新加入，会新建一条成员资格。',
+                'This membership was removed and is kept only for audit lineage: its role cannot change, and there is nothing left to remove. To bring the user back to this workspace, add them under “Add to a workspace” below, which makes a new membership.',
               )}
             </p>
           </div>

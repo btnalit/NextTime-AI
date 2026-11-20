@@ -141,6 +141,15 @@ export function approveGateAddressChangeErrors(t: Translate): ErrorOverrides {
     'Reject it; the workspace owner can propose another address.',
   );
   return {
+    // Legacy 668 (UX acceptance of #1156): who approves is a platform administrator, who neither
+    // sees nor settles those requests — the workspace owner does.
+    gate_address_change_blocked: `${t(
+      '这个门还有升级前发起、没有结束的请求，它们没有记录发起时的地址，',
+      'The gate still has requests made before the upgrade that have not finished, and they do not record the address they were made for, ',
+    )}${notApproved}${t(
+      '这些请求在申请换地址的工作区里，平台管理员看不到也处理不了：请那个工作区的所有者在「审批」页处理它们，或等它们结束，之后再批准。',
+      'Those requests are in the workspace that proposed the move, where a platform administrator can neither see nor settle them: ask its owner to deal with them on the Approvals page, or wait for them to finish, then approve.',
+    )}`,
     connection_secret_in_use: `${t(
       '申请里的新连接密钥现在属于这个工作区的另一个门，或已经用于另一次更换申请，',
       'The new connection secret in this proposal now belongs to another gate in the workspace, or served another proposal to move a gate, ',

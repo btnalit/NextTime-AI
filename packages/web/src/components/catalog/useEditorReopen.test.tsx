@@ -18,6 +18,7 @@ function mount(
     editorAddressed: boolean;
     editor: EditorState<Row>;
     rows: readonly Row[] | null;
+    canPropose: boolean | null;
   }>,
 ) {
   const setEditor = vi.fn();
@@ -30,6 +31,7 @@ function mount(
         editor: p.editor ?? null,
         setEditor,
         rows: p.rows === undefined ? ROWS : p.rows,
+        canPropose: p.canPropose === undefined ? false : p.canPropose,
       }),
     { initialProps: props },
   );
@@ -68,5 +70,26 @@ describe('useEditorReopen (legacy 662)', () => {
     mount({ editor: { kind: 'copy', row: { id: 'sk-gone' } } }).unmount();
     expect(mount({}).setEditor).not.toHaveBeenCalled();
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('legacy 668: the address with nothing to bring back opens a new draft for one who may propose', () => {
+    expect(mount({ canPropose: true }).setEditor).toHaveBeenCalledWith({ kind: 'new' });
+    expect(mount({ canPropose: false }).setEditor).not.toHaveBeenCalled();
+    expect(mount({ canPropose: true, editorAddressed: false }).setEditor).not.toHaveBeenCalled();
+  });
+
+  it('legacy 668: waits for the role, then decides once', () => {
+    const view = mount({ canPropose: null });
+    expect(view.setEditor).not.toHaveBeenCalled();
+    view.rerender({ canPropose: true });
+    expect(view.setEditor).toHaveBeenCalledTimes(1);
+    expect(view.setEditor).toHaveBeenCalledWith({ kind: 'new' });
+    view.rerender({ canPropose: false });
+    expect(view.setEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it('legacy 668: a copy of a row that is gone does not turn into a new draft', () => {
+    mount({ editor: { kind: 'copy', row: { id: 'sk-gone' } } }).unmount();
+    expect(mount({ canPropose: true }).setEditor).not.toHaveBeenCalled();
   });
 });

@@ -6769,3 +6769,62 @@ describe('CatalogPage — a draft whose definition went starts a new one (legacy
     expect(drawer.querySelector('.catalog-detail-title')?.textContent).toBe(`修改草稿 v${2}`);
   });
 });
+
+/** Legacy 668: a catalog editor's address (`…/<tab>/new`) opened from a link, a bookmark or a new
+ *  tab — with no editor to bring back — read 「未找到」. */
+describe('CatalogPage: the new-draft address opened directly (legacy 668)', () => {
+  const workspace = (role: 'owner' | 'auditor') => () => ({
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 2,
+    gatekeeperCount: 0,
+    caller: { id: `p-${role}`, role, displayName: role, kind: 'human' },
+  });
+
+  it('opens a new Skill draft for one who may propose', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspace('owner'),
+      list_skills: () => ({ items: [] }),
+    });
+    renderPage(http, 'skills', 'new');
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    expect(drawer.textContent).toContain('新建 Skill 草稿');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
+  it('opens a new Procedure draft for one who may propose', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspace('owner'),
+      list_procedures: () => ({ items: [] }),
+    });
+    renderPage(http, 'procedures', 'new');
+    await screen.findByTestId('procedure-editor-drawer');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
+  it('opens a new Worker definition draft for one who may propose', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspace('owner'),
+      list_worker_definitions: () => ({ items: [] }),
+      list_models: () => ({ items: [] }),
+    });
+    renderPage(http, 'workers', 'new');
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(drawer.textContent).toContain('新建 Worker 定义草稿');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
+  it('shows nothing selected, not 「未找到」, to one who may not propose', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspace('auditor'),
+      list_skills: () => ({ items: [{ id: 'sk-1', version: 1, status: 'published', name: 'a' }] }),
+    });
+    renderPage(http, 'skills', 'new');
+    await screen.findByTestId('catalog-row');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(await screen.findByTestId('catalog-detail-empty')).toBeTruthy();
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    expect(screen.queryByTestId('skill-editor-drawer')).toBeNull();
+  });
+});

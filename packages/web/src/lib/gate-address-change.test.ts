@@ -107,4 +107,12 @@ describe('legacy 701: words UX acceptance of #1158 asked for', () => {
       expect(text).toContain('nothing changed. ');
     }
   });
+
+  it('legacy 668: requests in flight from before the upgrade are the workspace owner’s to settle', () => {
+    const text = approveGateAddressChangeErrors(zh).gate_address_change_blocked ?? '';
+    expect(text).toContain('所以没有批准，什么也没改。');
+    expect(text).toContain('平台管理员看不到也处理不了');
+    expect(text).toContain('请那个工作区的所有者在「审批」页处理它们');
+    expect(text).not.toContain('处理掉）');
+  });
 });

@@ -329,6 +329,18 @@
   margin-top: 2px;
 }
 
+/* Legacy 668: an outcome not known yet (the composer unsure whether a message went out) is a
+   warning, not a failure. */
+.error-banner-warn {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.error-banner-warn .icon,
+.error-banner-warn .error-banner-code {
+  color: var(--warn);
+}
+
 .error-banner-body {
   flex: 1;
   min-width: 0;

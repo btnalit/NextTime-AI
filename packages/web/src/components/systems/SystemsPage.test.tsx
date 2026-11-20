@@ -811,6 +811,18 @@ describe('SystemsPage', () => {
     expect(within(drawer).getByTestId('wizard-step-kind')).toBeTruthy();
   });
 
+  it('legacy 668: 直接注册门 says it takes no request, and its drawer what that leaves out', async () => {
+    const http = scriptedHttp({});
+    renderPage(http);
+    await screen.findByTestId('systems-empty');
+    openConnectMoreMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: '直接注册门（不经申请）' }));
+    const drawer = await screen.findByTestId('complete-connection-drawer');
+    expect(drawer.textContent).toContain(
+      '结果和「申请连接」后再「完成连接」相同，只是不留申请记录。',
+    );
+  });
+
   it('bugfix (PR #324 review): an unreachable row keeps the reason as a chip tooltip, not inline text, drops the same-page fix-it link, and the drawer still spells it out with a real (different-page) link', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>

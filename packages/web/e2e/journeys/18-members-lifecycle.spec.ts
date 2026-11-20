@@ -21,7 +21,7 @@ import {
  *   1. 平台管理员在「用户」里找到一个还不属于任何工作区的用户，点「管理 → 管理成员资格」，把他加入这条
  *      旅程的全新工作区，角色保持默认的成员（`add_membership`）。
  *   2. 在这一条成员资格上把角色改成运维（`set_membership_role`）。
- *   3. 点「移出」再「确认移出」（`remove_membership`）——成员资格留着、标为已停用。
+ *   3. 点「移出」再「确认移出」（`remove_membership`）——成员资格留着、标为已移出。
  *   4. 工作区所有者在「成员与授权」打开一个服务凭证，把角色从成员改成运维、保存（`set_principal_role`）。
  *   5. 「轮换 API key」，新 key 只显示一次（`rotate_api_key`）。
  *   6. 「停用成员」再「确认停用」（`disable_principal`）。
@@ -33,8 +33,8 @@ import {
  *   - 无权限: 跳过——旅程 ⑧ 走过各角色打开成员与授权不出 403；非所有者看不到编辑区由组件测试覆盖。
  *   - 窄屏: 跳过——`00-gates/` 的截图门槛在 768 宽度下截过成员与授权和用户页。
  * 成功判据:
- *   - 六个动作都由真实内核答复，页面跟着变（新的成员资格一行、已停用的标记、轮换后的新 key、状态「已停用」），
- *     并从页面外读内核状态确认真的变了：`list_user_memberships` 先是成员、再是运维、最后已停用；
+ *   - 六个动作都由真实内核答复，页面跟着变（新的成员资格一行、已移出的标记、轮换后的新 key、状态「已停用」），
+ *     并从页面外读内核状态确认真的变了：`list_user_memberships` 先是成员、再是运维、最后已移出；
  *     `list_principals` 里服务凭证的角色是运维、停用时间有了；轮换后新 key 能以这个服务凭证的身份调用
  *     `get_workspace`，旧 key 被拒（401）。
  *
@@ -155,10 +155,10 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
       .toBe('operator');
     await expect(membershipRole).toBeEnabled();
 
-    // --- 3. 移出 → 确认移出：成员资格留着、标为已停用 ----------------------------------------------
+    // --- 3. 移出 → 确认移出：成员资格留着、标为已移出 ----------------------------------------------
     await membershipRow.getByRole('button', { name: '移出', exact: true }).click();
     await membershipRow.getByRole('button', { name: '确认移出', exact: true }).click();
-    await expect(membershipRow.getByText('已停用', { exact: true })).toBeVisible({
+    await expect(membershipRow.getByText('已移出', { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     // A removed membership is history (legacy 687): read-only, no role picker and nothing to remove.
