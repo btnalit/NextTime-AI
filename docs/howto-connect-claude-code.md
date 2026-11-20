@@ -60,8 +60,10 @@ curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \
   对，不是"发什么就给什么"。`scope.resources.gatekeeper` 只收窄执行授权，不限制只读调用。
 - `ttlSeconds` 默认 24 小时，上限 30 天（`ISSUE_HANDLE_MAX_TTL_SECONDS`）；到期后这个 Handle 上的
   一切调用都是 401，需要重新走本步骤拿新 Handle（没有"续期"接口）。
-- 撤销：每个 `issue_handle` 会话都列在平台管理员的「集成 → 外部运行时」里（`list_external_runtimes`），
-  可以单独吊销（`revoke_external_runtime`，连同其下全部 Handle）。管理员重置你的密码、你自己改密码、
+- 撤销：你自己在控制台「我的账户 → 会话凭证」里能看到代表你的每个会话（`list_handles`），点「撤销」就结束
+  这个会话和其下全部 Handle（`revoke_handle`）；平台为智能体和 Worker 持有的随对话或任务结束，不能在这里撤销。
+  每个 `issue_handle` 会话也列在平台管理员的「集成 → 外部运行时」里（`list_external_runtimes`），
+  管理员可以单独吊销（`revoke_external_runtime`，连同其下全部 Handle）。管理员重置你的密码、你自己改密码、
   停用你的账号或把你移出工作区，也会吊销你在该范围内签出的全部 Handle（2026-10-02 复审 R-12/R-13）。
   改你的角色同样会吊销它（W5.5）。
 

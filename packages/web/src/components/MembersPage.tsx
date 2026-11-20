@@ -15,6 +15,7 @@ import { capabilityHolders } from '../lib/role-holders.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
+import { HandlesList } from './handles/HandlesList.js';
 import { Button } from './kit/button.js';
 import {
   DropdownMenu,
@@ -117,6 +118,8 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   const ask = useAskForAccess(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
+  /** Legacy 168: bumped when a service Handle was issued here — its list reads again. */
+  const [handlesRevision, setHandlesRevision] = useState(0);
 
   const canManage = can('create_principal') !== false;
 
@@ -356,6 +359,15 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
           testId="members-load-more-error"
         />
       ) : null}
+      {/* Legacy 168: an owner sees the service accounts' live Handles and ends a client's here. */}
+      {canManage ? (
+        <section className="stack-s" aria-labelledby="members-service-handles-title">
+          <h2 className="section-title" id="members-service-handles-title">
+            {t('服务账号的会话凭证', 'Service accounts’ Handles')}
+          </h2>
+          <HandlesList http={http} scope="service" revision={handlesRevision} />
+        </section>
+      ) : null}
 
       <Sheet
         open={drawer.kind === 'addMember'}
@@ -443,7 +455,10 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
             <IssueServiceHandleSection
               http={http}
               principals={allPrincipals}
-              onDone={() => setDrawer({ kind: 'closed' })}
+              onDone={() => {
+                setDrawer({ kind: 'closed' });
+                setHandlesRevision((revision) => revision + 1);
+              }}
               onCreateServiceAccount={() => setDrawer({ kind: 'create', returnTo: 'issueHandle' })}
             />
           ) : null}

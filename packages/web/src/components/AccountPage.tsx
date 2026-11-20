@@ -32,6 +32,7 @@ import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { LangSwitch } from './LangSwitch.js';
 import { IssueOwnHandleSection } from './account/IssueOwnHandleSection.js';
+import { HandlesList } from './handles/HandlesList.js';
 import { PageHeader } from './kit/page-header.js';
 import { StillNeeded } from './kit/still-needed.js';
 import { Button } from './ui/Button.js';
@@ -128,7 +129,7 @@ export function AccountPage({
       <PasswordCard fetchImpl={fetchImpl} />
       <LanguageCard />
       <MembershipsCard memberships={memberships} />
-      {http ? <HandleCard http={http} /> : null}
+      {http ? <HandleCards http={http} /> : null}
       {onBound ? <BindApiKeyForm onBound={onBound} fetchImpl={fetchImpl} /> : null}
     </div>
   );
@@ -140,15 +141,29 @@ export function AccountPage({
  *  (rather than calling these hooks straight from `AccountPage`) so they only ever mount, and only
  *  ever call `get_workspace`, when `http` exists — `AccountPage` itself stays capability-call-free
  *  in every mode that has no workspace in scope. */
-function HandleCard({ http }: { readonly http: CapabilityCaller }) {
+function HandleCards({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const can = useRoleCan(http);
   const canManage = can('issue_handle') !== false;
-  if (!canManage) return null;
+  // Legacy 168: what issuing one adds to 「会话凭证」 shows there at once.
+  const [issuedRevision, setIssuedRevision] = useState(0);
   return (
-    <Card title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>
-      <IssueOwnHandleSection http={http} />
-    </Card>
+    <>
+      {canManage ? (
+        <Card title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>
+          <IssueOwnHandleSection
+            http={http}
+            onIssued={() => setIssuedRevision((revision) => revision + 1)}
+          />
+        </Card>
+      ) : null}
+      {/* Legacy 168: every role may list the Handles acting for it (an auditor too). */}
+      {can('list_handles') !== false ? (
+        <Card title={t('会话凭证', 'Handles')}>
+          <HandlesList http={http} scope="self" revision={issuedRevision} />
+        </Card>
+      ) : null}
+    </>
   );
 }
 
