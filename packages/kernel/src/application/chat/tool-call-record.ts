@@ -7,12 +7,14 @@ import {
   toolCallSecretKeyRule,
 } from '@nexttime/shared';
 import {
+  REDACTED,
   type RedactedValue,
   STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
   redactSecretFieldsInJsonText,
   redactSecrets,
   safeStringify,
+  scrubOutsideSpans,
   scrubSecretLiterals,
   scrubSecretValues,
   scrubbedCut,
@@ -89,10 +91,9 @@ function resultRule(toolName: string | null | undefined, args: unknown): ResultR
   };
 }
 
-/** A string of a result's JSON text, decoded: the arguments' hidden values as literals, then
- *  every secret-looking value (legacy 916 — `redactSecretFieldsInJsonText`'s `scrubValue`). */
-function scrubDecodedResultString(value: string, rule: ResultRule): Scrubbed<string> {
-  const literals = scrubSecretLiterals(value, rule.literals);
+/** The arguments' hidden values as literals, then every secret-looking value. */
+function scrubWithResultRule(text: string, rule: ResultRule): Scrubbed<string> {
+  const literals = scrubSecretLiterals(text, rule.literals);
   const values = scrubSecretValues(literals.value);
   return {
     value: values.value,
@@ -100,25 +101,18 @@ function scrubDecodedResultString(value: string, rule: ResultRule): Scrubbed<str
   };
 }
 
-/** The key rule when `text` is JSON — its strings decoded and scrubbed too — then the arguments'
- *  hidden values as literals. */
-function maskResultText(text: string, rule: ResultRule): Scrubbed<string> {
-  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey, (value) =>
-    scrubDecodedResultString(value, rule),
-  );
-  const literals = scrubSecretLiterals(fields.value, rule.literals);
-  return {
-    value: literals.value,
-    redactedValues: fields.redactedValues + literals.redactedValues,
-  };
-}
-
-/** One of a result's text parts — read only up to its bound — masked (`maskResultText`), then
- *  every secret-looking value scrubbed. */
+/** One of a result's text parts — read only up to its bound. When it is JSON: the key rule, and
+ *  its strings that hold an escape scrubbed decoded (legacy 916 — `redactSecretFieldsInJsonText`'s
+ *  `scrubValue`); then the rest of the text as it is, with the same scrub (`scrubWithResultRule`),
+ *  so a value counts the same wherever it is found. */
 function scrubResultText(text: string, rule: ResultRule): Scrubbed<string> {
-  const masked = maskResultText(text, rule);
-  const values = scrubSecretValues(masked.value);
-  return { value: values.value, redactedValues: masked.redactedValues + values.redactedValues };
+  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey, (value) =>
+    scrubWithResultRule(value, rule),
+  );
+  const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, (part) =>
+    scrubWithResultRule(part, rule),
+  );
+  return { value: rest.value, redactedValues: fields.redactedValues + rest.redactedValues };
 }
 
 /** A tool call's arguments with secret-looking keys and values replaced, read only as far as their
@@ -148,12 +142,36 @@ export function redactToolResult(
   });
 }
 
+/** `[redacted]"…\"`: a quoted value the value patterns split when they read JSON text as it is
+ *  written (before legacy 916) — `API_TOKEN=\"…\"` became `API_TOKEN=[redacted]"…\"`, the `\`
+ *  taken for the value and the value itself kept. Between `[redacted]"` and the next `\"` there
+ *  is no quote that is not escaped: in JSON that is valid, a string's closing quote is followed,
+ *  before any `\"`, by the opening quote of the next string, or by nothing. */
+const SPLIT_QUOTED_MASK = new RegExp(
+  String.raw`${REDACTED.replace(/[[\]]/g, '\\$&')}"(?:[^"\\]|\\[^"])*\\"`,
+  'g',
+);
+
+/** A stored result's text with each `SPLIT_QUOTED_MASK` written as the value patterns write that
+ *  value now — `\"[redacted]\"` — counted (legacy 916; one-way, like the rest of the rewrite). */
+function repairSplitQuotedMasks(text: string): Scrubbed<string> {
+  let redactedValues = 0;
+  const value = text.replace(SPLIT_QUOTED_MASK, () => {
+    redactedValues += 1;
+    return `\\"${REDACTED}\\"`;
+  });
+  return { value, redactedValues };
+}
+
 /**
  * A tool-call record stored before legacy 185 (`chat_messages.content`, kind `tool_call`) with its
  * result preview scrubbed the way `buildToolCallRecord` scrubs one now: the key rule over JSON text
- * (its tool's declared keys, or a secret-naming key), then every secret-looking value but a platform
- * API key standing alone (`STORED_REWRITE_SECRET_PATTERNS`: the rewrite is one-way and that shape is
- * any 32 bytes in base64url, so `cli/scrub-raw-secrets.ts` counts it instead — legacy 168 review).
+ * (its tool's declared keys, or a secret-naming key), with its escaped strings decoded (legacy
+ * 916), then every secret-looking value but a platform API key standing alone
+ * (`STORED_REWRITE_SECRET_PATTERNS`: the rewrite is one-way and that shape is any 32 bytes in
+ * base64url, so `cli/scrub-raw-secrets.ts` counts it instead — legacy 168 review). First, a quoted
+ * value the text pass split before legacy 916 is written as it is written now
+ * (`repairSplitQuotedMasks`).
  * What the record cannot give back is the values its arguments hid (its `args` copy is masked), so a
  * result that quoted one in prose keeps it. `redactedValues` is added to the record's own count.
  * `cli/scrub-raw-secrets.ts` rewrites stored records with it.
@@ -166,11 +184,12 @@ export function rescrubStoredToolCallResult(
     return { value: content, redactedValues: 0 };
   }
   const name = typeof content.name === 'string' ? content.name : null;
-  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name), (value) =>
-    scrubSecretValues(value, { patterns: STORED_REWRITE_SECRET_PATTERNS }),
-  );
-  const values = scrubSecretValues(fields.value, { patterns: STORED_REWRITE_SECRET_PATTERNS });
-  const redactedValues = fields.redactedValues + values.redactedValues;
+  const stored = (text: string) =>
+    scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+  const repaired = repairSplitQuotedMasks(result.text);
+  const fields = redactSecretFieldsInJsonText(repaired.value, secretKeyRule(name), stored);
+  const values = scrubOutsideSpans(fields.value, fields.decodedSpans, stored);
+  const redactedValues = repaired.redactedValues + fields.redactedValues + values.redactedValues;
   if (values.value === result.text) return { value: content, redactedValues: 0 };
   const previous = typeof content.redactedValues === 'number' ? content.redactedValues : 0;
   return {

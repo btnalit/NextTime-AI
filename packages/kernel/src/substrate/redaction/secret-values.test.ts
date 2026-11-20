@@ -11,10 +11,12 @@ import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  type Scrubbed,
   platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
+  scrubOutsideSpans,
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
   scrubSecretValues,
@@ -825,8 +827,18 @@ describe('redactSecrets — object keys (legacy 444)', () => {
   });
 });
 
+/** `redactSecretFieldsInJsonText`'s text and count (its `decodedSpans` are tested apart). */
+function fieldsIn(
+  text: string,
+  isSecretKey: (key: string) => boolean,
+  scrubValue?: (value: string) => Scrubbed<string>,
+): Scrubbed<string> {
+  const { value, redactedValues } = redactSecretFieldsInJsonText(text, isSecretKey, scrubValue);
+  return { value, redactedValues };
+}
+
 describe('redactSecretFieldsInJsonText — the field rule over JSON text (legacy 185)', () => {
-  const mask = (text: string) => redactSecretFieldsInJsonText(text, namesASecretField);
+  const mask = (text: string) => fieldsIn(text, namesASecretField);
 
   it('hides, at any depth, every string and number under a secret-named key, as redactSecrets does', () => {
     const value = {
@@ -901,9 +913,10 @@ describe('redactSecretFieldsInJsonText — the field rule over JSON text (legacy
   });
 
   it('takes the key rule it is given (a capability’s declared keys)', () => {
-    expect(
-      redactSecretFieldsInJsonText('{"connectionSecret":"x","pin":4321}', (key) => key === 'pin'),
-    ).toEqual({ value: `{"connectionSecret":"x","pin":"${REDACTED}"}`, redactedValues: 1 });
+    expect(fieldsIn('{"connectionSecret":"x","pin":4321}', (key) => key === 'pin')).toEqual({
+      value: `{"connectionSecret":"x","pin":"${REDACTED}"}`,
+      redactedValues: 1,
+    });
   });
 
   it.each([
@@ -1089,8 +1102,13 @@ describe('a cut never ends in the start of a secret (legacy 819)', () => {
 });
 
 describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded (legacy 916)', () => {
-  const scrub = (text: string) =>
-    redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+  const scrub = (text: string) => fieldsIn(text, namesASecretField, scrubSecretValues);
+  /** As the callers use it: then the value patterns over the rest of the text as it is. */
+  const scrubAll = (text: string): Scrubbed<string> => {
+    const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+    const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, scrubSecretValues);
+    return { value: rest.value, redactedValues: fields.redactedValues + rest.redactedValues };
+  };
   /** A tool's JSON result carrying `stdout` (and nothing else to hide). */
   const result = (stdout: string) => JSON.stringify({ stdout, code: 0 });
 
@@ -1128,14 +1146,71 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     });
   });
 
-  it('leaves keys, strings without an escape and a string the text ends inside to the text pass', () => {
+  it('leaves keys, strings without an escape and strings that do not decode to the text pass', () => {
     for (const text of [
       '{"x\\nBasic dXNlcjpwYXNzd29yZA==":1}',
       `{"a":"PGPASSWORD=${FAKE}"}`,
-      `{"a":"x\\nPGPASSWORD=${FAKE}`,
+      `{"a":"\\x\\nPGPASSWORD=${FAKE}"}`,
     ]) {
       expect(scrub(text)).toEqual({ value: text, redactedValues: 0 });
+      expect(
+        redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues).decodedSpans,
+      ).toEqual([]);
     }
+  });
+
+  // Review #493 on #1573: the text pass read `\"` as a value starting with `\` — before this PR
+  // the value itself was kept; after the decoded pass it broke the JSON and counted twice.
+  it.each([
+    ['an env line', `API_TOKEN="${FAKE}"`, `API_TOKEN="${REDACTED}"`],
+    ['an export', `export X_TOKEN="${FAKE}"`, `export X_TOKEN="${REDACTED}"`],
+    ['a YAML key', `password: "${FAKE}"`, `password: "${REDACTED}"`],
+    ['a --password flag', `--password "${FAKE}"`, `--password "${REDACTED}"`],
+    ['a query string', `api_key="${FAKE}"`, `api_key="${REDACTED}"`],
+  ])('hides %s with a quoted value once, the text still JSON', (_label, line, expected) => {
+    for (const stdout of [`a ${line} b`, `a\n${line}\n`]) {
+      const hidden = scrubAll(result(stdout));
+      expect(hidden).toEqual({ value: result(stdout.replace(line, expected)), redactedValues: 1 });
+      expect(scrubAll(hidden.value)).toEqual({ value: hidden.value, redactedValues: 0 });
+    }
+  });
+
+  it('skips what it read, rewritten or kept, in a pass over the text: the spans', () => {
+    const kept = '"\\u4e2d\\nAPI_TOKEN=\\"[redacted]\\""';
+    const text = `{"a":${kept},"b":"x\\nPGPASSWORD=${FAKE}","c":"plain","d":${kept}}`;
+    const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+    const rewritten = JSON.stringify(`x\nPGPASSWORD=${REDACTED}`);
+    expect(fields.value).toBe(`{"a":${kept},"b":${rewritten},"c":"plain","d":${kept}}`);
+    const at = (part: string) => fields.value.indexOf(part);
+    const last = fields.value.lastIndexOf(kept);
+    expect(fields.decodedSpans).toEqual([
+      [at(kept), at(kept) + kept.length],
+      [at(rewritten), at(rewritten) + rewritten.length],
+      [last, last + kept.length],
+    ]);
+    // Read over as it is, the kept string's `\"` reads as a value `\`.
+    expect(scrubSecretValues(kept).redactedValues).toBe(1);
+    expect(scrubAll(text)).toEqual({ value: fields.value, redactedValues: 1 });
+  });
+
+  it('decodes a string the text ends inside, an escape the cut left unfinished kept after it', () => {
+    const open = `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore`;
+    const hidden = `{"stdout":"a\\nPGPASSWORD=${REDACTED}\\nmore`;
+    for (const partial of ['', '\\', '\\u', '\\u4', '\\u4e2']) {
+      const fields = redactSecretFieldsInJsonText(
+        open + partial,
+        namesASecretField,
+        scrubSecretValues,
+      );
+      expect({ value: fields.value, redactedValues: fields.redactedValues }).toEqual({
+        value: hidden + partial,
+        redactedValues: 1,
+      });
+      expect(fields.decodedSpans).toEqual([[hidden.indexOf('"a'), hidden.length + partial.length]]);
+    }
+    // An escaped backslash is a whole escape, not a cut one.
+    expect(scrub(`${open}\\\\`).value).toBe(`${hidden}\\\\`);
+    expect(scrub(`${open}\\\\u4`).value).toBe(`${hidden}\\\\u4`);
   });
 
   it('still replaces a secret-named field whole, and counts each once; a second pass changes nothing', () => {
@@ -1150,7 +1225,7 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
 
   it('without scrubValue, strings are left to the text pass as before', () => {
     const text = result(`x\nPGPASSWORD=${FAKE}`);
-    expect(redactSecretFieldsInJsonText(text, namesASecretField)).toEqual({
+    expect(fieldsIn(text, namesASecretField)).toEqual({
       value: text,
       redactedValues: 0,
     });
@@ -1160,10 +1235,13 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     ['one long escaped string', `{"a":"${'\\nPGPASSWORD=x'.repeat(14_000)}"}`],
     ['many escaped strings', `[${'"\\nPGPASSWORD=x",'.repeat(10_000)}"y"]`],
     ['escapes only', `{"a":"${'\\n'.repeat(100_000)}"}`],
+    ['quoted values', `{"a":"${'API_TOKEN=\\"x\\" '.repeat(12_000)}"}`],
+    ['a string cut open', `{"a":"${'\\nPGPASSWORD=x'.repeat(14_000)}\\u4`],
+    ['many kept strings', `[${'"\\n",'.repeat(40_000)}"y"]`],
   ])('%s × 200 KB within 1 s', (_name, text) => {
-    scrub(text.slice(0, 1_000));
+    scrubAll(text.slice(0, 1_000));
     const started = performance.now();
-    scrub(text);
+    scrubAll(text);
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

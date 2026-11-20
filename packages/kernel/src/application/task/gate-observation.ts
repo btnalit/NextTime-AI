@@ -5,6 +5,7 @@ import {
   redactSecretFieldsInJsonText,
   redactSuspectedSecrets,
   redactSuspectedSecretsUpTo,
+  scrubOutsideSpans,
   scrubSecretValues,
 } from '../../governance/redaction/index.js';
 import {
@@ -153,7 +154,9 @@ export function gatePayloadKeptRaw(content: Record<string, unknown>): boolean {
   const payload = content.payload ?? null;
   if (content.truncated === true && typeof payload === 'string') {
     const fields = redactSecretFieldsInJsonText(payload, namesASecretField, scrubSecretValues);
-    return scrubSecretValues(fields.value).value !== payload;
+    return (
+      scrubOutsideSpans(fields.value, fields.decodedSpans, scrubSecretValues).value !== payload
+    );
   }
   const redacted = redactSuspectedSecrets(payload, { secretFields: true });
   return JSON.stringify(redacted.value) !== JSON.stringify(payload);

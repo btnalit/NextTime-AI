@@ -206,6 +206,22 @@ describe('gatePayloadKeptRaw — what the scrub counts (legacy 817)', () => {
     expect(gatePayloadKeptRaw(unmarked)).toBe(false);
   });
 
+  it('a result stored cut inside its last string reads that string decoded too', () => {
+    const payload = { rows: rows(1), log: `start\nPGPASSWORD=${PLAIN}\n${'x'.repeat(10_000)}` };
+    const before = storedBefore(payload);
+    expect(before.truncated).toBe(true);
+    expect(before.payload).toMatch(/"log":"start\\nPGPASSWORD=hunter2-plain-word\\nx+… \[/);
+    expect(gatePayloadKeptRaw(before)).toBe(true);
+    const { payloadRedacted: _, ...unmarked } = storedNow(payload);
+    expect(gatePayloadKeptRaw(unmarked)).toBe(false);
+    // A quoted value the kept copy hid: read as written, its `\\"[redacted]\\"` would change.
+    const quoted = { rows: rows(1), log: `export API_TOKEN="${PLAIN}"\n${'x'.repeat(10_000)}` };
+    const { payloadRedacted: __, ...kept } = storedNow(quoted);
+    expect(kept.payload).toContain('API_TOKEN=\\"[redacted]\\"');
+    expect(gatePayloadKeptRaw(kept)).toBe(false);
+    expect(gatePayloadKeptRaw(storedBefore(quoted))).toBe(true);
+  });
+
   it('a row written now is marked as the kept copy and never counted', () => {
     for (const payload of [
       { database: { user: 'app', password: PLAIN } },
