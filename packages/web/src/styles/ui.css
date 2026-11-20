@@ -752,6 +752,17 @@
   font-size: var(--fs-13);
 }
 
+/* Pinned to the popup's bottom edge, so a list taller than the popup still shows it without
+   scrolling (a server search cut off at its first matches, UX on #1561). */
+.combobox-footer {
+  position: sticky;
+  bottom: calc(-1 * var(--space-1));
+  margin: var(--space-1) calc(-1 * var(--space-1)) calc(-1 * var(--space-1));
+  padding: 6px calc(var(--space-2) + var(--space-1));
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+}
+
 /* Under the field, not in the popup: a paste that picked nothing yet. */
 .combobox-paste-note {
   padding: 4px 0 0;
