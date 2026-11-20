@@ -52,6 +52,8 @@ export {
 export type {
   CountedRawSecretCategory,
   CountedRawSecretRow,
+  LiveApiKeyCounts,
+  LiveApiKeyRow,
   RawSecretCategory,
   RawSecretCategoryCounts,
   ScrubRawSecretsInput,

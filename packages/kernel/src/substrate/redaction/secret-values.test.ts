@@ -10,6 +10,7 @@ import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
   scrubSecretLiterals,
@@ -215,6 +216,27 @@ describe('a platform API key standing alone (legacy 168)', () => {
     expect(
       SECRET_VALUE_PATTERNS.filter((p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p)),
     ).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
+  });
+
+  it('platformKeyShapes gives the values the shape-only scrub replaces, as written and in order', () => {
+    const other = `${PLATFORM_KEY.slice(0, 40)}-_Q`;
+    const text = `first ${PLATFORM_KEY}, then {"x":"${other}"}; not ${WIREGUARD_KEY} nor a-${PLATFORM_KEY}`;
+    expect(platformKeyShapes(text)).toEqual([PLATFORM_KEY, other]);
+    expect(scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues).toBe(
+      2,
+    );
+    expect(platformKeyShapes(`Bearer ${PLATFORM_KEY}`)).toEqual([PLATFORM_KEY]);
+    expect(platformKeyShapes(WIREGUARD_KEY)).toEqual([]);
+    // Minted keys, alone and in text: as many as the scrub counts, each the key itself.
+    for (let i = 0; i < 500; i += 1) {
+      const key = randomBytes(32).toString('base64url');
+      const sample = `k=${key} ${randomBytes(32).toString('base64')} (${key})`;
+      const found = platformKeyShapes(sample);
+      expect(found).toHaveLength(
+        scrubSecretValues(sample, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
+      );
+      for (const shape of found) expect(shape).toBe(key);
+    }
   });
 
   it('no stretch of a 4 KB standard base64 block is one — on one line or folded as PEM', () => {

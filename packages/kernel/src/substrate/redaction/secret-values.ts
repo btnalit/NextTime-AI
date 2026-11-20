@@ -315,6 +315,21 @@ export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VA
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
 
 /**
+ * Each value of a platform API key's shape `text` holds, as written: exactly what
+ * `scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS })` replaces, in order. Only
+ * for comparing stored copies against the keys issued, by their hash (application/platform/
+ * scrub-raw-secrets.ts's `issuedKeyHashes`): hash each one and drop it, never store, log or show
+ * it.
+ */
+export function platformKeyShapes(text: string): string[] {
+  const found: string[] = [];
+  for (const { start, end, replacement } of secretMatches(MINTED_PLATFORM_KEY, text)) {
+    if (replacement !== undefined) found.push(text.slice(start, end));
+  }
+  return found;
+}
+
+/**
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SECRET_FIELD_MASK } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -8,8 +9,9 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
-  PLATFORM_KEY_SHAPE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  findSuspectedSecrets,
+  platformKeyShapes,
   redactSuspectedSecrets,
   scrubSecretValues,
 } from '../../governance/redaction/index.js';
@@ -18,6 +20,7 @@ import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
 import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
 import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
+import { hashApiKey } from '../gateway/auth.js';
 import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate-observation.js';
 
 /**
@@ -81,6 +84,13 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
  *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself;
+ *   - `auditPayloads`: any audit row whose payload holds a value the value patterns would now hide
+ *     (`findSuspectedSecrets`, without the field-name rule: a payload's own fields —
+ *     `credentialReview`, `suspectedSecretValues` — are named after secrets) — a params copy
+ *     written before legacy 180, a platform API key's shape written before legacy 168's review, or
+ *     a value only shaped like one (a base64url digest). Append-only like `auditResults`, so the
+ *     count never clears; an `action_request.complete` / `.fail` row can be in both. What to act on
+ *     is `liveApiKeys` below;
  *   - `gateCallObservations`: an Observation of a Worker's gate call (Activity kind
  *     `worker_gate_call`) written before legacy 237, which kept the gate's result as it came — one
  *     the rule it is now kept by would hide something in; a row written since is marked as that
@@ -103,6 +113,27 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
  * kept as `examples` — the sample the audit row carries, which must stay bounded.
  *
+ * **Keys still issued (`liveApiKeys`).** Before anything is rewritten, every table in the `public`
+ * schema is read once more, each text, JSON and text-array column of every row (but the two
+ * credential hashes, `principals.api_key_hash` and `users.password_hash`): a person's chat message,
+ * an agent's reply, an Operation call's `action_requests.params`, a Worker's report, a note, a
+ * proposal — wherever a key could have been pasted or echoed, not only where the scans above look.
+ * Every value of a platform API key's shape in them is hashed the way `principals.api_key_hash`
+ * stores a key (`hashApiKey`) and looked up there. A match is a key still issued, listed
+ * (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the table and the row's
+ * primary key (its `ctid` for a table without one), the Principal holding the key (one key per
+ * Principal: the key's id) and, for a person's membership, their user (the account) — never the
+ * key, never a hash, never which column. One line per row and key. A key the rewrite then hides
+ * (`Bearer <key>`, a secret-named JSON field) is listed by that run only, so the keys to rotate are
+ * the ones the first run lists; a later run listing none says no row of the database, as stored,
+ * still holds an issued key's value standing alone. A key stops matching once its Principal is
+ * re-keyed (`rotate_api_key`), loses it (its person changes their password or has it reset:
+ * `revokeUserCredentials`) or is disabled (core 0059); a key on a disabled workspace or user still
+ * matches, since re-enabling either would let it authenticate again. The hashes reach the database
+ * only as the lookup's parameter, as every API call's key does (gateway/auth.ts
+ * `lookupPrincipalByApiKeyHash`). Not compared: anything outside this database — the dump
+ * `BACKUP_NOW` takes, the logs.
+ *
  * **How.** Per table, windows of `batchSize` rows in primary-key order, each one short transaction
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
  * no UPDATE on `decisions` or `chat_messages`, core 0035 / 0008). A rewrite is conditional on the
@@ -119,6 +150,11 @@ export const RAW_SECRET_SCRUB_BATCH_SIZE = 500;
 export const RAW_SECRET_SCRUB_AUDIT_ACTION = 'cli.raw_secrets_scrubbed';
 /** Ids kept per counted category in the result and on the audit row (`onCounted` gets all). */
 export const MAX_EXAMPLES = 20;
+/** Rows per window of the key comparison (`liveApiKeys`). It only reads and holds no lock a rewrite
+ *  would, so its windows are not the rewrites' short ones (`batchSize`); but a window's rows are all
+ *  held at once, and a row can be as large as an agent reply's stored cap: a thousand such rows
+ *  peaked near 680 MB of the CLI's memory, two hundred near 400 MB (release.md §3.208). */
+export const LIVE_API_KEY_COMPARE_WINDOW = 200;
 
 export const REWRITTEN_CATEGORIES = [
   'turnReports',
@@ -137,6 +173,7 @@ export const COUNTED_CATEGORIES = [
   'factProperties',
   'objectProperties',
   'auditResults',
+  'auditPayloads',
   'gateCallObservations',
   'turnReportKeyShapes',
   'decisionKeyShapes',
@@ -165,6 +202,35 @@ export interface RawSecretCategoryCounts {
   examples: CountedRawSecretRow[];
 }
 
+/** A row holding a platform API key still issued, by ids only — never the key, never its hash. */
+export interface LiveApiKeyRow {
+  /** The table (`public` schema). */
+  readonly table: string;
+  /** The row: its primary key's values as text, in the key's column order — `[workspaceId, id]`
+   *  for most tables; `[ctid]` for a table without a primary key. A value that may hold a secret is
+   *  `SECRET_FIELD_MASK` instead (`shownRowKey`). */
+  readonly row: readonly string[];
+  /** The Principal the key is issued to (`principals.api_key_hash`: one key per Principal). */
+  readonly principalWorkspaceId: string;
+  readonly principalId: string;
+  /** `human` (a person's membership) or `service` — which way its key is rotated. */
+  readonly principalKind: string;
+  /** A `human` Principal's user — the account; `null` for a service Principal. */
+  readonly userId: string | null;
+}
+
+export interface LiveApiKeyCounts {
+  /** Tables read, and their rows: what was compared. */
+  tables: number;
+  rows: number;
+  /** Rows holding a key still issued, once per row and key. */
+  found: number;
+  /** The Principals among them: the keys still to rotate. */
+  keys: number;
+  /** The first `MAX_EXAMPLES` found (`onLiveApiKey` gets all). */
+  examples: LiveApiKeyRow[];
+}
+
 export interface ScrubRawSecretsInput {
   readonly confirm: boolean;
   readonly batchSize?: number;
@@ -172,6 +238,8 @@ export interface ScrubRawSecretsInput {
   readonly actorUserId?: string;
   /** Called with every counted row, uncapped, once its window is read. */
   readonly onCounted?: (category: CountedRawSecretCategory, row: CountedRawSecretRow) => void;
+  /** Called with every row found holding a key still issued, uncapped, once its window is read. */
+  readonly onLiveApiKey?: (row: LiveApiKeyRow) => void;
 }
 
 export interface ScrubRawSecretsResult {
@@ -179,6 +247,7 @@ export interface ScrubRawSecretsResult {
   readonly batchSize: number;
   readonly batches: number;
   readonly categories: Readonly<Record<RawSecretCategory, RawSecretCategoryCounts>>;
+  readonly liveApiKeys: Readonly<LiveApiKeyCounts>;
   readonly auditRecordId: string | null;
 }
 
@@ -279,9 +348,147 @@ const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 
 /** How many values of a platform API key's shape `text` holds (0 for a non-string). */
 function keyShapes(text: unknown): number {
-  return typeof text === 'string'
-    ? scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues
-    : 0;
+  return typeof text === 'string' ? platformKeyShapes(text).length : 0;
+}
+
+/** A run of base64url characters as long as a platform API key or longer. A key may sit inside one
+ *  (`call_<key>`), where the value rules, which want a key standing alone, do not see it; a uuid
+ *  (36 characters) is never one. */
+const KEY_LENGTH_RUN = /[A-Za-z0-9_-]{43,}/;
+
+/** `row`'s primary key values as output: one a value rule would cut (a platform API key's shape, a
+ *  Handle, any other) or that holds a `KEY_LENGTH_RUN` is masked whole, so a secret used as (part
+ *  of) a text primary key (`connectors.name`, `quotas.key`, a `tool_call_id`) reaches neither the
+ *  log nor the append-only audit row. Paging goes on from the values as read. */
+function shownRowKey(row: readonly string[]): string[] {
+  return row.map((value) =>
+    KEY_LENGTH_RUN.test(value) || scrubSecretValues(value).redactedValues > 0
+      ? SECRET_FIELD_MASK
+      : value,
+  );
+}
+
+/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key shape in
+ *  `value` as read: every string at any depth, object keys included. The shapes themselves go no
+ *  further than this function. */
+function keyShapeHashes(value: unknown): Set<string> {
+  const hashes = new Set<string>();
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (typeof next === 'string') {
+      for (const shape of platformKeyShapes(next)) hashes.add(hashApiKey(shape));
+    } else if (Array.isArray(next)) {
+      for (const item of next) stack.push(item);
+    } else if (next !== null && typeof next === 'object') {
+      for (const [key, item] of Object.entries(next)) stack.push(key, item);
+    }
+  }
+  return hashes;
+}
+
+interface IssuedKeyRow {
+  readonly workspace_id: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly user_id: string | null;
+  readonly api_key_hash: string;
+}
+
+/** The Principals holding a key whose hash is among `hashes`, by hash — read here and dropped. */
+async function issuedKeysAmong(
+  client: PoolClient,
+  hashes: readonly string[],
+): Promise<Map<string, IssuedKeyRow>> {
+  const { rows } = await client.query<IssuedKeyRow>(
+    `select workspace_id, id, kind, user_id, api_key_hash from principals
+      where api_key_hash = any($1::text[])`,
+    [hashes],
+  );
+  return new Map(rows.map((row) => [row.api_key_hash, row]));
+}
+
+/** Never compared: the credentials' own hashes, which are not where a key is copied. */
+const NOT_COMPARED_COLUMNS: ReadonlySet<string> = new Set([
+  'principals.api_key_hash',
+  'users.password_hash',
+]);
+
+interface ComparedTable {
+  readonly name: string;
+  /** The primary key's columns and types, in key order; `ctid` for a table without one. */
+  readonly key: readonly { readonly name: string; readonly type: string }[];
+  /** The text, JSON and text-array columns compared. */
+  readonly columns: readonly string[];
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+/** Every table of the `public` schema (a partitioned one once, not per partition) with a column a
+ *  key could be copied into: a string type (`text`, `varchar`, …), `json`, `jsonb`, or an array of
+ *  one. Read from the catalog, so a table a later migration adds is compared without a change here. */
+async function comparedTables(client: PoolClient): Promise<ComparedTable[]> {
+  const { rows } = await client.query<{
+    name: string;
+    key: { name: string; type: string }[];
+    columns: string[];
+  }>(
+    `select c.relname as name,
+            coalesce((select json_agg(json_build_object(
+                               'name', a.attname, 'type', format_type(a.atttypid, a.atttypmod))
+                             order by k.ord)
+                        from pg_index i
+                       cross join unnest(i.indkey) with ordinality as k(attnum, ord)
+                        join pg_attribute a on a.attrelid = i.indrelid and a.attnum = k.attnum
+                       where i.indrelid = c.oid and i.indisprimary), '[]') as key,
+            coalesce((select json_agg(a.attname order by a.attnum)
+                        from pg_attribute a
+                        join pg_type t on t.oid = a.atttypid
+                        left join pg_type e on t.typcategory = 'A' and e.oid = t.typelem
+                       where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                         and (t.typcategory = 'S' or t.typname in ('json', 'jsonb')
+                              or e.typcategory = 'S' or e.typname in ('json', 'jsonb'))), '[]')
+              as columns
+       from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relispartition
+      order by c.relname`,
+  );
+  return rows
+    .map((row) => ({
+      name: row.name,
+      key: row.key.length > 0 ? row.key : [{ name: 'ctid', type: 'tid' }],
+      columns: row.columns.filter((column) => !NOT_COMPARED_COLUMNS.has(`${row.name}.${column}`)),
+    }))
+    .filter((table) => table.columns.length > 0);
+}
+
+/** `table`'s rows after `after` (its key's values as text; `null` from the start) in key order, at
+ *  most `limit`: each one's key as text and its compared columns' values. */
+async function comparedWindow(
+  client: PoolClient,
+  table: ComparedTable,
+  after: readonly string[] | null,
+  limit: number,
+): Promise<{ row: string[]; values: unknown[] }[]> {
+  const key = table.key.map((column) => quoteIdent(column.name)).join(', ');
+  const bound =
+    after === null
+      ? ''
+      : `where (${key}) > (${table.key.map((column, i) => `$${i + 2}::${column.type}`).join(', ')})`;
+  const { rows } = await client.query<Record<string, unknown>>(
+    `select ${table.key.map((column, i) => `${quoteIdent(column.name)}::text as k${i}`).join(', ')},
+            ${table.columns.map((column, i) => `${quoteIdent(column)} as v${i}`).join(', ')}
+       from public.${quoteIdent(table.name)} ${bound}
+      order by ${key} limit $1`,
+    [limit, ...(after ?? [])],
+  );
+  return rows.map((row) => ({
+    row: table.key.map((_, i) => row[`k${i}`] as string),
+    values: table.columns.map((_, i) => row[`v${i}`]),
+  }));
 }
 
 /** A counted Finding for `count` key shapes, or `null` for none. */
@@ -405,7 +612,8 @@ const SCANS: readonly Scan[] = [
       };
     },
   },
-  // After the rewrite of each table: what it leaves of a platform API key's shape, by row id.
+  // After the rewrite of each table: what it leaves of a platform API key's shape, by row id. The
+  // keys still issued among them were compared by the rewrite scan, as read.
   {
     category: 'turnReportKeyShapes',
     window: turnReportWindow,
@@ -675,6 +883,22 @@ const SCANS: readonly Scan[] = [
     },
   },
   {
+    category: 'auditPayloads',
+    // Every audit row, keyed on `id` alone like `auditResults`.
+    window: async (client, after, limit) =>
+      (
+        await client.query<ScannedRow>(
+          `select workspace_id, id, payload from audit_records
+            where id > $1::uuid order by id limit $2`,
+          [after.id, limit],
+        )
+      ).rows,
+    inspect: (row) => {
+      const { count } = findSuspectedSecrets((row as ScannedRow & { payload: unknown }).payload);
+      return count > 0 ? { values: count } : null;
+    },
+  },
+  {
     category: 'gateCallObservations',
     // Keyed on the Observation; its Activity says whose gate call it observed.
     window: async (client, after, limit) =>
@@ -727,17 +951,73 @@ export async function scrubRawSecrets(
     [...REWRITTEN_CATEGORIES, ...COUNTED_CATEGORIES].map((name) => [name, emptyCounts()]),
   ) as Record<RawSecretCategory, RawSecretCategoryCounts>;
   const rewrites = new Set<RawSecretCategory>(REWRITTEN_CATEGORIES);
+  const liveApiKeys: LiveApiKeyCounts = { tables: 0, rows: 0, found: 0, keys: 0, examples: [] };
+  const livePrincipals = new Set<string>();
   let batches = 0;
   const result = (auditRecordId: string | null): ScrubRawSecretsResult => ({
     executed: input.confirm,
     batchSize,
     batches,
     categories,
+    liveApiKeys,
     auditRecordId,
   });
 
   let failure: unknown;
   try {
+    // First, every row as stored: before any rewrite below hides a key in it.
+    for (const table of await onLoginRole(pool, comparedTables)) {
+      liveApiKeys.tables += 1;
+      let after: readonly string[] | null = null;
+      for (;;) {
+        const from = after;
+        const outcome = await onLoginRole(pool, async (client) => {
+          const rows = await comparedWindow(client, table, from, LIVE_API_KEY_COMPARE_WINDOW);
+          const last = rows.at(-1);
+          if (!last) return null;
+          const read = rows.map(({ row, values }) => ({ row, hashes: keyShapeHashes(values) }));
+          const hashes = new Set(read.flatMap((entry) => [...entry.hashes]));
+          const issued =
+            hashes.size > 0
+              ? await issuedKeysAmong(client, [...hashes])
+              : new Map<string, IssuedKeyRow>();
+          const live: LiveApiKeyRow[] = [];
+          for (const { row, hashes: rowHashes } of read) {
+            const shown = shownRowKey(row);
+            for (const hash of rowHashes) {
+              const key = issued.get(hash);
+              if (!key) continue;
+              live.push({
+                table: table.name,
+                row: shown,
+                principalWorkspaceId: key.workspace_id,
+                principalId: key.id,
+                principalKind: key.kind,
+                userId: key.user_id,
+              });
+            }
+          }
+          return {
+            examined: rows.length,
+            live,
+            after: last.row,
+            done: rows.length < LIVE_API_KEY_COMPARE_WINDOW,
+          };
+        });
+        if (outcome === null) break;
+        batches += 1;
+        after = outcome.after;
+        liveApiKeys.rows += outcome.examined;
+        for (const found of outcome.live) {
+          input.onLiveApiKey?.(found);
+          liveApiKeys.found += 1;
+          livePrincipals.add(`${found.principalWorkspaceId}/${found.principalId}`);
+          liveApiKeys.keys = livePrincipals.size;
+          if (liveApiKeys.examples.length < MAX_EXAMPLES) liveApiKeys.examples.push(found);
+        }
+        if (outcome.done) break;
+      }
+    }
     for (const scan of SCANS) {
       const counts = categories[scan.category];
       let cursor: Cursor = scan.start ?? { workspaceId: NIL_UUID, id: NIL_UUID };
@@ -807,8 +1087,9 @@ export async function scrubRawSecrets(
           ? { error: failure instanceof Error ? failure.message : String(failure) }
           : {}),
         batches,
-        // Counts and ids only — never a value.
+        // Counts and ids only — never a value, never a key's hash.
         categories,
+        liveApiKeys,
       },
     }),
   );
