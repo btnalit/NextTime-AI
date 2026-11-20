@@ -344,8 +344,9 @@ jobs:
       # relative to /api/health, so poll briefly; the file is only ever removed on a *later* kernel
       # start once an administrator already exists, so reading it here (kernel started, nothing
       # below restarts it) is safe regardless of what the bootstrap steps below do.
-      # P-B1 (docs/development-tasks.md P-B 决定 ③): the console e2e needs one "discovered" gate
-      # instance without running a gate container. Seed it exactly the way a packaged gate does — a
+      # P-B1 (docs/development-tasks.md P-B 决定 ③): the console e2e needs a "discovered" gate
+      # instance without running a gate container (two since legacy 260: `ci-spare-mcp` is never
+      # enabled in a workspace; journeys/08 enables it on the platform and stops at 在本工作区启用). Seed it exactly the way a packaged gate does — a
       # POST to the internal plane with the packaged gates' own credential
       # (secrets/internal-gate-to-kernel.token, read on the runner and piped in on stdin, never
       # argv). It runs inside the gate-host container only for its network position (it reaches
@@ -362,13 +363,22 @@ jobs:
           const op = (name, mode, extra) => ({ name, binding: { kind: "mcp", tool_name: name },
           params_schema: { type: "object", properties: {} }, mode, blast_radius: mode === "observe" ? "low" : "medium",
           reversibility: false, auto_approvable: mode === "observe", await_decision: mode === "execute", reads: [], writes: [], ...extra });
-          const body = { gateId: "ci-fixture-mcp", connector: "fixture-mcp", transportKind: "mcp",
-          target: "http://fixture-mcp.invalid:9000", endpoint: "http://127.0.0.1:1", displayName: "CI fixture MCP",
-          operations: [op("list_things", "observe", { read_only_hint: true }), op("restart_thing", "execute", { destructive_hint: false, idempotent_hint: true })] };
-          fetch("http://kernel:8080/internal/gates/announce", { method: "POST",
-          headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body) })
-          .then(async (r) => { const text = await r.text(); console.log(r.status, text); if (!r.ok) process.exit(1); })
-          .catch((err) => { console.error(String(err)); process.exit(1); });
+          const operations = [op("list_things", "observe", { read_only_hint: true }), op("restart_thing", "execute", { destructive_hint: false, idempotent_hint: true })];
+          // Legacy 260: a second instance of the same connector that no spec enables in a workspace,
+          // so journeys/08 can open 接入一个系统 on one that is still waiting for 在本工作区启用.
+          const bodies = [
+            { gateId: "ci-fixture-mcp", connector: "fixture-mcp", transportKind: "mcp",
+              target: "http://fixture-mcp.invalid:9000", endpoint: "http://127.0.0.1:1", displayName: "CI fixture MCP", operations },
+            { gateId: "ci-spare-mcp", connector: "fixture-mcp", transportKind: "mcp",
+              target: "http://spare-mcp.invalid:9000", endpoint: "http://127.0.0.1:2", displayName: "CI spare MCP", operations },
+          ];
+          (async () => {
+            for (const body of bodies) {
+              const r = await fetch("http://kernel:8080/internal/gates/announce", { method: "POST",
+                headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body) });
+              const text = await r.text(); console.log(body.gateId, r.status, text); if (!r.ok) process.exit(1);
+            }
+          })().catch((err) => { console.error(String(err)); process.exit(1); });
 
           JS
           cat >"$RUNNER_TEMP/gate-announce.sh" <<'SH'
