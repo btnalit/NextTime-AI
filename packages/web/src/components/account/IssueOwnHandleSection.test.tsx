@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { actionHint } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { entryCeilingCapabilities } from '../../lib/entry-ceiling.js';
+import { HttpError } from '../../lib/http-client.js';
 import { IssueOwnHandleSection } from './IssueOwnHandleSection.js';
 
 afterEach(cleanup);
@@ -40,6 +41,55 @@ describe('IssueOwnHandleSection', () => {
         ttlSeconds: 7 * 86400,
       }),
     );
+  });
+
+  it('legacy 902: sends the note trimmed, shows the session’s short id and note once issued, and says a credential-looking note on its field', async () => {
+    let refuse = true;
+    const call = vi.fn(async (name: string) => {
+      if (name === 'list_gatekeepers') return { items: [], nextCursor: null };
+      if (name === 'issue_handle') {
+        if (refuse) {
+          refuse = false;
+          throw new HttpError(
+            'capability_error',
+            'invalid params for capability "issue_handle": note looks like a credential (a token, a key or a password)',
+            'invalid_params',
+          );
+        }
+        return {
+          handle: 'h_own',
+          sessionId: '0f3a9c21-7b4e-4d6a-9e10-5c2b8a7d6e4f',
+          sessionShortId: '0f3a9c21',
+          sessionNote: 'laptop',
+          onBehalfOf: 'p-1',
+          expiresAt: '2026-09-10T00:00:00.000Z',
+          scope: { capabilities: [], resources: {} },
+        };
+      }
+      throw new Error(`unscripted ${name}`);
+    });
+    render(<IssueOwnHandleSection http={{ call } as unknown as CapabilityCaller} />);
+    const note = screen.getByLabelText(/备注（可选）/) as HTMLInputElement;
+    expect(note.maxLength).toBe(200);
+    fireEvent.change(note, { target: { value: 'token=abc' } });
+    fireEvent.click(screen.getByTestId('ioh-submit'));
+    await waitFor(() => expect(note.getAttribute('aria-invalid')).toBe('true'));
+    expect(document.getElementById('ioh-note-error')?.textContent).toContain('看起来带了凭证');
+    // The refusal is on this field, so focus returns to it.
+    expect(document.activeElement).toBe(note);
+    fireEvent.change(note, { target: { value: '  laptop  ' } });
+    fireEvent.click(screen.getByTestId('ioh-submit'));
+    await waitFor(() =>
+      expect(call).toHaveBeenLastCalledWith('issue_handle', {
+        sessionKind: 'interactive',
+        ttlSeconds: 86400,
+        note: 'laptop',
+      }),
+    );
+    const session = await screen.findByTestId('issue-own-handle-session');
+    expect(session.textContent).toContain('0f3a9c21');
+    expect(session.textContent).toContain('，备注：');
+    expect(session.textContent).toContain('laptop');
   });
 
   it('legacy 439 / 440: says what the unrestricted scope holds, and lists each capability by its console name and description', () => {

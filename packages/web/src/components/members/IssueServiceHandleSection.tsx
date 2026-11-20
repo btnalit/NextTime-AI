@@ -11,6 +11,7 @@ import {
 } from '../../lib/handle-ttl.js';
 import { useT } from '../../lib/i18n.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
+import { HandleNoteField, IssuedSession, isNoteRefused } from '../handles/HandleNote.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { CopyButton } from '../kit/copy-button.js';
@@ -61,6 +62,9 @@ interface IssueServiceHandleResult {
   readonly handle: string;
   readonly principalId: string;
   readonly sessionId: string;
+  /** Legacy 168 (902): how 「会话凭证」 names this session, and the note given it. */
+  readonly sessionShortId: string;
+  readonly sessionNote: string | null;
   readonly expiresAt: string;
   readonly scope: readonly string[];
 }
@@ -73,6 +77,9 @@ export interface IssueServiceHandleSectionProps {
   /** Fires once the reader has acknowledged the one-time Handle (`CreatePrincipalForm`'s own
    *  `onDone` precedent) — `MembersPage` closes the drawer this renders inside. */
   readonly onDone: () => void;
+  /** Legacy 902 (#1558 UX): a Handle was issued — the page's service Handle list reads again
+   *  now, not only when the reader presses 我已保存 (Esc or × close the drawer too). */
+  readonly onIssued?: () => void;
   /** Opens the "create a service account" flow — offered right in the notice when there is no
    *  service account yet, instead of pointing at a menu elsewhere on the page (#559 acceptance). */
   readonly onCreateServiceAccount?: () => void;
@@ -112,6 +119,7 @@ export function IssueServiceHandleSection({
   http,
   principals,
   onDone,
+  onIssued,
   onCreateServiceAccount,
 }: IssueServiceHandleSectionProps) {
   const t = useT();
@@ -148,6 +156,7 @@ export function IssueServiceHandleSection({
   const principalId = chosenPrincipalId || (onlyPrincipal?.id ?? '');
   // Legacy 168 ②: picked from presets, the shortest by default (was 30 days, typed).
   const [ttlDays, setTtlDays] = useState(ttlPresets[0] ?? 1);
+  const [note, setNote] = useState('');
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   /** The name box's text: a search over the handle-channel names, or a pasted list. */
   const [nameText, setNameText] = useState('');
@@ -216,8 +225,10 @@ export function IssueServiceHandleSection({
           principalId,
           scope,
           ttlSeconds: ttlDays * SECONDS_PER_DAY,
+          ...(note.trim() !== '' ? { note: note.trim() } : {}),
         }),
       );
+      onIssued?.();
     } catch (err) {
       setError(err);
     } finally {
@@ -230,8 +241,13 @@ export function IssueServiceHandleSection({
   if (issued) {
     return (
       <div className="stack" data-testid="issued-handle-dialog">
-        <p className="text-3 text-small">
-          {t('会话', 'Session')}{' '}
+        <IssuedSession
+          shortId={issued.sessionShortId}
+          note={issued.sessionNote}
+          testId="issued-handle-session"
+        />
+        <p className="text-3 text-small" style={{ margin: 0 }}>
+          {t('完整会话编号 ', 'Full session id ')}
           <span className="mono" data-testid="issued-handle-session-id">
             {issued.sessionId}
           </span>
@@ -348,6 +364,14 @@ export function IssueServiceHandleSection({
             ))}
           </Select>
         </Field>
+
+        <HandleNoteField
+          id="ish-note"
+          value={note}
+          onChange={setNote}
+          disabled={submitting}
+          error={error}
+        />
 
         <fieldset className="field">
           {/* S8 W2-U1 (audit AX1 "标签与星号分离"): the label and its required asterisk are one
@@ -481,7 +505,10 @@ export function IssueServiceHandleSection({
           )}
         </p>
 
-        <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
+        <PlatformError
+          error={isNoteRefused(error) ? null : error}
+          title={t('无法签发', 'Could not issue the Handle')}
+        />
 
         <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           <StillNeeded items={missing} hidden={submitting} testId="ish-missing" />

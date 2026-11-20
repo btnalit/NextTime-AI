@@ -35,6 +35,7 @@ import {
  *   - 无权限: 跳过——旅程 ⑧ 走过各角色打开成员与授权不出 403；非所有者看不到编辑区由组件测试覆盖。
  *   - 窄屏: 跳过——`00-gates/` 的截图门槛在 768 宽度下截过成员与授权和用户页。
  * 成功判据:
+ *   - 撤销前这一行和撤销确认都写出会话短编号和签发时的备注（遗留 902）。
  *   - 撤销后这一行消失、页面说凭证已失效；从页面外读 `list_handles` 不再有这个会话，撤销前能调用
  *     `graph_overview` 的 Handle 之后被拒（401）。
  *   - 六个动作都由真实内核答复，页面跟着变（新的成员资格一行、已移出的标记、轮换后的新 key、状态「已停用」），
@@ -44,7 +45,7 @@ import {
  *
  * 准备工作在页面外做，不算控制台操作：平台管理员建一个不加入任何工作区的用户（`create_user`，旅程 ⑥ 与
  * `createPlatformUser` 在控制台里走过），所有者建一个成员角色的服务凭证（`create_principal`，旅程 ⑮ 同样在
- * 页面外建）并给它签发一个 Handle（`issue_service_handle`，integrations.spec.ts 在控制台里走过）。这条旅程只动自己建的用户、工作区和服务凭证，不碰平台管理员和共享的用户。只有页面发出的调用才
+ * 页面外建）并给它签发一个带备注的 Handle（`issue_service_handle`，integrations.spec.ts 在控制台里走过）。这条旅程只动自己建的用户、工作区和服务凭证，不碰平台管理员和共享的用户。只有页面发出的调用才
  * 算数（`lib/test.ts`），所以准备和核对都从 Node 调，六个动作都由页面发出。
  */
 
@@ -52,6 +53,7 @@ const RUN = Date.now().toString(36);
 const MEMBER_LOGIN = `j18member${RUN}`;
 const MEMBER_NAME = `旅程⑱ 成员 ${RUN}`;
 const SERVICE_NAME = `旅程⑱ 服务凭证 ${RUN}`;
+const SERVICE_NOTE = `旅程⑱ 采集器 ${RUN}`;
 
 interface CapResult {
   readonly ok: boolean;
@@ -198,10 +200,10 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
       { role: 'member', displayName: SERVICE_NAME },
     );
     const oldKey = service.apiKey;
-    const issued = await callCap<{ handle: string; sessionId: string }>(
+    const issued = await callCap<{ handle: string; sessionId: string; sessionShortId: string }>(
       page,
       'issue_service_handle',
-      { principalId: service.principal.id, scope: ['graph_overview'] },
+      { principalId: service.principal.id, scope: ['graph_overview'], note: SERVICE_NOTE },
     );
     expect((await graphOverviewWithHandle(page, issued.handle)).status()).toBe(200);
 
@@ -212,9 +214,15 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
     const handleSession = serviceHandles.getByTestId(`handle-session-${issued.sessionId}`);
     await expect(handleSession).toContainText(SERVICE_NAME, { timeout: 15_000 });
     await expect(handleSession).toContainText('客户端持有');
+    // Legacy 902: the row and the confirm name the session by its short id and the note it was
+    // issued with, so the person knows which one they are revoking.
+    await expect(handleSession).toContainText(`会话 ${issued.sessionShortId}`);
+    await expect(handleSession).toContainText(`备注：${SERVICE_NOTE}`);
     await handleSession.getByRole('button', { name: '撤销', exact: true }).click();
     const revokeConfirm = page.getByTestId(`handle-session-revoke-confirm-${issued.sessionId}`);
     await expect(revokeConfirm).toContainText('这个凭证立即失效');
+    await expect(revokeConfirm).toContainText(issued.sessionShortId);
+    await expect(revokeConfirm).toContainText(`备注：${SERVICE_NOTE}`);
     await revokeConfirm.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(serviceHandles.getByTestId('handles-service-revoked')).toContainText('已失效', {
       timeout: 15_000,

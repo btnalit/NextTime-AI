@@ -180,12 +180,18 @@ describe('MembersPage', () => {
     fireEvent.change(paste, { target: { value: 'get_task' } });
     expect(within(form).getByTestId('ish-scope-summary').textContent).toContain('2');
 
+    const listReads = () => http.calls.filter((call) => call.name === 'list_handles').length;
+    await waitFor(() => expect(listReads()).toBeGreaterThan(0));
+    const readsBefore = listReads();
     fireEvent.click(within(form).getByRole('button', { name: '签发' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'issue_service_handle')).toBe(true),
     );
     const dialog = await screen.findByTestId('issued-handle-dialog');
     expect(within(dialog).getByTestId('issued-handle-token').textContent).toBe('svc_handle_abc123');
+    // Legacy 902 (#1558 UX): the service Handle list reads again as soon as one is issued, so the
+    // new session is there however the drawer is closed.
+    await waitFor(() => expect(listReads()).toBe(readsBefore + 1));
   });
 
   it('D3/B7: the TTL cap is read from the registry (one year) and only presets under it are offered', async () => {
