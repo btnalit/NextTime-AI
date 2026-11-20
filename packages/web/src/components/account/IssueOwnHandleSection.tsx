@@ -11,6 +11,7 @@ import {
 } from '../../lib/handle-ttl.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
+import { HandleNoteField, IssuedSession, isNoteRefused } from '../handles/HandleNote.js';
 import { Button } from '../kit/button.js';
 import {
   Dialog,
@@ -48,6 +49,9 @@ function issueHandleMaxTtlSeconds(): number {
 interface IssueHandleResult {
   readonly handle: string;
   readonly sessionId: string;
+  /** Legacy 168 (902): how 「会话凭证」 names this session, and the note given it. */
+  readonly sessionShortId: string;
+  readonly sessionNote: string | null;
   readonly onBehalfOf: string;
   readonly expiresAt: string;
   readonly scope: {
@@ -141,6 +145,7 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
 
   // Legacy 168 ②: the shortest preset by default.
   const [ttlDays, setTtlDays] = useState(ttlPresets[0] ?? 1);
+  const [note, setNote] = useState('');
   const [capabilitiesUnrestricted, setCapabilitiesUnrestricted] = useState(true);
   const [pickedCapabilities, setPickedCapabilities] = useState<ReadonlySet<string>>(new Set());
   const [gatekeepersUnrestricted, setGatekeepersUnrestricted] = useState(true);
@@ -182,6 +187,7 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
         sessionKind: 'interactive',
         ttlSeconds: ttlDays * SECONDS_PER_DAY,
         ...(Object.keys(scope).length > 0 ? { scope } : {}),
+        ...(note.trim() !== '' ? { note: note.trim() } : {}),
       };
       setIssued(await http.call<IssueHandleResult>('issue_handle', params));
       onIssued?.();
@@ -194,6 +200,7 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
 
   function closeIssued(): void {
     setIssued(null);
+    setNote('');
     setCapabilitiesUnrestricted(true);
     setPickedCapabilities(new Set());
     setGatekeepersUnrestricted(true);
@@ -247,6 +254,14 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
           ))}
         </Select>
       </Field>
+
+      <HandleNoteField
+        id="ioh-note"
+        value={note}
+        onChange={setNote}
+        disabled={submitting}
+        error={error}
+      />
 
       <fieldset className="field">
         <legend className="field-label">{t('能力范围', 'Capability scope')}</legend>
@@ -349,7 +364,7 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
         ) : null}
       </fieldset>
 
-      {error !== null ? (
+      {error !== null && !isNoteRefused(error) ? (
         <ErrorBanner error={error} title={t('无法签发', 'Could not issue the Handle')} />
       ) : null}
 
@@ -376,6 +391,11 @@ export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionP
                 )}
               </DialogDescription>
             </DialogHeader>
+            <IssuedSession
+              shortId={issued.sessionShortId}
+              note={issued.sessionNote}
+              testId="issue-own-handle-session"
+            />
             <Notice tone="warn">
               {t(
                 `到期时间：${new Date(issued.expiresAt).toLocaleString()}`,

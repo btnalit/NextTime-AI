@@ -455,10 +455,8 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
             <IssueServiceHandleSection
               http={http}
               principals={allPrincipals}
-              onDone={() => {
-                setDrawer({ kind: 'closed' });
-                setHandlesRevision((revision) => revision + 1);
-              }}
+              onDone={() => setDrawer({ kind: 'closed' })}
+              onIssued={() => setHandlesRevision((revision) => revision + 1)}
               onCreateServiceAccount={() => setDrawer({ kind: 'create', returnTo: 'issueHandle' })}
             />
           ) : null}

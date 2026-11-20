@@ -524,6 +524,8 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await scopeBox.fill('get_task ');
     await expect(form.getByTestId('ish-scope-summary')).toContainText('get_task');
     await scopeBox.press('Tab');
+    // Legacy 902: an optional note, shown with the session's short id once issued.
+    await form.getByLabel('备注（可选）').fill('CI 采集器');
     await form.getByRole('button', { name: /签发/ }).click();
 
     // The issued result swaps into this same drawer (no second, nested `Drawer`) — still
@@ -532,6 +534,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await expect(issuedPanel).toBeVisible({ timeout: 15_000 });
     const token = issuedPanel.getByTestId('issued-handle-token');
     await expect(token).toBeVisible();
+    await expect(issuedPanel.getByTestId('issued-handle-session')).toContainText('备注：CI 采集器');
     expect(((await token.textContent()) ?? '').trim().length).toBeGreaterThan(0);
     // Read the session id here (rather than filtering the runtimes table by principal, which a
     // leftover session from a failed earlier attempt could make ambiguous) so the row/revoke

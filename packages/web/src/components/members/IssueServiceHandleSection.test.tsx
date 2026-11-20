@@ -22,7 +22,9 @@ function renderSection(principals: readonly PrincipalRow[]) {
   const call = vi.fn(async (_name: string, params?: unknown) => ({
     handle: 'svc_handle',
     principalId: (params as { principalId: string }).principalId,
-    sessionId: 'sess-1',
+    sessionId: '0f3a9c21-7b4e-4d6a-9e10-5c2b8a7d6e4f',
+    sessionShortId: '0f3a9c21',
+    sessionNote: (params as { note?: string }).note ?? null,
     expiresAt: '2026-11-01T00:00:00.000Z',
     scope: (params as { scope: string[] }).scope,
   }));
@@ -98,6 +100,30 @@ describe('IssueServiceHandleSection — picked, not typed', () => {
         scope: ['report_task_result'],
         ttlSeconds: 86400,
       }),
+    );
+  });
+
+  it('legacy 902: takes an optional note and shows the issued session by its short id and note', async () => {
+    const { call } = renderSection([service('p-svc', 'CI runner')]);
+    fireEvent.change(nameBox(), { target: { value: 'get_task ' } });
+    fireEvent.change(screen.getByLabelText(/备注（可选）/), {
+      target: { value: ' backup collector ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '签发' }));
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith('issue_service_handle', {
+        principalId: 'p-svc',
+        scope: ['get_task'],
+        ttlSeconds: 86400,
+        note: 'backup collector',
+      }),
+    );
+    const session = await screen.findByTestId('issued-handle-session');
+    expect(session.textContent).toContain('0f3a9c21');
+    expect(session.textContent).toContain('，备注：');
+    expect(session.textContent).toContain('backup collector');
+    expect(screen.getByTestId('issued-handle-session-id').textContent).toBe(
+      '0f3a9c21-7b4e-4d6a-9e10-5c2b8a7d6e4f',
     );
   });
 
