@@ -145,15 +145,20 @@ export function redactToolResult(
 /** `[redacted]"…\"`: a quoted value the value patterns split when they read JSON text as it is
  *  written (before legacy 916) — `API_TOKEN=\"…\"` became `API_TOKEN=[redacted]"…\"`, the `\`
  *  taken for the value and the value itself kept. Between `[redacted]"` and the next `\"` there
- *  is no quote that is not escaped: in JSON that is valid, a string's closing quote is followed,
- *  before any `\"`, by the opening quote of the next string, or by nothing. */
-const SPLIT_QUOTED_MASK = /\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
+ *  is no quote that is not escaped, and no control character (JSON escapes those in a string): in
+ *  JSON that is valid, a string's closing quote is followed, before any `\"`, by the opening
+ *  quote of the next string, or by nothing. Only text that starts as JSON is read — in plain
+ *  text `TOKEN="[redacted]"` is the mask written whole (review #493 on #1573). */
+const SPLIT_QUOTED_MASK = /\[redacted\]"(?:[^"\\\u0000-\u001f]|\\[^"\u0000-\u001f])*\\"/g;
+const STARTS_AS_JSON = /^[ \t\n\r]*[[{]/;
 
 /** A stored result's text with each `SPLIT_QUOTED_MASK` written as the value patterns write that
  *  value now — `\"[redacted]\"` — counted (legacy 916; one-way, like the rest of the rewrite). */
 function repairSplitQuotedMasks(text: string): Scrubbed<string> {
   // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
-  if (!text.includes(`${REDACTED}"`)) return { value: text, redactedValues: 0 };
+  if (!STARTS_AS_JSON.test(text) || !text.includes(`${REDACTED}"`)) {
+    return { value: text, redactedValues: 0 };
+  }
   let redactedValues = 0;
   const value = text.replace(SPLIT_QUOTED_MASK, () => {
     redactedValues += 1;

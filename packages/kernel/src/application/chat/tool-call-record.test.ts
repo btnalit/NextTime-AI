@@ -472,6 +472,22 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
       });
     });
 
+    it('leaves plain text alone, where a quoted mask is the mask written whole (review #493)', () => {
+      for (const text of [
+        `export TOKEN="${REDACTED}"\nrun --name app\necho \\"done\\"`,
+        `TOKEN="${REDACTED}" and later \\"x\\"`,
+        // JSON, then a raw line break: a string never holds one, so the mask's quote closed one.
+        `{"a":"${REDACTED}"}\nlog \\"x\\"`,
+      ]) {
+        expect(rescrubStoredToolCallResult(stored(text)).value).toMatchObject({ result: { text } });
+      }
+      expect(rescrubStoredToolCallResult(stored(` \n${split('a API_TOKEN="x" b')}`))).toMatchObject(
+        {
+          redactedValues: 1,
+        },
+      );
+    });
+
     it('leaves JSON that is valid alone, where a closing quote follows a mask', () => {
       for (const text of [
         `{"a":"${REDACTED}"}`,
