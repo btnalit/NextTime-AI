@@ -43,8 +43,8 @@ export interface ComboboxProps {
   readonly loading?: boolean;
   /** Shown in the list when nothing matches (or the list is empty). */
   readonly emptyText?: ReactNode;
-  /** A note pinned to the bottom of the open list, visible however far it is scrolled — e.g. a
-   *  search answered on the server that returned only its first matches. */
+  /** A note under the open list, outside its scroll, so it is in view however far the list is
+   *  scrolled — e.g. a search answered on the server that returned only its first matches. */
   readonly footer?: ReactNode;
   readonly disabled?: boolean;
   readonly invalid?: boolean;
@@ -389,55 +389,61 @@ export function Combobox({
       </span>
       {open ? (
         <div className="combobox-popup">
-          {loading ? <output className="combobox-note">{t('正在加载…', 'Loading…')}</output> : null}
-          {/* The WAI-ARIA combobox pattern: focus stays on the input and moves through the
-           *  options via `aria-activedescendant`, so neither the listbox nor an option is
-           *  focusable or has key handlers of its own, and a native <select> cannot be used. */}
-          {/* biome-ignore lint/a11y/useSemanticElements: see above. */}
-          {/* biome-ignore lint/a11y/useFocusableInteractive: see above. */}
-          <div className="combobox-listbox" role="listbox" id={listId} aria-label={ariaLabel}>
-            {visible.map((option, index) => (
-              // biome-ignore lint/a11y/useFocusableInteractive: see above.
-              // biome-ignore lint/a11y/useKeyWithClickEvents: see above.
-              <div
-                key={option.value}
-                id={optionId(index)}
-                // biome-ignore lint/a11y/useSemanticElements: see above.
-                role="option"
-                className="combobox-option"
-                data-value={option.value}
-                aria-selected={option.value === value}
-                aria-disabled={option.disabled || undefined}
-                data-active={index === active || undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onMouseMove={() => {
-                  if (!option.disabled && index !== active) setActive(index);
-                }}
-                onClick={() => pick(option)}
-              >
-                <span className={cn('combobox-option-label', mono && 'mono')}>{option.label}</span>
-                {option.secondary ? (
-                  <span className="combobox-option-secondary">{option.secondary}</span>
-                ) : null}
-              </div>
-            ))}
+          <div className="combobox-scroll">
+            {loading ? (
+              <output className="combobox-note">{t('正在加载…', 'Loading…')}</output>
+            ) : null}
+            {/* The WAI-ARIA combobox pattern: focus stays on the input and moves through the
+             *  options via `aria-activedescendant`, so neither the listbox nor an option is
+             *  focusable or has key handlers of its own, and a native <select> cannot be used. */}
+            {/* biome-ignore lint/a11y/useSemanticElements: see above. */}
+            {/* biome-ignore lint/a11y/useFocusableInteractive: see above. */}
+            <div className="combobox-listbox" role="listbox" id={listId} aria-label={ariaLabel}>
+              {visible.map((option, index) => (
+                // biome-ignore lint/a11y/useFocusableInteractive: see above.
+                // biome-ignore lint/a11y/useKeyWithClickEvents: see above.
+                <div
+                  key={option.value}
+                  id={optionId(index)}
+                  // biome-ignore lint/a11y/useSemanticElements: see above.
+                  role="option"
+                  className="combobox-option"
+                  data-value={option.value}
+                  aria-selected={option.value === value}
+                  aria-disabled={option.disabled || undefined}
+                  data-active={index === active || undefined}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseMove={() => {
+                    if (!option.disabled && index !== active) setActive(index);
+                  }}
+                  onClick={() => pick(option)}
+                >
+                  <span className={cn('combobox-option-label', mono && 'mono')}>
+                    {option.label}
+                  </span>
+                  {option.secondary ? (
+                    <span className="combobox-option-secondary">{option.secondary}</span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            {!loading && visible.length === 0 ? (
+              <p className="combobox-note" data-testid={testId ? `${testId}-empty` : undefined}>
+                {emptyText ??
+                  (allowFreeEntry && (query ?? '').trim() !== ''
+                    ? t('没有匹配项，将使用输入的值。', 'No match — the typed value is kept.')
+                    : t('没有匹配项。', 'No match.'))}
+              </p>
+            ) : null}
+            {hidden > 0 ? (
+              <p className="combobox-note">
+                {t(
+                  `还有 ${hidden} 项未显示，继续输入以缩小范围。`,
+                  `${hidden} more not shown — keep typing to narrow the list.`,
+                )}
+              </p>
+            ) : null}
           </div>
-          {!loading && visible.length === 0 ? (
-            <p className="combobox-note" data-testid={testId ? `${testId}-empty` : undefined}>
-              {emptyText ??
-                (allowFreeEntry && (query ?? '').trim() !== ''
-                  ? t('没有匹配项，将使用输入的值。', 'No match — the typed value is kept.')
-                  : t('没有匹配项。', 'No match.'))}
-            </p>
-          ) : null}
-          {hidden > 0 ? (
-            <p className="combobox-note">
-              {t(
-                `还有 ${hidden} 项未显示，继续输入以缩小范围。`,
-                `${hidden} more not shown — keep typing to narrow the list.`,
-              )}
-            </p>
-          ) : null}
           {!loading && footer ? <p className="combobox-note combobox-footer">{footer}</p> : null}
         </div>
       ) : null}

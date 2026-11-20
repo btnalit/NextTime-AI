@@ -692,9 +692,10 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
+  display: flex;
+  flex-direction: column;
   max-height: 280px;
-  overflow-y: auto;
-  padding: var(--space-1);
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface-1);
@@ -752,15 +753,19 @@
   font-size: var(--fs-13);
 }
 
-/* Pinned to the popup's bottom edge, so a list taller than the popup still shows it without
-   scrolling (a server search cut off at its first matches, UX on #1561). */
+/* The options scroll; a footer note stays below them, outside the scroll, so it is always in
+   view and never covers the row the arrow keys bring into view (UX on #1561). */
+.combobox-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1);
+  scroll-padding-block: var(--space-1);
+}
+
 .combobox-footer {
-  position: sticky;
-  bottom: calc(-1 * var(--space-1));
-  margin: var(--space-1) calc(-1 * var(--space-1)) calc(-1 * var(--space-1));
+  flex: none;
   padding: 6px calc(var(--space-2) + var(--space-1));
   border-top: 1px solid var(--border);
-  background: var(--surface-1);
 }
 
 /* Under the field, not in the popup: a paste that picked nothing yet. */
