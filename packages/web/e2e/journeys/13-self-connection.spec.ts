@@ -224,8 +224,8 @@ async function addressChanges(
 async function endedMove(page: Page, changeId: string): Promise<Locator> {
   const history = page.getByTestId('gate-address-change-history');
   if ((await history.getAttribute('open')) === null) {
-    // Its header also names the latest move's outcome (legacy 668), so open it by the summary.
-    await history.locator('summary').click();
+    // Its header also names the latest move's outcome (legacy 668): match its opening words.
+    await history.getByText(/^已结束的换地址申请/).click();
   }
   const row = page.getByTestId(`gate-address-change-history-row-${changeId}`);
   await expect(row).toBeVisible({ timeout: 15_000 });
