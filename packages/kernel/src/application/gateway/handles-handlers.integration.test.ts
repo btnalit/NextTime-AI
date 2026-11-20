@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HandleWire, Role, SessionKind } from '@nexttime/shared';
@@ -21,6 +21,7 @@ import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { authenticateHandle } from './handle-auth.js';
 import { HandleRevokeError } from './handles-handlers.js';
+import { InvalidCapabilityParamsError } from './invalid-params.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import { fixtureApiKeyHash } from './traversal-fixture.js';
 
@@ -44,6 +45,18 @@ class UnusedSupervisorClient implements TaskSupervisorClientPort {
 }
 
 const DATABASE_URL = process.env.DATABASE_URL;
+/** A FAKE Handle-shaped JWT (the shape the high-confidence detector names; signs nothing). */
+const FAKE_HANDLE_TOKEN =
+  'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+/** A key minted as `generateApiKey` mints a platform API key (32 random bytes, base64url) — made
+ *  at run time and never used, so no real key is written down. Re-drawn in the rare case it has
+ *  none of a digit, `-` and `_`, which the detector does not claim to catch. */
+function generateApiKeyLike(): string {
+  for (;;) {
+    const key = randomBytes(32).toString('base64url');
+    if (/[0-9_-]/.test(key)) return key;
+  }
+}
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
@@ -227,6 +240,8 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     expect(items.find((item) => item.jti === mcp.jti)).toEqual({
       jti: mcp.jti,
       sessionId: mcp.sessionId,
+      sessionShortId: mcp.sessionId.slice(0, 8),
+      sessionNote: null,
       sessionKind: 'mcp_session',
       holder: 'bearer',
       onBehalfOf: memberId,
@@ -410,6 +425,8 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     expect(audit).toHaveLength(1);
     expect(audit[0]?.actorPrincipalId).toBe(memberId);
     expect(audit[0]?.payload).toMatchObject({
+      // The short id the list showed beside the session (legacy 168 addendum).
+      sessionShortId: own.sessionId.slice(0, 8),
       sessionKind: 'mcp_session',
       onBehalfOf: memberId,
       revokedHandleCount: 2,
@@ -589,6 +606,126 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     await expect(
       authenticateHandle(pool, issued.handle, { publicKey: handlePublicKey }),
     ).rejects.toThrow(HandleRevoked);
+  });
+
+  describe('a session’s short id and note (legacy 168 addendum)', () => {
+    interface Issued {
+      sessionId: string;
+      sessionShortId: string;
+      sessionNote: string | null;
+    }
+
+    async function issue(capability: string, params: Record<string, unknown>): Promise<Issued> {
+      return (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        capability,
+        params,
+      )) as Issued;
+    }
+
+    async function storedNote(sessionId: string): Promise<string | null | undefined> {
+      const result = await asAdmin(workspaceId, (client) =>
+        client.query<{ note: string | null }>('select note from sessions where id = $1', [
+          sessionId,
+        ]),
+      );
+      return result.rows[0]?.note;
+    }
+
+    async function counts(): Promise<{ sessions: string; handles: string }> {
+      const result = await asAdmin(workspaceId, (client) =>
+        client.query<{ sessions: string; handles: string }>(
+          `select (select count(*) from sessions where workspace_id = $1)::text as sessions,
+                  (select count(*) from capability_handles where workspace_id = $1)::text as handles`,
+          [workspaceId],
+        ),
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error('count query returned no row');
+      return row;
+    }
+
+    it('issuing takes a note: trimmed, stored on the session, returned with the short id, listed beside the Handle', async () => {
+      const own = await issue('issue_handle', {
+        sessionKind: 'interactive',
+        note: '  本机 Claude Code  ',
+      });
+      expect(own).toMatchObject({
+        sessionShortId: own.sessionId.slice(0, 8),
+        sessionNote: '本机 Claude Code',
+      });
+      const service = await issue('issue_service_handle', {
+        principalId: serviceId,
+        scope: ['search'],
+        note: '备份采集器',
+      });
+      expect(service).toMatchObject({
+        sessionShortId: service.sessionId.slice(0, 8),
+        sessionNote: '备份采集器',
+      });
+      expect(await storedNote(own.sessionId)).toBe('本机 Claude Code');
+      expect(await storedNote(service.sessionId)).toBe('备份采集器');
+
+      const listed = (await list(ownerId, 'owner', { limit: 500 })).items;
+      expect(listed.find((item) => item.sessionId === own.sessionId)).toMatchObject({
+        sessionShortId: own.sessionShortId,
+        sessionNote: '本机 Claude Code',
+      });
+      expect(listed.find((item) => item.sessionId === service.sessionId)).toMatchObject({
+        sessionShortId: service.sessionShortId,
+        sessionNote: '备份采集器',
+      });
+    });
+
+    it('a blank note is no note; a session issued without one, or held by the platform, lists a null note and its short id', async () => {
+      const blank = await issue('issue_handle', { sessionKind: 'interactive', note: ' \t ' });
+      expect(blank.sessionNote).toBeNull();
+      expect(await storedNote(blank.sessionId)).toBeNull();
+      const none = await issue('issue_service_handle', {
+        principalId: serviceId,
+        scope: ['search'],
+      });
+      expect(none.sessionNote).toBeNull();
+      expect(await storedNote(none.sessionId)).toBeNull();
+      const entry = await seedHandle(ownerId, 'entry');
+
+      const listed = (await list(ownerId, 'owner', { limit: 500 })).items;
+      for (const sessionId of [blank.sessionId, none.sessionId, entry.sessionId]) {
+        expect(listed.find((item) => item.sessionId === sessionId)).toMatchObject({
+          sessionShortId: sessionId.slice(0, 8),
+          sessionNote: null,
+        });
+      }
+    });
+
+    it('a note that looks like a credential, or is over 200, is refused (invalid params) before anything is written — the refusal never echoes it', async () => {
+      // Pasted into the note, each would be handed to every owner reading the list: a Handle; the
+      // platform API key a person or service account signs in with (review #501 on #1549 — no
+      // prefix to know it by); and a `password: …` the audit copy of the call would redact.
+      const apiKey = generateApiKeyLike();
+      const pasted: readonly (readonly [note: string, secret: string])[] = [
+        [`采集器 ${FAKE_HANDLE_TOKEN}`, FAKE_HANDLE_TOKEN.slice(0, 12)],
+        [`采集器的 key ${apiKey}`, apiKey.slice(0, 12)],
+        ['采集器 password: FAKEabcdefghijklmnopqrstuvwxyz', 'FAKEabcdefgh'],
+      ];
+      const before = await counts();
+      for (const [capability, params] of [
+        ['issue_handle', { sessionKind: 'interactive' }],
+        ['issue_service_handle', { principalId: serviceId, scope: ['search'] }],
+      ] as const) {
+        for (const [note, secret] of pasted) {
+          const refused = await issue(capability, { ...params, note }).catch((err: unknown) => err);
+          expect(refused).toBeInstanceOf(InvalidCapabilityParamsError);
+          expect((refused as Error).message).toContain('note looks like a credential');
+          expect((refused as Error).message).not.toContain(secret);
+        }
+        await expect(issue(capability, { ...params, note: 'x'.repeat(201) })).rejects.toThrow(
+          InvalidCapabilityParamsError,
+        );
+      }
+      expect(await counts()).toEqual(before);
+    });
   });
 
   it('an auditor lists its own Handles but cannot revoke one', async () => {

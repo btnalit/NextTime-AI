@@ -24,6 +24,9 @@ import {
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 /** A Handle-shaped compact JWT; `.gitleaks.toml` allows its signature segment. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+/** 32 bytes in base64url, 43 characters — a platform API key's shape, and a SHA-256 digest's or an
+ *  Ed25519 public key's in a JWK. Synthetic, spelled out from the alphabet. */
+const BASE64URL_32 = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
 /** A `Basic` credential's value, built at run time from the synthetic `FAKE`. */
 const BASIC = Buffer.from(`ops:${FAKE}`).toString('base64');
 
@@ -489,6 +492,14 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
       ['next'],
     ],
     ['a pageToken inside a query string', { next: `/items?pageToken=${FAKE}` }, ['next']],
+    // A platform API key's shape is any 32 bytes in base64url (legacy 168 review): hidden in the
+    // audit copy, never refused — a call that names an event by its digest goes through.
+    ['a SHA-256 digest in base64url', { eventId: BASE64URL_32 }, ['eventId']],
+    [
+      'an Ed25519 public key in a JWK',
+      { jwk: { kty: 'OKP', crv: 'Ed25519', x: BASE64URL_32 } },
+      ['jwk.x'],
+    ],
     // Secret-named fields: as often an ordinary cursor or resource id.
     ['pageToken', { pageToken: 'cursor-page-2', pageSize: 50 }, ['pageToken']],
     ['nextPageToken', { nextPageToken: 'opaque-cursor-42' }, ['nextPageToken']],

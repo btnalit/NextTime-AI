@@ -249,6 +249,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
+    it('approve: a platform API key pasted on its own into the reason is cut before the audit row is written (legacy 168)', async () => {
+      // 43 base64url characters, the shape `generateApiKey()` mints — no prefix, no `key=` before it.
+      const platformKey = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+      const id = await seedPending({ host: 'db.example.invalid' });
+      await call('approve', { actionRequestId: id, reason: `used ${platformKey} to check` });
+
+      const [transition] = await auditPayloads('action_request.approve', id);
+      expect(transition?.reason).toBe('used [redacted] to check');
+      const dispatched = await admin((client) =>
+        client.query<{ payload: { params: { reason?: string }; redactedValues?: number } }>(
+          `select payload from audit_records
+           where workspace_id = $1 and action = 'approve' and payload->'params'->>'actionRequestId' = $2`,
+          [workspaceId, id],
+        ),
+      );
+      expect(dispatched.rows[0]?.payload.params.reason).toBe('used [redacted] to check');
+      expect(dispatched.rows[0]?.payload.redactedValues).toBe(1);
+      expect(JSON.stringify(dispatched.rows[0]?.payload)).not.toContain(platformKey);
+    });
+
     it('request_action: params carrying a suspected credential never auto-approve', async () => {
       const scope: CapabilityScope = {
         capabilities: ['request_action'],

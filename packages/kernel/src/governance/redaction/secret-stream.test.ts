@@ -26,6 +26,11 @@ const TEXTS: readonly string[] = [
   'export API_TOKEN="abcdefghijklmnopqrstuvwxyz 0123" && password: \'two words\' --password  x y',
   'I don\'t know; password: "correct horse battery" said the note. Cookie: a=1; b=2\nnext',
   'POSTGRES_PASSWORD: abcdefghijklmnopqrstuvwxyz\nX-Api-Key: abcdefghijklmnopqrstuvwxyz0123 end',
+  // A platform API key's shape (legacy 168), and one character too long to be one.
+  'key FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ, not FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZx',
+  // Standard base64 is not one (legacy 168 review): 43 characters and `=`, a stretch between a `+`
+  // and a `/`, and a key after a `/`.
+  'PublicKey = FAKE0123456789abcdefghijklmnopqrstuvwxyzXYQ=\nQUJD+FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ/REVG /FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ key FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ',
 ];
 
 /** Everything a scrubber emits for `pieces`, then its flush. */

@@ -257,7 +257,11 @@ export type QuotaListEntryWire = z.infer<typeof QuotaListEntryWireSchema>;
  * a client holds itself (`issue_handle`, `issue_service_handle`). `revocable`: whether this caller
  * may end it with `revoke_handle` — every bearer Handle listed here, never a container one.
  * `expiresAt` is the Handle's own expiry (a service session has none of its own).
- * `capabilities`: what it may call.
+ * `capabilities`: what it may call. `sessionShortId` and `sessionNote` are the session's, the unit
+ * `revoke_handle` ends — so two rows of one session (a Handle and its attenuated children) carry
+ * the same ones: the short id ({@link sessionShortId}), and the note the person gave when issuing
+ * it (`issue_handle` / `issue_service_handle` `note`; null without one, and always for a
+ * container-held session, which no person issues).
  */
 export const HandleWireSchema = z
   .object({
@@ -272,9 +276,23 @@ export const HandleWireSchema = z
     expiresAt: z.string(),
     capabilities: z.array(z.string()),
     revocable: z.boolean(),
+    sessionShortId: z.string(),
+    sessionNote: z.string().nullable(),
   })
   .strict();
 export type HandleWire = z.infer<typeof HandleWireSchema>;
+
+/**
+ * Legacy 168: a session's short id — the first 8 hex digits of its id, lowercase — for a person
+ * to tell two sessions apart in a list (two rows of the same kind, two service accounts of the same
+ * name) and to match one against what they noted when issuing it. Derived from the session id,
+ * which the issuance result and the list already carry: not a fragment of the token, and knowing
+ * it grants nothing. Not unique: a reader that finds two equal ones in a list shows more of the
+ * id; `revoke_handle` and every other call still take the full ids.
+ */
+export function sessionShortId(sessionId: string): string {
+  return sessionId.replaceAll('-', '').slice(0, 8).toLowerCase();
+}
 
 /** Legacy 168: `revoke_handle` — the Handle's session ended, and with it every Handle issued
  *  under it (`revokedHandleCount`, this one included). */

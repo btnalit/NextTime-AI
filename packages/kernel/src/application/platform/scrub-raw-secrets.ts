@@ -7,7 +7,12 @@ import {
   findConnectionParamsCredential,
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
-import { redactSuspectedSecrets, scrubSecretValues } from '../../governance/redaction/index.js';
+import {
+  PLATFORM_KEY_SHAPE_PATTERNS,
+  STORED_REWRITE_SECRET_PATTERNS,
+  redactSuspectedSecrets,
+  scrubSecretValues,
+} from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
@@ -23,11 +28,13 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *
  * **Rewritten** — copies people read, scrubbed the way the write path now scrubs them:
  *   - `turnReports`: an agent Turn's `activities.metadata.summary` / `.decisions` (`report_turn`,
- *     legacy 183) — every secret-looking value (`scrubSecretValues`);
+ *     legacy 183) — every secret-looking value but a platform API key's shape
+ *     (`STORED_REWRITE_SECRET_PATTERNS`; see `*KeyShapes` below);
  *   - `decisions`: the `summary` of a Decision whose Activity is an agent Turn (`record_decision`,
  *     legacy 183) — likewise;
  *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — the key rule
- *     over JSON text, then the value patterns (application/chat's `rescrubStoredToolCallResult`);
+ *     over JSON text, then the value patterns but the key's shape (application/chat's
+ *     `rescrubStoredToolCallResult`);
  *   - `selfConnectionAddresses`: the copy of a self-connected gate's `target` / `endpoint` the
  *     platform plane shows (`workspace_self_connections`, core 0045) — copied from a Gatekeeper
  *     written before legacy 186, it can carry what the address rule refuses; it is cut out
@@ -81,6 +88,13 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *     817). No read returns an Observation's `content`, so the raw copy is in the table and in every
  *     dump only; Observations are insert-only (core 0035 revokes UPDATE), the provenance of what
  *     was observed, so — like a Fact — none is rewritten here;
+ *   - `turnReportKeyShapes` / `decisionKeyShapes` / `toolCallRecordKeyShapes`: a row of the three
+ *     rewritten categories above still holding a platform API key standing alone (43 base64url
+ *     characters, `PLATFORM_KEY_SHAPE_PATTERNS`; legacy 168 review). The rewrite leaves that shape:
+ *     it is any 32 bytes in base64url — a digest, a public key — and a rewrite cannot be undone, so
+ *     the row is listed by id for the keys still valid among them to be found and rotated. Read
+ *     after the rewrite of the same table, so a dry run also counts what the key rule would mask
+ *     first;
  *   - `connectedSystemDuplicates`: not a credential — every ConnectedSystem a run (this one or an
  *     earlier one) made a duplicate (`connectedSystems` above), for the record. Read after the
  *     rewrites, so a dry run lists only earlier runs' duplicates: whether a cut name collides is
@@ -124,6 +138,9 @@ export const COUNTED_CATEGORIES = [
   'objectProperties',
   'auditResults',
   'gateCallObservations',
+  'turnReportKeyShapes',
+  'decisionKeyShapes',
+  'toolCallRecordKeyShapes',
   'connectedSystemDuplicates',
 ] as const;
 export type CountedRawSecretCategory = (typeof COUNTED_CATEGORIES)[number];
@@ -257,31 +274,71 @@ function connectedSystemRewrite(
   };
 }
 
+/** What a rewrite of these rows hides: every value pattern but a platform API key's shape. */
+const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
+
+/** How many values of a platform API key's shape `text` holds (0 for a non-string). */
+function keyShapes(text: unknown): number {
+  return typeof text === 'string'
+    ? scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues
+    : 0;
+}
+
+/** A counted Finding for `count` key shapes, or `null` for none. */
+function keyShapeFinding(count: number): Finding | null {
+  return count > 0 ? { values: count } : null;
+}
+
 function scrubbedStrings(values: readonly unknown[]): { values: unknown[]; hidden: number } {
   let hidden = 0;
   const out = values.map((value) => {
     if (typeof value !== 'string') return value;
-    const scrubbed = scrubSecretValues(value);
+    const scrubbed = scrubSecretValues(value, STORED_REWRITE);
     hidden += scrubbed.redactedValues;
     return scrubbed.value;
   });
   return { values: out, hidden };
 }
 
+const turnReportWindow = workspaceKeyset(
+  'activities',
+  'workspace_id, id, metadata',
+  `kind = 'agent_turn' and (metadata ? 'summary' or metadata ? 'decisions')`,
+);
+
+async function decisionWindow(
+  client: PoolClient,
+  after: Cursor,
+  limit: number,
+): Promise<ScannedRow[]> {
+  return (
+    await client.query<ScannedRow>(
+      `select d.workspace_id, d.id, d.summary from decisions d
+         join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
+        where (d.workspace_id, d.id) > ($1::uuid, $2::uuid) and a.kind = 'agent_turn'
+          and d.summary is not null
+        order by d.workspace_id, d.id limit $3`,
+      [after.workspaceId, after.id, limit],
+    )
+  ).rows;
+}
+
+const toolCallRecordWindow = workspaceKeyset(
+  'chat_messages',
+  'workspace_id, id, content',
+  `role = 'tool' and content ->> 'kind' = 'tool_call' and content ? 'result'`,
+);
+
 const SCANS: readonly Scan[] = [
   {
     category: 'turnReports',
-    window: workspaceKeyset(
-      'activities',
-      'workspace_id, id, metadata',
-      `kind = 'agent_turn' and (metadata ? 'summary' or metadata ? 'decisions')`,
-    ),
+    window: turnReportWindow,
     inspect: (row) => {
       const metadata = (row as ScannedRow & { metadata: Record<string, unknown> }).metadata;
       const patch: Record<string, unknown> = {};
       let hidden = 0;
       if (typeof metadata.summary === 'string') {
-        const scrubbed = scrubSecretValues(metadata.summary);
+        const scrubbed = scrubSecretValues(metadata.summary, STORED_REWRITE);
         if (scrubbed.value !== metadata.summary) patch.summary = scrubbed.value;
         hidden += scrubbed.redactedValues;
       }
@@ -311,20 +368,10 @@ const SCANS: readonly Scan[] = [
   },
   {
     category: 'decisions',
-    window: async (client, after, limit) =>
-      (
-        await client.query<ScannedRow>(
-          `select d.workspace_id, d.id, d.summary from decisions d
-             join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
-            where (d.workspace_id, d.id) > ($1::uuid, $2::uuid) and a.kind = 'agent_turn'
-              and d.summary is not null
-            order by d.workspace_id, d.id limit $3`,
-          [after.workspaceId, after.id, limit],
-        )
-      ).rows,
+    window: decisionWindow,
     inspect: (row) => {
       const summary = (row as ScannedRow & { summary: string }).summary;
-      const scrubbed = scrubSecretValues(summary);
+      const scrubbed = scrubSecretValues(summary, STORED_REWRITE);
       if (scrubbed.value === summary) return null;
       return {
         values: scrubbed.redactedValues,
@@ -338,11 +385,7 @@ const SCANS: readonly Scan[] = [
   },
   {
     category: 'toolCallRecords',
-    window: workspaceKeyset(
-      'chat_messages',
-      'workspace_id, id, content',
-      `role = 'tool' and content ->> 'kind' = 'tool_call' and content ? 'result'`,
-    ),
+    window: toolCallRecordWindow,
     inspect: (row) => {
       const content = (row as ScannedRow & { content: Record<string, unknown> }).content;
       const scrubbed = rescrubStoredToolCallResult(content);
@@ -360,6 +403,33 @@ const SCANS: readonly Scan[] = [
           ],
         },
       };
+    },
+  },
+  // After the rewrite of each table: what it leaves of a platform API key's shape, by row id.
+  {
+    category: 'turnReportKeyShapes',
+    window: turnReportWindow,
+    inspect: (row) => {
+      const metadata = (row as ScannedRow & { metadata: Record<string, unknown> }).metadata;
+      const decisions: unknown = metadata.decisions;
+      return keyShapeFinding(
+        keyShapes(metadata.summary) +
+          (Array.isArray(decisions) ? decisions.reduce((sum, d) => sum + keyShapes(d), 0) : 0),
+      );
+    },
+  },
+  {
+    category: 'decisionKeyShapes',
+    window: decisionWindow,
+    inspect: (row) => keyShapeFinding(keyShapes((row as ScannedRow & { summary: string }).summary)),
+  },
+  {
+    category: 'toolCallRecordKeyShapes',
+    window: toolCallRecordWindow,
+    inspect: (row) => {
+      const content = (row as ScannedRow & { content: Record<string, unknown> }).content;
+      const result = content.result as { text?: unknown } | null | undefined;
+      return keyShapeFinding(keyShapes(result?.text));
     },
   },
   {

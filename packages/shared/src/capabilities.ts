@@ -54,6 +54,7 @@ import { CapabilityScopeSchema } from './handle-token.js';
 import {
   CHAT_TITLE_MAX_LENGTH,
   DISPLAY_NAME_MAX_LENGTH,
+  HANDLE_NOTE_MAX_LENGTH,
   LOGIN_MAX_LENGTH,
   NAME_MAX_LENGTH,
   WORKER_DEFINITION_NAME_MAX_LENGTH,
@@ -1221,6 +1222,9 @@ const connectionCapabilities = [
         scope: z.array(z.string().min(1)).min(1).max(100),
         /** Default one year; the CLI’s `issue-service-handle` default, now on the page. */
         ttlSeconds: z.number().int().positive().max(SERVICE_HANDLE_MAX_TTL_SECONDS).optional(),
+        /** Legacy 168: what this client is for, shown beside its session in `list_handles`
+         *  (`sessionNote`). Trimmed; blank means none. Never a credential (refused). */
+        note: z.string().max(HANDLE_NOTE_MAX_LENGTH).optional(),
       })
       .strict(),
     resultSchema: z
@@ -1228,6 +1232,9 @@ const connectionCapabilities = [
         handle: z.string(),
         principalId: z.string(),
         sessionId: z.string(),
+        /** Legacy 168: `sessionShortId(sessionId)` — what `list_handles` shows for this session. */
+        sessionShortId: z.string(),
+        sessionNote: z.string().nullable(),
         expiresAt: z.string(),
         scope: CapabilityScopeSchema,
       })
@@ -2414,12 +2421,18 @@ const governanceCapabilities = [
           })
           .strict()
           .optional(),
+        /** Legacy 168: what this client is for, shown beside its session in `list_handles`
+         *  (`sessionNote`). Trimmed; blank means none. Never a credential (refused). */
+        note: z.string().max(HANDLE_NOTE_MAX_LENGTH).optional(),
       })
       .strict(),
     resultSchema: z
       .object({
         handle: z.string(),
         sessionId: id,
+        /** Legacy 168: `sessionShortId(sessionId)` — what `list_handles` shows for this session. */
+        sessionShortId: z.string(),
+        sessionNote: z.string().nullable(),
         onBehalfOf: id,
         expiresAt: z.string(),
         scope: CapabilityScopeSchema,
