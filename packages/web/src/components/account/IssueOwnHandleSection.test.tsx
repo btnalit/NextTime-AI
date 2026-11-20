@@ -52,8 +52,8 @@ describe('IssueOwnHandleSection', () => {
           refuse = false;
           throw new HttpError(
             'capability_error',
-            'invalid params for capability "issue_handle": note looks like a credential (a token, a key or a password)',
-            'invalid_params',
+            'the text looks like it carries a credential',
+            'credentials_in_text',
           );
         }
         return {

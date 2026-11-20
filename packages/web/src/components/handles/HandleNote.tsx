@@ -7,13 +7,12 @@ import { Field, describedBy } from '../kit/field.js';
 /**
  * Whether issuing a Handle was refused for its note: the kernel refuses a note that looks like a
  * credential before anything is written (`issue_handle` / `issue_service_handle`, legacy 168) —
- * `credentials_in_text`, as other notes are, or `invalid_params` naming the note.
+ * 400 `credentials_in_text`, as any free text carrying a credential is (#1560). The note is the
+ * only free text those two take.
  */
 export function isNoteRefused(err: unknown): boolean {
   if (err === null || err === undefined) return false;
-  const { code, message } = describeError(err);
-  if (code === 'credentials_in_text') return true;
-  return code === 'invalid_params' && /\bnote looks like a credential\b/.test(message);
+  return describeError(err).code === 'credentials_in_text';
 }
 
 /**
