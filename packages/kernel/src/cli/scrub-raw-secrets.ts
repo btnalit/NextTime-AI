@@ -13,6 +13,7 @@ import {
 import type {
   CountedRawSecretCategory,
   CountedRawSecretRow,
+  LiveApiKeyRow,
   ScrubRawSecretsResult,
 } from '../application/platform/index.js';
 
@@ -29,7 +30,9 @@ import type {
  * `NEXTTIME_PLATFORM_ADMINS` login, else unattributed. Every counted row is printed by id, never
  * by value, one `counted <category> <workspace>/<id>` line each (`<id>` alone for a platform row),
  * uncapped — the operator goes through them row by row; the per-category report lines and the
- * audit row carry only the first few.
+ * audit row carry only the first few. Likewise every stored row holding a platform API key still
+ * issued: one `live-api-key <category> <row> principal <workspace>/<id> <kind>[ user <id>]` line
+ * each, ids only — the keys to rotate, one Principal each (`liveApiKeys=` in the summary).
  *
  * `scripts/apply-release.sh` runs `--yes` right after the release's `BACKUP_NOW` — that dump is the
  * recovery point. The last stdout line is a one-line summary the script echoes as its
@@ -122,6 +125,14 @@ export function formatCountedRow(
   return `counted ${category} ${row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id}`;
 }
 
+/** One row holding a key still issued, as the CLI prints it while it scans: the row, then whose key
+ *  it is — never the key, never its hash. */
+export function formatLiveApiKeyRow(row: LiveApiKeyRow): string {
+  const where = row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id;
+  const user = row.userId !== null ? ` user ${row.userId}` : '';
+  return `live-api-key ${row.category} ${where} principal ${row.principalWorkspaceId}/${row.principalId} ${row.principalKind}${user}`;
+}
+
 /** A counted category's rows carry a credential, except the duplicates `connectedSystems` leaves
  *  behind — listed for the record, with nothing to fix. */
 function countedLabel(name: CountedRawSecretCategory): {
@@ -160,6 +171,15 @@ export function formatScrubReport(
       `${name} (${label.group}): examined=${c.examined} ${label.rows}=${c.affected}${listed}`,
     );
   }
+  const live = result.liveApiKeys;
+  const principals = [
+    ...new Set(live.examples.map((row) => `${row.principalWorkspaceId}/${row.principalId}`)),
+  ];
+  const moreLive =
+    live.found > live.examples.length ? `,… (all ${live.found}: the "live-api-key" lines)` : '';
+  lines.push(
+    `liveApiKeys (still issued, rotate each): keys=${live.keys} found=${live.found}${principals.length > 0 ? ` principals=${principals.join(',')}${moreLive}` : ''}`,
+  );
   if (result.executed) {
     lines.push(
       result.auditRecordId !== null
@@ -175,7 +195,7 @@ export function formatScrubReport(
     (name) => `${name}=${result.categories[name].affected}`,
   ).join(' ');
   lines.push(
-    `scrub-raw-secrets: ${result.executed ? 'ok' : 'dry-run'} ${verb}=${rewritten} counted: ${counted} batches=${result.batches}`,
+    `scrub-raw-secrets: ${result.executed ? 'ok' : 'dry-run'} ${verb}=${rewritten} counted: ${counted} liveApiKeys=${live.keys} batches=${result.batches}`,
   );
   return lines;
 }
@@ -192,6 +212,7 @@ async function run(): Promise<void> {
         batchSize: args.batchSize,
         ...(actor !== undefined ? { actorUserId: actor.id } : {}),
         onCounted: (category, row) => console.log(formatCountedRow(category, row)),
+        onLiveApiKey: (row) => console.log(formatLiveApiKeyRow(row)),
       });
     } catch (err) {
       if (err instanceof RawSecretScrubFailedError) {

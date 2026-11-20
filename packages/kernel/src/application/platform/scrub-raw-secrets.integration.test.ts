@@ -577,6 +577,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['turnReportKeyShapes', ids.decisionsOnlyTurn],
         ['decisionKeyShapes', ids.agentDecision],
         ['toolCallRecordKeyShapes', ids.toolMessage],
+        // Any audit row whose payload holds a value the value patterns hide.
+        ['auditPayloads', ids.failAudit],
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         if (result.categories[name].affected <= 20) expect(listed(name)).toContain(id);
@@ -591,6 +593,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         'factProperties',
         'objectProperties',
         'auditResults',
+        'auditPayloads',
         'gateCallObservations',
         'turnReportKeyShapes',
         'decisionKeyShapes',
@@ -602,6 +605,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
+      // No field-name rule over a whole payload: a plain value under `token` is `auditResults`'
+      // (the result rule), and a value already masked is nobody's.
+      for (const id of [ids.completeAudit, ids.scrubbedAudit]) {
+        expect(counted).not.toContainEqual({ category: 'auditPayloads', id });
+      }
       // Legacy 817: a row kept as the rule keeps it — marked, whole or cut — a clean one, and an
       // Observation of another Activity kind are not counted.
       for (const id of [

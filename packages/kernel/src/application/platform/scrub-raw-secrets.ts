@@ -8,8 +8,9 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
-  PLATFORM_KEY_SHAPE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  findSuspectedSecrets,
+  platformKeyShapes,
   redactSuspectedSecrets,
   scrubSecretValues,
 } from '../../governance/redaction/index.js';
@@ -18,6 +19,7 @@ import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
 import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
 import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
+import { hashApiKey } from '../gateway/auth.js';
 import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate-observation.js';
 
 /**
@@ -81,6 +83,13 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
  *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself;
+ *   - `auditPayloads`: any audit row whose payload holds a value the value patterns would now hide
+ *     (`findSuspectedSecrets`, without the field-name rule: a payload's own fields —
+ *     `credentialReview`, `suspectedSecretValues` — are named after secrets) — a params copy
+ *     written before legacy 180, a platform API key's shape written before legacy 168's review, or
+ *     a value only shaped like one (a base64url digest). Append-only like `auditResults`, so the
+ *     count never clears; an `action_request.complete` / `.fail` row can be in both. What to act on
+ *     is `liveApiKeys` below;
  *   - `gateCallObservations`: an Observation of a Worker's gate call (Activity kind
  *     `worker_gate_call`) written before legacy 237, which kept the gate's result as it came — one
  *     the rule it is now kept by would hide something in; a row written since is marked as that
@@ -102,6 +111,24 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * A counted row is named by id, never by value: every one goes to `onCounted` (the CLI prints them
  * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
  * kept as `examples` — the sample the audit row carries, which must stay bounded.
+ *
+ * **Keys still issued (`liveApiKeys`).** Every value of a platform API key's shape in the columns a
+ * scan reads, as read — before that scan rewrites anything — is hashed the way
+ * `principals.api_key_hash` stores a key (`hashApiKey`) and looked up there. A match is a key still
+ * issued, listed (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the row
+ * and the scan that read it, the Principal holding the key (one key per Principal: the key's id)
+ * and, for a person's membership, their user (the account) — never the key, never a hash. Every
+ * scan compares what it reads but the `*KeyShapes` scans (their rows are compared by the rewrite
+ * scan of the same table) and `auditResults` (`auditPayloads` reads every audit row's payload); a
+ * row read by two scans (an observed ConnectedSystem's properties) can be listed under both. A key
+ * the rewrite then hides (`Bearer <key>`, a secret-named JSON field) is listed by that run only, so
+ * the keys to rotate are the ones the first run lists; a later run listing none says no stored copy
+ * it reads still holds an issued key. A key stops matching once its Principal is re-keyed
+ * (`rotate_api_key`), loses it (its person changes their password or has it reset:
+ * `revokeUserCredentials`) or is disabled (core 0059); a key on a disabled workspace or user still
+ * matches, since re-enabling either would let it authenticate again. The hashes reach the database
+ * only as the lookup's parameter, as every API call's key does (gateway/auth.ts
+ * `lookupPrincipalByApiKeyHash`).
  *
  * **How.** Per table, windows of `batchSize` rows in primary-key order, each one short transaction
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
@@ -137,6 +164,7 @@ export const COUNTED_CATEGORIES = [
   'factProperties',
   'objectProperties',
   'auditResults',
+  'auditPayloads',
   'gateCallObservations',
   'turnReportKeyShapes',
   'decisionKeyShapes',
@@ -165,6 +193,31 @@ export interface RawSecretCategoryCounts {
   examples: CountedRawSecretRow[];
 }
 
+/** A row holding a platform API key still issued, by ids only — never the key, never its hash. */
+export interface LiveApiKeyRow {
+  /** The scan that read the row. */
+  readonly category: RawSecretCategory;
+  /** The row, as a counted row is named. */
+  readonly workspaceId: string | null;
+  readonly id: string;
+  /** The Principal the key is issued to (`principals.api_key_hash`: one key per Principal). */
+  readonly principalWorkspaceId: string;
+  readonly principalId: string;
+  /** `human` (a person's membership) or `service` — which way its key is rotated. */
+  readonly principalKind: string;
+  /** A `human` Principal's user — the account; `null` for a service Principal. */
+  readonly userId: string | null;
+}
+
+export interface LiveApiKeyCounts {
+  /** Rows holding a key still issued, once per scan and key. */
+  found: number;
+  /** The Principals among them: the keys still to rotate. */
+  keys: number;
+  /** The first `MAX_EXAMPLES` found (`onLiveApiKey` gets all). */
+  examples: LiveApiKeyRow[];
+}
+
 export interface ScrubRawSecretsInput {
   readonly confirm: boolean;
   readonly batchSize?: number;
@@ -172,6 +225,8 @@ export interface ScrubRawSecretsInput {
   readonly actorUserId?: string;
   /** Called with every counted row, uncapped, once its window is read. */
   readonly onCounted?: (category: CountedRawSecretCategory, row: CountedRawSecretRow) => void;
+  /** Called with every row found holding a key still issued, uncapped, once its window is read. */
+  readonly onLiveApiKey?: (row: LiveApiKeyRow) => void;
 }
 
 export interface ScrubRawSecretsResult {
@@ -179,6 +234,7 @@ export interface ScrubRawSecretsResult {
   readonly batchSize: number;
   readonly batches: number;
   readonly categories: Readonly<Record<RawSecretCategory, RawSecretCategoryCounts>>;
+  readonly liveApiKeys: Readonly<LiveApiKeyCounts>;
   readonly auditRecordId: string | null;
 }
 
@@ -218,6 +274,9 @@ interface Scan {
   /** Rows after `after` in key order, at most `limit`. */
   readonly window: (client: PoolClient, after: Cursor, limit: number) => Promise<ScannedRow[]>;
   readonly inspect: (row: ScannedRow) => Finding | null;
+  /** The columns, as read, compared against the keys issued (`liveApiKeys`); omitted for a scan
+   *  whose rows another scan compares. */
+  readonly issuedKeysIn?: (row: ScannedRow) => unknown;
 }
 
 /** Keyset over a `(workspace_id, id)` primary key: `filter` narrows the rows (no parameters). */
@@ -279,9 +338,47 @@ const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 
 /** How many values of a platform API key's shape `text` holds (0 for a non-string). */
 function keyShapes(text: unknown): number {
-  return typeof text === 'string'
-    ? scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues
-    : 0;
+  return typeof text === 'string' ? platformKeyShapes(text).length : 0;
+}
+
+/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key shape in
+ *  `value` as read: every string at any depth, object keys included. The shapes themselves go no
+ *  further than this function. */
+function keyShapeHashes(value: unknown): Set<string> {
+  const hashes = new Set<string>();
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (typeof next === 'string') {
+      for (const shape of platformKeyShapes(next)) hashes.add(hashApiKey(shape));
+    } else if (Array.isArray(next)) {
+      for (const item of next) stack.push(item);
+    } else if (next !== null && typeof next === 'object') {
+      for (const [key, item] of Object.entries(next)) stack.push(key, item);
+    }
+  }
+  return hashes;
+}
+
+interface IssuedKeyRow {
+  readonly workspace_id: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly user_id: string | null;
+  readonly api_key_hash: string;
+}
+
+/** The Principals holding a key whose hash is among `hashes`, by hash — read here and dropped. */
+async function issuedKeysAmong(
+  client: PoolClient,
+  hashes: readonly string[],
+): Promise<Map<string, IssuedKeyRow>> {
+  const { rows } = await client.query<IssuedKeyRow>(
+    `select workspace_id, id, kind, user_id, api_key_hash from principals
+      where api_key_hash = any($1::text[])`,
+    [hashes],
+  );
+  return new Map(rows.map((row) => [row.api_key_hash, row]));
 }
 
 /** A counted Finding for `count` key shapes, or `null` for none. */
@@ -333,6 +430,7 @@ const SCANS: readonly Scan[] = [
   {
     category: 'turnReports',
     window: turnReportWindow,
+    issuedKeysIn: (row) => (row as ScannedRow & { metadata: unknown }).metadata,
     inspect: (row) => {
       const metadata = (row as ScannedRow & { metadata: Record<string, unknown> }).metadata;
       const patch: Record<string, unknown> = {};
@@ -369,6 +467,7 @@ const SCANS: readonly Scan[] = [
   {
     category: 'decisions',
     window: decisionWindow,
+    issuedKeysIn: (row) => (row as ScannedRow & { summary: unknown }).summary,
     inspect: (row) => {
       const summary = (row as ScannedRow & { summary: string }).summary;
       const scrubbed = scrubSecretValues(summary, STORED_REWRITE);
@@ -386,6 +485,7 @@ const SCANS: readonly Scan[] = [
   {
     category: 'toolCallRecords',
     window: toolCallRecordWindow,
+    issuedKeysIn: (row) => (row as ScannedRow & { content: unknown }).content,
     inspect: (row) => {
       const content = (row as ScannedRow & { content: Record<string, unknown> }).content;
       const scrubbed = rescrubStoredToolCallResult(content);
@@ -405,7 +505,8 @@ const SCANS: readonly Scan[] = [
       };
     },
   },
-  // After the rewrite of each table: what it leaves of a platform API key's shape, by row id.
+  // After the rewrite of each table: what it leaves of a platform API key's shape, by row id. The
+  // keys still issued among them were compared by the rewrite scan, as read.
   {
     category: 'turnReportKeyShapes',
     window: turnReportWindow,
@@ -445,6 +546,10 @@ const SCANS: readonly Scan[] = [
           [after.workspaceId, after.id, limit],
         )
       ).rows,
+    issuedKeysIn: (row) => {
+      const read = row as ScannedRow & { target: string; endpoint: string };
+      return [read.target, read.endpoint];
+    },
     inspect: (row) => {
       const read = row as ScannedRow & { target: string; endpoint: string };
       const write = {
@@ -471,6 +576,7 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, properties ->> 'name' as name`,
       `object_type = 'Gatekeeper' and properties ->> 'name' is not null`,
     ),
+    issuedKeysIn: (row) => (row as ScannedRow & { name: string }).name,
     inspect: (row) => {
       const { name } = row as ScannedRow & { name: string };
       const shown = redactConnectionAddress('target', name);
@@ -493,6 +599,10 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, identity_key, properties',
       `object_type = 'ConnectedSystem'`,
     ),
+    issuedKeysIn: (row) => {
+      const read = row as ScannedRow & { identity_key: unknown; properties: unknown };
+      return [read.identity_key, read.properties];
+    },
     inspect: (row) => {
       const read = row as ScannedRow & {
         identity_key: Record<string, unknown> | null;
@@ -530,6 +640,7 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, metadata ->> 'target' as target`,
       `kind = 'governance.create_connection' and jsonb_typeof(metadata -> 'target') = 'string'`,
     ),
+    issuedKeysIn: (row) => (row as ScannedRow & { target: string }).target,
     inspect: (row) => {
       const { target } = row as ScannedRow & { target: string };
       const shown = redactConnectionAddress('target', target);
@@ -548,6 +659,7 @@ const SCANS: readonly Scan[] = [
   {
     category: 'taskInputs',
     window: workspaceKeyset('tasks', 'workspace_id, id, input', 'input is not null'),
+    issuedKeysIn: (row) => (row as ScannedRow & { input: unknown }).input,
     inspect: (row) => {
       const input = (row as ScannedRow & { input: unknown }).input;
       const masked = redactSuspectedSecrets(input, { secretFields: true });
@@ -564,6 +676,7 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, target',
       'target is not null',
     ),
+    issuedKeysIn: (row) => (row as ScannedRow & { target: string }).target,
     inspect: (row) =>
       findConnectionParamsCredential({ target: (row as ScannedRow & { target: string }).target })
         ? { values: 1 }
@@ -576,6 +689,10 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, properties ->> 'target' as target, properties ->> 'endpoint' as endpoint`,
       `object_type = 'Gatekeeper'`,
     ),
+    issuedKeysIn: (row) => {
+      const read = row as ScannedRow & { target: string | null; endpoint: string | null };
+      return [read.target, read.endpoint];
+    },
     inspect: (row) =>
       findConnectionParamsCredential(
         row as ScannedRow & { target: string | null; endpoint: string | null },
@@ -599,6 +716,15 @@ const SCANS: readonly Scan[] = [
           [after.id, limit],
         )
       ).rows,
+    issuedKeysIn: (row) => {
+      const read = row as ScannedRow & {
+        target: string;
+        endpoint: string;
+        definition_target: string | null;
+        manifest_source: string | null;
+      };
+      return [read.target, read.endpoint, read.definition_target, read.manifest_source];
+    },
     inspect: (row) => {
       const instance = row as ScannedRow & {
         target: string;
@@ -618,6 +744,7 @@ const SCANS: readonly Scan[] = [
   {
     category: 'factProperties',
     window: workspaceKeyset('links', 'workspace_id, id, properties', `properties <> '{}'::jsonb`),
+    issuedKeysIn: (row) => (row as ScannedRow & { properties: unknown }).properties,
     inspect: (row) => {
       const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
       const { redactedValues } = scrubGraphProperties(properties);
@@ -631,6 +758,7 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, properties',
       `properties <> '{}'::jsonb and object_type not in (${KERNEL_AUTHORED_OBJECT_TYPES.map((type) => `'${type}'`).join(', ')})`,
     ),
+    issuedKeysIn: (row) => (row as ScannedRow & { properties: unknown }).properties,
     inspect: (row) => {
       const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
       const { redactedValues } = scrubGraphProperties(properties);
@@ -675,6 +803,23 @@ const SCANS: readonly Scan[] = [
     },
   },
   {
+    category: 'auditPayloads',
+    // Every audit row, keyed on `id` alone like `auditResults`.
+    window: async (client, after, limit) =>
+      (
+        await client.query<ScannedRow>(
+          `select workspace_id, id, payload from audit_records
+            where id > $1::uuid order by id limit $2`,
+          [after.id, limit],
+        )
+      ).rows,
+    issuedKeysIn: (row) => (row as ScannedRow & { payload: unknown }).payload,
+    inspect: (row) => {
+      const { count } = findSuspectedSecrets((row as ScannedRow & { payload: unknown }).payload);
+      return count > 0 ? { values: count } : null;
+    },
+  },
+  {
     category: 'gateCallObservations',
     // Keyed on the Observation; its Activity says whose gate call it observed.
     window: async (client, after, limit) =>
@@ -687,6 +832,7 @@ const SCANS: readonly Scan[] = [
           [after.workspaceId, after.id, limit, GATE_OBSERVATION_ACTIVITY_KIND],
         )
       ).rows,
+    issuedKeysIn: (row) => (row as ScannedRow & { content: unknown }).content,
     inspect: (row) =>
       gatePayloadKeptRaw((row as ScannedRow & { content: Record<string, unknown> }).content)
         ? { values: 1 }
@@ -727,12 +873,15 @@ export async function scrubRawSecrets(
     [...REWRITTEN_CATEGORIES, ...COUNTED_CATEGORIES].map((name) => [name, emptyCounts()]),
   ) as Record<RawSecretCategory, RawSecretCategoryCounts>;
   const rewrites = new Set<RawSecretCategory>(REWRITTEN_CATEGORIES);
+  const liveApiKeys: LiveApiKeyCounts = { found: 0, keys: 0, examples: [] };
+  const livePrincipals = new Set<string>();
   let batches = 0;
   const result = (auditRecordId: string | null): ScrubRawSecretsResult => ({
     executed: input.confirm,
     batchSize,
     batches,
     categories,
+    liveApiKeys,
     auditRecordId,
   });
 
@@ -747,6 +896,11 @@ export async function scrubRawSecrets(
           const last = rows.at(-1);
           if (!last) return null;
           const window = { ...emptyCounts(), examined: rows.length };
+          // Hashed as read, before any rewrite below.
+          const source = scan.issuedKeysIn;
+          const read = source
+            ? rows.map((row) => ({ row, hashes: keyShapeHashes(source(row)) }))
+            : [];
           for (const row of rows) {
             const finding = scan.inspect(row);
             if (finding === null) continue;
@@ -761,8 +915,30 @@ export async function scrubRawSecrets(
               if ((updated.rowCount ?? 0) === 0) window.skipped += 1;
             }
           }
+          const hashes = new Set(read.flatMap((entry) => [...entry.hashes]));
+          const issued =
+            hashes.size > 0
+              ? await issuedKeysAmong(client, [...hashes])
+              : new Map<string, IssuedKeyRow>();
+          const live: LiveApiKeyRow[] = [];
+          for (const { row, hashes: rowHashes } of read) {
+            for (const hash of rowHashes) {
+              const key = issued.get(hash);
+              if (!key) continue;
+              live.push({
+                category: scan.category,
+                workspaceId: row.workspace_id,
+                id: row.id,
+                principalWorkspaceId: key.workspace_id,
+                principalId: key.id,
+                principalKind: key.kind,
+                userId: key.user_id,
+              });
+            }
+          }
           return {
             window,
+            live,
             cursor: { workspaceId: last.workspace_id ?? NIL_UUID, id: last.id },
             done: rows.length < batchSize,
           };
@@ -778,6 +954,13 @@ export async function scrubRawSecrets(
         for (const example of outcome.window.examples) {
           input.onCounted?.(scan.category as CountedRawSecretCategory, example);
           if (counts.examples.length < MAX_EXAMPLES) counts.examples.push(example);
+        }
+        for (const found of outcome.live) {
+          input.onLiveApiKey?.(found);
+          liveApiKeys.found += 1;
+          livePrincipals.add(`${found.principalWorkspaceId}/${found.principalId}`);
+          liveApiKeys.keys = livePrincipals.size;
+          if (liveApiKeys.examples.length < MAX_EXAMPLES) liveApiKeys.examples.push(found);
         }
         if (outcome.done) break;
       }
@@ -807,8 +990,9 @@ export async function scrubRawSecrets(
           ? { error: failure instanceof Error ? failure.message : String(failure) }
           : {}),
         batches,
-        // Counts and ids only — never a value.
+        // Counts and ids only — never a value, never a key's hash.
         categories,
+        liveApiKeys,
       },
     }),
   );
