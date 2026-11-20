@@ -732,6 +732,37 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       }
       expect(await counts()).toEqual(before);
     });
+
+    it('a note reads as free text reads (review #501 on #1558): an unseen character as \\u{XXXX}, a credential stored before the check masked; the row kept as written', async () => {
+      // Two notes that look alike on a page, one carrying a zero-width space and a right-to-left
+      // override: issued and listed, each shows what it holds, so the two can be told apart.
+      const tricked = '采集器\u200B A\u202E B';
+      const shown = '采集器\\u{200B} A\\u{202E} B';
+      const own = await issue('issue_handle', { sessionKind: 'interactive', note: tricked });
+      expect(own.sessionNote).toBe(shown);
+      const service = await issue('issue_service_handle', {
+        principalId: serviceId,
+        scope: ['search'],
+        note: tricked,
+      });
+      expect(service.sessionNote).toBe(shown);
+      expect(await storedNote(own.sessionId)).toBe(tricked);
+      expect(await storedNote(service.sessionId)).toBe(tricked);
+
+      // A note kept before the write-time check (#1549) still holding a credential.
+      const secret = 'FAKEabcdefghijklmnopqrstuvwxyz';
+      const stale = `采集器 password: ${secret}`;
+      await asAdmin(workspaceId, (client) =>
+        client.query('update sessions set note = $1 where id = $2', [stale, service.sessionId]),
+      );
+
+      const listed = (await list(ownerId, 'owner', { limit: 500 })).items;
+      expect(listed.find((item) => item.sessionId === own.sessionId)?.sessionNote).toBe(shown);
+      const masked = listed.find((item) => item.sessionId === service.sessionId)?.sessionNote;
+      expect(masked).toContain('[redacted]');
+      expect(masked).not.toContain(secret.slice(0, 12));
+      expect(await storedNote(service.sessionId)).toBe(stale);
+    });
   });
 
   it('an auditor lists its own Handles but cannot revoke one', async () => {

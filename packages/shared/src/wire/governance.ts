@@ -261,7 +261,9 @@ export type QuotaListEntryWire = z.infer<typeof QuotaListEntryWireSchema>;
  * `revoke_handle` ends — so two rows of one session (a Handle and its attenuated children) carry
  * the same ones: the short id ({@link sessionShortId}), and the note the person gave when issuing
  * it (`issue_handle` / `issue_service_handle` `note`; null without one, and always for a
- * container-held session, which no person issues).
+ * container-held session, which no person issues), shown as the kernel shows free text it keeps
+ * as written (legacy 420): a character a reader cannot see as `\u{XXXX}`, a credential as
+ * `[redacted]`.
  */
 export const HandleWireSchema = z
   .object({

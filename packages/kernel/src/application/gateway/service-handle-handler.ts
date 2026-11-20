@@ -8,7 +8,7 @@ import {
 import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
-import { handleNoteFrom } from './handles-handlers.js';
+import { handleNoteFrom, shownHandleNote } from './handles-handlers.js';
 import {
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -150,7 +150,7 @@ export const issueServiceHandleHandler: CapabilityHandler = async (
       sessionId: issued.sessionId,
       // Legacy 168: how `list_handles` names this session, and the note given it.
       sessionShortId: sessionShortId(issued.sessionId),
-      sessionNote: note,
+      sessionNote: shownHandleNote(note),
       expiresAt: issued.expiresAt.toISOString(),
       scope: issued.scope,
     },
