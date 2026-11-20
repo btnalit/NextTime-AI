@@ -147,14 +147,13 @@ export function redactToolResult(
  *  taken for the value and the value itself kept. Between `[redacted]"` and the next `\"` there
  *  is no quote that is not escaped: in JSON that is valid, a string's closing quote is followed,
  *  before any `\"`, by the opening quote of the next string, or by nothing. */
-const SPLIT_QUOTED_MASK = new RegExp(
-  String.raw`${REDACTED.replace(/[[\]]/g, '\\$&')}"(?:[^"\\]|\\[^"])*\\"`,
-  'g',
-);
+const SPLIT_QUOTED_MASK = /\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
 
 /** A stored result's text with each `SPLIT_QUOTED_MASK` written as the value patterns write that
  *  value now — `\"[redacted]\"` — counted (legacy 916; one-way, like the rest of the rewrite). */
 function repairSplitQuotedMasks(text: string): Scrubbed<string> {
+  // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
+  if (!text.includes(`${REDACTED}"`)) return { value: text, redactedValues: 0 };
   let redactedValues = 0;
   const value = text.replace(SPLIT_QUOTED_MASK, () => {
     redactedValues += 1;
