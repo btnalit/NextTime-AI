@@ -31,7 +31,14 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "chatId", "turnId", "principalId", "chatMessageId"],
+      "required": [
+        "type",
+        "workspaceId",
+        "chatId",
+        "turnId",
+        "principalId",
+        "chatMessageId"
+      ],
       "type": "object"
     },
     {
@@ -41,7 +48,11 @@
           "type": "string"
         },
         "status": {
-          "enum": ["completed", "interrupted", "failed"],
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
+          ],
           "type": "string"
         },
         "turnId": {
@@ -55,7 +66,13 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "chatId", "turnId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "chatId",
+        "turnId",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -84,14 +101,24 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "taskId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "taskId",
+        "status"
+      ],
       "type": "object"
     },
     {
       "additionalProperties": false,
       "properties": {
         "status": {
-          "enum": ["provisioning", "running", "suspended", "terminated"],
+          "enum": [
+            "provisioning",
+            "running",
+            "suspended",
+            "terminated"
+          ],
           "type": "string"
         },
         "taskId": {
@@ -108,7 +135,13 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "workerRunId", "taskId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "workerRunId",
+        "taskId",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -183,7 +216,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "actionRequestId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "actionRequestId",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -193,7 +231,12 @@
           "type": "string"
         },
         "kind": {
-          "enum": ["http", "mcp", "cli", "ssh"],
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
           "type": "string"
         },
         "requestedBy": {
@@ -210,7 +253,14 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "connectionRequestId", "kind", "target", "requestedBy"],
+      "required": [
+        "type",
+        "workspaceId",
+        "connectionRequestId",
+        "kind",
+        "target",
+        "requestedBy"
+      ],
       "type": "object"
     },
     {
@@ -220,7 +270,12 @@
           "type": "string"
         },
         "kind": {
-          "enum": ["http", "mcp", "cli", "ssh"],
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
           "type": "string"
         },
         "target": {
@@ -234,7 +289,13 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "gatekeeperId", "kind", "target"],
+      "required": [
+        "type",
+        "workspaceId",
+        "gatekeeperId",
+        "kind",
+        "target"
+      ],
       "type": "object"
     },
     {
@@ -254,14 +315,26 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "gatekeeperId", "gateAddressChangeId"],
+      "required": [
+        "type",
+        "workspaceId",
+        "gatekeeperId",
+        "gateAddressChangeId"
+      ],
       "type": "object"
     },
     {
       "additionalProperties": false,
       "properties": {
         "epistemicStatus": {
-          "enum": ["observed", "extracted", "inferred", "asserted", "verified", "contradicted"],
+          "enum": [
+            "observed",
+            "extracted",
+            "inferred",
+            "asserted",
+            "verified",
+            "contradicted"
+          ],
           "type": "string"
         },
         "factId": {
@@ -278,7 +351,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "factId", "epistemicStatus"],
+      "required": [
+        "type",
+        "workspaceId",
+        "factId",
+        "epistemicStatus"
+      ],
       "type": "object"
     },
     {
@@ -302,7 +380,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "activityId", "domain"],
+      "required": [
+        "type",
+        "workspaceId",
+        "activityId",
+        "domain"
+      ],
       "type": "object"
     },
     {
@@ -314,7 +397,11 @@
           "type": "number"
         },
         "scope": {
-          "enum": ["task", "turn", "workspace_daily"],
+          "enum": [
+            "task",
+            "turn",
+            "workspace_daily"
+          ],
           "type": "string"
         },
         "taskId": {
@@ -331,7 +418,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "scope", "percent"],
+      "required": [
+        "type",
+        "workspaceId",
+        "scope",
+        "percent"
+      ],
       "type": "object"
     },
     {
@@ -380,7 +472,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "goalRunId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "goalRunId",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -414,7 +511,13 @@
           "type": "string"
         }
       },
-      "required": ["type", "workspaceId", "goalRunId", "stepRunId", "status"],
+      "required": [
+        "type",
+        "workspaceId",
+        "goalRunId",
+        "stepRunId",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -440,7 +543,12 @@
               "type": "string"
             },
             "role": {
-              "enum": ["user", "assistant", "tool", "system"],
+              "enum": [
+                "user",
+                "assistant",
+                "tool",
+                "system"
+              ],
               "type": "string"
             },
             "sequence": {
@@ -450,10 +558,19 @@
               "type": "string"
             },
             "turnId": {
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
-          "required": ["id", "role", "text", "createdAt", "sequence"],
+          "required": [
+            "id",
+            "role",
+            "text",
+            "createdAt",
+            "sequence"
+          ],
           "type": "object"
         },
         "type": {
@@ -461,7 +578,11 @@
           "type": "string"
         }
       },
-      "required": ["type", "chatId", "message"],
+      "required": [
+        "type",
+        "chatId",
+        "message"
+      ],
       "type": "object"
     },
     {
@@ -487,7 +608,10 @@
                   "type": "string"
                 }
               },
-              "required": ["streamKind", "delta"],
+              "required": [
+                "streamKind",
+                "delta"
+              ],
               "type": "object"
             },
             {
@@ -505,7 +629,11 @@
                   "type": "string"
                 }
               },
-              "required": ["streamKind", "toolCallId", "name"],
+              "required": [
+                "streamKind",
+                "toolCallId",
+                "name"
+              ],
               "type": "object"
             },
             {
@@ -523,7 +651,10 @@
                   "type": "string"
                 }
               },
-              "required": ["streamKind", "toolCallId"],
+              "required": [
+                "streamKind",
+                "toolCallId"
+              ],
               "type": "object"
             },
             {
@@ -543,7 +674,12 @@
                   "type": "string"
                 }
               },
-              "required": ["streamKind", "taskId", "workerRunId", "definitionId"],
+              "required": [
+                "streamKind",
+                "taskId",
+                "workerRunId",
+                "definitionId"
+              ],
               "type": "object"
             },
             {
@@ -569,7 +705,11 @@
                   "type": "string"
                 }
               },
-              "required": ["streamKind", "taskId", "status"],
+              "required": [
+                "streamKind",
+                "taskId",
+                "status"
+              ],
               "type": "object"
             }
           ]
@@ -582,7 +722,12 @@
           "type": "string"
         }
       },
-      "required": ["type", "chatId", "turnId", "payload"],
+      "required": [
+        "type",
+        "chatId",
+        "turnId",
+        "payload"
+      ],
       "type": "object"
     },
     {
@@ -600,7 +745,11 @@
           "type": "string"
         }
       },
-      "required": ["type", "chatId", "metadata"],
+      "required": [
+        "type",
+        "chatId",
+        "metadata"
+      ],
       "type": "object"
     },
     {
@@ -616,7 +765,10 @@
               "type": "string"
             }
           },
-          "required": ["tag", "label"],
+          "required": [
+            "tag",
+            "label"
+          ],
           "type": "object"
         },
         "actionRequestId": {
@@ -681,7 +833,11 @@
           "type": "string"
         }
       },
-      "required": ["type", "id", "status"],
+      "required": [
+        "type",
+        "id",
+        "status"
+      ],
       "type": "object"
     },
     {
@@ -707,7 +863,11 @@
           "type": "string"
         }
       },
-      "required": ["type", "id", "status"],
+      "required": [
+        "type",
+        "id",
+        "status"
+      ],
       "type": "object"
     }
   ]
