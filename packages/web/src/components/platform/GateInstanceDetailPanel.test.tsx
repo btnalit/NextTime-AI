@@ -463,6 +463,46 @@ describe('GateInstanceDetailPanel', () => {
       refusedOperations: ['container_restart'],
     };
 
+    it('legacy 223: lists the workspaces the gate refuses until they align, and how many more', () => {
+      renderPanel(
+        scriptedHttp({}),
+        gateInstance({
+          status: 'enabled',
+          pendingManifest: null,
+          awaitingWorkspaces: [
+            { id: 'ws-a', name: 'Alpha', operations: ['container_list', 'container_restart'] },
+            { id: 'ws-b', name: 'Beta', operations: ['container_restart'] },
+          ],
+          awaitingWorkspaceCount: 5,
+        }),
+      );
+      const notice = screen.getByTestId('gate-instance-awaiting-workspaces');
+      expect(notice.textContent).toContain(
+        '5 个工作区还没对齐，门正拒绝它们对下列 Operation 的调用',
+      );
+      expect(notice.textContent).toContain('点「与门公告对齐」，再到「能力目录」发布打开的修订');
+      expect(notice.textContent).toContain('平台这里替不了他们');
+      const rows = screen.getAllByTestId('gate-instance-awaiting-workspace');
+      expect(rows.map((row) => row.textContent)).toEqual([
+        'Alpha：container_list、container_restart',
+        'Beta：container_restart',
+      ]);
+      expect(screen.getByTestId('gate-instance-awaiting-unlisted').textContent).toBe(
+        '另有 3 个工作区未列出。',
+      );
+    });
+
+    it('legacy 223: says nothing when every workspace has aligned, or the kernel predates the field', () => {
+      renderPanel(
+        scriptedHttp({}),
+        gateInstance({ status: 'enabled', awaitingWorkspaces: [], awaitingWorkspaceCount: 0 }),
+      );
+      expect(screen.queryByTestId('gate-instance-awaiting-workspaces')).toBeNull();
+      cleanup();
+      renderPanel(scriptedHttp({}), gateInstance({ status: 'enabled' }));
+      expect(screen.queryByTestId('gate-instance-awaiting-workspaces')).toBeNull();
+    });
+
     it('renders nothing when nothing is held', () => {
       renderPanel(scriptedHttp({}), gateInstance({ status: 'enabled', pendingManifest: null }));
       expect(screen.queryByTestId('gate-instance-pending-manifest')).toBeNull();

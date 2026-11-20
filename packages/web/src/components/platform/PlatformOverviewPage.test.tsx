@@ -504,6 +504,49 @@ describe('PlatformOverviewPage', () => {
     );
   });
 
+  // Legacy 223: after adoption the gate still refuses calls from workspaces that have not aligned;
+  // only the platform sees all of them, so the overview lists the gate with how many.
+  it('lists a gate some workspaces have not aligned with yet, with how many', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-stock',
+            displayName: 'Stock',
+            status: 'enabled',
+            pendingManifest: null,
+            awaitingWorkspaces: [{ id: 'ws-a', name: 'Alpha', operations: ['stock.get'] }],
+            awaitingWorkspaceCount: 2,
+          },
+          {
+            gateId: 'gate-docs',
+            displayName: 'Docs',
+            status: 'enabled',
+            pendingManifest: null,
+            awaitingWorkspaces: [],
+            awaitingWorkspaceCount: 0,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    const items = Array.from(list.querySelectorAll('[data-testid="platform-attention-item"]')).map(
+      (item) => item.textContent ?? '',
+    );
+    expect(items).toContainEqual(
+      expect.stringContaining(
+        '门「Stock」：2 个工作区还没按生效的清单对齐，门正拒绝它们的部分调用',
+      ),
+    );
+    expect(items.some((text) => text.includes('Docs'))).toBe(false);
+    expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      '#/platform/integrations/gate-stock',
+    );
+  });
+
   it('renders an unattributed-actor recent-audit row (遗留 54) with a clear label, never blank or "null"', async () => {
     const http = scriptedHttp({
       platform_overview: () =>

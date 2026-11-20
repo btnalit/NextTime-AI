@@ -29,6 +29,7 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Icon, type IconName } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { awaitingWorkspaceCount, awaitingWorkspacesTitle } from './AwaitingWorkspaces.js';
 import { UpdateReminder } from './UpdateReminder.js';
 import {
   hiddenFromWorkspaces,
@@ -244,6 +245,8 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   // platform preset is in no workspace's catalog — a decision only an administrator can make.
   const connectors = useConnectorsByName(http);
   const hiddenGates = allGates.filter((gate) => hiddenFromWorkspaces(gate, connectors) !== null);
+  // Legacy 223: an adopted manifest some workspaces have not aligned with yet.
+  const awaitingGates = allGates.filter((gate) => awaitingWorkspaceCount(gate) > 0);
   const residue =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
@@ -305,6 +308,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           lostGates={lostGates}
           pendingManifestGates={pendingManifestGates}
           hiddenGates={hiddenGates}
+          awaitingGates={awaitingGates}
           nonResidueWorkspaceCount={nonResidueWorkspaceCount}
           onKeyBound={(result) => {
             onKeyBound?.(result);
@@ -328,6 +332,7 @@ function PlatformOverviewBody({
   lostGates,
   pendingManifestGates,
   hiddenGates,
+  awaitingGates,
   nonResidueWorkspaceCount,
   onKeyBound,
 }: {
@@ -343,6 +348,8 @@ function PlatformOverviewBody({
   readonly pendingManifestGates: readonly GateInstanceWire[];
   /** Enabled gate instances no workspace can see (connector not platform preset). */
   readonly hiddenGates: readonly GateInstanceWire[];
+  /** Gate instances some workspaces have not aligned with yet (legacy 223). */
+  readonly awaitingGates: readonly GateInstanceWire[];
   /** ui-audit O3 — `undefined` while `list_workspaces` is still loading; falls back to the
    *  kernel's raw `counts.workspaces` for that one frame (see this file's own module doc
    *  comment). */
@@ -356,6 +363,7 @@ function PlatformOverviewBody({
     lostGates,
     pendingManifestGates,
     hiddenGates,
+    awaitingGates,
     t,
   );
   const recentAudit = data.recentAudit.slice(0, RECENT_AUDIT_LIMIT);
@@ -642,6 +650,7 @@ function buildAttentionItems(
   lostGates: readonly GateInstanceWire[],
   pendingManifestGates: readonly GateInstanceWire[],
   hiddenGates: readonly GateInstanceWire[],
+  awaitingGates: readonly GateInstanceWire[],
   t: Translate,
 ): readonly AttentionItem[] {
   const items: AttentionItem[] = [];
@@ -660,6 +669,15 @@ function buildAttentionItems(
             `门「${gate.displayName}」公布了新清单，待采用`,
             `Gate "${gate.displayName}" announced a new manifest to adopt`,
           ),
+      href: hrefs.platformGateInstance(gate.gateId),
+    });
+  }
+  // Legacy 223: adopted, yet the gate still refuses some workspaces' calls until they align —
+  // their owners' work, but only the administrator sees all of them, so it is listed here.
+  for (const gate of awaitingGates) {
+    items.push({
+      key: `gate-awaiting-workspaces-${gate.gateId}`,
+      title: awaitingWorkspacesTitle(gate, t),
       href: hrefs.platformGateInstance(gate.gateId),
     });
   }

@@ -885,6 +885,39 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(table).getByText('UX538 库存宿主')).toBeTruthy();
   });
 
+  it('legacy 223: an instance some workspaces have not aligned with is flagged on its row with how many', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({
+            gateId: 'gate-1',
+            displayName: 'Docker prod',
+            status: 'enabled',
+            awaitingWorkspaces: [{ id: 'ws-a', name: 'Alpha', operations: ['stock.get'] }],
+            awaitingWorkspaceCount: 3,
+          }),
+          gateInstance({
+            gateId: 'gate-2',
+            displayName: 'Billing',
+            status: 'enabled',
+            awaitingWorkspaces: [],
+            awaitingWorkspaceCount: 0,
+          }),
+        ],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const badges = within(table).getAllByTestId('gate-awaiting-workspaces-badge');
+    expect(badges.map((badge) => badge.textContent)).toEqual(['3 个工作区待对齐 · 调用被拒']);
+    expect(
+      within(within(table).getByTestId('gate-instance-row-gate-1')).getByTestId(
+        'gate-awaiting-workspaces-badge',
+      ),
+    ).toBeTruthy();
+  });
+
   it('hosted instance with no heartbeat shows the hosted badge and waiting-for-host status', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [hostedGateInstance()] }),
