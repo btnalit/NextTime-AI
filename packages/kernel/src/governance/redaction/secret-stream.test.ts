@@ -31,6 +31,9 @@ const TEXTS: readonly string[] = [
   // Standard base64 is not one (legacy 168 review): 43 characters and `=`, a stretch between a `+`
   // and a `/`, and a key after a `/`.
   'PublicKey = FAKE0123456789abcdefghijklmnopqrstuvwxyzXYQ=\nQUJD+FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ/REVG /FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ key FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ',
+  // A platform API key with its prefix (legacy 906): alone, after `_` and `/`, with more after it,
+  // and after a letter (not one).
+  'key ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ, call_ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ /ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZmore agentk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ',
 ];
 
 /** Everything a scrubber emits for `pieces`, then its flush. */

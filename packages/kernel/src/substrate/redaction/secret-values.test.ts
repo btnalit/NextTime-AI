@@ -6,10 +6,12 @@ import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
+  PLATFORM_API_KEY_PREFIX,
   PLATFORM_KEY_SHAPE_PATTERNS,
   REDACTED,
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
@@ -256,6 +258,66 @@ describe('a platform API key standing alone (legacy 168)', () => {
   });
 });
 
+describe('a platform API key with its prefix (legacy 906)', () => {
+  const certain = (text: string) =>
+    redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+  const stored = (text: string) =>
+    scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+  const KEY = `ntk_${PLATFORM_KEY}`;
+
+  it.each([
+    ['alone', KEY, REDACTED],
+    ['in a sentence', `my key is ${KEY}, keep it`, `my key is ${REDACTED}, keep it`],
+    ['in a JSON string', `{"k":"${KEY}"}`, `{"k":"${REDACTED}"}`],
+    ['after CJK text', `密钥：${KEY}。`, `密钥：${REDACTED}。`],
+    ['after `_` in a longer run', `call_${KEY}`, `call_${REDACTED}`],
+    ['after `/` in a URL path', `/keys/${KEY}/x`, `/keys/${REDACTED}/x`],
+    ['after `-`', `x-${KEY}`, `x-${REDACTED}`],
+    ['with more after it', `${KEY}tail`, `${REDACTED}tail`],
+    ['all lower case after the prefix', `ntk_${'a'.repeat(43)}`, REDACTED],
+  ])(
+    'is hidden %s — by the full set, refused by the high-confidence set, rewritten in stored rows',
+    (_label, text, expected) => {
+      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
+      expect(stored(text)).toEqual({ value: expected, redactedValues: 1 });
+    },
+  );
+
+  it.each([
+    ['one character short', `ntk_${PLATFORM_KEY.slice(0, 42)}`],
+    ['after a letter, the end of another word', `agentk_${PLATFORM_KEY}`],
+    ['after a digit', `2ntk_${PLATFORM_KEY}`],
+    ['in upper case', `NTK_${PLATFORM_KEY}`],
+  ])('is not matched %s', (_label, text) => {
+    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+
+  it('a minted key always has it, never the bare shape, and is the key platformApiKeys gives', () => {
+    // generateApiKey's own recipe (application/gateway/auth.ts).
+    for (let i = 0; i < 2_000; i += 1) {
+      const key = `${PLATFORM_API_KEY_PREFIX}${randomBytes(32).toString('base64url')}`;
+      expect(key).toHaveLength(47);
+      for (const scrub of [scrubSecretValues, certain, stored]) {
+        expect(scrub(`key ${key}.`)).toMatchObject({
+          value: `key ${REDACTED}.`,
+          redactedValues: 1,
+        });
+      }
+      expect(platformKeyShapes(key)).toEqual([]);
+      expect(platformApiKeys(`k=${key} (${key})`)).toEqual([key, key]);
+    }
+  });
+
+  it('platformApiKeys gives prefixed keys and pre-prefix shapes as written, in order', () => {
+    const text = `old ${PLATFORM_KEY}, new ${KEY}; call_${KEY} not ${WIREGUARD_KEY} nor agentk_${PLATFORM_KEY}`;
+    expect(platformApiKeys(text)).toEqual([PLATFORM_KEY, KEY, KEY]);
+    expect(platformKeyShapes(text)).toEqual([PLATFORM_KEY]);
+    expect(platformApiKeys('nothing here')).toEqual([]);
+  });
+});
+
 describe('scrubSecretValues — linear time on adversarial input', () => {
   /** 200 KB of `unit` repeated. Each shape below took the previous patterns seconds (the review's
    *  probes: `a.` 26 s at 200 KB); a linear pattern does any of them in a few milliseconds. */
@@ -287,6 +349,9 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     '-----BEGIN RSA PRIVATE KEY-----',
     'Ab1',
     `${'Ab1'.repeat(14)}A `,
+    'ntk_',
+    '_ntk_a',
+    `ntk_${'a'.repeat(42)} `,
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));

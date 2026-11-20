@@ -24,8 +24,9 @@ import {
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 /** A Handle-shaped compact JWT; `.gitleaks.toml` allows its signature segment. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
-/** 32 bytes in base64url, 43 characters — a platform API key's shape, and a SHA-256 digest's or an
- *  Ed25519 public key's in a JWK. Synthetic, spelled out from the alphabet. */
+/** 32 bytes in base64url, 43 characters — the shape of a platform API key minted before its
+ *  `ntk_` prefix (legacy 906), and a SHA-256 digest's or an Ed25519 public key's in a JWK.
+ *  Synthetic, spelled out from the alphabet. */
 const BASE64URL_32 = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
 /** A `Basic` credential's value, built at run time from the synthetic `FAKE`. */
 const BASIC = Buffer.from(`ops:${FAKE}`).toString('base64');
@@ -393,10 +394,10 @@ describe('redactSuspectedSecretsUpTo — the same copy, read only up to a bound 
 /**
  * Legacy 175: an observe-class Operation's params. The table is the decision's two groups — a
  * value that is almost certainly a credential whatever field holds it is refused (a JWT, a vendor
- * key, a PEM key, a literal Bearer token, a URL's literal password); every other suspected value
- * passes and is recorded: a value under a secret-named field (a pagination cursor, a resource id),
- * and query text the other value patterns hit (a log search for failed Authorization, logfmt
- * `token=expired`, `$VAR` placeholders).
+ * key, a platform API key with its prefix, a PEM key, a literal Bearer token, a URL's literal
+ * password); every other suspected value passes and is recorded: a value under a secret-named
+ * field (a pagination cursor, a resource id), and query text the other value patterns hit (a log
+ * search for failed Authorization, logfmt `token=expired`, `$VAR` placeholders).
  */
 describe('reviewObserveParams — refuse what is certainly a credential, record the rest', () => {
   const refused: readonly [string, Record<string, unknown>, readonly string[]][] = [
@@ -409,6 +410,8 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
     ],
     ['a vendor key, nested', { filter: { key: `sk-ant-${FAKE}` } }, ['filter.key']],
     ['a GitHub token in a list', { ids: ['repo-1', `ghp_${FAKE}`] }, ['ids[1]']],
+    // Its prefix names a platform API key minted since legacy 906, unlike the bare shape below.
+    ['a platform API key with its prefix', { eventId: `ntk_${BASE64URL_32}` }, ['eventId']],
     ['a URL with a password', { url: `postgres://ops:${FAKE}@db.example.invalid/app` }, ['url']],
     [
       'a PEM private key',
@@ -492,7 +495,7 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
       ['next'],
     ],
     ['a pageToken inside a query string', { next: `/items?pageToken=${FAKE}` }, ['next']],
-    // A platform API key's shape is any 32 bytes in base64url (legacy 168 review): hidden in the
+    // A pre-prefix platform API key's shape is any 32 bytes in base64url (legacy 168 review): hidden in the
     // audit copy, never refused — a call that names an event by its digest goes through.
     ['a SHA-256 digest in base64url', { eventId: BASE64URL_32 }, ['eventId']],
     [

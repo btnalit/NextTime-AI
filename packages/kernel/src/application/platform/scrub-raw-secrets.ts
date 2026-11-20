@@ -11,6 +11,7 @@ import {
 import {
   STORED_REWRITE_SECRET_PATTERNS,
   findSuspectedSecrets,
+  platformApiKeys,
   platformKeyShapes,
   redactSuspectedSecrets,
   scrubSecretValues,
@@ -99,7 +100,7 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *     dump only; Observations are insert-only (core 0035 revokes UPDATE), the provenance of what
  *     was observed, so — like a Fact — none is rewritten here;
  *   - `turnReportKeyShapes` / `decisionKeyShapes` / `toolCallRecordKeyShapes`: a row of the three
- *     rewritten categories above still holding a platform API key standing alone (43 base64url
+ *     rewritten categories above still holding a pre-prefix platform API key standing alone (43 base64url
  *     characters, `PLATFORM_KEY_SHAPE_PATTERNS`; legacy 168 review). The rewrite leaves that shape:
  *     it is any 32 bytes in base64url — a digest, a public key — and a rewrite cannot be undone, so
  *     the row is listed by id for the keys still valid among them to be found and rotated. Read
@@ -118,7 +119,8 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * credential hashes, `principals.api_key_hash` and `users.password_hash`): a person's chat message,
  * an agent's reply, an Operation call's `action_requests.params`, a Worker's report, a note, a
  * proposal — wherever a key could have been pasted or echoed, not only where the scans above look.
- * Every value of a platform API key's shape in them is hashed the way `principals.api_key_hash`
+ * Every platform API key in them — a prefixed one (`ntk_…`, legacy 906) or a value of the shape
+ * keys had before the prefix (`platformApiKeys`) — is hashed the way `principals.api_key_hash`
  * stores a key (`hashApiKey`) and looked up there. A match is a key still issued, listed
  * (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the table and the row's
  * primary key (its `ctid` for a table without one), the Principal holding the key (one key per
@@ -368,16 +370,16 @@ function shownRowKey(row: readonly string[]): string[] {
   );
 }
 
-/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key shape in
- *  `value` as read: every string at any depth, object keys included. The shapes themselves go no
- *  further than this function. */
+/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key in
+ *  `value` as read, prefixed or of the pre-prefix shape (`platformApiKeys`): every string at any
+ *  depth, object keys included. The keys themselves go no further than this function. */
 function keyShapeHashes(value: unknown): Set<string> {
   const hashes = new Set<string>();
   const stack: unknown[] = [value];
   while (stack.length > 0) {
     const next = stack.pop();
     if (typeof next === 'string') {
-      for (const shape of platformKeyShapes(next)) hashes.add(hashApiKey(shape));
+      for (const key of platformApiKeys(next)) hashes.add(hashApiKey(key));
     } else if (Array.isArray(next)) {
       for (const item of next) stack.push(item);
     } else if (next !== null && typeof next === 'object') {

@@ -32,7 +32,8 @@ import {
  * What is replaced inside any string:
  *   - a PEM private key; an `Authorization` / `Cookie` header's value (the rest of the line);
  *   - a compact JWT (a Handle is one); a `Bearer`/`Basic` credential;
- *   - a vendor key with a well-known prefix; a platform API key (43 base64url characters alone);
+ *   - a vendor key with a well-known prefix; a platform API key (`ntk_` and 43 base64url
+ *     characters, or the 43 characters alone for one minted before the prefix);
  *   - the value of an upper-case env assignment whose name names a secret anywhere (`PGPASSWORD=`,
  *     `CAPABILITY_HANDLE=`, quoted or not);
  *   - the value of a `name: value` / `name=value` whose name's last word names a secret (YAML,
@@ -203,9 +204,29 @@ const VENDOR_KEY: ValuePattern = {
   redact: () => REDACTED,
 };
 
+/** What every platform API key the kernel mints starts with (`generateApiKey`,
+ *  application/gateway/auth.ts; legacy 906): it names a key as one wherever it is pasted, so the
+ *  key no longer has to be told apart from a digest by its shape alone. */
+export const PLATFORM_API_KEY_PREFIX = 'ntk_';
+
 /**
- * A platform API key as the kernel mints it (`generateApiKey`, application/gateway/auth.ts: 32
- * random bytes, base64url without padding — exactly 43 characters), standing alone: a run of
+ * A platform API key as the kernel mints it since legacy 906: `ntk_` and 32 random bytes in
+ * base64url (43 characters). The prefix makes it a credential wherever it stands, unlike the bare
+ * shape of a key minted before (`MINTED_PLATFORM_KEY`, below): hidden by every set — the
+ * high-confidence one too, which refuses a call carrying it, and the rewrite of stored rows, where
+ * no digest or public key can have this shape. Found inside a longer run after `_`, `-` or `/` too
+ * (`call_ntk_…`, a URL path), not after a letter or a digit, where `ntk_` ends some other word;
+ * the 43 characters after the prefix are hidden even when more follow. Linear: the literal prefix
+ * starts it, and the scan after it is bounded.
+ */
+const PREFIXED_PLATFORM_KEY: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9])ntk_[A-Za-z0-9_-]{43}/g,
+  redact: () => REDACTED,
+};
+
+/**
+ * A platform API key as the kernel minted it before legacy 906 (32 random bytes, base64url
+ * without padding — exactly 43 characters, no prefix), standing alone: a run of
  * exactly 43 base64url characters, mixing upper and lower case with a digit, `-` or `_` (a random
  * key lacks one of those only about once in 7,500; a word or a lower-case hex digest never has
  * them all). Nothing of either base64 alphabet on either side — not base64url's, and not standard
@@ -222,6 +243,10 @@ const VENDOR_KEY: ValuePattern = {
  * key's JWK `x`, a random id) has the same shape, so this is in `SECRET_VALUE_PATTERNS` only — such
  * a value is masked wherever values are scrubbed (the accepted over-redaction), and not in
  * `HIGH_CONFIDENCE_SECRET_PATTERNS`, where it would refuse a call outright.
+ *
+ * Kept while keys minted before the prefix are still issued: they authenticate as before, and
+ * without this they would be written down as they are again. Dropped once the host's old keys are
+ * rotated (legacy 906, second step); only then does a digest of this shape stop being hidden.
  */
 const MINTED_PLATFORM_KEY: ValuePattern = {
   pattern: /(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])/g,
@@ -258,6 +283,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
         : undefined,
   },
   VENDOR_KEY,
+  PREFIXED_PLATFORM_KEY,
   MINTED_PLATFORM_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
@@ -299,7 +325,8 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 ];
 
 /**
- * `SECRET_VALUE_PATTERNS` but a platform API key standing alone (`MINTED_PLATFORM_KEY`): what a
+ * `SECRET_VALUE_PATTERNS` but a pre-prefix platform API key standing alone (`MINTED_PLATFORM_KEY`;
+ * a prefixed key, `PREFIXED_PLATFORM_KEY`, is rewritten like any other credential): what a
  * one-way rewrite of rows already stored hides (application/platform/scrub-raw-secrets — historical
  * Turn reports, agent Decisions, tool-call records; legacy 168 review). The key's shape is any 32
  * bytes in base64url, so masking it there would lose every digest and public key in that history for
@@ -311,7 +338,8 @@ export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VA
   (valuePattern) => valuePattern !== MINTED_PLATFORM_KEY,
 );
 
-/** Only a platform API key standing alone — what a rewrite of stored rows leaves and counts. */
+/** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
+ *  counts. */
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
 
 /**
@@ -330,10 +358,26 @@ export function platformKeyShapes(text: string): string[] {
 }
 
 /**
+ * Every platform API key `text` holds, as written and in order: a prefixed one (`ntk_…`, legacy
+ * 906) and every bare shape of one minted before (`platformKeyShapes`). Only for comparing stored
+ * copies against the keys issued, by their hash (application/platform/scrub-raw-secrets.ts's
+ * `liveApiKeys`): hash each one and drop it, never store, log or show it.
+ */
+export function platformApiKeys(text: string): string[] {
+  const found: { readonly start: number; readonly key: string }[] = [];
+  for (const valuePattern of [PREFIXED_PLATFORM_KEY, MINTED_PLATFORM_KEY]) {
+    for (const { start, end, replacement } of secretMatches(valuePattern, text)) {
+      if (replacement !== undefined) found.push({ start, key: text.slice(start, end) });
+    }
+  }
+  return found.sort((a, b) => a.start - b.start).map(({ key }) => key);
+}
+
+/**
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
- * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
+ * a platform API key with its `ntk_` prefix (legacy 906), an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
  * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
  * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
  * `Authorization:` header (`Authorization: token ****` does not match), and a URL's password that
@@ -341,9 +385,10 @@ export function platformKeyShapes(text: string): string[] {
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
  * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
  * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
- * `Bearer` value; nor a platform API key standing alone (`MINTED_PLATFORM_KEY`): its shape is any 32
- * random bytes in base64url — a SHA-256 digest, an Ed25519 public key's JWK `x` — so a call that
- * names one by its digest would be refused (legacy 168 review). For refusing content outright (an
+ * `Bearer` value; nor a platform API key minted before the prefix, standing alone
+ * (`MINTED_PLATFORM_KEY`): its shape is any 32 random bytes in base64url — a SHA-256 digest, an
+ * Ed25519 public key's JWK `x` — so a call that names one by its digest would be refused (legacy
+ * 168 review). For refusing content outright (an
  * observe-class Operation's params, legacy 175), where every other pattern is only recorded.
  */
 export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
@@ -368,6 +413,7 @@ export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
       value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
   VENDOR_KEY,
+  PREFIXED_PLATFORM_KEY,
   {
     pattern: URL_PASSWORD,
     redact: (_match, [prefix, password]) =>
