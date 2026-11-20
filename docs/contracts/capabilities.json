@@ -36657,6 +36657,98 @@
     "sideEffects": false
   },
   {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_turn_tool_calls",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "user",
+                  "assistant",
+                  "tool",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "sequence": {
+                "type": "number"
+              },
+              "text": {
+                "type": "string"
+              },
+              "turnId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "text",
+              "content",
+              "createdAt",
+              "sequence",
+              "turnId"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "chatId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "handle",
     "group": "ontology",
     "mode": "observe",

@@ -121,6 +121,8 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'get_chat_history',
   'subscribe_chat',
   'list_chat_turns',
+  // Legacy 255: a Turn's tool calls, read as `get_chat_history` reads its Chat.
+  'get_turn_tool_calls',
 ]);
 
 /** See `AUDITOR_READ_CAPABILITIES`: the writes an auditor's own conversation with its read-only

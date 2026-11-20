@@ -16,6 +16,7 @@ import {
   formatDateTimeSecondsRange,
   formatDuration,
   formatTimeSeconds,
+  formatTimeSecondsDated,
   prettyJsonVisible,
   shortId,
 } from '../lib/format.js';
@@ -383,9 +384,13 @@ function outcomeChip(record: ToolCallRecord, t: Translate): { className: string;
 export function PersistedToolCallRowView({
   record,
   http,
+  dated = false,
 }: {
   readonly record: ToolCallRecord;
   readonly http?: CapabilityCaller;
+  /** The start carries its date unless it is today (legacy 255: the audit page, where a Turn may
+   *  be days old or cross midnight); the chat, read beside its own messages, shows the clock alone. */
+  readonly dated?: boolean;
 }) {
   const t = useT();
   const action = actionOutcomeOfRecord(record);
@@ -417,7 +422,7 @@ export function PersistedToolCallRowView({
             data-testid="tool-call-time"
             title={formatDateTimeSecondsRange(record.startedAt, record.endedAt)}
           >
-            {formatTimeSeconds(record.startedAt)}
+            {dated ? formatTimeSecondsDated(record.startedAt) : formatTimeSeconds(record.startedAt)}
             {record.endedAt
               ? t(
                   ` · 用时 ${formatDuration(record.startedAt, record.endedAt, t)}`,

@@ -27,6 +27,7 @@ import { Notice } from '../ui/Notice.js';
 import { ProvenanceChain } from '../ui/ProvenanceChain.js';
 import { RefChip } from '../ui/RefChip.js';
 import { useToast } from '../ui/Toast.js';
+import { TurnToolCalls } from './TurnToolCalls.js';
 
 export interface ExplainSectionProps {
   readonly http: CapabilityCaller;
@@ -54,7 +55,8 @@ const IDLE: ExplainState = { busy: false, error: null, nodeId: null, result: nul
  * the chain's own "原始证据" disclosure. "导出 Export" calls `export_prov{nodeId}` (S6-A C27:
  * the same untyped id, resolved like `explain`) and downloads the PROV-JSON document — auditor
  * only, so a member sees the 403 explained rather than a dead button. `explain` itself is
- * `minRole: 'member'`.
+ * `minRole: 'member'`. Legacy 255: an agent Turn's chain also lists the tool calls the Turn made
+ * (`audit/TurnToolCalls`, `get_turn_tool_calls`).
  */
 export function ExplainSection({ http, requestedNodeId, principalNames }: ExplainSectionProps) {
   const t = useT();
@@ -216,6 +218,7 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
       {view ? (
         <div ref={resultRef} tabIndex={-1}>
           <ExplainResultView
+            http={http}
             view={view}
             raw={state.result}
             principalNames={principalNames}
@@ -228,11 +231,13 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
 }
 
 function ExplainResultView({
+  http,
   view,
   raw,
   principalNames,
   canOpen,
 }: {
+  readonly http: CapabilityCaller;
   readonly view: ExplainView;
   readonly raw: unknown;
   readonly principalNames?: ReadonlyMap<string, string>;
@@ -359,6 +364,10 @@ function ExplainResultView({
             ) : null}
           </dl>
         </div>
+      ) : null}
+      {/* Legacy 255: an agent Turn's chain lists the tool calls the Turn made. */}
+      {view.activity?.kind === 'agent_turn' ? (
+        <TurnToolCalls key={view.activity.id} http={http} turnId={view.activity.id} />
       ) : null}
     </div>
   );

@@ -17,6 +17,7 @@ import {
   formatRelative,
   formatTime,
   formatTimeSeconds,
+  formatTimeSecondsDated,
   humanizeKind,
   prettyJsonVisible,
   redactSensitive,
@@ -255,6 +256,18 @@ describe('format', () => {
     it('renders HH:mm:ss (legacy 164 ③)', () => {
       expect(formatTimeSeconds('2026-09-03T09:05:07.400Z')).toBe('09:05:07');
       expect(formatTimeSeconds(null)).toBe('—');
+    });
+  });
+
+  describe('formatTimeSecondsDated', () => {
+    it('is the clock alone on today, with the date on any other day (legacy 255, UX on #1517)', () => {
+      const today = new Date(NOW).toISOString().slice(0, 10);
+      expect(formatTimeSecondsDated(`${today}T00:00:01.000Z`, NOW)).toBe('00:00:01');
+      expect(formatTimeSecondsDated(`${today}T23:59:59.000Z`, NOW)).toBe('23:59:59');
+      const yesterday = new Date(Date.parse(`${today}T00:00:00.000Z`) - 1000).toISOString();
+      expect(formatTimeSecondsDated(yesterday, NOW)).toBe(`${yesterday.slice(5, 10)} 23:59:59`);
+      expect(formatTimeSecondsDated('2025-03-04T05:06:07.000Z', NOW)).toBe('2025-03-04 05:06:07');
+      expect(formatTimeSecondsDated(null, NOW)).toBe('—');
     });
   });
 

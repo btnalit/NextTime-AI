@@ -29,7 +29,9 @@ import {
   endTurn,
   endUnknownRuntimeTurn,
   findRunningTurn,
+  findTurnChatId,
   getChatHistory,
+  getTurnToolCalls,
   listChats,
   newChat,
   publishTurnEnded,
@@ -890,6 +892,29 @@ const getChatHistoryHandler: CapabilityHandler = async (client, workspaceId, par
       ? { items: page.messages.map(toWireChatMessage) }
       : { items: page.messages.map(toWireChatMessage), nextCursor: page.nextCursor };
   return { result, resourceType: 'chat', resourceId: chatId };
+};
+
+/**
+ * Legacy 255: `get_turn_tool_calls` — the tool calls one agent Turn made, for the audit page's
+ * 「本轮记录」. Read as `get_chat_history` reads the Turn's Chat (`requireChatForCaller`: visible
+ * under RLS, an admin agent's Chat still its person's); a Turn the caller cannot see, or an id that
+ * names no `agent_turn` Activity, is 404 either way — existence is not told apart from visibility.
+ */
+const getTurnToolCallsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { turnId } = params as { turnId: string };
+  const chatId = await findTurnChatId(client, workspaceId, turnId);
+  if (chatId === null) throw new TurnNotFoundError(workspaceId, turnId);
+  await requireChatForCaller(client, workspaceId, chatId);
+  const page = await getTurnToolCalls(client, workspaceId, { chatId, turnId });
+  return {
+    result: {
+      chatId,
+      items: page.messages.map(toWireChatMessage),
+      ...(page.truncated ? { truncated: true as const } : {}),
+    },
+    resourceType: 'chat',
+    resourceId: chatId,
+  };
 };
 
 /** `subscribe_chat` is the one WS-only capability (§9.4) — this handler is the "no-op access-check
@@ -3016,6 +3041,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['send_chat_message', sendChatMessageHandler],
   ['stop_agent', stopAgentHandler],
   ['get_chat_history', getChatHistoryHandler],
+  ['get_turn_tool_calls', getTurnToolCallsHandler],
   ['subscribe_chat', subscribeChatHandler],
   ['archive_chat', archiveChatHandler],
   ['list_chat_turns', listChatTurnsHandler],

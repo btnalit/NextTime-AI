@@ -358,6 +358,9 @@ capabilities:
   get_task:
     console: required
     agents: [entry, admin]
+  get_turn_tool_calls:
+    console: required
+    agents: []
   get_type:
     console: required
     agents: [admin]
