@@ -747,6 +747,25 @@ export const PendingGateManifestWireSchema = z
   .strict();
 export type PendingGateManifestWire = z.infer<typeof PendingGateManifestWireSchema>;
 
+/** Legacy 223: a workspace that enabled a platform gate instance and still publishes, for some of
+ *  its Operations, another definition than the one the gate runs from the manifest in effect —
+ *  after the platform adopted a new manifest, until the workspace aligns
+ *  (`refresh_operation_governance`) and publishes the revisions. The gate refuses calls to these
+ *  meanwhile. A cross-plane read the platform administrator gets on its own gate instances: the
+ *  workspace's name and the Operation names only, never a definition, a draft or who published it
+ *  (`application/gates/awaiting-workspaces.ts`). */
+export const GateAwaitingWorkspaceWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    /** The Operation names, sorted: each in the manifest in effect, published in this workspace
+     *  under another definition, not cut off by the connector's deny list, and fixable by the
+     *  workspace (a definition only the gate's maintainer can change is not listed). */
+    operations: z.array(z.string()),
+  })
+  .strict();
+export type GateAwaitingWorkspaceWire = z.infer<typeof GateAwaitingWorkspaceWireSchema>;
+
 export const GateInstanceWireSchema = z
   .object({
     /** `GATE_ID`: the stable identity the gate announces itself with (compose config, not a display
@@ -781,6 +800,14 @@ export const GateInstanceWireSchema = z
     /** R-18 (D-18): the announced manifest awaiting an administrator's confirmation, `null` when
      *  none. Optional only so older fixtures still type-check; the real handler always sets it. */
     pendingManifest: PendingGateManifestWireSchema.nullable().optional(),
+    /** Legacy 223: up to `ENABLING_WORKSPACES_LIMIT` (`application/gates/store.ts`) of the
+     *  workspaces whose calls to some of this instance's Operations the gate refuses until they
+     *  align and publish (`GateAwaitingWorkspaceWireSchema`), by name. Only the platform
+     *  capabilities (`list_gate_instances`, `get_gate_instance`, `update_gate_instance`,
+     *  `confirm_gate_manifest`, `create_gate_instance`) set it; absent anywhere else. */
+    awaitingWorkspaces: z.array(GateAwaitingWorkspaceWireSchema).optional(),
+    /** Legacy 223: how many workspaces `awaitingWorkspaces` would list uncut. Set with it. */
+    awaitingWorkspaceCount: z.number().int().nonnegative().optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })

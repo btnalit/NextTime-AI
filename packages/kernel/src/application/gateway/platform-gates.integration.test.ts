@@ -73,6 +73,7 @@ import {
   findSelfConnection,
   landGatekeeper,
   operationPlatformStatus,
+  readAwaitingWorkspaces,
   readGatekeeperPlatformPolicy,
   recordGateInstanceCheck,
   recordMintedConnectionSecret,
@@ -4064,8 +4065,74 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await mismatchOf()).toEqual([
           { operation: OBSERVE_OP.name, awaiting: 'platform_adoption' },
         ]);
+        // Legacy 223: nothing awaits the workspace yet — adopting comes first.
+        expect(await instance()).toMatchObject({
+          awaitingWorkspaces: [],
+          awaitingWorkspaceCount: 0,
+        });
 
-        await callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: held.digest });
+        const adopted = await callAsAdmin<GateInstanceWire>('confirm_gate_manifest', {
+          gateId: PENDING_GATE,
+          digest: held.digest,
+        });
+        // Legacy 223: now the workspace's revision is what the gate waits for, and the platform
+        // sees which workspace and which Operation by name — nothing of the definition.
+        const awaitingHere = [
+          { id: workspaceId, name: expect.any(String), operations: [OBSERVE_OP.name] },
+        ];
+        expect(adopted.awaitingWorkspaces).toEqual(awaitingHere);
+        expect(adopted.awaitingWorkspaceCount).toBe(1);
+        expect(Object.keys(adopted.awaitingWorkspaces?.[0] ?? {}).sort()).toEqual([
+          'id',
+          'name',
+          'operations',
+        ]);
+        expect((await instance()).awaitingWorkspaces).toEqual(awaitingHere);
+        // The read enters the workspace and comes back (#501 T1): after it, the same platform
+        // transaction is on the platform plane again and reads none of the workspace's objects.
+        const afterRead = await withPlatform(pool, { userId: admin.id }, async (client) => {
+          const read = await readAwaitingWorkspaces(client, [PENDING_GATE]);
+          const context = await client.query<{
+            workspace: string;
+            principal: string;
+            platform: string;
+          }>(
+            `select current_setting('app.workspace_id', true) as workspace,
+                    current_setting('app.principal_id', true) as principal,
+                    current_setting('app.platform', true) as platform`,
+          );
+          const objects = await client.query<{ n: string }>(
+            'select count(*)::text as n from objects',
+          );
+          return {
+            count: read.get(PENDING_GATE)?.count,
+            context: context.rows[0],
+            objects: objects.rows[0]?.n,
+          };
+        });
+        expect(afterRead.count).toBe(1); // it did read inside the workspace
+        expect(afterRead.context).toEqual({ workspace: '', principal: '', platform: 'on' });
+        expect(afterRead.objects).toBe('0');
+        const listedInstances = await callAsAdmin<ListEnvelope<GateInstanceWire>>(
+          'list_gate_instances',
+          {},
+        );
+        expect(
+          listedInstances.items.find((item) => item.gateId === PENDING_GATE)?.awaitingWorkspaces,
+        ).toEqual(awaitingHere);
+        // An Operation the connector's deny list cuts off awaits no one: no publish brings it back.
+        await callAsAdmin('set_connector_mode', {
+          name: pendingBody.connector,
+          disabledOperations: [OBSERVE_OP.name],
+        });
+        expect(await instance()).toMatchObject({
+          awaitingWorkspaces: [],
+          awaitingWorkspaceCount: 0,
+        });
+        await callAsAdmin('set_connector_mode', {
+          name: pendingBody.connector,
+          disabledOperations: [],
+        });
 
         const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
           'preview_gate_instance_enable',
@@ -4123,6 +4190,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         );
         expect(again.revisionDrafts).toEqual([]);
+        // Aligned is not done: the workspace still awaits until it publishes the revision.
+        expect((await instance()).awaitingWorkspaces).toEqual(awaitingHere);
 
         // The catalog shows what the revision changes before it is published.
         const listed = await callAsOwner<ListEnvelope<OperationSummaryWire>>('list_operations', {
@@ -4150,6 +4219,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           )?.draftDigest,
         });
         expect(await mismatchOf()).toEqual([]);
+        expect(await instance()).toMatchObject({
+          awaitingWorkspaces: [],
+          awaitingWorkspaceCount: 0,
+        });
         const published = await withWorkspace(
           pool,
           { workspaceId, principalId: ownerPrincipalId },

@@ -32,6 +32,7 @@ import {
   loadConnectorPresets,
   lockGateInstancesAvailabilityExclusive,
   operationsOf,
+  readAwaitingWorkspaces,
   readConnectorOccupancy,
   recordGateInstanceCheck,
   resolveHostedDefinition,
@@ -84,6 +85,35 @@ async function requireGateInstance(client: PoolClient, gateId: string): Promise<
   const instance = await getGateInstance(client, gateId);
   if (!instance) throw new PlatformAdminError('gate_not_found', 'gate instance not found');
   return instance;
+}
+
+/** Legacy 223: `instances` as the platform capabilities return them — `displayedGateInstance`,
+ *  with the workspaces that still align and publish after an adopted manifest
+ *  (`readAwaitingWorkspaces`, a cross-plane read of names only). */
+async function shownGateInstances(
+  client: PoolClient,
+  instances: readonly GateInstanceWire[],
+): Promise<GateInstanceWire[]> {
+  const awaiting = await readAwaitingWorkspaces(
+    client,
+    instances.map((instance) => instance.gateId),
+  );
+  return instances.map((instance) => {
+    const forGate = awaiting.get(instance.gateId);
+    return {
+      ...displayedGateInstance(instance),
+      awaitingWorkspaces: [...(forGate?.items ?? [])],
+      awaitingWorkspaceCount: forGate?.count ?? 0,
+    };
+  });
+}
+
+async function shownGateInstance(
+  client: PoolClient,
+  instance: GateInstanceWire,
+): Promise<GateInstanceWire> {
+  const [shown] = await shownGateInstances(client, [instance]);
+  return shown as GateInstanceWire;
 }
 
 export const listConnectorsHandler: CapabilityHandler = async (client) => {
@@ -184,14 +214,14 @@ export const listGateInstancesHandler: CapabilityHandler = async (client, _works
     connector?: string;
   };
   const items = await listGateInstances(client, input);
-  return { result: { items: items.map(displayedGateInstance) } };
+  return { result: { items: await shownGateInstances(client, items) } };
 };
 
 export const getGateInstanceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { gateId: string };
   const instance = await requireGateInstance(client, input.gateId);
   return {
-    result: displayedGateInstance(instance),
+    result: await shownGateInstance(client, instance),
     resourceType: 'gate_instance',
     resourceId: instance.gateId,
   };
@@ -225,7 +255,7 @@ export const updateGateInstanceHandler: CapabilityHandler = async (
     ? await cancelGateInstanceEnableRequests(client, [input.gateId])
     : [];
   return {
-    result: displayedGateInstance(after),
+    result: await shownGateInstance(client, after),
     resourceType: 'gate_instance',
     resourceId: after.gateId,
     ...(cancelledRequests.length > 0
@@ -283,7 +313,7 @@ export const confirmGateManifestHandler: CapabilityHandler = async (
   });
   const after = await requireGateInstance(client, input.gateId);
   return {
-    result: displayedGateInstance(after),
+    result: await shownGateInstance(client, after),
     resourceType: 'gate_instance',
     resourceId: after.gateId,
   };
@@ -593,7 +623,7 @@ export const createGateInstanceHandler: CapabilityHandler = async (
   }
   const instance = await requireGateInstance(client, input.gateId);
   return {
-    result: displayedGateInstance(instance),
+    result: await shownGateInstance(client, instance),
     resourceType: 'gate_instance',
     resourceId: instance.gateId,
     // Legacy 606: the params copy replaces `credentialMode` whole (a field named after a

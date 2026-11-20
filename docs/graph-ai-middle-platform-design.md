@@ -531,6 +531,16 @@ CLI 建（key 打印一次），LLM 供应商靠主机改 YAML 再重启 `llm-pr
 `platform_audit_records` 表——审计要一条流，Explorer 与 `explain` 才不用查两处。跨工作区**读取**
 （列工作区、成员数、`llm_usage` 汇总）同样只经 `app_platform()` 在少数几张表的策略上加读子句；写操作
 每条都在事务里显式 `set_config` 到目标工作区执行，内核不获得任何通用的 RLS 绕过开关。
+没有平台读子句的表（如 `objects`，只有工作区隔离策略，core 0045）不为平台加子句：平台能力要读时，
+在同一事务里逐个工作区 `set_config` 进该工作区读、读完清回平台平面，与写同一个形状，只用于少数几处并且
+各自写明哪些内容可以出工作区——控制塔的计数（`computeCrossWorkspaceOverview`）、草稿残留计数
+（`platform_draft_residue`，只计数不列内容，I16），以及门实例的 `awaitingWorkspaces`（遗留 223，2026-11-20
+维护者决定）：管理员采用门的新清单后，哪些启用它的工作区还有已发布的 Operation 要对齐并发布新修订才能恢复
+调用。出工作区的只有工作区 id 与名字（`enablingWorkspaces` 已显示）和这些 Operation 的名字，按工作区名排序、
+最多 20 个、另给总数；定义、草稿、摘要、谁发布的都不出工作区。只列工作区自己能结束的：被接入包的 Operation
+开关禁用的不列，等平台采用的（`platform_adoption`，已在待确认清单的 `refusedOperations` 里）不列，门运行的
+定义带只有门能设的参数、任何修订都发布不了的也不列（等门的维护者）。实现见
+`packages/kernel/src/application/gates/awaiting-workspaces.ts`。
 
 **供应商配置与 I9**。provider key 只在 `llm-proxy`（I9、决策 20），所以配置路径绕开内核：web →
 caddy `/api/llm-admin/*` → `llm-proxy` 的管理端点。鉴权用内核签发的**平台管理员会话 JWT**（与控制台
