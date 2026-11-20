@@ -992,8 +992,8 @@ jobs:
       # side; `cap-calls.jsonl` says which socket requests the kernel answered). Raw socket frames
       # are not dumped: the first one carries the page's API key. Then every kernel container
       # e2e/resilience replaced, oldest first — a file that holds one of this run's own keys or
-      # passwords (the list the caddy log check uses) is not printed, only named, on top of the
-      # `::add-mask::` those values already have.
+      # passwords (the list the caddy log check uses, plus ci-self-gate's connection secret) is
+      # not printed, only named, on top of the `::add-mask::` those values already have.
       - name: docker compose logs (on failure)
         if: failure()
         run: |
@@ -1002,11 +1002,20 @@ jobs:
           (umask 077 && printf '%s\n' "${WEB_E2E_API_KEY:-}" "${WEB_E2E_API_KEY_B:-}" \
             "$(cat "$RUNNER_TEMP/switch-workspace.key" 2>/dev/null || true)" \
             "${WEB_E2E_ADMIN_INITIAL_PASSWORD:-}" "${WEB_E2E_OWNER_PASSWORD:-}" \
-            "${WEB_E2E_TEMP_PASSWORD:-}" | grep -v '^$' >"$forbidden") || true
+            "${WEB_E2E_TEMP_PASSWORD:-}" \
+            "$(sudo -n cat "$NEXTTIME_DATA/ci-self-gate/kernel.token" 2>/dev/null || true)" \
+            | grep -v '^$' >"$forbidden") || true
           for f in "$RUNNER_TEMP"/kernel-before-restart-*.log; do
             [ -e "$f" ] || continue
-            if [ -s "$forbidden" ] && grep -qFf "$forbidden" "$f"; then
-              echo "=== $(basename "$f"): not printed, it holds a credential of this run"
+            # Printed only when the check ran and found none (exit 1): a match (0) or a check
+            # that could not run (2, or no list) withholds the file.
+            status=2
+            if [ -s "$forbidden" ]; then
+              status=0
+              grep -qFf "$forbidden" "$f" || status=$?
+            fi
+            if [ "$status" -ne 1 ]; then
+              echo "=== $(basename "$f"): not printed, it may hold a credential of this run (check status $status)"
               continue
             fi
             echo "=== $(basename "$f"): the kernel container e2e/resilience replaced"
