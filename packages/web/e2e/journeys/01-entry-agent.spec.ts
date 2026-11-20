@@ -364,9 +364,17 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     const readyGateCard = page
       .getByTestId('gatekeeper-card')
       .filter({ hasText: GATE_DISPLAY_NAME });
-    await expect(readyGateCard.getByTestId('gatekeeper-reachability')).toContainText('可直接调用', {
-      timeout: 15_000,
-    });
+    // P3 893: asserted on `data-status` (the access itself, what this journey grants), not on the
+    // chip's words. Since legacy 872 the words also say whether the gate answers now, from this
+    // instance's stored health — and `integrations.spec.ts` ran 「测试」 on this very instance just
+    // before, which truthfully stores 「unreachable」 for its endpoint nothing listens on, until the
+    // workflow's next heartbeat re-announces it (every 60 s) and stores 「ok」 again. Whether that
+    // heartbeat lands before this step is timing, not anything this journey does.
+    await expect(readyGateCard.getByTestId('gatekeeper-reachability')).toHaveAttribute(
+      'data-status',
+      'direct',
+      { timeout: 15_000 },
+    );
 
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
