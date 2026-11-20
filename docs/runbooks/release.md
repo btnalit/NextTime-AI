@@ -3611,7 +3611,8 @@ select 'reconcile', count(*) from action_requests r
 
 - **约束**：`note` 为空，或是 1–200 个字符、首尾没有空格的文本。内核写入前已经去掉首尾空白、空白当作没有备注，长度上限和线上契约一致（`HANDLE_NOTE_MAX_LENGTH`，200），所以内核接受的备注总能写进去。
 - **行为变化**：
-  - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。看起来像凭据的（JWT、私钥、厂商密钥、`Bearer` 值、URL 里的密码，和审核凭据用的同一套高置信规则）返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容。
+  - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。审计参数副本会删减的内容（Handle、平台 API key、厂商密钥、`Bearer` 值、`password: …`、URL 里的密码等，`findSuspectedSecrets`）出现在备注里时返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容；所以存下和列出的备注总和审计行一致。
+  - 密钥识别多一种形态：单独出现的平台 API key（恰好 43 个 base64url 字符，前后都不是 base64url 字符，大小写混合且含数字、`-` 或 `_`，即 `generateApiKey` 生成的格式）。它在所有脱敏处（对话实时流与工具调用记录、落库的回复、能力调用的审计参数副本、Worker 报告等）换成 `[redacted]`，在拒收凭据处（观察类调用的参数、管理员提案等）被拒。以前这种 key 没有前缀可认，会以原文留下。正好满足这些条件的普通文本（比如 43 个字符、带数字的驼峰标识符）也会被遮住或被拒，这是接受的过度脱敏。
   - 两个签发结果和 `list_handles` 的每一行多两个字段：`sessionShortId`（会话 id 的前 8 位十六进制，小写；由 id 算出，不是 token 的片段，不唯一）和 `sessionNote`（没有备注时为 `null`）。入口、Worker、管理员智能体等平台持有的会话没有备注，但有短编号。
   - `revoke_handle` 的审计行多一个 `sessionShortId`，和列表里看到的一致。撤销仍按完整的 Handle id 走，短编号只给人看。
   - 主机命令 `issue-service-handle` 还不能写备注；`list_external_runtimes` 还不显示备注和短编号。控制台的显示由控制台一半接着做。

@@ -11,7 +11,7 @@ import {
   holderForSessionKind,
   lockSessions,
 } from '../../governance/capability/index.js';
-import { findCredentialValues } from '../../governance/redaction/index.js';
+import { findSuspectedSecrets } from '../../governance/redaction/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { isInternalPrincipalDisplayName } from './members-handlers.js';
@@ -60,14 +60,15 @@ export class HandleRevokeError extends Error {
  * clients of the same person, two service accounts of the same name — can be told apart before
  * one is revoked. Trimmed; blank is no note (`null`). The registered schema caps its length
  * (`HANDLE_NOTE_MAX_LENGTH`). Never a credential: the note is shown to the workspace's owners and
- * kept after the session ends, so a value the high-confidence detector names (a token, a key, a
- * URL password) is refused with 400 before anything is written — the refusal names the field,
- * never the value.
+ * kept after the session ends, so a note holding anything the audit copy of the call would redact
+ * (`findSuspectedSecrets` — a token, a platform API key, a `password: …`, a URL's password;
+ * review #501 on #1549) is refused with 400 before anything is written, and what is kept and
+ * listed is always what the audit row says. The refusal names the field, never the value.
  */
 export function handleNoteFrom(capability: string, raw: string | undefined): string | null {
   const note = raw?.trim() ?? '';
   if (note === '') return null;
-  if (findCredentialValues({ note }).count > 0) {
+  if (findSuspectedSecrets({ note }).count > 0) {
     throw new InvalidCapabilityParamsError(
       capability,
       [{ path: ['note'], message: 'looks like a credential' }],

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { namesASecretField } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -19,6 +20,9 @@ import {
  *  every other fixture here spells out `abcdefghijklmnopqrstuvwxyz`, which it allows too. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+/** A platform API key's shape (`generateApiKey`: 43 base64url characters). Synthetic — spells out
+ *  `abcdefghijklmnopqrstuvwxyz` too. */
+const PLATFORM_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
 
 describe('scrubSecretValues — the common ways a secret is written down', () => {
   it.each([
@@ -107,6 +111,46 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
   });
 });
 
+describe('a platform API key standing alone (legacy 168)', () => {
+  const certain = (text: string) =>
+    redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+
+  it.each([
+    ['in a sentence', `my key is ${PLATFORM_KEY}, keep it`, `my key is ${REDACTED}, keep it`],
+    ['alone', PLATFORM_KEY, REDACTED],
+    ['in quotes', `"${PLATFORM_KEY}"`, `"${REDACTED}"`],
+    ['after a colon in CJK text', `密钥：${PLATFORM_KEY}。`, `密钥：${REDACTED}。`],
+    ['with - and _ only', `${PLATFORM_KEY.slice(0, 41)}-_`, REDACTED],
+  ])('is replaced %s — by both pattern sets', (_label, text, expected) => {
+    expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+    expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
+  });
+
+  it('a minted key always has the shape, bar about one in 7,500 that lacks a digit, - and _', () => {
+    // generateApiKey's own recipe: 32 random bytes, base64url.
+    let missed = 0;
+    for (let i = 0; i < 2_000; i += 1) {
+      const key = randomBytes(32).toString('base64url');
+      expect(key).toHaveLength(43);
+      if (scrubSecretValues(`key ${key}`).value !== `key ${REDACTED}`) missed += 1;
+    }
+    // Expected about 0.27 misses in 2,000; more than 5 has odds of about 4 in 10 million.
+    expect(missed).toBeLessThanOrEqual(5);
+  });
+
+  it.each([
+    ['one character short', PLATFORM_KEY.slice(0, 42)],
+    ['one character long', `${PLATFORM_KEY}x`],
+    ['inside a longer run', `a-${PLATFORM_KEY}`],
+    ['all lower case (a word run, a hex digest)', 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq'],
+    ['letters only, no digit, - or _', 'AbcdefghijklmnopqrstuvwxyzAbcdefghijklmnopq'],
+    ['a sha-256 hex digest', `sha256:${'0123456789abcdef'.repeat(4)}`],
+  ])('is not matched %s', (_label, text) => {
+    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+});
+
 describe('scrubSecretValues — linear time on adversarial input', () => {
   /** 200 KB of `unit` repeated. Each shape below took the previous patterns seconds (the review's
    *  probes: `a.` 26 s at 200 KB); a linear pattern does any of them in a few milliseconds. */
@@ -136,6 +180,8 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'Bearer aaaaaaa ',
     'authorization ',
     '-----BEGIN RSA PRIVATE KEY-----',
+    'Ab1',
+    `${'Ab1'.repeat(14)}A `,
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));

@@ -32,7 +32,7 @@ import {
  * What is replaced inside any string:
  *   - a PEM private key; an `Authorization` / `Cookie` header's value (the rest of the line);
  *   - a compact JWT (a Handle is one); a `Bearer`/`Basic` credential;
- *   - a vendor key with a well-known prefix;
+ *   - a vendor key with a well-known prefix; a platform API key (43 base64url characters alone);
  *   - the value of an upper-case env assignment whose name names a secret anywhere (`PGPASSWORD=`,
  *     `CAPABILITY_HANDLE=`, quoted or not);
  *   - the value of a `name: value` / `name=value` whose name's last word names a secret (YAML,
@@ -203,6 +203,22 @@ const VENDOR_KEY: ValuePattern = {
   redact: () => REDACTED,
 };
 
+/**
+ * A platform API key as the kernel mints it (`generateApiKey`, application/gateway/auth.ts: 32
+ * random bytes, base64url without padding — exactly 43 characters), standing alone: a run of
+ * exactly 43 base64url characters, nothing of the alphabet on either side, mixing upper and lower
+ * case with a digit, `-` or `_` (a random key lacks one of those only about once in 7,500; a word
+ * or a lower-case hex digest never has them all). It has no prefix to find it by, and whoever
+ * holds it acts as that person or service account on every `/api` route (legacy 168: a key pasted
+ * into a Handle's note would have been kept and listed as written). Starts only where a run
+ * starts, so a longer run is passed over in linear time.
+ */
+const MINTED_PLATFORM_KEY: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
+  redact: (match) =>
+    /[A-Z]/.test(match) && /[a-z]/.test(match) && /[0-9_-]/.test(match) ? REDACTED : undefined,
+};
+
 /** `scheme://user:password@host`, the password captured. */
 const URL_PASSWORD =
   /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}):(?!\[redacted\]@)([^\s/@]{1,256})@/g;
@@ -232,6 +248,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
         : undefined,
   },
   VENDOR_KEY,
+  MINTED_PLATFORM_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
   {
@@ -275,6 +292,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
+ * a platform API key standing alone,
  * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
  * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
  * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
@@ -308,6 +326,7 @@ export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
       value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
   VENDOR_KEY,
+  MINTED_PLATFORM_KEY,
   {
     pattern: URL_PASSWORD,
     redact: (_match, [prefix, password]) =>

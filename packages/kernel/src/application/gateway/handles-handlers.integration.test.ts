@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HandleWire, Role, SessionKind } from '@nexttime/shared';
@@ -48,6 +48,15 @@ const DATABASE_URL = process.env.DATABASE_URL;
 /** A FAKE Handle-shaped JWT (the shape the high-confidence detector names; signs nothing). */
 const FAKE_HANDLE_TOKEN =
   'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+/** A key minted as `generateApiKey` mints a platform API key (32 random bytes, base64url) — made
+ *  at run time and never used, so no real key is written down. Re-drawn in the rare case it has
+ *  none of a digit, `-` and `_`, which the detector does not claim to catch. */
+function generateApiKeyLike(): string {
+  for (;;) {
+    const key = randomBytes(32).toString('base64url');
+    if (/[0-9_-]/.test(key)) return key;
+  }
+}
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
@@ -691,19 +700,26 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     });
 
     it('a note that looks like a credential, or is over 200, is refused (invalid params) before anything is written — the refusal never echoes it', async () => {
-      // A Handle pasted into the note: the token it would hand every owner reading the list.
-      const pasted = `采集器 ${FAKE_HANDLE_TOKEN}`;
+      // Pasted into the note, each would be handed to every owner reading the list: a Handle; the
+      // platform API key a person or service account signs in with (review #501 on #1549 — no
+      // prefix to know it by); and a `password: …` the audit copy of the call would redact.
+      const apiKey = generateApiKeyLike();
+      const pasted: readonly (readonly [note: string, secret: string])[] = [
+        [`采集器 ${FAKE_HANDLE_TOKEN}`, FAKE_HANDLE_TOKEN.slice(0, 12)],
+        [`采集器的 key ${apiKey}`, apiKey.slice(0, 12)],
+        ['采集器 password: FAKEabcdefghijklmnopqrstuvwxyz', 'FAKEabcdefgh'],
+      ];
       const before = await counts();
       for (const [capability, params] of [
         ['issue_handle', { sessionKind: 'interactive' }],
         ['issue_service_handle', { principalId: serviceId, scope: ['search'] }],
       ] as const) {
-        const refused = await issue(capability, { ...params, note: pasted }).catch(
-          (err: unknown) => err,
-        );
-        expect(refused).toBeInstanceOf(InvalidCapabilityParamsError);
-        expect((refused as Error).message).toContain('note looks like a credential');
-        expect((refused as Error).message).not.toContain('eyJ');
+        for (const [note, secret] of pasted) {
+          const refused = await issue(capability, { ...params, note }).catch((err: unknown) => err);
+          expect(refused).toBeInstanceOf(InvalidCapabilityParamsError);
+          expect((refused as Error).message).toContain('note looks like a credential');
+          expect((refused as Error).message).not.toContain(secret);
+        }
         await expect(issue(capability, { ...params, note: 'x'.repeat(201) })).rejects.toThrow(
           InvalidCapabilityParamsError,
         );
