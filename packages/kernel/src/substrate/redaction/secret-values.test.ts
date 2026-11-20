@@ -365,6 +365,8 @@ describe('a platform API key with its prefix (legacy 906)', () => {
     ],
     ['after \\t in JSON text', JSON.stringify(`a\t${KEY}`), JSON.stringify(`a\t${REDACTED}`)],
     ['after \\r in JSON text', JSON.stringify(`a\r${KEY}`), JSON.stringify(`a\r${REDACTED}`)],
+    ['after \\b in JSON text', JSON.stringify(`a\b${KEY}`), JSON.stringify(`a\b${REDACTED}`)],
+    ['after \\f in JSON text', JSON.stringify(`a\f${KEY}`), JSON.stringify(`a\f${REDACTED}`)],
     [
       'after \\uXXXX escapes',
       `"\\u5bc6\\u94a5\\uff1a${KEY}"`,
