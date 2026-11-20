@@ -35,7 +35,7 @@ export function SkillPublishRecord({
   const t = useT();
   return (
     <div className="stack-s" data-testid="skill-publish-record">
-      <span className="section-title">{t('发布依据', 'Published on')}</span>
+      <span className="section-title">{t('发布依据', 'Publish evidence')}</span>
       {record === null ? (
         <p className="text-3 text-small" data-testid="skill-publish-record-none">
           {t(
@@ -104,6 +104,11 @@ function RecordBody({
               {t('查看评测详情', 'See the evaluation')}
             </RouteLink>
           </div>
+          {evaluation.verdict === null ? (
+            <p className="text-3 text-small" data-testid="skill-publish-record-cancelled">
+              {t('已取消，没有结论。', 'Cancelled, with no verdict.')}
+            </p>
+          ) : null}
           {evaluation.reason !== null ? (
             <p className="text-small" data-testid="skill-publish-record-reason">
               {verdictReasonText(evaluation.reason, t)}
@@ -114,7 +119,7 @@ function RecordBody({
               className="row-wrap text-3 text-small"
               data-testid="skill-publish-record-observation"
             >
-              {t('图谱里的评测摘要观察', 'Its summary Observation in the graph')}
+              {t('图谱里的评测摘要观察', 'Summary observation in the graph')}
               <span className="mono">{shortId(evaluation.observationId)}</span>
               <CopyButton
                 value={evaluation.observationId}

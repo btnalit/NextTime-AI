@@ -73,6 +73,20 @@ describe('SkillPublishRecord (legacy 539)', () => {
     expect(http.calls.some((call) => call.name === 'get_draft_evaluation')).toBe(false);
   });
 
+  it('a cancelled evaluation says it has no verdict', () => {
+    renderRecord(scriptedHttp({ get_workspace: () => workspace }), {
+      evaluation: { id: EVALUATION_ID, verdict: null, reason: null, observationId: null },
+      acknowledgedFailures: 0,
+      acknowledgements: [],
+    });
+    const section = screen.getByTestId('skill-publish-record-evaluation');
+    expect(section.getAttribute('data-verdict')).toBe('');
+    expect(within(section).queryByTestId('skill-publish-record-verdict')).toBeNull();
+    expect(within(section).getByTestId('skill-publish-record-cancelled').textContent).toBe(
+      '已取消，没有结论。',
+    );
+  });
+
   it('a content published unevaluated says so', () => {
     renderRecord(scriptedHttp({ get_workspace: () => workspace }), {
       evaluation: null,
