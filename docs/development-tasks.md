@@ -3918,6 +3918,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 取舍：不用"由 extension 持有"（与 `bash` 同 uid）、per-container unix socket、mTLS 或 supervisor 侧代理（都要往模型可读的容器里放东西）；方案 C（Turn 级短期 Handle）不做；被轮换的入口 Handle 解绑即不可用，不额外吊销。按地址认 Handle 的前提（runsc `--network=host` 下每容器仍有自己的 netns 与地址、`CapDrop ALL` 无法伪造源地址、地址复用、supervisor 重启、绑定文件丢失）逐条证明与测试见 PR §3。
 - 验收：S1 新增 `env-no-handle`、`env-workers-plane`、`env-source-binding`；测试只用临时密钥对现签的合成 Handle。
 - 遗留：157（bearer 副本仍在库内容里）、165–171。
+- 实现说明（遗留 168 内核部分：列出与撤销 Handle，#1539，2026-11-20 合入，3b1657a；无迁移）：`application/gateway/handles-handlers.ts`。可见性——`list_handles` 列出代表调用者的各种会话的有效 Handle；owner 另看工作区 service Principal 的，不看平台内部服务主体的（`isInternalPrincipalDisplayName`）；不看其他成员的；auditor 可读。撤销——`revoke_handle` 只撤销 bearer：锁会话后标 revoked，governance 0042 触发器撤销其下全部 Handle，`revokedHandleCount` 在锁内读；容器持有的返回 409 `handle_container_held`，看不到的返回 404 `handle_not_found`；两次撤销同时到达时后到的返回 404、只记一条审计。owner 能撤销服务账号的 Handle，包括在主机上用 `issue-service-handle` 签发的（如采集器的），撤销后要在页面或主机上重新签发。两项能力都只在人的通道。测试缺口见遗留 897（随 168 PR-2 补）。控制台显示与撤销由控制台负责人做；「未绑定」被拒的原因由 168 PR-2 带出。
 
 **含疑似凭据的内容生效前二次确认（#526，2026-10-09 合入，无迁移；2026-10-09 维护者决定「二次确认」）**
 
