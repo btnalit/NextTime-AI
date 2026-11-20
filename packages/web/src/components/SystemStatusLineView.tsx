@@ -30,6 +30,7 @@ const OPEN_TITLE = {
   // Never opened: the Turn it is about is the message right above it.
   model_refused: ['', ''],
   turn_not_started: ['', ''],
+  agent_reconnecting: ['', ''],
 } as const;
 
 /** components/SystemStatusLineView: the compact inline notice for `system.action_update`/
@@ -76,6 +77,27 @@ export function SystemStatusLineView({
           {label}
         </span>
         <span className="system-status-text">{turnNotStartedText(line, t, agentKind)}</span>
+      </div>
+    );
+  }
+  // Legacy 168: the same shape, in amber — nothing is wrong that the reader must fix; sending the
+  // message again once the platform has reconnected the agent is all there is to do.
+  if (line.variant === 'agent_reconnecting') {
+    return (
+      <div
+        className="system-status-line"
+        data-testid="system-status-line"
+        data-variant={line.variant}
+      >
+        <span className="system-status-failure text-warn" data-testid="system-status-failure">
+          {t('智能体正在重新连接平台', 'Agent reconnecting')}
+        </span>
+        <span className="system-status-text">
+          {t(
+            '这条消息没有处理完，请稍后再发一次。',
+            'This message was not finished. Send it again in a moment.',
+          )}
+        </span>
       </div>
     );
   }

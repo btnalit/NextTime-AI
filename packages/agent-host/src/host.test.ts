@@ -589,6 +589,101 @@ describe('createHost — translated pi events reach the kernel with correlation 
     expect(kernelLink.rejected).toEqual([]);
   });
 
+  // Legacy 168: llm-proxy refused the model call because nothing is bound to the container's
+  // address — pi records it as an assistant message that ended in an error, with no text.
+  const unboundRefusal = {
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage:
+        '401: {"code":"unbound_source","message":"unbound_source: no Handle is bound to this agent container address; the platform is reconnecting the agent"}',
+    },
+  };
+
+  it('legacy 168: a Turn whose last model call llm-proxy refused as unbound ends with modelRefusal', async () => {
+    const lines: string[] = [];
+    const { host, containerIo, kernelLink } = setUp({ log: (line) => lines.push(line) });
+    const cmd = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, cmd);
+
+    attachment?.emitLine(unboundRefusal);
+    attachment?.emitLine({ type: 'agent_settled' });
+
+    expect(kernelLink.runtimeEvents).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'completed',
+        modelRefusal: 'unbound_source',
+        workspaceId: cmd.workspaceId,
+        chatId: cmd.chatId,
+        turnId: cmd.turnId,
+        principalId: cmd.principalId,
+      },
+    ]);
+    // Logged by its code, never with pi's error text.
+    const logged = lines.join('\n');
+    expect(logged).toContain('"modelRefusal":"unbound_source"');
+    expect(logged).not.toContain('reconnecting the agent');
+  });
+
+  it('legacy 168: only the last model call counts — one answered after the refusal clears it, and the next Turn starts clear', async () => {
+    const { host, containerIo, kernelLink } = setUp();
+    const cmd = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, cmd);
+    attachment?.emitLine(unboundRefusal);
+    attachment?.emitLine({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Back' }], stopReason: 'stop' },
+    });
+    attachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents.at(-1)).toEqual({
+      type: 'turnEnded',
+      status: 'completed',
+      workspaceId: cmd.workspaceId,
+      chatId: cmd.chatId,
+      turnId: cmd.turnId,
+      principalId: cmd.principalId,
+    });
+
+    // Another error (an upstream 500) is not a refusal either.
+    const next = startTurnCommand({ principalId: cmd.principalId, workspaceId: cmd.workspaceId });
+    await startTurnAndAccept(host, containerIo, next);
+    attachment?.emitLine({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: '500: {"error":{"message":"upstream failed"}}',
+      },
+    });
+    attachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents.at(-1)).toEqual({
+      type: 'turnEnded',
+      status: 'completed',
+      workspaceId: next.workspaceId,
+      chatId: next.chatId,
+      turnId: next.turnId,
+      principalId: next.principalId,
+    });
+  });
+
+  it('legacy 168: a stopped Turn still reports the refusal; the kernel decides that the stop comes first', async () => {
+    const { host, containerIo, kernelLink } = setUp();
+    const cmd = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, cmd);
+    attachment?.emitLine(unboundRefusal);
+    host.handleStopTurn({ type: 'stopTurn', turnId: cmd.turnId, principalId: cmd.principalId });
+    attachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents.at(-1)).toMatchObject({
+      type: 'turnEnded',
+      status: 'interrupted',
+      modelRefusal: 'unbound_source',
+    });
+  });
+
   it('drops an event with no tracked active turn to correlate it to', async () => {
     const { containerIo, kernelLink } = setUp();
     // No handleStartTurn ever called — attach a container directly to simulate a stray line.

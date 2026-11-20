@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { UNBOUND_SOURCE_CODE, UNBOUND_SOURCE_MESSAGE } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
@@ -176,6 +177,18 @@ describe('registerAdminMode', () => {
     ).rejects.toThrow(
       'admin_proposal_target_not_chosen: your administrator has not chosen that workspace',
     );
+  });
+
+  it('legacy 168: a refusal whose message already names its code is not prefixed twice', async () => {
+    kernel.setHandler('propose_admin_proposal', () => ({
+      raw: true,
+      status: 401,
+      body: { ok: false, error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE } },
+    }));
+    const tool = fake.tools.get('propose_admin_proposal');
+    await expect(
+      tool?.execute('call-1', { segments: [] }, undefined, undefined, undefined as never),
+    ).rejects.toMatchObject({ message: UNBOUND_SOURCE_MESSAGE, code: UNBOUND_SOURCE_CODE });
   });
 
   // S11 AA5a-1: its trial runs, called the way every mode calls invoke_worker.
