@@ -579,7 +579,7 @@ capabilities:
     console: required
     agents: []
   lookup_users:
-    console: "none: 遗留 150 的控制台一半接着把「成员与授权 → 添加成员」的登录名改成搜索选择；在那之前 owner 照旧按登录名添加，平台管理员在「平台 → 用户」里选"
+    console: required
     agents: []
   mark_turn_outcome:
     console: required

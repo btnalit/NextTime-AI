@@ -3877,6 +3877,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
 - e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
 - 遗留 150 的 owner 用户查找（#1556，2026-11-20 合入，e41c462，core 0064，release.md §3.209）：`lookup_users`（members，只给人用，minRole owner）经 security definer 函数 `lookup_users_for_owner` 读 `users`；函数只回答本工作区有效的 owner，其他调用者得到 42501，handler 映射为 403；匹配用 `strpos` 子串、不区分大小写，去掉空白后至少 2 个字符；只列 `add_member` 能加的人（没停用、不是本工作区有效成员、不是验收残留，与 `hideResidual` 同一条件）；只回登录名和显示名，最多 20 条并带 `truncated`，函数自己最多回 21 行；每次调用写一条带查询原文的审计行（已接受风险见遗留 912）。150 其余三项和控制台的搜索选择未做。
+- 遗留 150 控制台部分（#1561，2026-11-20 合入，de711e0）：`AddMemberForm` 的用户字段改用 `members/UserLookup.tsx`（kit `combobox`），按登录名或显示名调 `lookup_users`，方向键加回车选中；「改为手动输入」带上已选登录名，切回时保留所选；`truncated` 时的截断提示放在滚动区外（UX 复验两次）。e2e 旅程 06、08 的所有者改为查找后点选。「曾被移出本工作区」的标记见遗留 915。
 
 **本轮工具调用落库、agent 输出密钥脱敏与 `graph_overview`（#520，2026-10-09 合入；控制台审计 P1 / P2 的内核侧）**
 
@@ -4047,6 +4048,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **301 与控制台**：门删光 Operation 时芯片、「你的可达性」、就绪提示都说「门已不再提供」；审批页与对话卡片只在请求按现在发布的版本发起时提供「总是允许」并写明版本（wire `publishedDefinition {version | null, requestIsCurrent}`），没有已发布版本时说明原因；策略表显示「已暂停 · 待确认版本 / 定义已变」并可重新确认，编辑面板读门上当前版本、遇 409 就地重读；门已不再提供的规则按钮为「停用」；隐藏服务端必拒的三类按钮（自批、目录非提议人发布 / 弃用、零 Operation 门启用）。
   - **主机**：`release.md` §3.29（迁移、窗口后旧规则可能「待确认版本」、契约不向后兼容、只读核对、回滚）与 §6 的 0020 一行。脚本 `accept_s2.sh` / `accept_s4.sh` / `drill-add-gatekeeper.sh` / `lib/accept-common.sh` 已带新参数（审查 #488 范围），窗口里跑 S2 / S4 时验证。
   - **遗留**：STATUS 311–318（`enable_gate_instance` 的 `manifestDigest` 可选、无删除策略能力、两条 UX P3、目录 `not_proposer` 按钮、测试意图漂移、e2e 覆盖、向导清单名字转义）。
+  - **遗留 216 内核一半**（#1565，2026-11-20 合入，2bb1d1a；无迁移）：待审批行的 `publishedDefinition` 带 `requestDigest`（请求记下的定义摘要，草稿发起时是草稿的摘要，`none` 或旧行为 `null`）和 `requestVersion`（以这个定义发布过的最新版本，只看 `published` 和 `deprecated`，从不给出草稿；`requestDefinitionVersions` 按门、动作、摘要去重，测试缺口见遗留 914）；两个字段线上可选。控制台审批卡显示未做。
 
 **232 — `request_action` 在边界拒绝未知动作名，回显经转义与限长**（见 `global-roadmap-2026-10-16.md` §4）
 

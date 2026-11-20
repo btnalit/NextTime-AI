@@ -6,6 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { MembersPage } from './MembersPage.js';
+import { pickComboboxOption } from './kit/combobox.test-helpers.js';
 import {
   handleScopeCapabilities,
   serviceHandleMaxTtlSeconds,
@@ -821,6 +822,7 @@ describe('MembersPage', () => {
         listCallCount += 1;
         return { items: listCallCount === 1 ? [principal()] : [principal(), added] };
       },
+      lookup_users: () => ({ items: [{ login: 'dana', displayName: 'Dana' }] }),
       add_member: (params) => {
         expect(params).toEqual({ login: 'dana', role: 'operator' });
         return added;
@@ -831,7 +833,10 @@ describe('MembersPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /添加成员/ }));
     const form = await screen.findByTestId('add-member-form');
-    fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'dana' } });
+    // Legacy 150: an owner who is not a platform administrator searches, then picks.
+    const lookup = within(form).getByTestId('add-member-lookup');
+    fireEvent.change(lookup, { target: { value: 'da' } });
+    await pickComboboxOption(lookup, 'dana — Dana');
     fireEvent.change(within(form).getByLabelText(/角色/), { target: { value: 'operator' } });
     fireEvent.click(within(form).getByRole('button', { name: '添加' }));
 
@@ -852,6 +857,7 @@ describe('MembersPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /添加成员/ }));
     const form = await screen.findByTestId('add-member-form');
+    fireEvent.click(within(form).getByTestId('add-member-type-instead'));
     fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'nobody' } });
     fireEvent.click(within(form).getByRole('button', { name: '添加' }));
 
