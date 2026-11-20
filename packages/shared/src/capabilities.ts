@@ -1246,7 +1246,25 @@ const connectionCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.AvailableGateInstanceWireSchema),
     description:
-      'P-B1: the platform’s enabled gate instances whose connector is in platform-preset mode, with whether this workspace already enabled each (its Gatekeeper id).',
+      'P-B1: the platform’s enabled gate instances whose connector is in platform-preset mode, with whether this workspace already enabled each (its Gatekeeper id) and — legacy 254 — the caller’s own open request that the owner enable it (myEnableRequest).',
+  },
+  {
+    // Legacy 254 (coordinator decision 2026-11-19, choice A): a member who may not enable a
+    // platform gate instance (`enable_gate_instance` is owner-only) asks the workspace owner to.
+    // The ask is a ConnectionRequest (governance/0047: `gate_instance_id` instead of `target`), so
+    // it lands in the owner's one queue (`list_connection_requests`), is withdrawn or declined with
+    // `cancel_connection_request`, and is completed by `enable_gate_instance` — every open request
+    // for that gate in the workspace, audited `connection.request_completed`. Human channel only:
+    // an agent proposes a self connection with `request_connection`, never a gate instance.
+    name: 'request_gate_instance_enable',
+    group: 'connection',
+    mode: 'propose',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.ConnectionRequestWireSchema,
+    description:
+      'Legacy 254: ask the workspace owner to enable a platform gate instance (one list_available_gate_instances lists and this workspace has not enabled). Produces a ConnectionRequest naming the gate instance (gateInstance, no target) in the owner’s list_connection_requests queue; the owner completes it with enable_gate_instance, which completes every open request for that gate (audit connection.request_completed per request). One open request per person per gate: asking again while yours is open returns it unchanged. Withdraw it (or the owner declines it) with cancel_connection_request; the platform deleting or disabling the instance, or taking its connector out of platform-preset mode, cancels it (cancelReason gate_unavailable). Refused 404 gate_not_found / 409 connector_not_preset / gate_not_enabled / gate_not_ready like enable_gate_instance, and 409 gate_already_enabled once this workspace enabled it.',
   },
   {
     name: 'enable_gate_instance',
@@ -6140,6 +6158,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'approve_gate_address_change',
     'reject_gate_address_change',
     'list_available_gate_instances',
+    // Legacy 254: a person asks the owner to enable one; an agent never raises it.
+    'request_gate_instance_enable',
     'enable_gate_instance',
     'preview_gate_instance_enable',
     'preview_gatekeeper_resync',

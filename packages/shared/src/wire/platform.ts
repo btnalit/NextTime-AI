@@ -864,6 +864,10 @@ export const AvailableGateInstanceWireSchema = z
     operationCount: z.number().int().nonnegative(),
     /** Set when this workspace already enabled it: the workspace's Gatekeeper object id. */
     gatekeeperId: z.string().nullable(),
+    /** Legacy 254: the caller's own open request that the owner enable it
+     *  (`request_gate_instance_enable`), while there is one — what the console's 「已申请」 reads
+     *  back after a reload. Absent otherwise. */
+    myEnableRequest: z.object({ id: z.string(), requestedAt: z.string() }).strict().optional(),
   })
   .strict();
 export type AvailableGateInstanceWire = z.infer<typeof AvailableGateInstanceWireSchema>;
@@ -916,6 +920,10 @@ export const EnableGateInstanceResultWireSchema = z
     /** Present only when `linkedExisting` is `true` — which of name/target/transportKind differ
      *  between the linked Object and the instance (empty object if none do). */
     drift: GateLinkDriftWireSchema.optional(),
+    /** Legacy 254: the open requests that the owner enable this gate instance
+     *  (`request_gate_instance_enable`) this call completed — each now `completed` with this
+     *  Gatekeeper, audited `connection.request_completed`. Absent when there were none. */
+    completedConnectionRequestIds: z.array(z.string()).optional(),
   })
   .strict();
 export type EnableGateInstanceResultWire = z.infer<typeof EnableGateInstanceResultWireSchema>;

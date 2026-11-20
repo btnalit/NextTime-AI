@@ -22,6 +22,11 @@ export {
   claimConnectionRequest,
   markConnectionRequestCompleted,
   cancelConnectionRequest,
+  requestGateInstanceEnable,
+  openGateInstanceEnableRequest,
+  listOpenGateInstanceEnableRequests,
+  completeGateInstanceEnableRequests,
+  cancelGateInstanceEnableRequests,
   connectGatekeeper,
   GatekeeperNotFoundError,
 } from './service.js';
@@ -29,10 +34,11 @@ export type {
   RequestConnectionInput,
   ListConnectionRequestsInput,
   CancelConnectionRequestInput,
+  RequestGateInstanceEnableInput,
   ConnectGatekeeperInput,
 } from './service.js';
 
-export { ConnectionRequestNotFoundError } from './types.js';
+export { ConnectionRequestIsGateEnableError, ConnectionRequestNotFoundError } from './types.js';
 export {
   ConnectionParamsCarryCredentialsError,
   assertConnectionParamsCarryNoCredentials,

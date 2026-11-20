@@ -313,6 +313,7 @@ import {
   previewGateInstanceEnableHandler,
   previewGatekeeperResyncHandler,
   refreshOperationGovernanceHandler,
+  requestGateInstanceEnableHandler,
 } from './gate-instance-handlers.js';
 import {
   getGatekeeperHandler,
@@ -2950,6 +2951,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['approve_gate_address_change', approveGateAddressChangeHandler],
   ['reject_gate_address_change', rejectGateAddressChangeHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
+  // Legacy 254: a member asks the owner to enable one (a ConnectionRequest, governance 0047).
+  ['request_gate_instance_enable', requestGateInstanceEnableHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
   // S8 W3-K1 (leftover 79) — the write half of preview_gate_instance_enable's `differs`.

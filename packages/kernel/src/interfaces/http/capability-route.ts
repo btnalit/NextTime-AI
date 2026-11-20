@@ -229,6 +229,7 @@ import {
 } from '../../governance/capability/index.js';
 import {
   ConnectionParamsCarryCredentialsError,
+  ConnectionRequestIsGateEnableError,
   ConnectionRequestNotFoundError,
 } from '../../governance/connections/index.js';
 import {
@@ -1007,6 +1008,16 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   // `endpoint` — refused before anything is stored; `details.field` says which, never the value.
   if (err instanceof ConnectionParamsCarryCredentialsError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // Legacy 254: `create_connection` given a gate instance enable request — `enable_gate_instance`
+  // completes that one.
+  if (err instanceof ConnectionRequestIsGateEnableError) {
+    return {
+      status: 409,
+      code: 'connection_request_is_gate_enable',
+      message: err.message,
+      details: { gateId: err.gateId },
+    };
   }
   // STATUS leftover 36 (connection-handlers.ts "Endpoint guard"): the address belongs to a
   // platform-catalog gate instance; the caller's route to it is `enable_gate_instance`.

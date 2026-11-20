@@ -185,6 +185,8 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'chat.unarchive',
   'chat.rename',
   'connection.request_cancelled',
+  // Legacy 254: one per gate instance enable request the owner's enable completed.
+  'connection.request_completed',
   // S11 AA5a-1 (the AA5 plan's F1): one use of the trial-workspace exception to a platform-preset
   // connector, beside the `request_connection` / `create_connection` row it let through.
   'connection.trial_self_connect',

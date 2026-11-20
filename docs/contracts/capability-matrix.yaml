@@ -861,6 +861,11 @@ capabilities:
     agents: [entry, admin]
     e2e: observed
     repeat: creates
+  request_gate_instance_enable:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: idempotent  # the caller's open request for the gate comes back unchanged (one per person per gate)
   reset_user_password:
     console: required
     agents: []

@@ -887,6 +887,10 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
     names: ['enable_gate_instance'],
     why: "SystemsPage's canEnable; ConnectSystemLauncher mounts it behind the same canEnable",
   },
+  'components/connect/RequestGateEnable.tsx': {
+    names: ['cancel_connection_request', 'request_gate_instance_enable'],
+    why: "legacy 254: AvailableGateInstancesSection's canRequestEnable (SystemsPage) and ConnectSystemLauncher, both can('request_gate_instance_enable') !== false; its withdraw is cancel_connection_request, the same roles",
+  },
   'components/connect/RefreshOperationGovernanceConfirm.tsx': {
     names: ['refresh_operation_governance'],
     why: "SystemAccessCard's canManage; the catalog's GateOwnedParamsNotice mounts it only when can('refresh_operation_governance') !== false",

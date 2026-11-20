@@ -13,12 +13,15 @@ function request(target: string): ConnectionRequestRow {
     status: 'requested',
     kind: 'http',
     target,
+    gateInstanceId: null,
     requestedBy: '00000000-0000-4000-8000-000000000003',
     gatekeeperId: null,
     completedBy: null,
     requestedAt: new Date('2026-11-18T00:00:00Z'),
     completedAt: null,
     adminAgentSessionId: null,
+    cancelReason: null,
+    cancelledAt: null,
   };
 }
 
@@ -63,5 +66,47 @@ describe('toWireConnectionRequest — targetRedacted (legacy 247)', () => {
       expect(wire.targetRedacted).toBe(true);
       expect(ConnectionRequestWireSchema.safeParse(wire).success).toBe(true);
     }
+  });
+});
+
+describe('toWireConnectionRequest — gate instance enable request (legacy 254)', () => {
+  const gateRequest: ConnectionRequestRow = {
+    ...request('unused'),
+    target: null,
+    gateInstanceId: 'inventory-gate',
+  };
+
+  it('carries gateInstance with the name read now and no target; the schema accepts it', () => {
+    const wire = toWireConnectionRequest(gateRequest, new Map([['inventory-gate', 'Inventory']]));
+    expect(wire).not.toHaveProperty('target');
+    expect(wire).not.toHaveProperty('targetRedacted');
+    expect(wire.gateInstance).toEqual({ gateId: 'inventory-gate', displayName: 'Inventory' });
+    expect(ConnectionRequestWireSchema.safeParse(wire).success).toBe(true);
+  });
+
+  it('an instance the platform deleted has no name', () => {
+    const wire = toWireConnectionRequest(gateRequest);
+    expect(wire.gateInstance).toEqual({ gateId: 'inventory-gate', displayName: null });
+    expect(ConnectionRequestWireSchema.safeParse(wire).success).toBe(true);
+  });
+
+  it('a cancelled request says why and when; one cancelled before 0047 says neither', () => {
+    const cancelledAt = new Date('2026-11-19T01:02:03Z');
+    const wire = toWireConnectionRequest({
+      ...gateRequest,
+      status: 'cancelled',
+      cancelReason: 'gate_unavailable',
+      cancelledAt,
+    });
+    expect(wire.cancelReason).toBe('gate_unavailable');
+    expect(wire.cancelledAt).toBe(cancelledAt.toISOString());
+    expect(ConnectionRequestWireSchema.safeParse(wire).success).toBe(true);
+    const old = toWireConnectionRequest({
+      ...request('https://gate.example.invalid'),
+      status: 'cancelled',
+    });
+    expect(old).not.toHaveProperty('cancelReason');
+    expect(old).not.toHaveProperty('cancelledAt');
+    expect(ConnectionRequestWireSchema.safeParse(old).success).toBe(true);
   });
 });

@@ -19,7 +19,10 @@ import {
   createOutboundTargetGuard,
   withoutRedirects,
 } from '../../adapters/outbound-target/index.js';
-import type { ConnectionRequestKind } from '../../governance/connections/index.js';
+import type {
+  ConnectionRequestKind,
+  ConnectionRequestRow,
+} from '../../governance/connections/index.js';
 import {
   ConnectionRequestNotFoundError,
   assertConnectionParamsCarryNoCredentials,
@@ -53,6 +56,7 @@ import {
   gateAddressChangeSaltUsed,
   landGatekeeper,
   readConnectorMode,
+  readGateInstanceDisplayNames,
   recordMintedConnectionSecret,
   recordRotatedConnectionSecret,
 } from '../gates/index.js';
@@ -474,7 +478,7 @@ export const requestConnectionHandler: CapabilityHandler = async (
       id: row.id,
       status: row.status,
       kind: row.kind,
-      target: row.target,
+      target,
       requestedBy: row.requestedBy,
       requestedAt: row.requestedAt.toISOString(),
       ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
@@ -850,8 +854,14 @@ export const listConnectionRequestsHandler: CapabilityHandler = async (
 ) => {
   const { status } = params as { status?: 'requested' | 'completed' | 'cancelled' };
   const rows = await listConnectionRequests(client, workspaceId, { status });
-  return { result: { items: rows.map(toWireConnectionRequest) } };
+  // Legacy 254: a gate instance enable request is shown with its instance's name, read now.
+  const names = await readGateInstanceDisplayNames(client, gateInstanceIdsOf(rows));
+  return { result: { items: rows.map((row) => toWireConnectionRequest(row, names)) } };
 };
+
+function gateInstanceIdsOf(rows: readonly ConnectionRequestRow[]): string[] {
+  return rows.flatMap((row) => (row.gateInstanceId !== null ? [row.gateInstanceId] : []));
+}
 
 /**
  * `cancel_connection_request(connectionRequestId)` — S6-A C26 (docs/console-completion-plan.md
@@ -887,9 +897,12 @@ export const cancelConnectionRequestHandler: CapabilityHandler = async (
   const cancelled = await cancelConnectionRequest(client, workspaceId, {
     connectionRequestId,
     cancelledBy: caller.id,
+    // Legacy 254: the requester withdraws their own; the owner declines someone else's.
+    reason: existing.requestedBy === caller.id ? 'withdrawn' : 'declined',
   });
+  const names = await readGateInstanceDisplayNames(client, gateInstanceIdsOf([cancelled]));
   return {
-    result: toWireConnectionRequest(cancelled),
+    result: toWireConnectionRequest(cancelled, names),
     resourceType: 'connection_request',
     resourceId: cancelled.id,
   };

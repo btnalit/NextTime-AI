@@ -1307,6 +1307,21 @@ export async function listAvailableGateInstances(
   }));
 }
 
+/** Legacy 254: the display names of these platform gate instances, by gate id — what a gate
+ *  instance enable request shows in the owner's queue. An id with no row (an instance the platform
+ *  deleted) is absent. `gate_instances` is readable from every workspace (core 0023). */
+export async function readGateInstanceDisplayNames(
+  client: PoolClient,
+  gateIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  if (gateIds.length === 0) return new Map();
+  const result = await client.query<{ gate_id: string; display_name: string }>(
+    'select gate_id, display_name from gate_instances where gate_id = any($1::text[])',
+    [[...new Set(gateIds)]],
+  );
+  return new Map(result.rows.map((row) => [row.gate_id, row.display_name]));
+}
+
 // -------------------------------------------------------------------------------------------
 // external runtimes (design §6.3 "外部运行时"): service Principals' live sessions, across workspaces
 // -------------------------------------------------------------------------------------------
