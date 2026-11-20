@@ -1354,6 +1354,37 @@ export async function getOperationVersion(
   return toOperationRecord(gatekeeperId, name, row.id, row.properties);
 }
 
+/** Legacy 216: the newest version of `(gatekeeperId, name)` that was published — now `published`
+ *  or `deprecated` — whose definition digest (`operationRecordDigestOrNull`) is `digest`, or `null`
+ *  when none is: the version an ActionRequest that recorded `digest` was made under. A draft, a
+ *  discarded one included, is never named: no request is made against one, and a draft is private
+ *  to its proposer and the reviewers (D-26). Versions that only revised governance or the
+ *  description share their predecessor's digest, so the newest such version is the one named. */
+export async function findPublishedOperationVersionByDigest(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+  digest: string,
+): Promise<number | null> {
+  const result = await client.query<OperationObjectRow>(
+    `select id, identity_key, properties
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and properties ->> 'status' in ('published', 'deprecated')
+     order by coalesce((properties ->> 'version')::int, 1) desc`,
+    [workspaceId, gatekeeperId, name],
+  );
+  for (const row of result.rows) {
+    const record = toOperationRecord(gatekeeperId, name, row.id, row.properties);
+    if (operationRecordDigestOrNull(record) === digest) return record.version;
+  }
+  return null;
+}
+
 export interface PublishOperationRevisionInput {
   readonly gatekeeperId: string;
   readonly name: string;
