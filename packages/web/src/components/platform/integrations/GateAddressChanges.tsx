@@ -276,8 +276,8 @@ function GateAddressChangeRow({
             id={reasonId}
             label={t('原因（可选）', 'Reason (optional)')}
             hint={t(
-              '工作区所有者会在门的「健康与操作」里看到这段原因，看不到是谁驳回的；只写这次申请的事，不要写其他工作区或门的信息。也记在平台审计里。',
-              'The workspace’s owners see this reason on the gate’s “Health & operations”, not who rejected it: write about this proposal only, nothing of other workspaces or gates. It is also kept in the platform audit.',
+              '工作区所有者会在门的「健康与操作」和「更换地址」里看到这段原因，看不到是谁驳回的；只写这次申请的事，不要写其他工作区或门的信息。也记在平台审计里。',
+              'The workspace’s owners see this reason on the gate’s “Health & operations” and in “Move to a new address”, not who rejected it: write about this proposal only, nothing of other workspaces or gates. It is also kept in the platform audit.',
             )}
           >
             <input

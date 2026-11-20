@@ -19,8 +19,8 @@ import {
   isAbsoluteUrl,
   withDefaultScheme,
 } from '../../lib/gate-input.js';
-import type { GatekeeperDetail } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import type { GatekeeperDetail, GatekeeperHealth } from '../../lib/governance.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -149,7 +149,7 @@ function GateAddressChangeBody({
           {/* Legacy 715: why the last one did not take, before proposing again — only once the
               read no longer has an open one, so a proposal just withdrawn here shows nothing. */}
           {stored === null && gate.lastAddressChangeOutcome ? (
-            <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} />
+            <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} placement="sheet" />
           ) : null}
           {/* Unmounted while a proposal is open, so after one is withdrawn the steps start again
               with a new secret: the last one is spent. */}
@@ -439,16 +439,71 @@ export interface PendingGateAddressChangeProps {
   readonly onWithdrawn: () => void;
 }
 
+/** UX of #1168 (legacy 668): in 「健康与操作」 an outcome this old is folded to one line. */
+const OUTCOME_FOLD_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Legacy 715: how the gate's latest proposal to move ended, as its owner reads it
  *  (`get_gatekeeper`'s `lastAddressChangeOutcome`, owners only). Withdrawn is the owner's own act
  *  and shows nothing; applied says what stays at the old address; rejected gives the platform
  *  administrator's reason (never who); expired says nobody decided it. Rejected and expired end
  *  with the way back for a gate that already took the new secret at the same host. Shown in
- *  「健康与操作」 and above 「更换地址」's steps while no proposal is open. */
+ *  「健康与操作」 and above 「更换地址」's steps while no proposal is open.
+ *
+ *  UX of #1168 (legacy 668): above 「更换地址」's steps it points down to them; in 「健康与操作」
+ *  it folds to its headline once the gate answers at its current address (`health: 'ok'`, so
+ *  nothing it says is needed now) or a week after it ended — the whole of it a click away. */
 export function GateAddressChangeOutcome({
   outcome,
+  placement = 'drawer',
+  health,
 }: {
   readonly outcome: GateAddressChangeOutcomeWire;
+  /** 'sheet': above 「更换地址」's steps, which are where to propose again. */
+  readonly placement?: 'drawer' | 'sheet';
+  /** The gate's live probe, in 「健康与操作」. */
+  readonly health?: GatekeeperHealth | undefined;
+}) {
+  const t = useT();
+  if (outcome.status === 'withdrawn') return null;
+  const notice = <OutcomeNotice outcome={outcome} placement={placement} />;
+  const fold =
+    placement === 'drawer' &&
+    (health === 'ok' || Date.now() - Date.parse(outcome.endedAt) > OUTCOME_FOLD_AFTER_MS);
+  if (!fold) return notice;
+  return (
+    <details className="disclosure" data-testid="gate-address-change-outcome-folded">
+      <summary>
+        {outcomeHeadline(outcome.status, t)}
+        {' · '}
+        <time dateTime={outcome.endedAt} title={formatDateTime(outcome.endedAt)}>
+          {formatRelative(outcome.endedAt, t)}
+        </time>
+      </summary>
+      <div className="disclosure-body">{notice}</div>
+    </details>
+  );
+}
+
+function outcomeHeadline(
+  status: Exclude<GateAddressChangeOutcomeWire['status'], 'withdrawn'>,
+  t: Translate,
+): string {
+  switch (status) {
+    case 'applied':
+      return t('门已换到新地址', 'The gate moved to its new address');
+    case 'rejected':
+      return t('换地址的申请被平台管理员驳回了', 'A platform administrator rejected the move');
+    case 'expired':
+      return t('换地址的申请过期了，没有生效', 'The move expired without taking effect');
+  }
+}
+
+function OutcomeNotice({
+  outcome,
+  placement,
+}: {
+  readonly outcome: GateAddressChangeOutcomeWire;
+  readonly placement: 'drawer' | 'sheet';
 }) {
   const t = useT();
   if (outcome.status === 'withdrawn') return null;
@@ -461,16 +516,22 @@ export function GateAddressChangeOutcome({
     '新旧地址是同一扇门、门已经换上新密钥的话：在 ⋯ 里「重新签发连接密钥」，放进门并重启，门才恢复。',
     'If both addresses reach the same gate and it already holds the new secret: use ⋯ → “Issue a new connection secret” and put that in the gate, restarting it, to bring it back.',
   );
-  const proposeAgain = t(
-    '门留在现在的地址。要换就在 ⋯ 里「更换地址」重新申请，用新生成的连接密钥。',
-    'The gate stays at its current address. To move it, propose again from ⋯ → “Move to a new address”, with a new connection secret.',
-  );
+  const proposeAgain =
+    placement === 'sheet'
+      ? t(
+          '门留在现在的地址。要换就在下面重新申请，用新生成的连接密钥。',
+          'The gate stays at its current address. To move it, propose again below, with a new connection secret.',
+        )
+      : t(
+          '门留在现在的地址。要换就在 ⋯ 里「更换地址」重新申请，用新生成的连接密钥。',
+          'The gate stays at its current address. To move it, propose again from ⋯ → “Move to a new address”, with a new connection secret.',
+        );
   if (outcome.status === 'applied') {
     return (
       <Notice tone="info" testId="gate-address-change-outcome">
         <div className="stack-s">
           <strong>
-            {t('门已换到新地址', 'The gate moved to its new address')}
+            {outcomeHeadline('applied', t)}
             {' · '}
             {ended}
           </strong>
@@ -496,9 +557,7 @@ export function GateAddressChangeOutcome({
     <Notice tone="warn" testId="gate-address-change-outcome">
       <div className="stack-s">
         <strong>
-          {outcome.status === 'rejected'
-            ? t('换地址的申请被平台管理员驳回了', 'A platform administrator rejected the move')
-            : t('换地址的申请过期了，没有生效', 'The move expired without taking effect')}
+          {outcomeHeadline(outcome.status, t)}
           {' · '}
           {ended}
         </strong>

@@ -1257,11 +1257,11 @@ describe('PlatformIntegrationsPage', () => {
           call.name === 'list_gate_address_changes' &&
           (call.params as { ended?: boolean }).ended === true,
       ).length;
-    expect(historyReads()).toBe(0);
-    history.open = true;
-    fireEvent(history, new Event('toggle'));
+    // Read up front, for the latest outcome in its header (UX of #1191, legacy 668).
     await screen.findByTestId('gate-address-change-history-empty');
+    expect(history.open).toBe(false);
     expect(historyReads()).toBe(1);
+    expect(screen.queryByTestId('gate-address-change-history-latest')).toBeNull();
 
     fireEvent.click(within(changes).getByTestId('gate-address-change-approve-gac-1'));
     const approve = await screen.findByRole('dialog', {
@@ -1271,6 +1271,9 @@ describe('PlatformIntegrationsPage', () => {
     const applied = await screen.findByTestId('gate-address-change-history-outcome-gac-1');
     expect(applied.textContent).toBe('已换址');
     expect(historyReads()).toBe(2);
+    expect(screen.getByTestId('gate-address-change-history-latest').textContent).toContain(
+      '已换址',
+    );
 
     fireEvent.click(within(changes).getByTestId('gate-address-change-reject-gac-2'));
     const reject = await screen.findByRole('dialog', {

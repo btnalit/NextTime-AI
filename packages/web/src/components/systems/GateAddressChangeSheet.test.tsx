@@ -159,6 +159,10 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
     expect(screen.getByTestId('gate-address-change-outcome-reason').textContent).toMatch(
       /^原因：Not that host\.$/,
     );
+    // UX of #1168 (legacy 668): the steps to propose again are right below it, never folded.
+    expect(notice.textContent).toContain('要换就在下面重新申请');
+    expect(notice.textContent).not.toContain('⋯ 里「更换地址」');
+    expect(screen.queryByTestId('gate-address-change-outcome-folded')).toBeNull();
     // The steps are there to propose again.
     await enterAddress('gate-b:8443');
     fireEvent.click(previewButton());

@@ -317,14 +317,16 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
 
     fireEvent.click(await screen.findByTestId('catalog-change-rollback-trigger'));
     const blocker = await screen.findByTestId('catalog-change-blocker-1');
-    expect(blocker.textContent).toContain(
-      '撤销后会有关系类型指向工作区里没有任何本体声明的对象类型',
+    // UX acceptance of #1141 (legacy 668): by the ends it names — this item's own end (the
+    // version to return to names a type that is gone), then other families' ends (named by
+    // family, "another ontology" when no ChangePlan record names it) — each with its own remedy,
+    // not the general 「要么…要么…」.
+    expect(blocker.textContent).toBe(
+      '要退回的那一版里有关系类型指向工作区里已经没有本体声明的对象类型：关系类型 runs_on 的 domain 是 Gone。' +
+        '撤销会去掉别的本体的关系类型还在用的对象类型：本体 uxlink-services 的关系类型 served_by 的 range 是 Host；另一个本体的关系类型 relates 的 domain 是 Host。' +
+        '所以不撤销。要撤销，先让工作区里有本体声明这些类型（例如装上提供它们的能力包）。还要先改动那个本体，或先撤销装上那个本体的记录。',
     );
-    // Another family's end names that family (UX acceptance of #1141) — "another ontology" when
-    // no ChangePlan record names it; this item's own end names no family.
-    expect(blocker.textContent).toContain(
-      '（本体 uxlink-services 的关系类型 served_by 的 range 是 Host；另一个本体的关系类型 relates 的 domain 是 Host；关系类型 runs_on 的 domain 是 Gone）',
-    );
+    expect(blocker.textContent).not.toContain('要么');
     expect((screen.getByRole('button', { name: '撤销' }) as HTMLButtonElement).disabled).toBe(true);
     expect(http.calls.some((c) => c.name === 'roll_back_change_segment')).toBe(false);
   });
