@@ -172,9 +172,14 @@ export function HandlesList({
           style={{ margin: 0 }}
           data-testid={`handles-${scope}-empty`}
         >
-          {scope === 'service'
-            ? t('服务账号现在没有有效的会话凭证。', 'No service account has a live Handle now.')
-            : t('现在没有代表你的会话凭证。', 'No Handle is acting for you now.')}
+          {more
+            ? t(
+                '已读到的会话凭证里还没有这一类的，点「加载更多」接着读。',
+                'None of the Handles read so far is of this kind; load more to read on.',
+              )
+            : scope === 'service'
+              ? t('服务账号现在没有有效的会话凭证。', 'No service account has a live Handle now.')
+              : t('现在没有代表你的会话凭证。', 'No Handle is acting for you now.')}
         </p>
       ) : (
         <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -288,8 +293,8 @@ function SessionRow({
               : revocable === undefined
                 ? t('你不能撤销这个会话。', 'You cannot revoke this session.')
                 : t(
-                    '你的角色只能查看，不能撤销；要撤销，请工作区里其他角色的成员来做。',
-                    'Your role can only look, not revoke; ask a member with another role in the workspace.',
+                    '你的角色只能查看，不能撤销；要提前结束，请平台管理员在「集成 → 外部运行时」里吊销。',
+                    'Your role can only look, not revoke; to end it sooner, ask a platform administrator to revoke it under Integrations → External runtimes.',
                   )}
           </span>
         ) : (

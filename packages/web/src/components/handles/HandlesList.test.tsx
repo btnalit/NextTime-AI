@@ -205,9 +205,20 @@ describe('HandlesList', () => {
     const { http, calls } = scriptedHttp(() => ({ items: [MCP_A] }), 'auditor');
     show(http);
     const ends = await screen.findByTestId('handle-session-ends-session-mcp');
-    await waitFor(() => expect(ends.textContent).toContain('你的角色只能查看，不能撤销'));
+    await waitFor(() =>
+      expect(ends.textContent).toContain('请平台管理员在「集成 → 外部运行时」里吊销'),
+    );
     expect(screen.queryByTestId('handle-session-revoke-session-mcp')).toBeNull();
     expect(calls.map((call) => call.name)).toEqual(['list_handles']);
+  });
+
+  it('a first page holding only the other kind says to read on, not that there is none', async () => {
+    const { http } = scriptedHttp(() => ({ items: [SERVICE], nextCursor: 'c1' }));
+    show(http);
+    expect((await screen.findByTestId('handles-self-empty')).textContent).toBe(
+      '已读到的会话凭证里还没有这一类的，点「加载更多」接着读。',
+    );
+    expect(screen.getByTestId('handles-self-more')).toBeTruthy();
   });
 
   it('reads in English', async () => {

@@ -126,9 +126,8 @@ function CopyButton({ text, label }: { readonly text: string; readonly label: st
  *
  * The Handle is shown exactly once, in a `kit/dialog`, with copy buttons for the token and for the
  * ready-to-paste `claude mcp add` snippet from the howto doc — never stored beyond the copy action.
- * No `list_handles`/`revoke_handle` capability exists (checked against `packages/shared/src/
- * capabilities.ts`), so this section offers no history/revoke list — the howto doc's own
- * "排障"/撤销 section says the same.
+ * The list of live Handles and revoking one is the 「会话凭证」 card under this one (legacy 168:
+ * `handles/HandlesList`, `list_handles` / `revoke_handle`); `onIssued` makes it read again.
  */
 export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionProps) {
   const t = useT();
