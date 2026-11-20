@@ -110,6 +110,8 @@ const PURGE_COUNT_LABELS = {
   sessions: { zh: '会话', en: 'Sessions' },
   tasks: { zh: '任务', en: 'Tasks' },
   workerRuns: { zh: 'Worker 运行', en: 'Worker runs' },
+  // Legacy 155 (task/0016).
+  workerRunToolCalls: { zh: 'Worker 运行的工具调用', en: 'Worker runs’ tool calls' },
   goalRuns: { zh: '目标运行', en: 'Goal runs' },
   planRevisions: { zh: '计划版本', en: 'Plan revisions' },
   stepRuns: { zh: '步骤运行', en: 'Step runs' },

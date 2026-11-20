@@ -358,6 +358,9 @@ capabilities:
   get_task:
     console: required
     agents: [entry, admin]
+  get_task_tool_calls:
+    console: "none: 遗留 155 的控制台一半接着在任务详情里显示 Worker 的工具调用；在那之前人看任务结果走任务页与审计页"
+    agents: []
   get_turn_tool_calls:
     console: required
     agents: []
@@ -848,6 +851,10 @@ capabilities:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
     repeat: "conflict: unauthorized" # the first report settles the Task, and ending its WorkerRun revokes the run's Handle
+  report_tool_calls:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+    repeat: idempotent # the run keeps the first record of each call id; a report repeating one stores nothing
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []

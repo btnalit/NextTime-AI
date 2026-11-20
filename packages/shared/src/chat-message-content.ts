@@ -184,7 +184,9 @@ export const ToolCallPayloadPreviewSchema = z
     text: z.string(),
     /** How long the payload's text was before it was cut — a result's text as the tool returned
      *  it; for a structured payload too large to read whole, a lower bound (`truncated` is then
-     *  true). Larger than `text.length` when it was cut. */
+     *  true). Larger than `text.length` when it was cut. A Worker's record (legacy 155) counts
+     *  what its runtime sent, which is bounded (`WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS`): past that, a
+     *  lower bound as well. */
     totalChars: z.number().int().nonnegative(),
     truncated: z.boolean(),
   })

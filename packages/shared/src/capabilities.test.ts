@@ -99,6 +99,9 @@ const EXPECTED_CAPABILITY_NAMES = [
   'get_task',
   'list_tasks',
   'cancel_task',
+  // legacy 155
+  'report_tool_calls',
+  'get_task_tool_calls',
   // worker
   'propose_worker_definition',
   'publish_worker_definition',
@@ -211,6 +214,7 @@ describe('CAPABILITY_REGISTRY', () => {
       'report_turn',
       'invoke_worker',
       'report_task_result',
+      'report_tool_calls',
       'cancel_task',
       'register_source',
       'submit_observations',

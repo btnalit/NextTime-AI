@@ -71,6 +71,7 @@ import {
   getTaskWithWorkerRuns,
   invokeWorkerCreate,
   listQuotas,
+  listTaskToolCalls,
   listTasksForPrincipal,
   proposeDefinitionFromCombination,
   readCombinationCandidates,
@@ -489,6 +490,7 @@ import {
 } from './skill-procedure-handlers.js';
 import { NoActiveTurnError, TurnNotFoundError } from './turn-errors.js';
 import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-result-handler.js';
+import { reportToolCallsHandler } from './worker-tool-calls-handler.js';
 
 // The two Turn errors moved to `turn-errors.ts` (S10 E1) so the attribution handlers can throw them
 // without importing this file; re-exported so every existing `from './handlers.js'` import holds.
@@ -2705,6 +2707,33 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
   };
 };
 
+/** Legacy 155: `get_task_tool_calls` — the tool calls the Task's Worker reported for its runs
+ *  (`report_tool_calls`, application/task/tool-calls.ts), read under `get_task`'s rule: a Task the
+ *  caller may not read is the 404 an unknown id is. Human channel only (the capability's
+ *  registration), so the viewer is the console's: the owner sees every Task, anyone else their own. */
+const getTaskToolCallsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { taskId, limit, cursor } = params as { taskId: string; limit?: number; cursor?: string };
+  await getTaskVisibleTo(client, workspaceId, await taskViewerOf(client, workspaceId, ctx), taskId);
+  const page = await listTaskToolCalls(client, workspaceId, taskId, {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
+  });
+  return {
+    result: {
+      taskId,
+      items: page.items.map((row) => ({
+        workerRunId: row.workerRunId,
+        sequence: row.sequence,
+        reportedAt: row.reportedAt.toISOString(),
+        content: row.content,
+      })),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+    },
+    resourceType: 'task',
+    resourceId: taskId,
+  };
+};
+
 /** `list_tasks` (S2.10 addition — see `packages/shared/src/capabilities.ts`'s registry entry and
  *  `application/task/service.ts`'s `listTasksForPrincipal` for why one had to be added and how it
  *  is scoped). Human-channel-only, so `currentPrincipalId` (same RLS-session-variable read every
@@ -3137,6 +3166,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S2.9 (docs/development-tasks.md S2.9) — worker-result-handler.ts.
   ['list_allowed_operations', listAllowedOperationsHandler],
   ['report_task_result', reportTaskResultHandler],
+  // Legacy 155 — worker-tool-calls-handler.ts; the read is getTaskToolCallsHandler above.
+  ['report_tool_calls', reportToolCallsHandler],
+  ['get_task_tool_calls', getTaskToolCallsHandler],
   // S2.13 (docs/development-tasks.md S2.13) — connection-handlers.ts / operation-manifest-
   // handlers.ts's own `publish_manifest`.
   ['request_connection', requestConnectionHandler],

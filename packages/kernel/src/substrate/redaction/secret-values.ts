@@ -1,7 +1,11 @@
 import {
+  MAX_SECRET_LITERALS,
+  MAX_SECRET_LITERAL_CHARS,
+  MIN_SECRET_LITERAL_CHARS,
   SECRET_FIELD_MASK,
   isSecretFieldValue,
   namesASecretField,
+  secretFieldLiterals,
   sliceKeepingPairs,
 } from '@nexttime/shared';
 
@@ -600,52 +604,14 @@ export function redactSecretFieldsInJsonText(
   return { value: parts.join(''), redactedValues };
 }
 
-/** A secret value shorter than this is not hidden as a literal: a 1–3 character value (`0`, `on`)
- *  would hide ordinary text wherever it appears. The value patterns still run. */
-export const MIN_SECRET_LITERAL_CHARS = 4;
-/** At most this many literals are collected, and none longer than `MAX_SECRET_LITERAL_CHARS` —
- *  longer ones (a PEM key) are what the value patterns find on their own. */
-export const MAX_SECRET_LITERALS = 64;
-export const MAX_SECRET_LITERAL_CHARS = 4_096;
-
-/**
- * The secret values `value` holds under a key `isSecretKey` names — every string or number at any
- * depth below one (`isSecretFieldValue`), as text, longest first. These are the values the field
- * rule hides in a structured copy; text that *quotes* them — a gate's error, a URL or command a
- * gate rendered from the params, a tool result that repeats an argument — must hide them too, as
- * literals (`scrubSecretLiterals`): no pattern can tell `mysql -phunter2`'s password from any other
- * word. Walks at most `MAX_WALK_NODES` objects and arrays, with an explicit stack.
- */
-export function secretFieldLiterals(
-  value: unknown,
-  isSecretKey: (key: string) => boolean,
-): string[] {
-  const found = new Set<string>();
-  const stack: { readonly value: unknown; readonly secret: boolean }[] = [{ value, secret: false }];
-  let nodes = MAX_WALK_NODES;
-  while (stack.length > 0 && found.size < MAX_SECRET_LITERALS) {
-    const next = stack.pop() as { readonly value: unknown; readonly secret: boolean };
-    const current = next.value;
-    if (next.secret && isSecretFieldValue(current)) {
-      const text = String(current);
-      if (text.length >= MIN_SECRET_LITERAL_CHARS && text.length <= MAX_SECRET_LITERAL_CHARS) {
-        found.add(text);
-      }
-      continue;
-    }
-    if (current === null || typeof current !== 'object') continue;
-    nodes -= 1;
-    if (nodes < 0) break;
-    if (Array.isArray(current)) {
-      for (const item of current) stack.push({ value: item, secret: next.secret });
-    } else {
-      for (const [key, inner] of Object.entries(current as Record<string, unknown>)) {
-        stack.push({ value: inner, secret: next.secret || isSecretKey(key) });
-      }
-    }
-  }
-  return [...found].sort((a, b) => b.length - a.length);
-}
+// The literals a structured value's secret fields hold, and their bounds, are `@nexttime/shared`'s
+// (secret-field-name.ts) since legacy 155: worker mode collects them too, with the same walk.
+export {
+  MAX_SECRET_LITERALS,
+  MAX_SECRET_LITERAL_CHARS,
+  MIN_SECRET_LITERAL_CHARS,
+  secretFieldLiterals,
+};
 
 /** `text` with every occurrence of each of `literals` (`secretFieldLiterals`, longest first)
  *  replaced by `[redacted]`. One search per literal — at most `MAX_SECRET_LITERALS` of them. */

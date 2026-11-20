@@ -36693,6 +36693,176 @@
   },
   {
     "channel": "human",
+    "group": "task",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_task_tool_calls",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "maximum": 200,
+          "type": "integer"
+        },
+        "taskId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "totalChars": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "totalChars",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "endedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "tool_call",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "outcome": {
+                    "enum": [
+                      "done",
+                      "failed",
+                      "not_finished"
+                    ],
+                    "type": "string"
+                  },
+                  "redactedValues": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "result": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "totalChars": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "totalChars",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "startedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "toolCallId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "toolCallId",
+                  "name",
+                  "outcome",
+                  "redactedValues",
+                  "startedAt",
+                  "endedAt"
+                ],
+                "type": "object"
+              },
+              "reportedAt": {
+                "type": "string"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "workerRunId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "workerRunId",
+              "sequence",
+              "reportedAt",
+              "content"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "observe",
@@ -72662,6 +72832,118 @@
         "factsRejected",
         "proposedOperationsRejected",
         "evidenceDropped"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "handle",
+    "group": "task",
+    "mode": "write",
+    "name": "report_tool_calls",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "args": {},
+              "endedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "outcome": {
+                "enum": [
+                  "done",
+                  "failed",
+                  "not_finished"
+                ],
+                "type": "string"
+              },
+              "result": {},
+              "startedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "toolCallId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "name",
+              "outcome",
+              "startedAt",
+              "endedAt"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "calls"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "alreadyStored": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "overLimit": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stored": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workerRunId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workerRunId",
+        "stored",
+        "alreadyStored",
+        "overLimit"
       ],
       "type": "object"
     },

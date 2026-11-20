@@ -52,11 +52,13 @@ import { QuotaExceededError, TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
  *   - one try: a crashed run is not retried (`lifecycle.ts`: a Task with a purpose never is).
  */
 
-/** A planner Worker's Handle — its own Task, its (empty) tool list, its report. */
+/** A planner Worker's Handle — its own Task, its (empty) tool list, its report, and the tool calls
+ *  of its run (legacy 155: what it read and ran in its own container, nothing outside it). */
 export const PLANNER_HANDLE_CAPABILITIES: readonly string[] = [
   'get_task',
   'list_allowed_operations',
   'report_task_result',
+  'report_tool_calls',
 ];
 
 /** The workspace's goal planner Principal — what proposes and publishes the planner definition and

@@ -207,6 +207,9 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   // latter's handler 403s on any `claims.sid` with no matching WorkerRun row.
   'list_allowed_operations',
   'report_task_result',
+  // Legacy 155: worker mode reports its run's tool calls — the same reason, the same 403 (no
+  // WorkerRun for an entry session's `claims.sid`).
+  'report_tool_calls',
   // The concrete capability behind the `<gate>.<op>` observe placeholder below (S2.12 fix): an
   // entry agent's projected gate tools call it (packages/platform-extension modes/entry.ts). Mode
   // `observe`, so the "no execute-mode capability in the entry ceiling" invariant holds by
@@ -298,6 +301,8 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
   // S2.9 — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's own doc comment below.
   'list_allowed_operations',
   'report_task_result',
+  // Legacy 155 — likewise.
+  'report_tool_calls',
   // Leftover 98: worker mode calls observe-class gate tools through `observe_operation` (as entry
   // and interactive modes do) and only execute-class ones through `request_action`. Mode
   // `observe`, approval-exempt by design (§11 "观察免审"); who may observe is decided per call by
@@ -369,6 +374,11 @@ export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeiling
 export const WORKER_INFRASTRUCTURE_CAPABILITY_NAMES: readonly string[] = Object.freeze([
   'list_allowed_operations',
   'report_task_result',
+  // Legacy 155: worker mode reports the tool calls of its run as they finish. Like
+  // `report_task_result`, authenticated by the Handle's own `claims.sid` (the run is the session's,
+  // never one the body names): a Worker writes only its own run's records, so the name alone
+  // widens nothing.
+  'report_tool_calls',
   // S2.12 host run: worker mode reads its own Task on `context` (platform-extension modes/worker.ts
   // `get_task {taskId}`) before it can do anything — a WorkerDefinition that declares an explicit
   // `capabilities` list without it produced a Worker that 403'd on its very first kernel call and
@@ -518,8 +528,9 @@ export interface EntryScopeOptions {
  *      `record_decision`, goal proposal or report here. AA3b adds `propose_admin_proposal` the same
  *      way, and one write, `agent_withdraw_admin_proposal`: taking back a proposal it made,
  *      recorded `withdrawn_origin = 'agent'`. AA5a-1 adds `request_connection` (a proposal) and
- *      `invoke_worker` (a write), and one write that is there for the Worker it starts, never for
- *      itself: `report_task_result` (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS` — a Worker's Handle
+ *      `invoke_worker` (a write), and writes that are there for the Worker it starts, never for
+ *      itself: `report_task_result`, and `report_tool_calls` since legacy 155
+ *      (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS` — a Worker's Handle
  *      keeps only what its parent's holds, and the handler refuses every session but the
  *      WorkerRun's own).
  *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
@@ -569,6 +580,7 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
   // S11 AA5a-1: for a Worker it starts, never for itself (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS`)
   'report_task_result',
+  'report_tool_calls',
   // the platform, redacted (S11 AA2): only an admin agent's Handle carries these (`adminAgentOnly`)
   'platform_state_gates',
   'platform_state_connectors',
@@ -654,7 +666,11 @@ const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set([
  *  call is refused (403) and nothing is recorded; admin mode registers no tool for it. The entry
  *  ceiling holds it for the same reason (`ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`). A literal list
  *  as the ceiling is; every name must also be Worker infrastructure. */
-const ADMIN_AGENT_CEILING_FOR_ITS_WORKERS: ReadonlySet<string> = new Set(['report_task_result']);
+const ADMIN_AGENT_CEILING_FOR_ITS_WORKERS: ReadonlySet<string> = new Set([
+  'report_task_result',
+  // Legacy 155: the same, for the tool calls its run reports.
+  'report_tool_calls',
+]);
 
 /** The ceiling's observe-class capabilities that declare side effects (`sideEffects: true`): the
  *  observe-class gate calls, which record their observation. The `propose_*` drafts above write

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ToolCallMessageContentSchema } from '../chat-message-content.js';
 import { TaskPurposeSchema, TaskStatusSchema, WorkerRunStatusSchema } from '../enums.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
@@ -235,3 +236,43 @@ export const ReportTaskResultWireSchema = z
     evidenceDropped: z.array(z.number().int().nonnegative()),
   })
   .strict();
+
+/** Legacy 155: `report_tool_calls`'s result — the WorkerRun the calling Handle's session is (the
+ *  records are its), how many of the sent calls were stored now, how many it already held (a
+ *  `toolCallId` already stored is kept as first written), and how many were not stored because the
+ *  run already holds `MAX_WORKER_RUN_TOOL_CALL_RECORDS`. */
+export const ReportToolCallsWireSchema = z
+  .object({
+    workerRunId: z.string(),
+    stored: z.number().int().nonnegative(),
+    alreadyStored: z.number().int().nonnegative(),
+    overLimit: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ReportToolCallsWire = z.infer<typeof ReportToolCallsWireSchema>;
+
+/** Legacy 155: one tool call a Worker reported for one of the Task's WorkerRuns, as stored —
+ *  redacted and cut when the kernel received it (`content`, the shape a chat Turn's tool call is
+ *  kept in). `sequence` is its place among its run's records (1 = first reported); `reportedAt` is
+ *  when the kernel received it. `content.startedAt` / `endedAt` are the Worker's own clock. */
+export const WorkerToolCallWireSchema = z
+  .object({
+    workerRunId: z.string(),
+    sequence: z.number().int().positive(),
+    reportedAt: z.string(),
+    content: ToolCallMessageContentSchema,
+  })
+  .strict();
+export type WorkerToolCallWire = z.infer<typeof WorkerToolCallWireSchema>;
+
+/** Legacy 155: `get_task_tool_calls`'s result — a page of the Task's tool-call records, its runs
+ *  in the order they started and each run's records in the order reported; `nextCursor` when
+ *  there are more. */
+export const TaskToolCallsWireSchema = z
+  .object({
+    taskId: z.string(),
+    items: z.array(WorkerToolCallWireSchema),
+    nextCursor: z.string().optional(),
+  })
+  .strict();
+export type TaskToolCallsWire = z.infer<typeof TaskToolCallsWireSchema>;

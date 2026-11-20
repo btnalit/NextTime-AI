@@ -159,6 +159,8 @@ export { UnstorableTextError } from '@nexttime/shared';
  */
 export const HANDLERS_SETTLING_UNSTORABLE_TEXT: ReadonlySet<string> = new Set([
   'report_task_result',
+  // Legacy 155: a run's tool calls, already made.
+  'report_tool_calls',
   'report_turn',
   'submit_observations',
 ]);

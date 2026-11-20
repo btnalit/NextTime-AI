@@ -278,11 +278,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const name of claims.scope.capabilities) {
         // S11 AA3a: reads, and the five draft proposals; AA3b: an admin proposal, and
         // withdrawing one; AA5a-1: a connection request, and a trial Worker — the two writes —
-        // and that Worker's report, which this Handle's own session is refused.
+        // and that Worker's report (and, legacy 155, its tool calls), which this Handle's own
+        // session is refused.
         expect(
           name === 'agent_withdraw_admin_proposal' ||
             name === 'invoke_worker' ||
-            name === 'report_task_result'
+            name === 'report_task_result' ||
+            name === 'report_tool_calls'
             ? ['write']
             : ['observe', 'propose'],
           name,
