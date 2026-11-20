@@ -4047,6 +4047,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **301 与控制台**：门删光 Operation 时芯片、「你的可达性」、就绪提示都说「门已不再提供」；审批页与对话卡片只在请求按现在发布的版本发起时提供「总是允许」并写明版本（wire `publishedDefinition {version | null, requestIsCurrent}`），没有已发布版本时说明原因；策略表显示「已暂停 · 待确认版本 / 定义已变」并可重新确认，编辑面板读门上当前版本、遇 409 就地重读；门已不再提供的规则按钮为「停用」；隐藏服务端必拒的三类按钮（自批、目录非提议人发布 / 弃用、零 Operation 门启用）。
   - **主机**：`release.md` §3.29（迁移、窗口后旧规则可能「待确认版本」、契约不向后兼容、只读核对、回滚）与 §6 的 0020 一行。脚本 `accept_s2.sh` / `accept_s4.sh` / `drill-add-gatekeeper.sh` / `lib/accept-common.sh` 已带新参数（审查 #488 范围），窗口里跑 S2 / S4 时验证。
   - **遗留**：STATUS 311–318（`enable_gate_instance` 的 `manifestDigest` 可选、无删除策略能力、两条 UX P3、目录 `not_proposer` 按钮、测试意图漂移、e2e 覆盖、向导清单名字转义）。
+  - **遗留 216 内核一半**（#1565，2026-11-20 合入，2bb1d1a；无迁移）：待审批行的 `publishedDefinition` 带 `requestDigest`（请求记下的定义摘要，草稿发起时是草稿的摘要，`none` 或旧行为 `null`）和 `requestVersion`（以这个定义发布过的最新版本，只看 `published` 和 `deprecated`，从不给出草稿；`requestDefinitionVersions` 按门、动作、摘要去重，测试缺口见遗留 914）；两个字段线上可选。控制台审批卡显示未做。
 
 **232 — `request_action` 在边界拒绝未知动作名，回显经转义与限长**（见 `global-roadmap-2026-10-16.md` §4）
 
