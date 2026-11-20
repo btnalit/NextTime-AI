@@ -359,7 +359,7 @@ capabilities:
     console: required
     agents: [entry, admin]
   get_task_tool_calls:
-    console: "none: 遗留 155 的控制台一半接着在任务详情里显示 Worker 的工具调用；在那之前人看任务结果走任务页与审计页"
+    console: required
     agents: []
   get_turn_tool_calls:
     console: required

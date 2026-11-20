@@ -46,7 +46,10 @@ function scriptedHttp(
 ): CapabilityCaller {
   return {
     call: vi.fn(async (name: string, params?: unknown) => {
-      const handler = handlers[name];
+      // Legacy 155: every detail with a run reads its Worker's tool calls — none unless scripted.
+      const handler =
+        handlers[name] ??
+        (name === 'get_task_tool_calls' ? () => ({ taskId: 'task-1', items: [] }) : undefined);
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
@@ -622,5 +625,45 @@ describe('TaskDetail admin agent', () => {
     renderDetail();
     await screen.findByTestId('task-detail');
     expect(screen.queryByTestId('task-admin-agent')).toBeNull();
+  });
+  it('lists the tool calls the Worker reported under its runs (legacy 155), and reads none without a run', async () => {
+    const http = scriptedHttp({
+      list_action_requests: () => ({ items: [] }),
+      get_task_tool_calls: () => ({
+        taskId: 'task-1',
+        items: [
+          {
+            workerRunId: 'run-1',
+            sequence: 1,
+            reportedAt: '2026-09-03T00:00:05.000Z',
+            content: {
+              kind: 'tool_call',
+              text: 'read',
+              toolCallId: 'call-1',
+              name: 'read',
+              outcome: 'done',
+              redactedValues: 0,
+              startedAt: '2026-09-03T00:00:01.000Z',
+              endedAt: '2026-09-03T00:00:02.000Z',
+            },
+          },
+        ],
+      }),
+    });
+    renderDetail({}, http);
+    const section = await screen.findByTestId('task-tool-calls');
+    expect(await within(section).findAllByTestId('tool-call-record')).toHaveLength(1);
+    // The Task is running: its Worker may still report, so 刷新 is there.
+    expect(within(section).getByTestId('task-tool-calls-refresh')).toBeTruthy();
+    cleanup();
+    const noRuns = scriptedHttp({ list_action_requests: () => ({ items: [] }) });
+    renderDetail({ workerRuns: [] }, noRuns);
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-tool-calls')).toBeNull();
+    expect(
+      (noRuns.call as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([name]) => name === 'get_task_tool_calls',
+      ),
+    ).toBe(false);
   });
 });

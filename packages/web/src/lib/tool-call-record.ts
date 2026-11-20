@@ -52,7 +52,12 @@ function nullableString(value: unknown): string | null | undefined {
  *  caller then renders the message as an ordinary row. */
 export function toolCallRecordFromMessage(message: ChatMessage): ToolCallRecord | null {
   if (message.role !== 'tool') return null;
-  const content: unknown = message.content;
+  return toolCallRecordFromContent(message.content);
+}
+
+/** The record a stored tool-call `content` is (a chat message's, or one a Worker reported for its
+ *  run — legacy 155, `get_task_tool_calls`), or `null` when it is not a well-formed one. */
+export function toolCallRecordFromContent(content: unknown): ToolCallRecord | null {
   if (!isRecord(content) || content.kind !== ('tool_call' satisfies ToolCallMessageContent['kind']))
     return null;
   const { toolCallId, name, outcome, redactedValues } = content;
