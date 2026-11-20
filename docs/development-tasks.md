@@ -3877,6 +3877,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
 - e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
 - 遗留 150 的 owner 用户查找（#1556，2026-11-20 合入，e41c462，core 0064，release.md §3.209）：`lookup_users`（members，只给人用，minRole owner）经 security definer 函数 `lookup_users_for_owner` 读 `users`；函数只回答本工作区有效的 owner，其他调用者得到 42501，handler 映射为 403；匹配用 `strpos` 子串、不区分大小写，去掉空白后至少 2 个字符；只列 `add_member` 能加的人（没停用、不是本工作区有效成员、不是验收残留，与 `hideResidual` 同一条件）；只回登录名和显示名，最多 20 条并带 `truncated`，函数自己最多回 21 行；每次调用写一条带查询原文的审计行（已接受风险见遗留 912）。150 其余三项和控制台的搜索选择未做。
+- 遗留 150 控制台部分（#1561，2026-11-20 合入，de711e0）：`AddMemberForm` 的用户字段改用 `members/UserLookup.tsx`（kit `combobox`），按登录名或显示名调 `lookup_users`，方向键加回车选中；「改为手动输入」带上已选登录名，切回时保留所选；`truncated` 时的截断提示放在滚动区外（UX 复验两次）。e2e 旅程 06、08 的所有者改为查找后点选。「曾被移出本工作区」的标记见遗留 915。
 
 **本轮工具调用落库、agent 输出密钥脱敏与 `graph_overview`（#520，2026-10-09 合入；控制台审计 P1 / P2 的内核侧）**
 
