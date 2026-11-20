@@ -245,7 +245,6 @@
     "row.click()": 1
   },
   "packages/web/e2e/journeys/06-add-member.spec.ts": {
-    "addDrawer.locator('#am-login').fill(memberLogin)": 1,
     "page.getByTestId('change-password-submit').click()": 1,
     "page.getByTestId('nav-chats').click()": 1,
     "page.getByTestId('sign-out').click()": 1,
@@ -261,7 +260,6 @@
     "page.getByTestId('provider-create').click()": 1
   },
   "packages/web/e2e/journeys/08-least-privilege.spec.ts": {
-    "addDrawer.locator('#am-login').fill(login)": 1,
     "addDrawer.locator('#am-role').selectOption(role)": 1,
     "connect.click()": 1,
     "page.getByTestId('change-password-submit').click()": 1,
