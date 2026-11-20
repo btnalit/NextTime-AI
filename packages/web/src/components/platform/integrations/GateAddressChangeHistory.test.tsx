@@ -64,7 +64,7 @@ function open(): HTMLElement {
 }
 
 describe('GateAddressChangeHistory (legacy 717)', () => {
-  it('reads nothing until opened, then the ended moves, each with how it ended', async () => {
+  it('reads the first page up front for its header, and lists the ended moves, each with how it ended', async () => {
     const http = scriptedHttp(() => ({
       items: [
         ended(),
@@ -85,19 +85,27 @@ describe('GateAddressChangeHistory (legacy 717)', () => {
       ],
     }));
     render(<GateAddressChangeHistory http={http} revision={0} />);
-    const history = screen.getByTestId('gate-address-change-history');
-    expect(history.textContent).toContain('已结束的换地址申请');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(http.calls).toHaveLength(0);
+    const history = screen.getByTestId('gate-address-change-history') as HTMLDetailsElement;
+    // UX of #1191 (legacy 668): collapsed, the header says how the latest one ended and when.
+    const latest = await screen.findByTestId('gate-address-change-history-latest');
+    expect(history.open).toBe(false);
+    expect(history.querySelector('summary')?.textContent).toMatch(
+      /^已结束的换地址申请（最近一条：Acme · 已换址 · .+）$/,
+    );
+    expect(latest.querySelector('time')?.getAttribute('dateTime')).toBe('2026-11-13T01:00:00.000Z');
+    expect(http.calls).toEqual([{ ended: true, limit: 20 }]);
 
     open();
-    const applied = await screen.findByTestId('gate-address-change-history-row-gac-1');
-    expect(http.calls).toEqual([{ ended: true, limit: 20 }]);
+    const applied = screen.getByTestId('gate-address-change-history-row-gac-1');
+    expect(http.calls).toHaveLength(1);
     expect(applied.textContent).toContain('Acme · https://notes.example.com');
-    expect(applied.textContent).toContain('http://gate-a:8090');
-    expect(applied.textContent).toContain('https://gate-b.example.com');
-    expect(applied.textContent).toContain('Alice');
-    expect(applied.textContent).toContain('root-admin');
+    // Both addresses on one line, who proposed it and how it ended on the next.
+    expect(screen.getByTestId('gate-address-change-history-addresses-gac-1').textContent).toBe(
+      'http://gate-a:8090 → https://gate-b.example.com',
+    );
+    expect(screen.getByTestId('gate-address-change-history-who-gac-1').textContent).toMatch(
+      /^Alice 申请 · .+；root-admin 批准 · .+$/,
+    );
     const outcome = (id: string) =>
       screen.getByTestId(`gate-address-change-history-outcome-${id}`).textContent;
     expect(outcome('gac-1')).toBe('已换址');
@@ -114,7 +122,7 @@ describe('GateAddressChangeHistory (legacy 717)', () => {
     expect(withdrawn).toContain('工作区所有者');
     // An expired one ended at its expiry, not when a later act recorded it.
     const expired = screen.getByTestId('gate-address-change-history-row-gac-5');
-    expect(expired.textContent).toContain('过期于');
+    expect(expired.textContent).toContain('没人审批，过期');
     expect(expired.querySelectorAll('time')[1]?.getAttribute('dateTime')).toBe(
       '2026-11-14T00:00:00.000Z',
     );
@@ -148,23 +156,21 @@ describe('GateAddressChangeHistory (legacy 717)', () => {
     expect(screen.queryByTestId('gate-address-change-history-more')).toBeNull();
   });
 
-  it('reads again when a move above was decided — only once it was opened', async () => {
+  it('reads again when a move above was decided, so it is on top and in the header', async () => {
     let decided = false;
     const http = scriptedHttp(() => ({
       items: decided ? [ended({ id: 'gac-9', status: 'rejected' }), ended()] : [ended()],
     }));
     const { rerender } = render(<GateAddressChangeHistory http={http} revision={0} />);
-    rerender(<GateAddressChangeHistory http={http} revision={1} />);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(http.calls).toHaveLength(0);
-
-    open();
     await screen.findByTestId('gate-address-change-history-row-gac-1');
     expect(http.calls).toHaveLength(1);
     decided = true;
-    rerender(<GateAddressChangeHistory http={http} revision={2} />);
+    rerender(<GateAddressChangeHistory http={http} revision={1} />);
     await screen.findByTestId('gate-address-change-history-row-gac-9');
     expect(http.calls).toHaveLength(2);
+    expect(screen.getByTestId('gate-address-change-history-latest').textContent).toContain(
+      '已驳回',
+    );
   });
 
   it('a failed read says so and can be retried', async () => {

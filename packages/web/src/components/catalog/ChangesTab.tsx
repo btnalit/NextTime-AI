@@ -927,6 +927,58 @@ const BLOCKER_TEXT: Readonly<
   },
 };
 
+/** Legacy 303, UX acceptance of #1141 (legacy 668): a rollback blocked by
+ *  `link_endpoint_undeclared`, said by the ends it names, as the install review says its
+ *  refusal — this item's own ends (the version to return to names a type that is gone) and other
+ *  ontologies' ends (the rollback takes away a type they use), each with its own remedy only.
+ *  Null when the preview names no end: the general sentence then says both. */
+function linkEndpointBlockerText(
+  item: Extract<ChangeRollbackItemWire, { kind: 'ontology_version' }>,
+  t: Translate,
+): string | null {
+  if (item.blocker !== 'link_endpoint_undeclared' || item.linkEnds.length === 0) return null;
+  const ownId = item.target.ontologyId;
+  const own = item.linkEnds.filter((end) => end.ontologyId === ownId);
+  const others = item.linkEnds.filter((end) => end.ontologyId !== ownId);
+  const zh: string[] = [];
+  const en: string[] = [];
+  if (own.length > 0) {
+    zh.push(
+      `要退回的那一版里有关系类型指向工作区里已经没有本体声明的对象类型：${ontologyLinkEndsText(own, t, ownId)}。`,
+    );
+    en.push(
+      `A link type in the version to return to points at an object type no ontology in the workspace declares any more: ${ontologyLinkEndsText(own, t, ownId)}.`,
+    );
+  }
+  if (others.length > 0) {
+    zh.push(`撤销会去掉别的本体的关系类型还在用的对象类型：${ontologyLinkEndsText(others, t)}。`);
+    en.push(
+      `Rolling back would take away an object type another ontology’s link type still uses: ${ontologyLinkEndsText(others, t)}.`,
+    );
+  }
+  zh.push('所以不撤销。');
+  en.push('So it is not rolled back.');
+  if (own.length > 0) {
+    zh.push('要撤销，先让工作区里有本体声明这些类型（例如装上提供它们的能力包）。');
+    en.push(
+      'To roll it back, first have an ontology in the workspace declare those types (for example, install the pack that provides them).',
+    );
+  }
+  if (others.length > 0) {
+    zh.push(
+      own.length > 0
+        ? '还要先改动那个本体，或先撤销装上那个本体的记录。'
+        : '要撤销，先改动那个本体，或先撤销装上那个本体的记录。',
+    );
+    en.push(
+      own.length > 0
+        ? 'Also change that other ontology, or roll back the record that installed it, first.'
+        : 'To roll it back, first change that ontology, or roll back the record that installed it.',
+    );
+  }
+  return t(zh.join(''), en.join(' '));
+}
+
 function workerGatesOf(items: readonly ChangeItemWire[], ordinal: number): WorkerItemGates | null {
   const item = items.find((candidate) => candidate.ordinal === ordinal);
   return item?.kind === 'worker_definition_version' ? item.gates : null;
@@ -1107,21 +1159,14 @@ function RollBackSegment({
                 </span>
                 {item.blocker !== null ? (
                   <Notice tone="warn" testId={`catalog-change-blocker-${item.ordinal}`}>
-                    {t(BLOCKER_TEXT[item.blocker].zh, BLOCKER_TEXT[item.blocker].en)}
+                    {(item.kind === 'ontology_version' ? linkEndpointBlockerText(item, t) : null) ??
+                      t(BLOCKER_TEXT[item.blocker].zh, BLOCKER_TEXT[item.blocker].en)}
                     {item.kind === 'ontology_version' &&
                     item.blocker === 'namespace_conflict' &&
                     item.conflicts.length > 0
                       ? t(
                           `（${item.conflicts.map((c) => `${c.kind === 'object' ? '对象类型' : '动作类型'} ${c.name}`).join('、')}）`,
                           ` (${item.conflicts.map((c) => `${c.kind} type ${c.name}`).join(', ')})`,
-                        )
-                      : null}
-                    {item.kind === 'ontology_version' &&
-                    item.blocker === 'link_endpoint_undeclared' &&
-                    item.linkEnds.length > 0
-                      ? t(
-                          `（${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)}）`,
-                          ` (${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)})`,
                         )
                       : null}
                     {item.blocker === 'replaced' ? (

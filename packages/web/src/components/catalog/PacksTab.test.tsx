@@ -531,8 +531,59 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect(banner.textContent).toContain(
       '装上它会去掉别的本体的关系类型还在用的对象类型：本体 uxlink-services 的关系类型 runs_on 的 domain 是 UxHost。',
     );
-    expect(banner.textContent).toContain('所以现在装不上，什么也没有改');
+    // UX acceptance of #1141 (legacy 668): the cause, then 「所以」, then what to do — both
+    // remedies are needed here, so no 「都」.
+    expect(banner.textContent).toContain(
+      '所以现在装不上，什么也没有改。先装好提供这些类型的能力包，再在「安装历史」里撤销装上那个本体的记录或改动那个本体；做不到时请平台管理员处理。',
+    );
+    expect(banner.textContent).not.toContain('都做不到');
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('legacy 668: one remedy says no 「都」; a choice of two does', async () => {
+    const refuse = (details: Record<string, unknown>) =>
+      scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+        preview_pack_install: () =>
+          Promise.reject(
+            new HttpError(
+              'capability_error',
+              'ontology LinkType ends must name a declared ObjectType or "*"',
+              'ontology_link_endpoint_undeclared',
+              details,
+            ),
+          ),
+      });
+    const undeclared = {
+      ontologyId: 'o-1',
+      family: null,
+      linkType: 'served_by',
+      end: 'range',
+      objectType: 'Gatekeepr',
+    };
+    const orphaned = {
+      ontologyId: 'o-2',
+      family: 'uxlink-services',
+      linkType: 'runs_on',
+      end: 'domain',
+      objectType: 'UxHost',
+    };
+    renderTab(refuse({ undeclared: [undeclared] }), 'ops-assets');
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    let banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toContain(
+      '多半是它依赖的能力包还没装。所以现在装不上，什么也没有改。先装好提供这些类型的能力包；做不到时请平台管理员处理。',
+    );
+    expect(banner.textContent).not.toContain('都做不到');
+    cleanup();
+
+    renderTab(refuse({ orphaned: [orphaned] }), 'ops-assets');
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toContain(
+      '所以现在装不上，什么也没有改。先在「安装历史」里撤销装上那个本体的记录，或改动那个本体；都做不到时请平台管理员处理。',
+    );
   });
 
   it('legacy 705: a link type ending in an ontology the pack does not build on names the end and sends the owner to an administrator', async () => {

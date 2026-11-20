@@ -88,6 +88,14 @@ interface FieldErrors {
   readonly target?: string;
 }
 
+/** Each field's control, in the order the form shows them: the first one in error gets focus. */
+const FIELD_CONTROL_IDS: Readonly<Record<keyof FieldErrors, string>> = {
+  target: 'cc-target',
+  endpoint: 'cc-endpoint',
+  credentials: 'cc-credentials',
+  manifestSource: 'cc-manifest',
+};
+
 /** "Looks like a URL": a scheme followed by `://` — the loose check the manifest-source field
  *  always had. The endpoint no longer uses it (C15 follow-up): a missing scheme there is filled
  *  with `http://` (`https://` for a public address, legacy 152) instead of refused, and what
@@ -371,6 +379,26 @@ export function CompleteConnectionForm({
   /** Bumped to mint another secret in place (`regenerateSecret`). */
   const [mintRound, setMintRound] = useState(0);
   const secretFieldRef = useRef<HTMLDivElement>(null);
+  /** Legacy 668 (P3 846, UX acceptance of #1129): the field a refusal or a check named, to focus
+   *  once it shows its error — `round` so the same field twice in a row is focused again. */
+  const [focusRequest, setFocusRequest] = useState<{
+    readonly field: keyof FieldErrors;
+    readonly round: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (focusRequest === null) return;
+    const control = document.getElementById(FIELD_CONTROL_IDS[focusRequest.field]);
+    if (control === null) return;
+    control.focus({ preventScroll: true });
+    // P3 845: the whole field — its error line and 「技术细节」 under the control — scrolled clear
+    // of the pinned action row (the sheet's scroll padding leaves that row out), not just the box.
+    control.closest('.field')?.scrollIntoView?.({ block: 'nearest' });
+  }, [focusRequest]);
+
+  function focusField(field: keyof FieldErrors): void {
+    setFocusRequest((last) => ({ field, round: (last?.round ?? 0) + 1 }));
+  }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `mintRound` is the re-mint trigger.
   useEffect(() => {
@@ -457,7 +485,13 @@ export function CompleteConnectionForm({
     setServerFieldError(null);
     setExistingGatekeeper(null);
     setSubmitError(null);
-    if (Object.keys(errors).length > 0) return;
+    const first = (Object.keys(FIELD_CONTROL_IDS) as (keyof FieldErrors)[]).find(
+      (field) => errors[field] !== undefined,
+    );
+    if (first !== undefined) {
+      focusField(first);
+      return;
+    }
     if (connectionSecret === null) return;
 
     const params: CreateConnectionParams = {
@@ -522,6 +556,7 @@ export function CompleteConnectionForm({
                 ),
         });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
+        focusField(field);
       } else {
         setSubmitError(err);
       }
