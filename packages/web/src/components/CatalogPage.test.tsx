@@ -1579,6 +1579,195 @@ describe('CatalogPage', () => {
     expect(within(detail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
+  describe('Workers tab: the gates the reader’s entry agent cannot hand a published Worker (legacy 633)', () => {
+    const gate = (gateId: string, name: string, overrides: Record<string, unknown> = {}) => ({
+      gateId,
+      name,
+      granted: true,
+      publishedOperationCount: 1,
+      observeOperationCount: 1,
+      executeOperationCount: 1,
+      disabledOperations: [],
+      definitionMismatch: [],
+      excludedByPolicy: false,
+      excludedByProfile: false,
+      inEntryScope: true,
+      workerDefinitionIds: [],
+      status: 'direct',
+      ...overrides,
+    });
+    const definitions = () => ({
+      items: [
+        {
+          id: 'wd-1',
+          version: 2,
+          kind: 'worker',
+          status: 'published',
+          definition: { name: 'Fixer', gates: ['gk-1', 'gk-2', 'gk-3'] },
+        },
+      ],
+    });
+    const gates = [
+      gate('gk-1', 'prod-docker'),
+      gate('gk-2', 'billing', { granted: false, inEntryScope: false, status: 'unreachable' }),
+      gate('gk-3', 'crm', { excludedByPolicy: true, inEntryScope: false, status: 'unreachable' }),
+    ];
+
+    it('tags each gate it cannot hand on and says why, with the fix, while the Worker can still be delegated', async () => {
+      const http = scriptedHttp({
+        list_worker_definitions: definitions,
+        execution_readiness: () => ({
+          principalId: 'p-1',
+          ready: true,
+          missing: [],
+          gates,
+          workers: [
+            {
+              definitionId: 'wd-1',
+              version: 2,
+              name: 'Fixer',
+              delegable: true,
+              reachableGateCount: 1,
+              blockedBy: [],
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      const notice = await within(detail).findByTestId('worker-detail-gate-gaps');
+      expect(notice.textContent).toContain(
+        '你的入口 agent 能委派这一版，但委派出去的 Worker 用不了下面的门',
+      );
+      const lines = within(notice).getAllByTestId('worker-detail-gate-gap');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]?.textContent).toContain('门「billing」还没有授权给你的');
+      expect(lines[1]?.textContent).toContain(
+        '门「crm」已经授权给你，但工作区策略的门上限没有包含它',
+      );
+      const tags = within(within(detail).getByTestId('worker-detail-gates')).getAllByTestId(
+        'worker-detail-gate-gap-tag',
+      );
+      expect(
+        tags.map((tag) => tag.closest('[data-gate-id]')?.getAttribute('data-gate-id')),
+      ).toEqual(['gk-2', 'gk-3']);
+      expect(tags.map((tag) => tag.textContent)).toEqual(['未授权', '工作区策略未包含']);
+    });
+
+    it('says the reader’s entry agent cannot delegate the version at all when readiness says so', async () => {
+      const http = scriptedHttp({
+        list_worker_definitions: definitions,
+        execution_readiness: () => ({
+          principalId: 'p-1',
+          ready: false,
+          missing: [{ code: 'no_grant', gateId: 'gk-2' }],
+          gates,
+          workers: [
+            {
+              definitionId: 'wd-1',
+              version: 2,
+              name: 'Fixer',
+              delegable: false,
+              reachableGateCount: 0,
+              blockedBy: [
+                { code: 'no_grant', gateId: 'gk-2', workerDefinitionId: 'wd-1' },
+                { code: 'excluded_by_profile', workerDefinitionId: 'wd-1' },
+              ],
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      const notice = await within(detail).findByTestId('worker-detail-gate-gaps');
+      expect(notice.textContent).toContain('你的入口 agent 现在委派不了这一版');
+      // UX acceptance of #1523 P2-1: what stops the delegation comes first, naming this Worker,
+      // then a gate it needs to act on; the gate that only goes missing is listed apart, after.
+      const blocking = within(
+        within(notice).getByTestId('worker-detail-gate-gaps-blocking'),
+      ).getAllByTestId('worker-detail-gate-gap');
+      expect(blocking.map((line) => line.textContent)).toEqual([
+        expect.stringContaining('这个 Worker 在「我的智能体」里被取消了勾选'),
+        expect.stringContaining('它要在门「billing」上执行操作，但这个门还没有授权给你的'),
+      ]);
+      expect(notice.textContent).toContain('另外，委派出去后它也用不了这些门');
+      const unusable = within(
+        within(notice).getByTestId('worker-detail-gate-gaps-unusable'),
+      ).getAllByTestId('worker-detail-gate-gap');
+      expect(unusable).toHaveLength(1);
+      expect(unusable[0]?.textContent).toContain('门「crm」已经授权给你');
+    });
+
+    it('tells a member who to ask once, under the list, when every line is the owner’s to fix', async () => {
+      const http = scriptedHttp({
+        get_workspace: () => ({
+          id: 'ws-1',
+          name: 'Acme',
+          createdAt: '2026-01-01T00:00:00Z',
+          principalCount: 2,
+          gatekeeperCount: 0,
+          caller: { id: 'p-member', role: 'member', displayName: 'member', kind: 'human' },
+        }),
+        list_worker_definitions: definitions,
+        execution_readiness: () => ({
+          principalId: 'p-member',
+          ready: true,
+          missing: [],
+          gates,
+          workers: [
+            {
+              definitionId: 'wd-1',
+              version: 2,
+              name: 'Fixer',
+              delegable: true,
+              reachableGateCount: 1,
+              blockedBy: [],
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      const notice = await within(detail).findByTestId('worker-detail-gate-gaps');
+      const ask = await within(notice).findByTestId('worker-detail-gate-gaps-ask');
+      expect(ask.textContent).toContain('请联系他们');
+      expect(within(notice).queryAllByTestId('execution-readiness-ask')).toHaveLength(0);
+      expect(within(notice).queryAllByTestId('execution-readiness-fix')).toHaveLength(0);
+    });
+
+    it('says nothing when every gate goes through', async () => {
+      const http = scriptedHttp({
+        list_worker_definitions: definitions,
+        execution_readiness: () => ({
+          principalId: 'p-1',
+          ready: true,
+          missing: [],
+          gates: [gate('gk-1', 'prod-docker'), gate('gk-2', 'billing'), gate('gk-3', 'crm')],
+          workers: [
+            {
+              definitionId: 'wd-1',
+              version: 2,
+              name: 'Fixer',
+              delegable: true,
+              reachableGateCount: 3,
+              blockedBy: [],
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      await waitFor(() =>
+        expect(http.calls.filter((c) => c.name === 'execution_readiness').length).toBeGreaterThan(
+          0,
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(within(detail).queryByTestId('worker-detail-gate-gaps')).toBeNull();
+      expect(within(detail).queryAllByTestId('worker-detail-gate-gap-tag')).toHaveLength(0);
+    });
+  });
+
   it('Workers tab: names the gates a Worker acts on, linked to each gate (legacy 441)', async () => {
     const http = scriptedHttp({
       list_worker_definitions: () => ({

@@ -60,7 +60,11 @@ import {
 } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
-import { operationFieldLabel, workerDefinitionKindLabel } from '../lib/labels.js';
+import {
+  executionReadinessMissingCodeLabel,
+  operationFieldLabel,
+  workerDefinitionKindLabel,
+} from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { procedureTemplateProblemText } from '../lib/procedure-template.js';
 import {
@@ -128,6 +132,7 @@ import {
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerDefinitionUsageSection } from './catalog/WorkerDefinitionUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
+import { WorkerGateGapsNotice, useWorkerGateGaps } from './catalog/WorkerGateGaps.js';
 import { forgetEditorDraft, useEditorReopen } from './catalog/useEditorReopen.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
@@ -4058,6 +4063,15 @@ function WorkerDetailView({
   const gates = Array.isArray(row.definition.gates)
     ? row.definition.gates.filter((id): id is string => typeof id === 'string')
     : [];
+  // Legacy 633: on a published Worker, the declared gates the reader's entry agent cannot hand it —
+  // tagged on the chips below, said with their fixes under the details. A Worker with no gate has
+  // none to tag, and is not read for.
+  const gateGaps = useWorkerGateGaps(
+    http,
+    row.kind === 'worker' && row.status === 'published' && gates.length > 0
+      ? { definitionId: row.id, version: row.version, gates }
+      : null,
+  );
   const items: KeyValueItem[] = [];
   // Legacy 597: whose version this is and who wrote it — the platform's own entry or planner
   // template, a person, or an agent drafting for one.
@@ -4105,16 +4119,27 @@ function WorkerDetailView({
           </span>
         ) : (
           <span className="row-wrap" data-testid="worker-detail-gates">
-            {gates.map((id) => (
-              <RefChip
-                key={id}
-                kind="gatekeeper"
-                id={id}
-                name={nameOf(gatekeeperNames, id)}
-                href={hrefs.gatekeeper(id)}
-                size="s"
-              />
-            ))}
+            {gates.map((id) => {
+              const gap = gateGaps?.gates.get(id);
+              return (
+                // UX acceptance of #1523 P2-2: on a narrow panel the tag drops under its chip instead
+                // of squeezing the gate name or running past the panel's edge.
+                <span key={id} className="row-wrap" style={{ maxWidth: '100%' }} data-gate-id={id}>
+                  <RefChip
+                    kind="gatekeeper"
+                    id={id}
+                    name={nameOf(gatekeeperNames, id)}
+                    href={hrefs.gatekeeper(id)}
+                    size="s"
+                  />
+                  {gap !== undefined ? (
+                    <span className="tag text-warn" data-testid="worker-detail-gate-gap-tag">
+                      {executionReadinessMissingCodeLabel(gap, t)}
+                    </span>
+                  ) : null}
+                </span>
+              );
+            })}
           </span>
         ),
     });
@@ -4146,6 +4171,8 @@ function WorkerDetailView({
       {entryNotice}
 
       {items.length > 0 ? <KeyValue items={items} /> : null}
+
+      {gateGaps !== null ? <WorkerGateGapsNotice http={http} gaps={gateGaps} /> : null}
 
       <div className="stack-s">
         <span className="section-title">{t('定义', 'Definition')}</span>
