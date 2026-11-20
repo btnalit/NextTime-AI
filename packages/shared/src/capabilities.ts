@@ -2433,6 +2433,43 @@ const governanceCapabilities = [
       'entry Handle; execution through it is re-checked against that set at call time. The token ' +
       'is returned once and never stored in plaintext.',
   },
+  // Legacy 168: the Handles a person holds, and ending one a client holds. Container-held ones
+  // (entry, WorkerRun, admin agent) are listed so a person can see them, but end with their
+  // conversation or Task, never here.
+  {
+    name: 'list_handles',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ limit: z.number().int().positive().optional(), cursor: z.string().optional() })
+      .strict(),
+    resultSchema: listEnvelope(wire.HandleWireSchema),
+    description:
+      'List the live (unrevoked, unexpired) CapabilityHandles acting for the caller — their entry ' +
+      'agent’s, their Workers’, their admin agent’s and the MCP sessions they issued — and, for a ' +
+      'workspace owner, those of the workspace’s service Principals; never another member’s. Each ' +
+      'says how it is held (container: the platform holds it, it ends with its conversation or ' +
+      'Task; bearer: a client holds it), when it was issued and expires, what it may call and ' +
+      'whether revoke_handle may end it. Never the token. Newest first, keyset-paginated (limit, ' +
+      'cursor → nextCursor).',
+  },
+  {
+    name: 'revoke_handle',
+    group: 'governance',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ jti: z.string().uuid() }).strict(),
+    resultSchema: wire.RevokeHandleResultWireSchema,
+    description:
+      'End a bearer Handle that list_handles shows the caller: its session is revoked, and with ' +
+      'it every Handle issued under it, at once. A member ends their own MCP sessions; only an ' +
+      'owner ends a service Principal’s. A container-held Handle is refused (409 ' +
+      'handle_container_held): it ends with its conversation or Task. A Handle the caller cannot ' +
+      'see, or one already revoked or expired, is 404 handle_not_found.',
+  },
   // -----------------------------------------------------------------------------------------
   // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision):
   // list views over the governance state this group already writes (`grant_capability`/
@@ -6053,6 +6090,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'set_policy',
   'set_quota',
   'issue_handle',
+  // Legacy 168: a person's own Handles, and ending one — never a Handle's.
+  'list_handles',
+  'revoke_handle',
   'publish_worker_definition',
   'deprecate_worker_definition',
   // S11 GO15a: the console's read of one definition version, beside a goal step's WorkerSpec.

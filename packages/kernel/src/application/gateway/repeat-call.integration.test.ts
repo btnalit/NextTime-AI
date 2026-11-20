@@ -1625,6 +1625,25 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  revoke_handle: {
+    // Legacy 168: the first call revoked the Handle's session, so the same call again finds no
+    // live Handle (404 handle_not_found), nothing written.
+    'an MCP session the owner issued': {
+      setUp: async (ctx) => {
+        const issued = await as<{ sessionId: string }>(ctx, 'issue_handle', {
+          sessionKind: 'interactive',
+        });
+        const listed = await as<{ items: { jti: string; sessionId: string }[] }>(
+          ctx,
+          'list_handles',
+          {},
+        );
+        const jti = listed.items.find((item) => item.sessionId === issued.sessionId)?.jti;
+        if (!jti) throw new Error('list_handles did not list the Handle issue_handle just issued');
+        return { jti };
+      },
+    },
+  },
   cancel_connection_request: {
     'a pending request': {
       setUp: async (ctx) => {
@@ -3386,6 +3405,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'test_gate_instance',
   'confirm_gate_manifest',
   'revoke_external_runtime',
+  // Legacy 168: its param is a Handle id only a live Handle gives.
+  'revoke_handle',
   'reject_platform_segment',
   'apply_platform_segment',
   'roll_back_platform_change_segment',

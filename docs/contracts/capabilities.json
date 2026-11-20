@@ -45866,6 +45866,123 @@
   },
   {
     "channel": "human",
+    "group": "governance",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_handles",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "holder": {
+                "enum": [
+                  "container",
+                  "bearer"
+                ],
+                "type": "string"
+              },
+              "issuedAt": {
+                "type": "string"
+              },
+              "jti": {
+                "type": "string"
+              },
+              "onBehalfOf": {
+                "type": "string"
+              },
+              "onBehalfOfKind": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "service"
+                ],
+                "type": "string"
+              },
+              "onBehalfOfName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "revocable": {
+                "type": "boolean"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "sessionKind": {
+                "enum": [
+                  "web",
+                  "entry",
+                  "worker_run",
+                  "mcp_session",
+                  "service",
+                  "admin_agent"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "jti",
+              "sessionId",
+              "sessionKind",
+              "holder",
+              "onBehalfOf",
+              "onBehalfOfKind",
+              "onBehalfOfName",
+              "issuedAt",
+              "expiresAt",
+              "capabilities",
+              "revocable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "members",
     "minRole": "member",
     "mode": "observe",
@@ -76719,6 +76836,62 @@
         "workspaceId",
         "sessionId",
         "revoked"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "governance",
+    "minRole": "member",
+    "mode": "write",
+    "name": "revoke_handle",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "jti": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "jti"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "jti": {
+          "type": "string"
+        },
+        "revokedHandleCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "sessionKind": {
+          "enum": [
+            "web",
+            "entry",
+            "worker_run",
+            "mcp_session",
+            "service",
+            "admin_agent"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "jti",
+        "sessionId",
+        "sessionKind",
+        "revokedHandleCount"
       ],
       "type": "object"
     },

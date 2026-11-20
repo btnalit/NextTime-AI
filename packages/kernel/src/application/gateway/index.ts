@@ -257,6 +257,7 @@ export {
   registerGatekeeperAddressChangedConsumer,
 } from './credential-presence.js';
 export { GateAddressChangeError } from './gate-address-change-handlers.js';
+export { HandleRevokeError } from './handles-handlers.js';
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
 // P0b: the one landing path's own refusals (application/gates/landing.ts) — a second
 // self-connection to an address, or relinking a Gatekeeper whose self connection the platform
