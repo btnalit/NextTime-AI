@@ -3316,6 +3316,7 @@ W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审
 | W1-A12 | #267 | 补齐漏译（审计 S4 后半）：系统接入的"连接请求 / 已注册系统"、我的智能体、平台设置、平台审计、运行状态、模型与供应商等处纯英文与"中文句。English sentence."整句对，约 50 个文件转 `t()`；`i18n-pairs` 守卫新增"≥ 3 词纯英文文案"与"中英整句粘连"两种检测（26 条单测），基线仅 1 条（访问页的 JSON 代码示例） | 3 词以下的英文短标签未全扫；译文未经母语审校 |
 
 - **后续（#614，47f6e27，2026-10-16）**：Tailwind 的 `@source` 从只扫 `components/kit/` 扩到整个 `src/`（不含 `*.test.ts(x)`）：`ActionFailure.tsx` 的 `line-clamp-4` 此前没有生成样式，单测只看 className、jsdom 不算布局所以没拦住（#614 UX MUST-1）。扩范围后真正挂到元素上的新工具类只有 `line-clamp-4`、`wrap-anywhere`、`flex-row`。**规则**：旧样式表在 `@layer legacy`、低于 `utilities`，所以控制台手写的样式类名必须避开 Tailwind 工具类名，否则工具类会盖过手写样式（写在 `styles/tailwind.css` 注释）；布局类的行为改动要有 e2e 断言（例如 `e2e/approval-failure-reason.spec.ts` 在 390 宽度下比较折叠前后高度），不能只靠 className 单测。
+- **后续（#1567，4d0c311，2026-11-20；遗留 245、538 内核部分，无迁移）**：`execution_readiness` 结果带两个字段。`agentsPaused`：实时读封印暂停，不改 `ready`、不加新的 `missing` 代码；只给读自己的人和身为人的所有者，操作员、服务 Principal 读别人的时不给（#501 P2-1）。`owners`：在用的人类所有者及当前名字，成员可读。两个字段线上可选。控制台就绪卡写所有者名字、状态栏 / 总览的暂停提示未做。同 PR 补了 #1565 上 #493 的去重键测试（遗留 914）。
 
 **W1 第二轮批量设计评审**（2026-09-24，87 张截图）：W1 无新引入的倒退；第一轮三处修复保持；S4 的折行根因已消（系统接入标题、成员 / 用户 / 模型表头、对话顶栏在三档宽度均单行）；L2 / L3 / L5 已落地。评审唯一 BLOCK 是 S4 的"补齐漏译"未完成 → W1-A12 修复。W1 至此收口。
 
@@ -3877,6 +3878,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
 - e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
 - 遗留 150 的 owner 用户查找（#1556，2026-11-20 合入，e41c462，core 0064，release.md §3.209）：`lookup_users`（members，只给人用，minRole owner）经 security definer 函数 `lookup_users_for_owner` 读 `users`；函数只回答本工作区有效的 owner，其他调用者得到 42501，handler 映射为 403；匹配用 `strpos` 子串、不区分大小写，去掉空白后至少 2 个字符；只列 `add_member` 能加的人（没停用、不是本工作区有效成员、不是验收残留，与 `hideResidual` 同一条件）；只回登录名和显示名，最多 20 条并带 `truncated`，函数自己最多回 21 行；每次调用写一条带查询原文的审计行（已接受风险见遗留 912）。150 其余三项和控制台的搜索选择未做。
+- 遗留 150 控制台部分（#1561，2026-11-20 合入，de711e0）：`AddMemberForm` 的用户字段改用 `members/UserLookup.tsx`（kit `combobox`），按登录名或显示名调 `lookup_users`，方向键加回车选中；「改为手动输入」带上已选登录名，切回时保留所选；`truncated` 时的截断提示放在滚动区外（UX 复验两次）。e2e 旅程 06、08 的所有者改为查找后点选。「曾被移出本工作区」的标记见遗留 915。
 
 **本轮工具调用落库、agent 输出密钥脱敏与 `graph_overview`（#520，2026-10-09 合入；控制台审计 P1 / P2 的内核侧）**
 

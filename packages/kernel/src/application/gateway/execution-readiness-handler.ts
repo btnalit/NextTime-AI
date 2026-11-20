@@ -1,6 +1,8 @@
 import { roleSatisfiesMinRole } from '../../governance/capability/index.js';
+import { hasActiveSealHold } from '../eval-seal/index.js';
 import type { GateHealth } from '../gates/index.js';
 import { assertPrincipalExists } from './agent-profile-handlers.js';
+import { listActiveHumanOwners } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { computeCapabilityReachability } from './capability-reachability.js';
@@ -59,6 +61,15 @@ import { planGateHealths, probeGateHealths } from './gate-health-probes.js';
  * here with nothing else to say so. Health is reported beside the reachability, never folded into
  * it: `status`, `reason`, `missing` and `ready` say what the agent may reach (the enforcement
  * predicates), and a probe is a moment's answer that enforcement does not consult.
+ *
+ * Legacy 538 / 245: the result also says whether the evaluation seal pauses the agents acting for
+ * the principal now (`agentsPaused`, the same live read `get_goal`'s `requesterAgentsPaused`
+ * makes), and names the workspace's active human owners (`owners`), whom a member asks for what
+ * only an owner does. The pause is told for one's own agents, and to a person who is an owner for
+ * anyone's; an operator or a service account reading another member gets no `agentsPaused` (as
+ * `list_eval_seal_holds` refuses them). The pause is reported beside the reachability as health is: `ready` keeps
+ * describing what the configuration lets the entry agent reach, and the pause refuses every call
+ * of one of its agents on top of it, until the owner releases it.
  */
 
 interface ExecutionReadinessMissing {
@@ -226,6 +237,16 @@ export const executionReadinessHandler: CapabilityHandler = async (
     missing: [...missingByKey.values()],
     gates,
     workers,
+    // Legacy 538: the seal's pause on the agents acting for `target` (application/eval-seal) —
+    // before, its operator learnt of it only from a refusal; the configuration above is unchanged.
+    // Only one's own, or anyone's to a person who is an owner, who places and lifts it (#501 on
+    // #1567): an operator or a service account reading another member is left without it, as
+    // `list_eval_seal_holds` refuses them.
+    ...(target === caller.id || (caller.kind === 'human' && caller.role === 'owner')
+      ? { agentsPaused: await hasActiveSealHold(client, workspaceId, target) }
+      : {}),
+    // Legacy 245: whom a member asks, by name — readable at this capability's member floor.
+    owners: await listActiveHumanOwners(client, workspaceId),
   };
   const done = { resourceType: 'principal', resourceId: target } as const;
   if (includeGateHealth !== true) return { ...done, result };

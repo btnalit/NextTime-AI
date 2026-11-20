@@ -201,6 +201,20 @@ export const ExecutionReadinessWireSchema = z
     missing: z.array(ExecutionReadinessMissingWireSchema),
     gates: z.array(ExecutionReadinessGateWireSchema),
     workers: z.array(ExecutionReadinessWorkerWireSchema),
+    /** Legacy 538: whether the evaluation seal pauses the agents acting for `principalId` now (an
+     *  active pause, S10 E3-2c): every call of one of them is refused (`evaluation_probe_hold`)
+     *  until the workspace owner releases it. Read live. `ready` and `workers[].delegable` still
+     *  say what the configuration lets the entry agent reach; this is the pause on top of it.
+     *  Given for the caller's own `principalId`, and to a person who is an owner for anyone's;
+     *  left out when an operator or a service account reads another member's (#501 on #1567). */
+    agentsPaused: z.boolean().optional(),
+    /** Legacy 245: the workspace's active human owners, the people to ask for what only an owner
+     *  does — each one's Principal id and the name they go by now (`null` when they have none),
+     *  in the order they joined. The name only: never a role, a login or anything `list_principals`
+     *  (operator) gates. */
+    owners: z
+      .array(z.object({ principalId: z.string(), displayName: z.string().nullable() }).strict())
+      .optional(),
   })
   .strict();
 export type ExecutionReadinessWire = z.infer<typeof ExecutionReadinessWireSchema>;
