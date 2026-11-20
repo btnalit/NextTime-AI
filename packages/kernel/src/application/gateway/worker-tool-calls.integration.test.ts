@@ -13,6 +13,7 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { storeWorkerToolCalls } from '../task/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -127,7 +128,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function seedRun(
       taskId: string,
       onBehalfOf: string,
-      options: { readonly status?: string; readonly startedAt?: Date } = {},
+      options: { readonly status?: string; readonly startedAt?: Date; readonly id?: string } = {},
     ): Promise<{ sessionId: string; workerRunId: string }> {
       return admin(async (client) => {
         const session = await client.query<{ id: string }>(
@@ -137,9 +138,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         const sessionId = session.rows[0]?.id as string;
         const run = await client.query<{ id: string }>(
-          `insert into worker_runs (workspace_id, status, task_id, session_id, started_at)
-           values ($1, $2, $3, $4, $5) returning id`,
+          `insert into worker_runs (id, workspace_id, status, task_id, session_id, started_at)
+           values ($1, $2, $3, $4, $5, $6) returning id`,
           [
+            options.id ?? randomUUID(),
             workspaceId,
             options.status ?? 'running',
             taskId,
@@ -154,6 +156,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** A running Task on behalf of `onBehalfOf` with one running WorkerRun. */
     async function seedTask(
       onBehalfOf: string,
+      runId?: string,
     ): Promise<{ taskId: string; sessionId: string; workerRunId: string }> {
       const taskId = await admin(async (client) => {
         const task = await client.query<{ id: string }>(
@@ -164,7 +167,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         return task.rows[0]?.id as string;
       });
-      return { taskId, ...(await seedRun(taskId, onBehalfOf)) };
+      return { taskId, ...(await seedRun(taskId, onBehalfOf, runId ? { id: runId } : {})) };
     }
 
     function report(caller: ResolvedCaller, calls: readonly ReportedToolCall[]): Promise<Counts> {
@@ -420,10 +423,15 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('pages through every run of the Task, the runs in the order they started', async () => {
-      const { taskId, sessionId, workerRunId } = await seedTask(requesterId);
+      // The run started first has the larger id, so only the start times give this order.
+      const { taskId, sessionId, workerRunId } = await seedTask(
+        requesterId,
+        `ffffffff${randomUUID().slice(8)}`,
+      );
       // A retry's run, started after the first.
       const retry = await seedRun(taskId, requesterId, {
         startedAt: new Date(Date.now() + 60_000),
+        id: `00000000${randomUUID().slice(8)}`,
       });
       await report(handleCaller(requesterId, retry.sessionId), [call('r-1'), call('r-2')]);
       await report(handleCaller(requesterId, sessionId), [call('a-1'), call('a-2'), call('a-3')]);
@@ -445,9 +453,78 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(seen).toEqual(['a:1', 'a:2', 'a:3', 'r:1', 'r:2']);
       expect(pages).toBe(3);
 
-      // A cursor the kernel did not make reads from the first record.
-      const fromStart = await read(reader, { taskId, limit: 1, cursor: 'not-a-cursor' });
-      expect(fromStart.items[0]?.content.toolCallId).toBe('a-1');
+      // A cursor the kernel did not make reads from the first record, and so does a well-formed
+      // one whose run is another Task's or no run at all.
+      const elsewhere = await seedTask(requesterId);
+      for (const cursor of [
+        'not-a-cursor',
+        Buffer.from(`${elsewhere.workerRunId}|1`, 'utf8').toString('base64url'),
+        Buffer.from(`${randomUUID()}|1`, 'utf8').toString('base64url'),
+      ]) {
+        const fromStart = await read(reader, { taskId, limit: 1, cursor });
+        expect(fromStart.items[0]?.content.toolCallId).toBe('a-1');
+      }
+    });
+
+    it('numbers overlapping reports of one run one after the other', async () => {
+      const { sessionId, workerRunId } = await seedTask(requesterId);
+      const held = (toolCallId: string) =>
+        ({ kind: 'tool_call', toolCallId, text: toolCallId }) as unknown as ToolCallMessageContent;
+      let stored!: () => void;
+      const firstStored = new Promise<void>((resolve) => {
+        stored = resolve;
+      });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // One report holds its transaction open after storing; a second starts meanwhile.
+      const first = withWorkspace(
+        pool,
+        { workspaceId, principalId: requesterId },
+        async (client) => {
+          const counts = await storeWorkerToolCalls(client, workspaceId, workerRunId, [
+            held('first-1'),
+            held('first-2'),
+          ]);
+          stored();
+          await released;
+          return counts;
+        },
+      );
+      await firstStored;
+      const second = report(handleCaller(requesterId, sessionId), [
+        call('second-1'),
+        call('second-2'),
+      ]);
+      // The second waits on a lock until the first commits.
+      let waiting = false;
+      for (let tries = 0; tries < 100 && !waiting; tries += 1) {
+        const seen = await pool.query<{ count: string }>(
+          `select count(*)::text as count from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'`,
+        );
+        waiting = Number(seen.rows[0]?.count) > 0;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(waiting).toBe(true);
+      release();
+      expect(await first).toEqual({ stored: 2, alreadyStored: 0, overLimit: 0 });
+      expect(await second).toMatchObject({ stored: 2, alreadyStored: 0, overLimit: 0 });
+
+      const rows = await admin((client) =>
+        client.query<{ tool_call_id: string; sequence: number }>(
+          `select tool_call_id, sequence from worker_run_tool_calls
+            where worker_run_id = $1 order by sequence`,
+          [workerRunId],
+        ),
+      );
+      expect(rows.rows.map((row) => `${row.tool_call_id}:${row.sequence}`)).toEqual([
+        'first-1:1',
+        'first-2:2',
+        'second-1:3',
+        'second-2:4',
+      ]);
     });
 
     it('is written once: the application role may not change or remove a record', async () => {

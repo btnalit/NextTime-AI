@@ -97,7 +97,9 @@ function encodeCursor(row: WorkerToolCallRow): string {
 }
 
 /** The record a page starts after, or `null` — for a cursor this module did not make, too, which
- *  reads from the first record (as `list_tasks` treats one). */
+ *  reads from the first record (as `list_tasks` treats one). A well-formed cursor naming a run
+ *  that is not one of the Task's (another Task's, or none) reads from the first record as well
+ *  (`listTaskToolCalls`). */
 function decodeCursor(
   cursor: string | undefined,
 ): { readonly workerRunId: string; readonly sequence: number } | null {
@@ -112,8 +114,10 @@ function decodeCursor(
 
 /**
  * A page of the records of every WorkerRun of `taskId`: the runs in the order they started, each
- * run's records in the order reported. Who may read the Task is the caller's to check first
- * (`getTaskVisibleTo`); this reads under the workspace's row security only.
+ * run's records in the order reported. A cursor whose run is not one of this Task's reads from
+ * the first record, as a cursor this module did not make does. Who may read the Task is the
+ * caller's to check first (`getTaskVisibleTo`); this reads under the workspace's row security
+ * only.
  */
 export async function listTaskToolCalls(
   client: PoolClient,
@@ -132,15 +136,18 @@ export async function listTaskToolCalls(
     reported_at: Date;
     content: ToolCallMessageContent;
   }>(
-    `select c.worker_run_id, c.sequence, c.reported_at, c.content
+    `with anchor as (
+       select a.started_at, a.id from worker_runs a
+        where a.workspace_id = $1 and a.task_id = $2 and a.id = $3::uuid
+     )
+     select c.worker_run_id, c.sequence, c.reported_at, c.content
        from worker_run_tool_calls c
        join worker_runs r on r.workspace_id = c.workspace_id and r.id = c.worker_run_id
       where c.workspace_id = $1 and r.task_id = $2
         and (
-          $3::uuid is null
+          not exists (select 1 from anchor)
           or (r.started_at, r.id, c.sequence) > (
-            select a.started_at, a.id, $4::int from worker_runs a
-             where a.workspace_id = $1 and a.id = $3::uuid
+            select anchor.started_at, anchor.id, $4::int from anchor
           )
         )
       order by r.started_at, r.id, c.sequence
