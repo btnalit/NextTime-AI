@@ -125,6 +125,9 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'list_chat_turns',
   // Legacy 255: a Turn's tool calls, read as `get_chat_history` reads its Chat.
   'get_turn_tool_calls',
+  // Legacy 168: the Handles acting for the auditor itself (its entry agent's) — metadata, never a
+  // token; ending one (`revoke_handle`) is a write it does not get.
+  'list_handles',
 ]);
 
 /** See `AUDITOR_READ_CAPABILITIES`: the writes an auditor's own conversation with its read-only

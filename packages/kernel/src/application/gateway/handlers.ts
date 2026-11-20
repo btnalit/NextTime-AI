@@ -348,6 +348,7 @@ import {
 // S8 W4-A (ui-audit G1, STATUS leftover 70/62) — same one-capability-per-file convention as
 // execution-readiness-handler.ts/resolve-refs-handler.ts just above.
 import { graphFreshnessHandler } from './graph-freshness-handler.js';
+import { listHandlesHandler, revokeHandleHandler } from './handles-handlers.js';
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
 // Legacy 491 — list_draft_rejections, a proposer's own rejected drafts with the reason.
@@ -3122,6 +3123,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['revoke_capability', revokeCapabilityHandler],
   // S3.6 (docs/development-tasks.md W2-B) — issue-handle-handler.ts.
   ['issue_handle', issueHandleHandler],
+  // Legacy 168: a person's own Handles, and ending one a client holds.
+  ['list_handles', listHandlesHandler],
+  ['revoke_handle', revokeHandleHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — governance read-side additions.
   ['list_grants', listGrantsHandler],
   ['list_policies', listPoliciesHandler],

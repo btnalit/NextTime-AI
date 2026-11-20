@@ -83,6 +83,7 @@ import { GateInstanceNotAvailableError } from '../../application/gateway/gate-in
 // interfaces -> application, exactly what .dependency-cruiser.cjs already permits; only the
 // "go through index.ts" naming convention is bypassed, not the six-layer rule itself.
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
+import { HandleRevokeError } from '../../application/gateway/handles-handlers.js';
 import {
   AgentProfileValidationError,
   CapabilityCallRefusedError,
@@ -1078,6 +1079,10 @@ export function mapCapabilityError(err: unknown, capability = 'create_connection
   }
   // Legacy 701 (gate-address-change-handlers.ts): each refusal carries its own status and code.
   if (err instanceof GateAddressChangeError) {
+    return { status: err.status, code: err.code, message: err.message };
+  }
+  // Legacy 168 (handles-handlers.ts): `revoke_handle`'s refusals carry their own status and code.
+  if (err instanceof HandleRevokeError) {
     return { status: err.status, code: err.code, message: err.message };
   }
   if (err instanceof GateConnectionSecretsUnavailableError) {

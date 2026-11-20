@@ -100,6 +100,7 @@ import {
   GateAddressChangeError,
   GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
+  HandleRevokeError,
   InvalidCapabilityParamsError,
   MetaOntologyObjectWriteError,
   ModelsCatalogUnavailableError,
@@ -802,6 +803,13 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
             ? WS_ERROR_CODES.UPSTREAM_ERROR
             : WS_ERROR_CODES.ILLEGAL_TRANSITION;
     return { code, message: err.message };
+  }
+  // Legacy 168 — same additions as capability-route.ts's mapCapabilityError.
+  if (err instanceof HandleRevokeError) {
+    return {
+      code: err.status === 404 ? WS_ERROR_CODES.NOT_FOUND : WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: err.message,
+    };
   }
   if (
     err instanceof ConnectionSecretConflictError ||
