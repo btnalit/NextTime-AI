@@ -1681,10 +1681,58 @@ describe('CatalogPage', () => {
       const detail = await selectRow(await screen.findByTestId('catalog-row'));
       const notice = await within(detail).findByTestId('worker-detail-gate-gaps');
       expect(notice.textContent).toContain('你的入口 agent 现在委派不了这一版');
-      const lines = within(notice).getAllByTestId('worker-detail-gate-gap');
-      // The two gates, then what is tied to no gate: the Worker unticked on My Agent.
-      expect(lines).toHaveLength(3);
-      expect(lines[2]?.textContent).toContain('在「我的智能体」里被取消了勾选');
+      // UX acceptance of #1523 P2-1: what stops the delegation comes first, naming this Worker,
+      // then a gate it needs to act on; the gate that only goes missing is listed apart, after.
+      const blocking = within(
+        within(notice).getByTestId('worker-detail-gate-gaps-blocking'),
+      ).getAllByTestId('worker-detail-gate-gap');
+      expect(blocking.map((line) => line.textContent)).toEqual([
+        expect.stringContaining('这个 Worker 在「我的智能体」里被取消了勾选'),
+        expect.stringContaining('它要在门「billing」上执行操作，但这个门还没有授权给你的'),
+      ]);
+      expect(notice.textContent).toContain('另外，委派出去后它也用不了这些门');
+      const unusable = within(
+        within(notice).getByTestId('worker-detail-gate-gaps-unusable'),
+      ).getAllByTestId('worker-detail-gate-gap');
+      expect(unusable).toHaveLength(1);
+      expect(unusable[0]?.textContent).toContain('门「crm」已经授权给你');
+    });
+
+    it('tells a member who to ask once, under the list, when every line is the owner’s to fix', async () => {
+      const http = scriptedHttp({
+        get_workspace: () => ({
+          id: 'ws-1',
+          name: 'Acme',
+          createdAt: '2026-01-01T00:00:00Z',
+          principalCount: 2,
+          gatekeeperCount: 0,
+          caller: { id: 'p-member', role: 'member', displayName: 'member', kind: 'human' },
+        }),
+        list_worker_definitions: definitions,
+        execution_readiness: () => ({
+          principalId: 'p-member',
+          ready: true,
+          missing: [],
+          gates,
+          workers: [
+            {
+              definitionId: 'wd-1',
+              version: 2,
+              name: 'Fixer',
+              delegable: true,
+              reachableGateCount: 1,
+              blockedBy: [],
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      const notice = await within(detail).findByTestId('worker-detail-gate-gaps');
+      const ask = await within(notice).findByTestId('worker-detail-gate-gaps-ask');
+      expect(ask.textContent).toContain('请联系他们');
+      expect(within(notice).queryAllByTestId('execution-readiness-ask')).toHaveLength(0);
+      expect(within(notice).queryAllByTestId('execution-readiness-fix')).toHaveLength(0);
     });
 
     it('says nothing when every gate goes through', async () => {

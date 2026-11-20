@@ -4122,7 +4122,9 @@ function WorkerDetailView({
             {gates.map((id) => {
               const gap = gateGaps?.gates.get(id);
               return (
-                <span key={id} className="row" data-gate-id={id}>
+                // UX acceptance of #1523 P2-2: on a narrow panel the tag drops under its chip instead
+                // of squeezing the gate name or running past the panel's edge.
+                <span key={id} className="row-wrap" style={{ maxWidth: '100%' }} data-gate-id={id}>
                   <RefChip
                     kind="gatekeeper"
                     id={id}

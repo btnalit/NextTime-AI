@@ -5,7 +5,7 @@ import type {
 } from '@nexttime/shared';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { Notice } from '../kit/notice.js';
 import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
 import {
@@ -28,9 +28,13 @@ export interface WorkerGateGaps {
    *  kernel's `execution_readiness` names (`gateGap`). Such a gate is dropped from the Worker's
    *  Handle when it is delegated, or, for a Worker that needs to act, refuses the delegation. */
   readonly gates: ReadonlyMap<string, GapCode>;
-  /** What to say and link, one line per gap: each gate above, then what `blockedBy` names that is
-   *  tied to no gate (the profile unticks the Worker itself; an act it needs no gate grant allows). */
-  readonly items: readonly ExecutionReadinessMissingWire[];
+  /** What stops the delegation, from `blockedBy` (empty when `delegable`): the Worker itself
+   *  unticked on 我的智能体, a gate it needs to act on, or an act no gate grant allows. UX
+   *  acceptance of #1523 P2-1: listed first, apart from the gates that only go missing. */
+  readonly blocking: readonly ExecutionReadinessMissingWire[];
+  /** The declared gates the delegated Worker would go without, one line each — every gap above
+   *  that is not already in `blocking`. */
+  readonly unusable: readonly ExecutionReadinessMissingWire[];
   readonly gateNames: ReadonlyMap<string, string>;
 }
 
@@ -80,21 +84,68 @@ export function workerGateGaps(
           : 'excluded_by_profile',
     );
   }
-  const items: ExecutionReadinessMissingWire[] = [...gates].map(([gateId, code]) => ({
-    code,
-    gateId,
-  }));
-  if (!entry.delegable) {
-    for (const item of entry.blockedBy) {
-      if (item.gateId === undefined) items.push({ code: item.code });
-    }
-  }
+  const blocking: ExecutionReadinessMissingWire[] = entry.delegable
+    ? []
+    : // The Worker's own lines (unticked; an act no grant allows) first, then the gates.
+      [...entry.blockedBy]
+        .sort((a, b) => Number(a.gateId !== undefined) - Number(b.gateId !== undefined))
+        .map((item) => ({ ...item, workerDefinitionId: worker.definitionId }));
+  const blockingGates = new Set(blocking.flatMap((item) => (item.gateId ? [item.gateId] : [])));
+  const unusable: ExecutionReadinessMissingWire[] = [...gates]
+    .filter(([gateId]) => !blockingGates.has(gateId))
+    .map(([gateId, code]) => ({ code, gateId }));
   return {
     delegable: entry.delegable,
     gates,
-    items,
+    blocking,
+    unusable,
     gateNames: new Map(data.gates.map((gate) => [gate.gateId, gate.name])),
   };
+}
+
+/** What stops the delegation, said of this Worker: the two `blockedBy` entries tied to no gate
+ *  read, in `missingCauseText`, as a workspace-wide gap ("a system or Worker is unticked"); here
+ *  the reader is looking at the Worker in question, so they name it. */
+function blockingText(
+  item: ExecutionReadinessMissingWire,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string {
+  if (item.gateId === undefined && item.code === 'excluded_by_profile') {
+    return t(
+      '这个 Worker 在「我的智能体」里被取消了勾选，入口 agent 不会委派它。',
+      'This Worker is unticked on My Agent, so your entry agent does not delegate to it.',
+    );
+  }
+  if (item.gateId === undefined && item.code === 'no_grant') {
+    return t(
+      '这个 Worker 要执行操作，但你的入口 agent 还没有任何门的写操作授权。',
+      'This Worker needs to act on a system, but your entry agent holds no write grant on any gate.',
+    );
+  }
+  const name = item.gateId !== undefined ? gateNames.get(item.gateId) : undefined;
+  if (name !== undefined) {
+    switch (item.code) {
+      case 'no_grant':
+        return t(
+          `它要在门「${name}」上执行操作，但这个门还没有授权给你的入口 agent。`,
+          `It acts on the “${name}” gate, which your entry agent has not been granted.`,
+        );
+      case 'excluded_by_policy':
+        return t(
+          `它要在门「${name}」上执行操作，但工作区策略的门上限没有包含这个门。`,
+          `It acts on the “${name}” gate, which the workspace policy’s gate limit leaves out.`,
+        );
+      case 'excluded_by_profile':
+        return t(
+          `它要在门「${name}」上执行操作，但这个门在「我的智能体」里被取消了勾选。`,
+          `It acts on the “${name}” gate, which is unticked on My Agent.`,
+        );
+      default:
+        break;
+    }
+  }
+  return missingCauseText(item, gateNames, t);
 }
 
 /** Legacy 633: under a published Worker's 「可作用的门」, why the reader's entry agent cannot hand
@@ -109,32 +160,73 @@ export function WorkerGateGapsNotice({
 }) {
   const t = useT();
   const reader = useReadinessReader(http);
-  if (gaps.delegable && gaps.items.length === 0) return null;
+  const { blocking, unusable } = gaps;
+  if (blocking.length === 0 && unusable.length === 0) return null;
+  const fixOf = (item: ExecutionReadinessMissingWire) => ({
+    href: missingLinkHref(item, reader),
+    label: missingLinkLabel(item, t, reader),
+    ask: missingAsk(item, reader, t),
+  });
+  const all = [...blocking, ...unusable].map(fixOf);
+  // UX acceptance of #1523 P3-1: when the reader can fix none of it and every line would say the
+  // same "ask the owner", say it once under the list instead of on each line.
+  const firstAsk = all[0]?.ask;
+  const sharedAsk =
+    firstAsk !== undefined && all.every((fix) => fix.href === undefined && fix.ask === firstAsk)
+      ? firstAsk
+      : undefined;
+  const line = (item: ExecutionReadinessMissingWire, text: string) => {
+    const fix = fixOf(item);
+    return (
+      <li key={missingKey(item)} className="row-wrap" data-testid="worker-detail-gate-gap">
+        <span>{text}</span>
+        <FixHint
+          href={fix.href}
+          label={fix.label}
+          ask={sharedAsk === undefined ? fix.ask : undefined}
+        />
+      </li>
+    );
+  };
+  const list = { listStyle: 'none', margin: 0, padding: 0 } as const;
   return (
     <Notice tone="warn" testId="worker-detail-gate-gaps">
-      <strong>
-        {gaps.delegable
-          ? t(
-              '你的入口 agent 能委派这一版，但委派出去的 Worker 用不了下面的门：',
-              'Your entry agent can delegate this version, but the delegated Worker cannot use the gates below:',
-            )
-          : t(
+      {!gaps.delegable ? (
+        <>
+          <strong>
+            {t(
               '你的入口 agent 现在委派不了这一版：',
               'Your entry agent cannot delegate this version right now:',
             )}
-      </strong>
-      <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {gaps.items.map((item) => (
-          <li key={missingKey(item)} className="row-wrap" data-testid="worker-detail-gate-gap">
-            <span>{missingCauseText(item, gaps.gateNames, t)}</span>
-            <FixHint
-              href={missingLinkHref(item, reader)}
-              label={missingLinkLabel(item, t, reader)}
-              ask={missingAsk(item, reader, t)}
-            />
-          </li>
-        ))}
-      </ul>
+          </strong>
+          <ul className="stack-s" style={list} data-testid="worker-detail-gate-gaps-blocking">
+            {blocking.map((item) => line(item, blockingText(item, gaps.gateNames, t)))}
+          </ul>
+        </>
+      ) : null}
+      {unusable.length > 0 ? (
+        <>
+          <strong>
+            {gaps.delegable
+              ? t(
+                  '你的入口 agent 能委派这一版，但委派出去的 Worker 用不了下面的门：',
+                  'Your entry agent can delegate this version, but the delegated Worker cannot use the gates below:',
+                )
+              : t(
+                  '另外，委派出去后它也用不了这些门：',
+                  'Besides, once delegated it could not use these gates either:',
+                )}
+          </strong>
+          <ul className="stack-s" style={list} data-testid="worker-detail-gate-gaps-unusable">
+            {unusable.map((item) => line(item, missingCauseText(item, gaps.gateNames, t)))}
+          </ul>
+        </>
+      ) : null}
+      {sharedAsk !== undefined ? (
+        <p className="text-3" data-testid="worker-detail-gate-gaps-ask">
+          {sharedAsk}
+        </p>
+      ) : null}
     </Notice>
   );
 }
