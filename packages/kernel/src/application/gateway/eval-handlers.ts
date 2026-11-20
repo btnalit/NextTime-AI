@@ -4,6 +4,7 @@ import type {
   EvalRunKind,
   EvalSealHoldStatus,
   PublishEvaluationReview,
+  SkillDetailWire,
 } from '@nexttime/shared';
 import {
   type DraftEvaluationActor,
@@ -28,6 +29,7 @@ import {
   listSealHolds,
   readEvalBudget,
   readSkillPublishEvidence,
+  readSkillPublishRecord,
   releaseSealHold,
   removeEvalFixtureGate,
   repinEvalSuite,
@@ -464,5 +466,36 @@ export function withPublishEvidence(publish: CapabilityHandler): CapabilityHandl
       evaluationReview,
     );
     return { ...published, auditPayload: { ...published.auditPayload, ...audit } };
+  };
+}
+
+/**
+ * Legacy 539: `get_skill` with what a published version was published on — the evaluation, the
+ * failures acknowledged and their reasons, read back from that version's own `publish_skill`
+ * audit record (application/eval `readSkillPublishRecord`; null for a draft, and for a version
+ * published before E3-3 or by a path that records no evidence). `getSkill`
+ * (skill-procedure-handlers.ts) reads the version first, under its own visibility rule; the record
+ * is added for a person only — a human Principal on the human channel, as `withPublishEvidence`
+ * and every `actsForPerson` capability judge one (review #501 on #1563: a service Principal's API
+ * key also authenticates on the human channel, and `get_draft_evaluation` refuses it). A Handle's
+ * or a service Principal's result is left as it was, with no `publishEvidence` at all: no one but
+ * a person is told of an evaluation's cases or reasons (§3.3 I-E4, §5.5 封闭), which is also why
+ * this lives here and not beside `getSkill`.
+ */
+export function withSkillPublishRecord(getSkill: CapabilityHandler): CapabilityHandler {
+  return async (client, workspaceId, params, ctx) => {
+    const read = await getSkill(client, workspaceId, params, ctx);
+    const skill = read.result as SkillDetailWire | null;
+    if (ctx?.channel !== 'human' || ctx.principal?.kind !== 'human' || skill === null) return read;
+    return {
+      ...read,
+      result: {
+        ...skill,
+        publishEvidence:
+          skill.status === 'draft'
+            ? null
+            : await readSkillPublishRecord(client, workspaceId, skill.id, skill.version),
+      },
+    };
   };
 }
