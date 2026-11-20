@@ -2,7 +2,7 @@ import type { TurnToolCallsWire } from '@nexttime/shared';
 import { useMemo } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { isForbiddenError } from '../../lib/errors.js';
+import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { type ToolCallRecord, toolCallRecordFromMessage } from '../../lib/tool-call-record.js';
@@ -21,6 +21,9 @@ import { SkeletonRows } from '../kit/skeleton.js';
  * first. A Turn that called no tool says so (an empty list, not an error); more than the kernel
  * lists (100) says only the first are here and links to the Chat, which has them all. Each call's
  * start carries its date unless it is today (UX review on #1517: a Turn read here may be days old).
+ * A call this console cannot read (a kernel newer than it) is not listed but is counted, so a Turn
+ * whose calls were all unreadable never reads as one that called none; `turn_not_found` offers no
+ * retry, the kernel answers it the same way every time (console review on #1517).
  */
 export function TurnToolCalls({
   http,
@@ -44,8 +47,14 @@ export function TurnToolCalls({
             .filter((record): record is ToolCallRecord => record !== null),
     [data],
   );
+  // Calls the kernel listed that the console could not read: left out, said, never "no calls".
+  const unreadable = data === null ? 0 : data.items.length - records.length;
   // A role that may not call it has nothing to show here; `explain` above still stands.
   if (state.status === 'error' && isForbiddenError(state.error)) return null;
+  // The kernel answers a Turn it cannot show (gone, or the reader may not read its chat) with the
+  // same 404 every time: retrying only fails again.
+  const retryable =
+    state.status !== 'error' || describeError(state.error).code !== 'turn_not_found';
 
   return (
     <div className="stack-s" data-testid="explain-turn-tool-calls">
@@ -66,12 +75,17 @@ export function TurnToolCalls({
               'The chat this turn belongs to cannot be read: it may have been deleted, or you may not have access to it.',
             ),
           }}
-          onRetry={() => void calls.reload()}
+          onRetry={retryable ? () => void calls.reload() : undefined}
           testId="explain-turn-tool-calls-error"
         />
       ) : data === null ? null : records.length === 0 ? (
         <p className="text-3" data-testid="explain-turn-tool-calls-empty">
-          {t('这一轮没有调用工具。', 'This turn called no tools.')}{' '}
+          {unreadable === 0
+            ? t('这一轮没有调用工具。', 'This turn called no tools.')
+            : t(
+                `这一轮有 ${unreadable} 个工具调用，这个控制台读不了（平台比控制台新），可以在对话里看。`,
+                `This turn made ${unreadable} tool call(s) this console cannot read (the platform is newer than the console); the chat shows them.`,
+              )}{' '}
           <RouteLink href={hrefs.chat(data.chatId)} testId="explain-turn-tool-calls-chat">
             {t('打开对话', 'Open the chat')}
           </RouteLink>
@@ -93,6 +107,14 @@ export function TurnToolCalls({
               {t('打开对话', 'Open the chat')}
             </RouteLink>
           </span>
+          {unreadable > 0 ? (
+            <span className="text-3 text-small" data-testid="explain-turn-tool-calls-unreadable">
+              {t(
+                `另有 ${unreadable} 个这个控制台读不了（平台比控制台新），可以在对话里看。`,
+                `${unreadable} more this console cannot read (the platform is newer than the console); the chat shows them.`,
+              )}
+            </span>
+          ) : null}
           {data.truncated === true ? (
             <Notice tone="warn" testId="explain-turn-tool-calls-truncated">
               {t(

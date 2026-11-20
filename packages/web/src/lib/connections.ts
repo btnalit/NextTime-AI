@@ -1,4 +1,5 @@
 import type {
+  ConnectionRequestCancelReason,
   ConnectionRequestStatus,
   GateCredentialMode,
   OperationAbsentAnswersWire,
@@ -27,7 +28,13 @@ export interface ConnectionRequestRow {
   readonly id: string;
   readonly status: ConnectionRequestStatus;
   readonly kind: ConnectionKind;
-  readonly target: string;
+  /** The address asked for — absent on a request to enable a platform gate instance
+   *  (`gateInstance`, legacy 254): a request has exactly one of the two. */
+  readonly target?: string;
+  /** Legacy 254: a member asked the owner to enable this platform gate instance here
+   *  (`request_gate_instance_enable`). The owner answers it by enabling the instance, not with
+   *  `create_connection`. `displayName` is `null` once the platform deleted the instance. */
+  readonly gateInstance?: { readonly gateId: string; readonly displayName: string | null };
   readonly requestedBy: string;
   readonly gatekeeperId: string | null;
   readonly completedBy: string | null;
@@ -40,6 +47,11 @@ export interface ConnectionRequestRow {
    *  out of it (user info, query, fragment), which can leave no `[redacted]` behind
    *  (`https://u:p@host/x` reads `https://host/x`). Absent otherwise. */
   readonly targetRedacted?: true;
+  /** Legacy 254 (governance 0047): why a cancelled request ended — its requester withdrew it, the
+   *  owner declined it, or the platform disabled, deleted or un-preset the gate it asked for.
+   *  Absent on requests cancelled before 0047. */
+  readonly cancelReason?: ConnectionRequestCancelReason;
+  readonly cancelledAt?: string;
 }
 
 export interface CreateConnectionParams {
@@ -276,8 +288,8 @@ export function searchItems<T>(result: unknown): readonly T[] {
 // through to `ErrorBanner` with the kernel's own message.
 // -------------------------------------------------------------------------------------------
 
-/** The kernel's answer: the same row with `status: 'cancelled'` (0005 has no `cancelled_at`
- *  column — who / when is on the `connection.request_cancelled` audit row). */
+/** The kernel's answer: the same row with `status: 'cancelled'`, `cancelReason` and
+ *  `cancelledAt` (governance 0047; who is on the `connection.request_cancelled` audit row). */
 export type CancelConnectionRequestResult = ConnectionRequestRow;
 
 const CONNECTION_ERROR_MESSAGES: Readonly<
@@ -408,7 +420,10 @@ export function addressMasked(address: string): boolean {
 export function requestTargetCut(
   request: Pick<ConnectionRequestRow, 'target' | 'targetRedacted'>,
 ): boolean {
-  return request.targetRedacted === true || addressMasked(request.target);
+  return (
+    request.targetRedacted === true ||
+    (request.target !== undefined && addressMasked(request.target))
+  );
 }
 
 /** Legacy 247: what the kernel's `targetRedacted` means, said next to an address that shows no
@@ -419,15 +434,51 @@ export function targetCutNote(t: Translate): string {
 }
 
 /** Legacy 247: a connection request's address as a person reads it — hidden when masked, and
- *  marked when the kernel cut a credential out of it with nothing left to show for it. */
+ *  marked when the kernel cut a credential out of it with nothing left to show for it. Legacy 254:
+ *  a request to enable a platform gate instance has no address and reads as the instance. */
 export function requestTargetText(
-  request: Pick<ConnectionRequestRow, 'target' | 'targetRedacted'>,
+  request: Pick<ConnectionRequestRow, 'target' | 'targetRedacted' | 'gateInstance'>,
   t: Translate,
 ): string {
-  if (addressMasked(request.target)) return addressText(request.target, t);
+  const target = request.target;
+  if (target === undefined) {
+    return request.gateInstance !== undefined ? gateEnableRequestText(request.gateInstance, t) : '';
+  }
+  if (addressMasked(target)) return addressText(target, t);
   return request.targetRedacted === true
-    ? `${request.target}${t('（', ' (')}${targetCutNote(t)}${t('）', ')')}`
-    : request.target;
+    ? `${target}${t('（', ' (')}${targetCutNote(t)}${t('）', ')')}`
+    : target;
+}
+
+/** Legacy 254: a request to enable a platform gate instance, as a person reads it — the instance by
+ *  name, never an empty address; by its id once the platform deleted it (no name left to read). */
+export function gateEnableRequestText(
+  gate: NonNullable<ConnectionRequestRow['gateInstance']>,
+  t: Translate,
+): string {
+  return gate.displayName !== null
+    ? t(`启用平台实例「${gate.displayName}」`, `Enable platform instance “${gate.displayName}”`)
+    : t(
+        `启用平台实例 ${gate.gateId}（平台已删除这个实例）`,
+        `Enable platform instance ${gate.gateId} (deleted by the platform)`,
+      );
+}
+
+/** Legacy 254 (governance 0047): why a cancelled request ended, in a person's words. */
+export function cancelReasonText(reason: ConnectionRequestCancelReason, t: Translate): string {
+  switch (reason) {
+    case 'withdrawn':
+      return t('申请人撤回', 'withdrawn by the requester');
+    case 'declined':
+      return t('所有者拒绝', 'declined by the owner');
+    case 'gate_unavailable':
+      // The request row is where the workspace reads this: a platform transaction writes no
+      // workspace audit row (coordinator, #1521).
+      return t(
+        '平台停用或删除了这个门实例，或不再向工作区开放它，申请已自动取消',
+        'the platform disabled or deleted the instance, or stopped offering it to workspaces; the request was cancelled automatically',
+      );
+  }
 }
 
 export function addressText(address: string, t: Translate): string {

@@ -9,6 +9,8 @@ import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
 import {
   assertConnectionParamsCarryNoCredentials,
+  cancelGateInstanceEnableRequests,
+  cancelledGateInstanceEnableRequestsAuditPayload,
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import { gateAddressOrigin } from '../../governance/gatekeepers/index.js';
@@ -28,6 +30,7 @@ import {
   listGateInstances,
   listSelfConnections,
   loadConnectorPresets,
+  lockGateInstancesAvailabilityExclusive,
   operationsOf,
   readConnectorOccupancy,
   recordGateInstanceCheck,
@@ -59,6 +62,20 @@ import { PlatformAdminError } from './platform-handlers.js';
  * a Principal — `gate-instance-handlers.ts`, owner), tear down workspace links when a connector's
  * mode changes (design §8: mode gates new enables and catalog visibility only), or touch a
  * credential (the platform never holds one).
+ */
+
+/*
+ * Legacy 254 (the coordinator's requirement 3): what the platform does to the open requests that a
+ * workspace owner enable a gate instance once no workspace can enable it — the instance disabled,
+ * deleted, or its connector taken out of platform-preset mode (and a platform change rolled back,
+ * `application/change-plan/platform-segments.ts`). They end `cancelled` / `gate_unavailable` in
+ * this transaction (`cancelGateInstanceEnableRequests`), after the change and under the instances'
+ * availability lock, taken exclusive before anything changed (`application/gates/availability.ts`):
+ * a request in flight either committed first and is cancelled here, or reads the change and is
+ * refused. The call's platform audit row lists them
+ * (`cancelledGateInstanceEnableRequestsAuditPayload`: workspace, request id, gate, requester). A
+ * `lost` instance keeps its requests open: losing contact is not the administrator's decision, and
+ * the gate usually comes back (an enable meanwhile is refused `gate_not_enabled`).
  */
 
 /** The instance as stored — what the handlers below decide on. What they return goes through
@@ -98,11 +115,20 @@ export const setConnectorModeHandler: CapabilityHandler = async (
   const nextDisabledOperations = input.disabledOperations
     ? [...new Set(input.disabledOperations)].sort()
     : undefined;
+  // Legacy 254: leaving platform-preset mode leaves this connector's instances enableable by no
+  // workspace — lock them before the change, end their open enable requests after it.
+  const leavesPreset =
+    before.mode === 'platform_preset' && input.mode !== undefined && input.mode !== before.mode;
+  const presetGateIds = leavesPreset
+    ? (await listGateInstances(client, { connector: input.name })).map((g) => g.gateId)
+    : [];
+  await lockGateInstancesAvailabilityExclusive(client, presetGateIds);
   await updateConnector(client, input.name, {
     mode: input.mode,
     disabledOperations: nextDisabledOperations,
   });
   const after = await getConnector(client, input.name);
+  const cancelledRequests = await cancelGateInstanceEnableRequests(client, presetGateIds);
 
   // P-B1 propagation fix (production incident 2026-09-26): a deny-list or mode edit that actually
   // changes what this connector's already-linked workspaces may call must reach every already-
@@ -142,7 +168,14 @@ export const setConnectorModeHandler: CapabilityHandler = async (
     }
   }
 
-  return { result: after, resourceType: 'connector', resourceId: input.name };
+  return {
+    result: after,
+    resourceType: 'connector',
+    resourceId: input.name,
+    ...(cancelledRequests.length > 0
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
+      : {}),
+  };
 };
 
 export const listGateInstancesHandler: CapabilityHandler = async (client, _workspaceId, params) => {
@@ -182,12 +215,22 @@ export const updateGateInstanceHandler: CapabilityHandler = async (
       'only an MCP gate instance can be marked vetted (design §6.3 MCP 信任分级)',
     );
   }
+  // Legacy 254: a disable leaves the instance enableable by no workspace — locked before the
+  // change, its open enable requests ended after it.
+  const disables = input.status === 'disabled';
+  if (disables) await lockGateInstancesAvailabilityExclusive(client, [input.gateId]);
   await updateGateInstance(client, input.gateId, input);
   const after = await requireGateInstance(client, input.gateId);
+  const cancelledRequests = disables
+    ? await cancelGateInstanceEnableRequests(client, [input.gateId])
+    : [];
   return {
     result: displayedGateInstance(after),
     resourceType: 'gate_instance',
     resourceId: after.gateId,
+    ...(cancelledRequests.length > 0
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
+      : {}),
   };
 };
 
@@ -571,6 +614,8 @@ export const deleteGateInstanceHandler: CapabilityHandler = async (
   params,
 ) => {
   const input = params as { gateId: string };
+  // Legacy 254: locked before the delete; the instance's open enable requests end after it.
+  await lockGateInstancesAvailabilityExclusive(client, [input.gateId]);
   const outcome = await deleteHostedGateInstance(client, input.gateId);
   if (outcome === 'not_found') {
     throw new PlatformAdminError('gate_not_found', 'gate instance not found');
@@ -587,10 +632,14 @@ export const deleteGateInstanceHandler: CapabilityHandler = async (
       'a workspace still has this instance enabled — disable it instead (links are never torn down by the platform)',
     );
   }
+  const cancelledRequests = await cancelGateInstanceEnableRequests(client, [input.gateId]);
   return {
     result: { gateId: input.gateId, deleted: true },
     resourceType: 'gate_instance',
     resourceId: input.gateId,
+    ...(cancelledRequests.length > 0
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
+      : {}),
   };
 };
 

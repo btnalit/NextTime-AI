@@ -2222,3 +2222,188 @@ describe('SystemsPage: S11 AA5b — requests in a trial workspace', () => {
     expect(within(rows[1] as HTMLElement).queryByTestId('request-admin-agent')).toBeNull();
   });
 });
+
+describe('SystemsPage: legacy 254 — a request to enable a platform instance in the owner queue', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '#/');
+  });
+
+  /** A member's request to enable the platform instance `stock`, as the kernel lists it. */
+  function gateRequest(overrides: Record<string, unknown> = {}) {
+    const { target: _target, ...row } = requestRow({ id: 'cr-g' });
+    return { ...row, gateInstance: { gateId: 'stock', displayName: '库存' }, ...overrides };
+  }
+
+  const STOCK_INSTANCE = { ...LINKED_STOCK_INSTANCE, gatekeeperId: null };
+
+  it('names the instance, never an empty address; the owner enables or declines it, and no 完成 is offered', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [gateRequest()] }),
+      list_available_gate_instances: () => ({ items: [STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-gate-instance').textContent).toBe(
+      '启用平台实例「库存」',
+    );
+    expect(row.querySelector('.mono')).toBeNull();
+    expect(within(row).queryByRole('button', { name: '完成' })).toBeNull();
+    expect(within(row).getByTestId('enable-request-cr-g').textContent).toBe('启用');
+    expect(within(row).getByTestId('cancel-request-cr-g').textContent).toBe('拒绝');
+    // It asks for the instance, not a kind of connection: no transport tag.
+    expect(within(row).queryByTestId('request-kind')).toBeNull();
+  });
+
+  it('a request still open on an instance the platform deleted offers only 拒绝', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [gateRequest({ gateInstance: { gateId: 'stock', displayName: null } })],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-gate-instance').textContent).toBe(
+      '启用平台实例 stock（平台已删除这个实例）',
+    );
+    expect(within(row).queryByTestId('enable-request-cr-g')).toBeNull();
+    expect(within(row).getByTestId('cancel-request-cr-g').textContent).toBe('拒绝');
+  });
+
+  it('拒绝 asks first, names the instance, and the row then reads declined by the owner', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [gateRequest()] }),
+      cancel_connection_request: () =>
+        gateRequest({
+          status: 'cancelled',
+          cancelReason: 'declined',
+          cancelledAt: '2026-09-02T00:00:00.000Z',
+        }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    fireEvent.click(within(row).getByTestId('cancel-request-cr-g'));
+    const confirm = await screen.findByTestId('cancel-request-confirm');
+    expect(confirm.textContent).toContain('拒绝启用申请');
+    expect(confirm.textContent).toContain('启用平台实例「库存」');
+    // #1521 UX acceptance: the owner is told the requester will not see it was declined.
+    expect(confirm.textContent).toContain('申请人那里只会重新显示「申请启用」，看不到被拒');
+    expect(confirm.textContent).not.toContain('undefined');
+    expect(confirm.textContent).not.toContain('HTTP');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'cancel_connection_request')).toBe(true),
+    );
+    // Under 全部 the row says why it ended.
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }));
+    expect((await screen.findByTestId('request-cancel-reason')).textContent).toBe('所有者拒绝');
+  });
+
+  it('the owner’s own request reads 撤回', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [gateRequest({ requestedBy: 'p-self' })] }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('cancel-request-cr-g').textContent).toBe('撤回');
+  });
+
+  it('启用 runs the same preview and confirm as the catalog, then reads the queue back', async () => {
+    let listed = 0;
+    const http = scriptedHttp({
+      list_connection_requests: () => {
+        listed += 1;
+        return {
+          items: [
+            listed === 1
+              ? gateRequest()
+              : gateRequest({
+                  status: 'completed',
+                  gatekeeperId: 'gk-9',
+                  completedBy: 'p-self',
+                  completedAt: '2026-09-02T00:00:00.000Z',
+                }),
+          ],
+        };
+      },
+      list_available_gate_instances: () => ({ items: [STOCK_INSTANCE] }),
+      preview_gate_instance_enable: () => ({
+        gateId: 'stock',
+        wouldLink: null,
+        ambiguousCandidates: [],
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+        awaitingPlatformAdoption: null,
+        manifestDigest: 'sha256:previewed',
+      }),
+      enable_gate_instance: () => ({
+        gateId: 'stock',
+        gatekeeperId: 'gk-9',
+        publishedOperationNames: [],
+        skippedOperationNames: [],
+        linkedExisting: false,
+        completedConnectionRequestIds: ['cr-g'],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    fireEvent.click(within(row).getByTestId('enable-request-cr-g'));
+    const confirm = await screen.findByTestId('enable-request-cr-g-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(listed).toBe(2));
+    expect(http.calls.find((call) => call.name === 'enable_gate_instance')?.params).toEqual({
+      gateId: 'stock',
+      manifestDigest: 'sha256:previewed',
+    });
+    // Completed: no longer under 待处理.
+    await waitFor(() => expect(screen.queryByTestId('request-row')).toBeNull());
+  });
+
+  it('a cancelled request says why; one whose instance the platform deleted shows its id', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          gateRequest({
+            status: 'cancelled',
+            cancelReason: 'gate_unavailable',
+            cancelledAt: '2026-09-02T00:00:00.000Z',
+            gateInstance: { gateId: 'stock', displayName: null },
+          }),
+          requestRow({
+            id: 'cr-w',
+            status: 'cancelled',
+            cancelReason: 'withdrawn',
+            cancelledAt: '2026-09-02T00:00:00.000Z',
+          }),
+          // Cancelled before governance 0047: no reason on file, none shown.
+          requestRow({ id: 'cr-old', status: 'cancelled' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    await screen.findByTestId('requests-empty');
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }));
+    const rows = await screen.findAllByTestId('request-row');
+    expect(rows).toHaveLength(3);
+    const [deleted, withdrawn, old] = rows as [HTMLElement, HTMLElement, HTMLElement];
+    expect(within(deleted).getByTestId('request-gate-instance').textContent).toBe(
+      '启用平台实例 stock（平台已删除这个实例）',
+    );
+    expect(within(deleted).getByTestId('request-cancel-reason').textContent).toBe(
+      '平台停用或删除了这个门实例，或不再向工作区开放它，申请已自动取消',
+    );
+    expect(within(withdrawn).getByTestId('request-cancel-reason').textContent).toBe('申请人撤回');
+    expect(within(old).queryByTestId('request-cancel-reason')).toBeNull();
+  });
+
+  it('a link to it from elsewhere opens no 完成连接 drawer', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-g');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [gateRequest()] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('request-row');
+    await waitFor(() => expect(window.location.hash).toBe('#/govern/systems'));
+    expect(screen.queryByTestId('complete-connection-drawer')).toBeNull();
+    expect(screen.queryByTestId('linked-request-note')).toBeNull();
+  });
+});

@@ -18,6 +18,7 @@ import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
 import { CredentialDraftsNotice } from './connect/CredentialDrafts.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 import { HeldDraftsNotice } from './connect/GateOwnedParams.js';
+import { type MyEnableRequest, RequestGateEnable } from './connect/RequestGateEnable.js';
 // Bugfix (PR #324 review): "待启用的平台实例" was still the legacy dashed-border EmptyState —
 // `kit/empty-state` (block variant, no dashed border) instead, matching V9. The rest of this
 // file's `components/ui/*` imports are unchanged (this file stays on
@@ -49,6 +50,9 @@ export interface AvailableGateInstancesSectionProps {
   /** Owner-only: shows the 启用 button. Members still see the list and, on linked rows, the
    *  per-member credential entry (P-B2a). */
   readonly canEnable: boolean;
+  /** Legacy 254: a reader who may not enable asks the owner to (`request_gate_instance_enable`)
+   *  instead of copying a sentence to them — not an auditor. */
+  readonly canRequestEnable?: boolean;
   /** The reader's role may enter its own credential for an enabled instance
    *  (`issue_gate_credential_token`) — not an auditor (#541 acceptance must-fix 2). */
   readonly canEnterCredential?: boolean;
@@ -83,6 +87,7 @@ export function AvailableGateInstancesSection({
   available,
   onEnabled,
   canEnable,
+  canRequestEnable = false,
   canEnterCredential = true,
   platformAdmin = false,
   focusCredentialFor = null,
@@ -156,6 +161,22 @@ export function AvailableGateInstancesSection({
     onEnabled();
   }
 
+  // Legacy 254: the row keeps the reader's request as the control just left it, so a card that
+  // remounts at 768px (legacy 388) shows the same; the next read replaces it with the server's.
+  function handleEnableRequestChange(
+    row: AvailableGateInstanceWire,
+    next: MyEnableRequest | undefined,
+  ): void {
+    available.mutate((data) => ({
+      ...data,
+      items: data.items.map((item) => {
+        if (item.gateId !== row.gateId) return item;
+        const { myEnableRequest: _previous, ...rest } = item;
+        return next === undefined ? rest : { ...rest, myEnableRequest: next };
+      }),
+    }));
+  }
+
   return (
     <div aria-labelledby="available-gates-title">
       <div className="section-header">
@@ -226,11 +247,13 @@ export function AvailableGateInstancesSection({
             {
               http,
               canEnable,
+              canRequestEnable,
               canEnterCredential,
               platformAdmin,
               enabledResults,
               focusCredentialFor,
               onCredentialFocused,
+              onEnableRequestChange: handleEnableRequestChange,
             },
             handleEnabled,
             t,
@@ -296,11 +319,16 @@ function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) 
 interface AvailableGateCellContext {
   readonly http: CapabilityCaller;
   readonly canEnable: boolean;
+  readonly canRequestEnable: boolean;
   readonly canEnterCredential: boolean;
   readonly platformAdmin: boolean;
   readonly enabledResults: ReadonlyMap<string, EnableGateInstanceResultWire>;
   readonly focusCredentialFor: string | null;
   readonly onCredentialFocused: (() => void) | undefined;
+  readonly onEnableRequestChange: (
+    row: AvailableGateInstanceWire,
+    next: MyEnableRequest | undefined,
+  ) => void;
 }
 
 /** The 待启用的平台实例 table's columns (`kit/data-table`): the instance is the card title and what
@@ -380,10 +408,12 @@ function AvailableGateWorkspaceCell({
   enabledResult,
   onEnabled,
   canEnable,
+  canRequestEnable,
   canEnterCredential,
   platformAdmin,
   focusCredentialFor,
   onCredentialFocused,
+  onEnableRequestChange,
 }: Omit<AvailableGateCellContext, 'enabledResults'> & {
   readonly row: AvailableGateInstanceWire;
   readonly enabledResult: EnableGateInstanceResultWire | null;
@@ -441,6 +471,17 @@ function AvailableGateWorkspaceCell({
           onEnabled={onEnabled}
           platformAdmin={platformAdmin}
           testId={`enable-gate-${row.gateId}`}
+        />
+      ) : canRequestEnable ? (
+        // Legacy 254: the request reaches the owner's queue; 「已申请」 reads back from the server.
+        <RequestGateEnable
+          compact
+          http={http}
+          gateId={row.gateId}
+          gateName={row.displayName}
+          myEnableRequest={row.myEnableRequest}
+          onChange={(next) => onEnableRequestChange(row, next)}
+          testId={`available-gate-request-${row.gateId}`}
         />
       ) : (
         // #554 acceptance (242① class): not a bare "owner enables" — the request to send them.

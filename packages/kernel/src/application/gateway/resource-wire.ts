@@ -253,17 +253,35 @@ export function toWireSource(row: SourceRow) {
   };
 }
 
-export function toWireConnectionRequest(row: ConnectionRequestRow) {
+/**
+ * A ConnectionRequest as every read shows it. Legacy 254 (governance 0047): a gate instance enable
+ * request has no `target` and carries `gateInstance` — its gate id and the instance's display name
+ * from `gateDisplayNames` (`readGateInstanceDisplayNames`; `null` once the platform deleted it) —
+ * and a cancelled request says why and when (`cancelReason`, `cancelledAt`) when it was cancelled
+ * after 0047.
+ */
+export function toWireConnectionRequest(
+  row: ConnectionRequestRow,
+  gateDisplayNames: ReadonlyMap<string, string> = new Map(),
+) {
   // Shown as every gate address is (`redactConnectionAddress`): a request from before legacy 186
   // can still carry a credential (`scrub-raw-secrets` counts it, `connectionTargets`).
-  const target = redactConnectionAddress('target', row.target);
+  const target = row.target === null ? null : redactConnectionAddress('target', row.target);
   return {
     id: row.id,
     status: row.status,
     kind: row.kind,
-    target,
+    ...(target !== null ? { target } : {}),
     // Legacy 247: a cut can leave no `[redacted]` in the address, so the reader is told.
-    ...(target !== row.target ? { targetRedacted: true as const } : {}),
+    ...(target !== null && target !== row.target ? { targetRedacted: true as const } : {}),
+    ...(row.gateInstanceId !== null
+      ? {
+          gateInstance: {
+            gateId: row.gateInstanceId,
+            displayName: gateDisplayNames.get(row.gateInstanceId) ?? null,
+          },
+        }
+      : {}),
     requestedBy: row.requestedBy,
     gatekeeperId: row.gatekeeperId,
     completedBy: row.completedBy,
@@ -271,6 +289,8 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     // S11 AA5a-1: only on a request an admin agent made (I-A7).
     ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
+    ...(row.cancelReason !== null ? { cancelReason: row.cancelReason } : {}),
+    ...(row.cancelledAt !== null ? { cancelledAt: row.cancelledAt.toISOString() } : {}),
   };
 }
 

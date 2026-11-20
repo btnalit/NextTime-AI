@@ -55,6 +55,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let workspaceId: string;
     let ownerId: string;
     let otherId: string;
+    let auditorId: string;
 
     function human(principalId: string): ResolvedCaller {
       return {
@@ -63,7 +64,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           id: principalId,
           kind: 'human',
-          role: 'member',
+          role: principalId === auditorId ? 'auditor' : 'member',
           displayName: null,
         },
         session: {
@@ -88,6 +89,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         text: '哪个服务依赖哪个',
       })) as { turnId: string };
       return { chatId: chat.id, turnId };
+    }
+
+    /** A Turn in a new private Chat with `count` stored `search` calls, `t0`, `t1`, … */
+    async function startTurnWithCalls(count: number): Promise<{ chatId: string; turnId: string }> {
+      const started = await startTurn();
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        for (let i = 0; i < count; i++) {
+          await insertToolCallMessage(client, workspaceId, {
+            chatId: started.chatId,
+            turnId: started.turnId,
+            content: {
+              kind: 'tool_call',
+              text: 'search',
+              toolCallId: `t${i}`,
+              name: 'search',
+              outcome: 'done',
+              redactedValues: 0,
+              startedAt: null,
+              endedAt: null,
+            },
+          });
+        }
+      });
+      return started;
     }
 
     async function history(chatId: string, as = ownerId): Promise<ChatMessageWire[]> {
@@ -119,6 +144,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       workspaceId = randomUUID();
       ownerId = randomUUID();
       otherId = randomUUID();
+      auditorId = randomUUID();
       await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
@@ -130,8 +156,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           await client.query(
             `insert into principals (workspace_id, id, kind, role, display_name)
              values ($1, $2, 'human', 'member', 'owner of the chat'),
-                    ($1, $3, 'human', 'member', 'another member')`,
-            [workspaceId, ownerId, otherId],
+                    ($1, $3, 'human', 'member', 'another member'),
+                    ($1, $4, 'human', 'auditor', 'an auditor')`,
+            [workspaceId, ownerId, otherId, auditorId],
           );
         },
         { skipRoleSwitch: true },
@@ -439,6 +466,37 @@ describe.runIf(DATABASE_URL !== undefined)(
         (message) => ToolCallMessageContentSchema.parse(message.content).toolCallId,
       );
       expect(ids).toEqual(Array.from({ length: MAX_TURN_TOOL_CALLS }, (_, i) => `t${i}`));
+    });
+
+    // #493 on #1517 (T5): exactly the limit is all of them — no `truncated`.
+    it(`legacy 255: a Turn with exactly ${MAX_TURN_TOOL_CALLS} tool calls lists them all and does not say there are more`, async () => {
+      const { turnId } = await startTurnWithCalls(MAX_TURN_TOOL_CALLS);
+      const got = await turnToolCalls(turnId);
+      expect(got.items).toHaveLength(MAX_TURN_TOOL_CALLS);
+      expect(got.truncated).toBeUndefined();
+    });
+
+    // #501 on #1517 (O1): an auditor reads a Turn's calls in a Chat the workspace can see, and gets
+    // the same 404 as anyone else for a private one.
+    it('legacy 255: an auditor reads the tool calls of a Turn in a workspace-visible Chat; a private Chat’s Turn is not found', async () => {
+      const shared = await startTurnWithCalls(1);
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query(
+            `update chats set visibility = 'workspace' where workspace_id = $1 and id = $2`,
+            [workspaceId, shared.chatId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      expect((await turnToolCalls(shared.turnId, auditorId)).items.map((m) => m.text)).toEqual([
+        'search',
+      ]);
+      const privateTurn = await startTurnWithCalls(1);
+      await expect(turnToolCalls(privateTurn.turnId, auditorId)).rejects.toBeInstanceOf(
+        TurnNotFoundError,
+      );
     });
   },
 );

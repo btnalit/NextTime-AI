@@ -325,6 +325,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '列出平台预置、本工作区可以启用的门实例。',
     enHint: 'Lists the platform gate instances this workspace can enable.',
   },
+  request_gate_instance_enable: {
+    zh: '申请启用门实例',
+    en: 'Ask to enable gate instance',
+    zhHint: '请工作区所有者在本工作区启用一个平台门实例；同一个门只留一条待处理的申请。',
+    enHint:
+      'Asks the workspace owner to enable a platform gate instance here; one open request per gate.',
+  },
   enable_gate_instance: {
     zh: '启用门实例',
     en: 'Enable gate instance',
@@ -2103,8 +2110,17 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   'connection.request_cancelled': {
     zh: '连接申请已取消',
     en: 'Connection request cancelled',
-    zhHint: '一条待处理的连接申请被取消。',
-    enHint: 'A pending connection request was cancelled.',
+    zhHint: '一条待处理的连接申请被取消：申请人撤回，或所有者拒绝。',
+    enHint:
+      'A pending connection request was cancelled: withdrawn by its requester, or declined by the owner.',
+  },
+  // Legacy 254: the owner enabled the gate instance a member asked for — one row per request.
+  'connection.request_completed': {
+    zh: '启用申请已完成',
+    en: 'Enable request completed',
+    zhHint: '所有者在本工作区启用了这个门实例，申请随之完成；记录谁申请、谁启用。',
+    enHint:
+      'The owner enabled the gate instance here, which completed the request; records who asked and who enabled it.',
   },
   // S11 AA5a-1 (the AA5 plan's F1; `application/admin-agent/trial.ts`).
   'connection.trial_self_connect': {

@@ -19,7 +19,7 @@ import type {
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import type { CapabilityCaller } from './clients.js';
-import { addressText } from './connections.js';
+import { addressText, gateEnableRequestText } from './connections.js';
 import { noVisibleRecentDecisionsText } from './decision-visibility.js';
 import { actionKindLabel, actionKindTagText, formatRelative, shortId } from './format.js';
 import { objectDisplayName } from './graph-view.js';
@@ -454,7 +454,13 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     {},
     (request, t) => ({
       id: request.id,
-      label: addressText(request.target, t),
+      // Legacy 254: a request to enable a platform gate instance has no address.
+      label:
+        request.target !== undefined
+          ? addressText(request.target, t)
+          : request.gateInstance !== undefined
+            ? gateEnableRequestText(request.gateInstance, t)
+            : request.id,
       detail: statusText('connectionRequest', request.status, t),
     }),
   ),

@@ -196,6 +196,7 @@ import {
 } from '../../governance/capability/index.js';
 import {
   ConnectionParamsCarryCredentialsError,
+  ConnectionRequestIsGateEnableError,
   ConnectionRequestNotFoundError,
 } from '../../governance/connections/index.js';
 import {
@@ -781,6 +782,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof ConnectionParamsCarryCredentialsError
   ) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 254 — mirrors HTTP 409 `connection_request_is_gate_enable`.
+  if (err instanceof ConnectionRequestIsGateEnableError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // R-27 / R-01 (D-01) — same additions as capability-route.ts's mapCapabilityError.
   if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {

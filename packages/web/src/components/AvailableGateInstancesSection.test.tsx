@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { AvailableGateInstanceWire } from '@nexttime/shared';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityListResult } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -74,6 +74,64 @@ describe('AvailableGateInstancesSection — a platform instance this workspace h
     expect(ask.textContent).toContain('由工作区所有者启用');
     expect(ask.querySelector('button')).not.toBeNull();
     expect(screen.queryByTestId('enable-gate-ci-fixture-mcp')).toBeNull();
+  });
+
+  it('legacy 254: a member who may ask asks the owner from the row; 「已申请」 reads back from the server row', async () => {
+    const call = vi.fn(async () => ({
+      id: 'cr-9',
+      status: 'requested',
+      kind: 'mcp',
+      gateInstance: { gateId: ROW.gateId, displayName: ROW.displayName },
+      requestedBy: 'p-1',
+      gatekeeperId: null,
+      completedBy: null,
+      requestedAt: '2026-11-19T08:00:00.000Z',
+      completedAt: null,
+    }));
+    const available = ready([ROW]);
+    const view = render(
+      <AvailableGateInstancesSection
+        http={{ call } as unknown as CapabilityCaller}
+        available={available}
+        onEnabled={vi.fn()}
+        canEnable={false}
+        canRequestEnable
+      />,
+    );
+    expect(screen.queryByTestId('available-gate-ask-owner-ci-fixture-mcp')).toBeNull();
+    fireEvent.click(screen.getByTestId('available-gate-request-ci-fixture-mcp-ask'));
+    await waitFor(() =>
+      expect(screen.getByTestId('available-gate-request-ci-fixture-mcp-state').textContent).toBe(
+        '已申请，等所有者启用',
+      ),
+    );
+    expect(call).toHaveBeenCalledWith('request_gate_instance_enable', { gateId: ROW.gateId });
+    // The row is kept in step, so a card that remounts at 768px shows the same.
+    const update = (available.mutate as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as (data: {
+      items: readonly AvailableGateInstanceWire[];
+    }) => { items: readonly AvailableGateInstanceWire[] };
+    expect(update({ items: [ROW] }).items[0]?.myEnableRequest).toEqual({
+      id: 'cr-9',
+      requestedAt: '2026-11-19T08:00:00.000Z',
+    });
+    view.unmount();
+
+    // After a refresh: the server's row carries it.
+    render(
+      <AvailableGateInstancesSection
+        http={{ call: vi.fn() } as unknown as CapabilityCaller}
+        available={ready([
+          { ...ROW, myEnableRequest: { id: 'cr-9', requestedAt: '2026-11-19T08:00:00.000Z' } },
+        ])}
+        onEnabled={vi.fn()}
+        canEnable={false}
+        canRequestEnable
+      />,
+    );
+    expect(screen.getByTestId('available-gate-request-ci-fixture-mcp-state').textContent).toBe(
+      '已申请，等所有者启用',
+    );
+    expect(screen.getByTestId('available-gate-request-ci-fixture-mcp-withdraw')).toBeTruthy();
   });
 
   it('self-service visibility: a platform administrator is told which enabled instances the catalog leaves out — not the ones this workspace already enabled (UX acceptance of #567 P2)', async () => {

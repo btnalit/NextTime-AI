@@ -34,6 +34,7 @@ export {
   insertGateLink,
   listAvailableGateInstances,
   listConnectors,
+  readGateInstanceDisplayNames,
   readConnectorOccupancy,
   listExternalRuntimes,
   listGateInstances,
@@ -173,3 +174,7 @@ export {
   planHostedGateInstance,
   resolveHostedDefinition,
 } from './hosted-plan.js';
+export {
+  lockGateInstanceAvailabilityShared,
+  lockGateInstancesAvailabilityExclusive,
+} from './availability.js';

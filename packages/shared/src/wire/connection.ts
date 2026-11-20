@@ -32,6 +32,34 @@ import {
 
 const ConnectionKindSchema = z.enum(['http', 'mcp', 'cli', 'ssh']);
 
+/** Legacy 254 (governance 0047): why a request ended `cancelled` — its requester withdrew it
+ *  (`withdrawn`), the workspace owner turned down someone else's (`declined`), or the platform
+ *  deleted or disabled the gate instance it asked for, or took that instance's connector out of
+ *  platform-preset mode (`gate_unavailable`). */
+export const ConnectionRequestCancelReasonSchema = z.enum([
+  'withdrawn',
+  'declined',
+  'gate_unavailable',
+]);
+export type ConnectionRequestCancelReason = z.infer<typeof ConnectionRequestCancelReasonSchema>;
+
+/** Legacy 254: the platform gate instance a `request_gate_instance_enable` request asks the owner
+ *  to enable. `displayName` is read when the request is listed — `null` once the platform deleted
+ *  the instance. */
+export const ConnectionRequestGateInstanceWireSchema = z
+  .object({ gateId: z.string(), displayName: z.string().nullable() })
+  .strict();
+export type ConnectionRequestGateInstanceWire = z.infer<
+  typeof ConnectionRequestGateInstanceWireSchema
+>;
+
+/**
+ * A ConnectionRequest: either a self connection (`request_connection`: `target` names the system,
+ * completed by `create_connection`) or — legacy 254 — a gate instance enable
+ * (`request_gate_instance_enable`: `gateInstance` names the platform gate instance, completed by
+ * `enable_gate_instance`). Exactly one of `target` and `gateInstance` is present; `kind` is the
+ * system's transport kind either way.
+ */
 export const ConnectionRequestWireSchema = z
   .object({
     id: z.string(),
@@ -39,8 +67,11 @@ export const ConnectionRequestWireSchema = z
     kind: ConnectionKindSchema,
     /** As every gate address is shown (kernel `redactConnectionAddress`): one that could carry a
      *  credential loses its user info, query and fragment, what still looks like a secret in it
-     *  reads `[redacted]`, and one the rule would still refuse reads `[redacted]` whole. */
-    target: z.string(),
+     *  reads `[redacted]`, and one the rule would still refuse reads `[redacted]` whole. Legacy
+     *  254: absent on a gate instance enable request (it has `gateInstance` instead). */
+    target: z.string().optional(),
+    /** Legacy 254: present on a gate instance enable request only. */
+    gateInstance: ConnectionRequestGateInstanceWireSchema.optional(),
     /** Legacy 247 (review #501 on #661): `true` when `target` is not the address as stored — it
      *  was cut by that rule. A cut can leave no `[redacted]` in it (`https://u:p@host/x` reads
      *  `https://host/x`), so this is how a reader tells a cut address from one asked for as
@@ -57,6 +88,10 @@ export const ConnectionRequestWireSchema = z
      *  Principal, so this is what says the agent asked, not the person. Fixed when the request is
      *  made (governance 0037). Absent for every other request. */
     adminAgentSessionId: z.string().optional(),
+    /** Legacy 254 (governance 0047): why and when a `cancelled` request ended. Absent on every
+     *  other status, and on a request cancelled before the platform recorded why. */
+    cancelReason: ConnectionRequestCancelReasonSchema.optional(),
+    cancelledAt: z.string().optional(),
   })
   .strict();
 export type ConnectionRequestWire = z.infer<typeof ConnectionRequestWireSchema>;
@@ -69,10 +104,13 @@ export const ConnectionRequestCreatedWireSchema = ConnectionRequestWireSchema.pi
   id: true,
   status: true,
   kind: true,
-  target: true,
   requestedBy: true,
   requestedAt: true,
   adminAgentSessionId: true,
+}).extend({
+  // Legacy 254: optional on a listed request (a gate instance enable has none); `request_connection`
+  // always names one, so its result keeps it required — unchanged for its callers (agents too).
+  target: z.string(),
 });
 
 export const GatekeeperSummaryWireSchema = z
