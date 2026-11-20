@@ -154,7 +154,7 @@ function VersionBlock({
         {version.reviewSuggested ? (
           <ReviewSuggestedChip
             reason={t(
-              `某个运行环境或组合下最近 ${reviewStreak} 个结果都未达成，下面已展开是哪一组`,
+              `某个运行环境或组合下最近 ${reviewStreak} 个结果都未达成，下面展开的那一组就是`,
               `The latest ${reviewStreak} outcomes of one run environment or combination were all not achieved; the list below that has it is open`,
             )}
             t={t}

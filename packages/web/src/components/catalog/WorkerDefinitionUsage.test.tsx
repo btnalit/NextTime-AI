@@ -290,7 +290,7 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
       `worker-usage-version-2-combination-${REF_B}`,
     ]);
     expect(screen.getByTestId('worker-usage-version-2-review-reason').textContent).toContain(
-      '下面已展开',
+      '下面展开的那一组就是',
     );
   });
 
