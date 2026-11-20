@@ -47,6 +47,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     const ownerId = randomUUID();
     const ids = {
       turn: randomUUID(),
+      // A Turn whose only key shape is in its `decisions` list.
+      decisionsOnlyTurn: randomUUID(),
       approvalActivity: randomUUID(),
       agentDecision: randomUUID(),
       approvalDecision: randomUUID(),
@@ -88,9 +90,10 @@ describe.runIf(DATABASE_URL !== undefined)(
     };
     const turnMetadata = {
       summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}`,
-      decisions: [`use PGPASSWORD=${FAKE}`, 'keep the plain one'],
+      decisions: [`use PGPASSWORD=${FAKE}`, 'keep the plain one', `pin ${KEY_SHAPE}`],
       model: 'm',
     };
+    const decisionsOnlyMetadata = { decisions: ['keep it', `pin ${KEY_SHAPE}`], model: 'm' };
     const toolContent = {
       kind: 'tool_call',
       text: 'some_tool',
@@ -164,6 +167,12 @@ describe.runIf(DATABASE_URL !== undefined)(
             await one('select metadata from activities where workspace_id = $1 and id = $2', [
               workspaceId,
               ids.turn,
+            ])
+          )?.metadata,
+          decisionsOnlyTurn: (
+            await one('select metadata from activities where workspace_id = $1 and id = $2', [
+              workspaceId,
+              ids.decisionsOnlyTurn,
             ])
           )?.metadata,
           agentDecision: (
@@ -282,6 +291,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           `insert into activities (workspace_id, id, kind, chat_id, sequence, status, metadata, started_by)
            values ($1, $2, 'agent_turn', $3, 1, 'completed', $4::jsonb, $5)`,
           [workspaceId, ids.turn, ids.chat, JSON.stringify(turnMetadata), ownerId],
+        );
+        await client.query(
+          `insert into activities (workspace_id, id, kind, chat_id, sequence, status, metadata, started_by)
+           values ($1, $2, 'agent_turn', $3, 2, 'completed', $4::jsonb, $5)`,
+          [
+            workspaceId,
+            ids.decisionsOnlyTurn,
+            ids.chat,
+            JSON.stringify(decisionsOnlyMetadata),
+            ownerId,
+          ],
         );
         await client.query(
           `insert into activities (workspace_id, id, kind, status, started_by)
@@ -554,6 +574,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['gateCallObservations', ids.gateCallRawCut],
         // Legacy 168 review: a platform API key's shape is counted, never rewritten.
         ['turnReportKeyShapes', ids.turn],
+        ['turnReportKeyShapes', ids.decisionsOnlyTurn],
         ['decisionKeyShapes', ids.agentDecision],
         ['toolCallRecordKeyShapes', ids.toolMessage],
       ] as const) {
@@ -609,7 +630,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(after.turn).toEqual({
         summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}`,
-        decisions: ['use PGPASSWORD=[redacted]', 'keep the plain one'],
+        decisions: ['use PGPASSWORD=[redacted]', 'keep the plain one', `pin ${KEY_SHAPE}`],
         model: 'm',
       });
       expect(after.agentDecision).toBe(
@@ -712,6 +733,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       // a digest, a public key) and lists the row by id instead, for the keys still valid among
       // them to be found and rotated.
       expect(counted).toContainEqual({ category: 'turnReportKeyShapes', id: ids.turn });
+      expect(counted).toContainEqual({
+        category: 'turnReportKeyShapes',
+        id: ids.decisionsOnlyTurn,
+      });
+      expect(after.decisionsOnlyTurn).toEqual(decisionsOnlyMetadata);
       expect(counted).toContainEqual({ category: 'decisionKeyShapes', id: ids.agentDecision });
       expect(counted).toContainEqual({ category: 'toolCallRecordKeyShapes', id: ids.toolMessage });
       expect(counted).not.toContainEqual({

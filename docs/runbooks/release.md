@@ -3618,6 +3618,10 @@ select 'reconcile', count(*) from action_requests r
   - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。审计参数副本会删减的内容（Handle、平台 API key、厂商密钥、`Bearer` 值、`password: …`、URL 里的密码等，`findSuspectedSecrets`）出现在备注里时返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容；所以存下和列出的备注总和审计行一致。
   - 密钥识别多一种形态：单独出现的平台 API key（恰好 43 个 base64url 字符，大小写混合且含数字、`-` 或 `_`，即 `generateApiKey` 生成的格式）。它在所有脱敏处（对话实时流与工具调用记录、落库的回复、能力调用的审计参数副本、Worker 报告等）换成 `[redacted]`。以前这种 key 没有前缀可认，会以原文留下。
     - 只遮不拒：任何 32 字节值的 base64url 编码都是这个形状（base64url 的 SHA-256 摘要、JWK 里 Ed25519 公钥的 `x`、随机 id），所以它不在高置信规则里。观察类调用的参数和管理员提案里出现这种值照常放行，只在审计副本里遮住并计数，不会因此返回 400。签发备注用的是完整规则，贴进 key 仍然拒收。
+    - 门地址例外：门的 `target`、`manifestSource` 按地址规则判断（遗留 186：地址里不能带凭据）。这种形状单独出现在查询串、片段或 `@` 之后等位置时，处理如下；路径段里的不算，因为前面紧挨着 `/`：
+      - **写入**：建连接申请、注册门、建门实例都返回 400 `credentials_in_connection_params`。base64url 的 32 字节摘要和 key 同形，也会被拒。
+      - **升级清洗**：这类地址计入 `connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`，只计数。门实际调用的地址不改。
+      - **展示副本**：4 类（`selfConnectionAddresses`、`gatekeeperNames`、`connectedSystems`、`connectionActivities`）按读侧的显示规则单向剪掉 userinfo、查询串和片段，剩下的形状换成 `[redacted]`。只能从 `BACKUP_NOW` 恢复。
     - 「单独」指前后都不紧接任何一种 base64 的字符：base64url 的字母表、标准 base64 的 `+` 和 `/`，后面也不能是 `=`。所以标准 base64 编码的 32 字节值（WireGuard 公钥、`Digest: SHA-256=…`、S3 校验和，都是 43 个字符加 `=`），以及证书正文、data URI 这类大块 base64 里的任何片段，都不算 key，不会被遮住。
     - 接受的过度脱敏：单独出现、恰好 43 个字符、同时含大写、小写和数字（或 `-`、`_`）的 base64url 串都会被遮住。除了平台 key，主要是 base64url 编码的 32 字节值（SHA-256 摘要、JWK 公钥），偶尔是很长的驼峰标识符。Worker 报告、图谱写入这类存脱敏副本的地方，存下的也是遮住后的值。
     - 接受的漏检只有一种：紧跟在 `/` 或 `+` 后面的 key，比如写进 URL 路径里的。平台 key 只通过 `Authorization: Bearer` 传，不会出现在路径里。
