@@ -15,6 +15,7 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { HANDLE_SIGNING_ALG, HandleRevoked } from '../../governance/capability/index.js';
+import { TextCarriesCredentialsError } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { configureTaskRuntime } from '../task/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -699,7 +700,7 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       }
     });
 
-    it('a note that looks like a credential, or is over 200, is refused (invalid params) before anything is written — the refusal never echoes it', async () => {
+    it('a note that looks like a credential is refused (credentials_in_text), one over 200 (invalid params), before anything is written — the refusal never echoes it', async () => {
       // Pasted into the note, each would be handed to every owner reading the list: a Handle; the
       // platform API key a person or service account signs in with (review #501 on #1549 — no
       // prefix to know it by); and a `password: …` the audit copy of the call would redact.
@@ -716,8 +717,13 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       ] as const) {
         for (const [note, secret] of pasted) {
           const refused = await issue(capability, { ...params, note }).catch((err: unknown) => err);
-          expect(refused).toBeInstanceOf(InvalidCapabilityParamsError);
-          expect((refused as Error).message).toContain('note looks like a credential');
+          // The refusal every free text carrying a credential gets (400 credentials_in_text), so
+          // the console tells it apart from a malformed call (console owner's ask).
+          expect(refused).toBeInstanceOf(TextCarriesCredentialsError);
+          expect(refused).toMatchObject({
+            code: 'credentials_in_text',
+            details: { field: 'note', suspectedSecretValues: 1 },
+          });
           expect((refused as Error).message).not.toContain(secret);
         }
         await expect(issue(capability, { ...params, note: 'x'.repeat(201) })).rejects.toThrow(
@@ -725,6 +731,37 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
         );
       }
       expect(await counts()).toEqual(before);
+    });
+
+    it('a note reads as free text reads (review #501 on #1558): an unseen character as \\u{XXXX}, a credential stored before the check masked; the row kept as written', async () => {
+      // Two notes that look alike on a page, one carrying a zero-width space and a right-to-left
+      // override: issued and listed, each shows what it holds, so the two can be told apart.
+      const tricked = '采集器\u200B A\u202E B';
+      const shown = '采集器\\u{200B} A\\u{202E} B';
+      const own = await issue('issue_handle', { sessionKind: 'interactive', note: tricked });
+      expect(own.sessionNote).toBe(shown);
+      const service = await issue('issue_service_handle', {
+        principalId: serviceId,
+        scope: ['search'],
+        note: tricked,
+      });
+      expect(service.sessionNote).toBe(shown);
+      expect(await storedNote(own.sessionId)).toBe(tricked);
+      expect(await storedNote(service.sessionId)).toBe(tricked);
+
+      // A note kept before the write-time check (#1549) still holding a credential.
+      const secret = 'FAKEabcdefghijklmnopqrstuvwxyz';
+      const stale = `采集器 password: ${secret}`;
+      await asAdmin(workspaceId, (client) =>
+        client.query('update sessions set note = $1 where id = $2', [stale, service.sessionId]),
+      );
+
+      const listed = (await list(ownerId, 'owner', { limit: 500 })).items;
+      expect(listed.find((item) => item.sessionId === own.sessionId)?.sessionNote).toBe(shown);
+      const masked = listed.find((item) => item.sessionId === service.sessionId)?.sessionNote;
+      expect(masked).toContain('[redacted]');
+      expect(masked).not.toContain(secret.slice(0, 12));
+      expect(await storedNote(service.sessionId)).toBe(stale);
     });
   });
 

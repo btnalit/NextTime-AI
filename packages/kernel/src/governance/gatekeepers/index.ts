@@ -55,6 +55,7 @@ export {
   publishOperationRevision,
   lockOperationRevision,
   getOperationVersion,
+  findPublishedOperationVersionByDigest,
   publishManifest,
   publishImportedDrafts,
   deprecateOperation,

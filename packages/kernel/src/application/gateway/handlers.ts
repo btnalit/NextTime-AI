@@ -102,6 +102,7 @@ import {
   ActionRequestNotFoundError,
   type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
+  NO_OPERATION_DEFINITION,
   SelfApprovalNotAllowedError,
   approveActionRequest,
   assertMayApprove,
@@ -123,6 +124,7 @@ import {
 import {
   GatekeeperNotFoundError,
   OperationNotFoundError,
+  findPublishedOperationVersionByDigest,
   getGatekeeper,
   getPublishedOperation,
   isPublishedOperationName,
@@ -290,6 +292,7 @@ import {
   startEvalCaseTrialHandler,
   syncEvalFixtureGateHandler,
   withPublishEvidence,
+  withSkillPublishRecord,
 } from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
 // one-capability(-family)-per-file convention `export-prov-handler.ts`/`operation-manifest-
@@ -1825,10 +1828,12 @@ async function withApprovalDecision(
   const waiting = await readActionRequestWaitingStates(client, workspaceId, rows);
   const failureReasons = await readActionRequestFailureReasons(client, workspaceId, rows);
   const published = await publishedDefinitions(client, workspaceId, rows);
+  const requestVersions = await requestDefinitionVersions(client, workspaceId, rows, published);
   return rows.map((row) => {
     const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
     const waits = waiting.get(row.id);
     const inForce = published.get(definitionKey(row));
+    const requestDigest = requestDigestOf(row);
     return {
       ...toWireActionRequest(row),
       decisionReason: decision?.reason ?? null,
@@ -1846,6 +1851,11 @@ async function withApprovalDecision(
                 inForce !== undefined &&
                 row.operationDigest !== null &&
                 row.operationDigest === inForce.digest,
+              requestDigest,
+              requestVersion:
+                requestDigest === null
+                  ? null
+                  : (requestVersions.get(requestDefinitionKey(row, requestDigest)) ?? null),
             },
           }
         : {}),
@@ -1877,6 +1887,56 @@ async function publishedDefinitions(
     );
     if (record)
       byKey.set(key, { version: record.version, digest: operationRecordDigestOrNull(record) });
+  }
+  return byKey;
+}
+
+/** Legacy 216: the definition digest a request recorded, or `null` when it named none (an
+ *  unpublished Operation with no draft, `NO_OPERATION_DEFINITION`) or predates digests. */
+function requestDigestOf(row: Pick<ActionRequestRow, 'operationDigest'>): string | null {
+  return row.operationDigest === null || row.operationDigest === NO_OPERATION_DEFINITION
+    ? null
+    : row.operationDigest;
+}
+
+function requestDefinitionKey(
+  row: Pick<ActionRequestRow, 'gatekeeperId' | 'actionKind'>,
+  digest: string,
+): string {
+  return `${definitionKey(row)}\u0000${digest}`;
+}
+
+/** Legacy 216: for each pending row's (gate, action kind, recorded digest), the newest version of
+ *  that Operation published with that definition — the version the request was made under. The
+ *  published one when it is that definition (no further read); otherwise the newest published or
+ *  deprecated version with that digest (`findPublishedOperationVersionByDigest`), never a draft. A
+ *  key missing from the map: no published version had that definition. */
+async function requestDefinitionVersions(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly ActionRequestRow[],
+  published: ReadonlyMap<string, { readonly version: number; readonly digest: string | null }>,
+): Promise<ReadonlyMap<string, number>> {
+  const byKey = new Map<string, number>();
+  const read = new Set<string>();
+  for (const row of rows) {
+    const digest = requestDigestOf(row);
+    if (row.status !== 'pending_approval' || digest === null) continue;
+    const key = requestDefinitionKey(row, digest);
+    if (read.has(key)) continue;
+    read.add(key);
+    const inForce = published.get(definitionKey(row));
+    const version =
+      inForce !== undefined && inForce.digest === digest
+        ? inForce.version
+        : await findPublishedOperationVersionByDigest(
+            client,
+            workspaceId,
+            row.gatekeeperId,
+            row.actionKind,
+            digest,
+          );
+    if (version !== null) byKey.set(key, version);
   }
   return byKey;
 }
@@ -3149,7 +3209,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_skill', withPublishEvidence(publishSkillHandler)],
   ['deprecate_skill', deprecateSkillHandler],
   ['list_skills', listSkillsHandler],
-  ['get_skill', getSkillHandler],
+  ['get_skill', withSkillPublishRecord(getSkillHandler)],
   // S11 W1a E2-1 — read-time Skill statistics (application/task/skill-stats.ts).
   ['get_skill_stats', getSkillStatsHandler],
   // S10 E3-3 — the dev verdicts of the caller's own drafts (application/worker/draft-verdicts.ts).

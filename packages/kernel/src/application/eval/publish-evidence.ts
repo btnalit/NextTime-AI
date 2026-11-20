@@ -2,8 +2,10 @@ import {
   type DraftEvaluationArmTallyWire,
   type DraftEvaluationEvidenceWire,
   type DraftEvaluationReason,
+  DraftEvaluationReasonSchema,
   type DraftEvaluationSummaryWire,
   type DraftEvaluationVerdict,
+  DraftEvaluationVerdictSchema,
   type DraftEvaluationWire,
   type DraftOrigin,
   FAMILY_HISTORY_VERDICTS,
@@ -14,10 +16,12 @@ import {
   type SkillPublishCandidateState,
   type SkillPublishEvidenceWire,
   type SkillPublishFamilyEntryWire,
+  type SkillPublishRecordWire,
   publishAcknowledgesVerdict,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { seesEveryDraft } from '../../governance/capability/index.js';
+import { shownFreeText } from '../../governance/redaction/index.js';
 import { skillDraftDigest } from '../worker/index.js';
 import {
   DRAFT_EVALUATION_VISIBLE_TO,
@@ -373,5 +377,72 @@ export async function checkPublishEvidence(
         }
       : null,
     acknowledgedFailures: given.size,
+  };
+}
+
+/** The audit action `checkPublishEvidence`'s record is written under (dispatch.ts: a capability's
+ *  own name). */
+const PUBLISH_SKILL_AUDIT_ACTION = 'publish_skill';
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Legacy 539: what version `version` of Skill `skillId` was published on, read back from its
+ * `publish_skill` audit record — the evidence `checkPublishEvidence` added to it, and the
+ * acknowledgements of the call's params copy (`SkillPublishRecordWire`). `null` when there is no
+ * such record, or it holds no evidence: a version published before S10 E3-3 kept it, or not
+ * through `publish_skill`. A version is published once, so one record answers; the newest is read
+ * should there be more. The acknowledgement reasons are a person's words, shown as `shownFreeText`
+ * shows them; a verdict or reason the vocabulary no longer has reads as `null`.
+ */
+export async function readSkillPublishRecord(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+  version: number,
+): Promise<SkillPublishRecordWire | null> {
+  const result = await client.query<{ payload: unknown }>(
+    `select payload from audit_records
+     where workspace_id = $1 and resource_id = $2::uuid and resource_type = 'skill'
+       and action = $3 and payload -> 'params' -> 'version' = to_jsonb($4::int)
+     order by created_at desc, id desc
+     limit 1`,
+    [workspaceId, skillId, PUBLISH_SKILL_AUDIT_ACTION, version],
+  );
+  const payload = record(result.rows[0]?.payload);
+  const acknowledgedFailures = payload?.acknowledgedFailures;
+  if (!payload || typeof acknowledgedFailures !== 'number') return null;
+  const evaluation = record(payload.evaluation);
+  const evaluationId = text(evaluation?.id);
+  const review = record(record(payload.params)?.evaluationReview);
+  const given = Array.isArray(review?.acknowledgements) ? review.acknowledgements : [];
+  return {
+    evaluation:
+      evaluation && evaluationId !== null
+        ? {
+            id: evaluationId,
+            verdict: DraftEvaluationVerdictSchema.safeParse(evaluation.verdict).data ?? null,
+            reason: DraftEvaluationReasonSchema.safeParse(evaluation.reason).data ?? null,
+            observationId: text(evaluation.observationId),
+          }
+        : null,
+    acknowledgedFailures,
+    acknowledgements: given.flatMap((item: unknown) => {
+      const entry = record(item);
+      const evaluationOf = text(entry?.evaluationId);
+      const caseId = text(entry?.caseId);
+      const reason = text(entry?.reason);
+      return evaluationOf !== null && caseId !== null && reason !== null
+        ? [{ evaluationId: evaluationOf, caseId, reason: shownFreeText(reason) }]
+        : [];
+    }),
   };
 }

@@ -152,8 +152,21 @@ export const ActionRequestWireSchema = z
     // gate no longer publishes it), and whether this request was made against that definition.
     // "Always allow" from a request is accepted only when it was (409 `version_changed`, or 404
     // when nothing is published), and covers that version only. Absent on other rows.
+    // Legacy 216: and which definition the request itself was made under — `requestDigest`, the
+    // definition digest the request recorded and the executor tells the gate was approved (of the
+    // version then published, or of the draft it was made against when none was; `null` when it
+    // named no definition at all, and on a row from before digests were recorded), and
+    // `requestVersion`, the newest version of this Operation on the gate published with that
+    // definition (the published one when `requestIsCurrent`; `null` when none was — a draft not
+    // yet published — or `requestDigest` is `null`). Optional only for readers built before them;
+    // the kernel sets both wherever it sets `publishedDefinition`.
     publishedDefinition: z
-      .object({ version: z.number().int().positive().nullable(), requestIsCurrent: z.boolean() })
+      .object({
+        version: z.number().int().positive().nullable(),
+        requestIsCurrent: z.boolean(),
+        requestDigest: z.string().nullable().optional(),
+        requestVersion: z.number().int().positive().nullable().optional(),
+      })
       .strict()
       .optional(),
     // Legacy 513: on a `pending_approval` row read by a person (`get_action`, `list_pending`),
@@ -261,7 +274,9 @@ export type QuotaListEntryWire = z.infer<typeof QuotaListEntryWireSchema>;
  * `revoke_handle` ends — so two rows of one session (a Handle and its attenuated children) carry
  * the same ones: the short id ({@link sessionShortId}), and the note the person gave when issuing
  * it (`issue_handle` / `issue_service_handle` `note`; null without one, and always for a
- * container-held session, which no person issues).
+ * container-held session, which no person issues), shown as the kernel shows free text it keeps
+ * as written (legacy 420): a character a reader cannot see as `\u{XXXX}`, a credential as
+ * `[redacted]`.
  */
 export const HandleWireSchema = z
   .object({

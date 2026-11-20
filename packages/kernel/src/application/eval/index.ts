@@ -68,7 +68,11 @@ export {
   PublishAcknowledgementInputError,
 } from './errors.js';
 export type { PublishEvidenceAudit, PublishEvidenceTarget } from './publish-evidence.js';
-export { checkPublishEvidence, readSkillPublishEvidence } from './publish-evidence.js';
+export {
+  checkPublishEvidence,
+  readSkillPublishEvidence,
+  readSkillPublishRecord,
+} from './publish-evidence.js';
 export { EVALUATION_PRINCIPAL_DISPLAY_NAME } from './principal.js';
 export type { EvalTrialTickOptions } from './runner.js';
 export { EVALUATION_TRIAL_END_ACTION, runEvalTrialTick } from './runner.js';
