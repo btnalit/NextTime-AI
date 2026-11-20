@@ -31,6 +31,7 @@ import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { Tabs } from '../ui/Tabs.js';
+import { awaitingWorkspaceCount, awaitingWorkspacesBadge } from './AwaitingWorkspaces.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
@@ -837,6 +838,16 @@ function GateInstancesTab({
                                   'New manifest to adopt · calls refused',
                                 )
                               : t('新清单待采用', 'New manifest to adopt')}
+                          </span>
+                        ) : null}
+                        {/* Legacy 223: adopted, but some workspaces still publish the old
+                         *  definitions — the gate refuses those calls until they align. */}
+                        {awaitingWorkspaceCount(row) > 0 ? (
+                          <span
+                            className="chip chip-s chip-warn"
+                            data-testid="gate-awaiting-workspaces-badge"
+                          >
+                            {awaitingWorkspacesBadge(awaitingWorkspaceCount(row), t)}
                           </span>
                         ) : null}
                         {hiddenFromWorkspaces(row, connectors) !== null ? (

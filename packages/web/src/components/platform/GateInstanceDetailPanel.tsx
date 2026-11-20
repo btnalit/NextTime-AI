@@ -24,6 +24,7 @@ import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { RefChip } from '../ui/RefChip.js';
 import { StatusChip } from '../ui/StatusChip.js';
+import { AwaitingWorkspaces } from './AwaitingWorkspaces.js';
 import { GateCredentialEntry } from './GateCredentialEntry.js';
 import { PendingManifestReview } from './PendingManifestReview.js';
 import { PlatformError } from './PlatformError.js';
@@ -331,6 +332,7 @@ export function GateInstanceDetailPanel({
               onConfirmed={onChanged}
             />
           ) : null}
+          <AwaitingWorkspaces instance={instance} />
         </DrawerSection>
 
         <DrawerSection title={t('相关链接', 'Related links')}>
