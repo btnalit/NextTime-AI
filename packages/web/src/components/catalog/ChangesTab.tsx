@@ -292,6 +292,29 @@ export function operationValueText(
   return value;
 }
 
+/** The rollback preview's boundary confirmation names which way the change goes (UX on #1052): the
+ *  reasons below it are what the rollback does, from the version now installed back to the one
+ *  before it, so 「Skill 正文有改动」 alone does not say whether it is the install or its undoing. */
+function rollbackWideningLead(
+  item: ChangeSubject & {
+    readonly from: { readonly version: number } | null;
+    readonly to: { readonly version: number } | null;
+  },
+  t: Translate,
+): string {
+  const subject = changeSubjectText(item, t);
+  if (item.to === null) {
+    return t(
+      `我确认撤销会改变权限边界（${zhJoin('撤销后工作区里不再有', subject)}）：`,
+      `I confirm the rollback moves an authority boundary (afterwards the workspace no longer has ${subject}): `,
+    );
+  }
+  return t(
+    `我确认撤销会改变权限边界（${zhJoin(zhJoin('撤销后', subject), `从${versionText(item.from, t)}回到${versionText(item.to, t)}`)}）：`,
+    `I confirm the rollback moves an authority boundary (afterwards ${subject} goes from ${versionText(item.from, t)} back to ${versionText(item.to, t)}): `,
+  );
+}
+
 function versionText(version: { readonly version: number } | null, t: Translate): string {
   return version === null
     ? t('未安装', 'not installed')
@@ -1171,10 +1194,7 @@ function RollBackSegment({
                           data-testid={`catalog-change-confirm-item-${item.ordinal}`}
                         />
                         <span>
-                          {t(
-                            '我确认这会改变权限边界：',
-                            'I confirm this moves an authority boundary: ',
-                          )}
+                          {rollbackWideningLead(item, t)}
                           {item.widening.map((w) => wideningText(w, t)).join(t('；', '; '))}
                         </span>
                       </label>

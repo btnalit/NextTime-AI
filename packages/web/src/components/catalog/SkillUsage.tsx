@@ -10,7 +10,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { taskFailureCategoryLabel, taskRefusalLabel } from '../../lib/labels.js';
+import { taskFailureText } from '../../lib/labels.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
@@ -170,7 +170,11 @@ function VersionBlock({
         testId={`${testId}-numbers`}
       />
       {version.segments.length > 0 ? (
-        <details className="disclosure" data-testid={`${testId}-segments`}>
+        <details
+          className="disclosure"
+          open={version.segments.some((segment) => segment.reviewSuggested)}
+          data-testid={`${testId}-segments`}
+        >
           <summary>
             {t(
               `按运行环境（${version.segments.length} 段）`,
@@ -250,10 +254,7 @@ function FailureGroups({
                     `v${group.skillVersion} · Worker ${workerName} v${worker.version} · ${group.tasks} Task(s) · last failed ${formatRelative(group.lastFailedAt, t)}`,
                   )}
                 </span>
-                <span className="text-3 text-small">
-                  {taskFailureCategoryLabel(group.category, t)} ·{' '}
-                  {taskRefusalLabel(group.refusal, t)}
-                </span>
+                <span className="text-3 text-small">{taskFailureText(group, t)}</span>
               </li>
             );
           })}

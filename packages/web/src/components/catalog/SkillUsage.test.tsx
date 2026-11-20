@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { OutcomeTallyWire, SkillStatsWire, SkillUsageWire } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -221,8 +221,9 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
     expect(screen.getByTestId('skill-usage-version-2-review').textContent).toBe('建议复核');
     expect(screen.queryByTestId('skill-usage-version-1-review')).toBeNull();
 
-    const segments = screen.getByTestId('skill-usage-version-2-segments');
-    fireEvent.click(within(segments).getByText(/按运行环境/));
+    // Legacy 668: the list with the environment the review comes from is open already.
+    const segments = screen.getByTestId('skill-usage-version-2-segments') as HTMLDetailsElement;
+    expect(segments.open).toBe(true);
     const known = within(v2).getByTestId(`skill-usage-version-2-segment-${ENV_A}`);
     expect(known.textContent).toContain('v1:aaaaaaaaaaaa');
     expect(within(known).getByTestId(`skill-usage-version-2-segment-${ENV_A}-review`)).toBeTruthy();
@@ -241,7 +242,6 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
     expect(reason.textContent).toBe('同一运行环境下最近 3 个结果都未达成');
     expect(within(v2).getByTestId('skill-usage-version-2-review').getAttribute('title')).toBeNull();
 
-    fireEvent.click(within(v2).getByText(/按运行环境/));
     expect(within(v2).getByTestId('skill-usage-version-2-segments-note').textContent).toContain(
       '定义版本、模型、镜像、平台版本和系统提示都相同',
     );

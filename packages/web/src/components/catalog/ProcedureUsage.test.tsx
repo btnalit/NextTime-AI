@@ -5,7 +5,7 @@ import type {
   ProcedureUsageWire,
   ProcedureVersionStatsWire,
 } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -197,7 +197,10 @@ describe('ProcedureUsageSection (S11 W1a E2-2)', () => {
       '某一组运行环境里最近 3 个结果都未达成',
     );
 
-    fireEvent.click(within(v2).getByText(/按运行环境/));
+    // Legacy 668: the list with the set of environments the review comes from is open already.
+    expect(
+      (screen.getByTestId('procedure-usage-version-2-segments') as HTMLDetailsElement).open,
+    ).toBe(true);
     const onlyA = within(v2).getByTestId(`procedure-usage-version-2-segment-${ENV_A}`);
     expect(onlyA.textContent).toContain('1 个运行环境');
     expect(onlyA.textContent).toContain('v1:aaaaaaaaaaaa');

@@ -12,7 +12,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatRelative, zhJoin } from '../../lib/format.js';
 import { workerSpecFieldLabel } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { taskFailureCategoryLabel, taskRefusalLabel } from '../../lib/labels.js';
+import { taskFailureText } from '../../lib/labels.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
@@ -154,8 +154,8 @@ function VersionBlock({
         {version.reviewSuggested ? (
           <ReviewSuggestedChip
             reason={t(
-              `某个运行环境或组合下最近 ${reviewStreak} 个结果都未达成，展开下面两组看是哪一个`,
-              `The latest ${reviewStreak} outcomes of one run environment or combination were all not achieved; open the two lists below to see which`,
+              `某个运行环境或组合下最近 ${reviewStreak} 个结果都未达成，下面展开的那一组就是`,
+              `The latest ${reviewStreak} outcomes of one run environment or combination were all not achieved; the list below that has it is open`,
             )}
             t={t}
             testId={`${testId}-review`}
@@ -167,7 +167,11 @@ function VersionBlock({
         testId={`${testId}-numbers`}
       />
       {version.segments.length > 0 ? (
-        <details className="disclosure" data-testid={`${testId}-segments`}>
+        <details
+          className="disclosure"
+          open={version.segments.some((segment) => segment.reviewSuggested)}
+          data-testid={`${testId}-segments`}
+        >
           <summary>
             {t(
               `按运行环境（${version.segments.length} 段）`,
@@ -189,7 +193,11 @@ function VersionBlock({
         </details>
       ) : null}
       {version.combinations.length > 0 ? (
-        <details className="disclosure" data-testid={`${testId}-combinations`}>
+        <details
+          className="disclosure"
+          open={version.combinations.some((combination) => combination.reviewSuggested)}
+          data-testid={`${testId}-combinations`}
+        >
           <summary>
             {t(
               `按组合（${version.combinations.length} 种）`,
@@ -203,7 +211,7 @@ function VersionBlock({
                 'A combination is this Worker as defined, or with one goal step’s adjustments. By run environment and by combination split the same Tasks two ways: do not add them up.',
               )}
             </span>
-            {version.combinations.map((combination) => (
+            {asDefinedFirst(version.combinations).map((combination) => (
               <CombinationBlock
                 key={combination.specRef ?? 'as-defined'}
                 combination={combination}
@@ -248,6 +256,17 @@ function SegmentBlock({
       <KeyValue items={runNumbers(segment.usage, segment.outcomes, t, 'worker-usage')} />
     </div>
   );
+}
+
+/** UX on #1064: 「原样」 (no step adjustments) always leads the combination list; the rest keep
+ *  the kernel's order. */
+function asDefinedFirst(
+  combinations: readonly WorkerDefinitionCombinationWire[],
+): readonly WorkerDefinitionCombinationWire[] {
+  return [
+    ...combinations.filter((combination) => combination.specRef === null),
+    ...combinations.filter((combination) => combination.specRef !== null),
+  ];
 }
 
 type CombinationNaming = Pick<WorkerDefinitionCombinationWire, 'specRef' | 'specDigest' | 'fields'>;
@@ -374,10 +393,7 @@ function FailureGroups({
                     `v${group.definitionVersion} · ${combination} · ${group.tasks} Task(s) · last failed ${formatRelative(group.lastFailedAt, t)}`,
                   )}
                 </span>
-                <span className="text-3 text-small">
-                  {taskFailureCategoryLabel(group.category, t)} ·{' '}
-                  {taskRefusalLabel(group.refusal, t)}
-                </span>
+                <span className="text-3 text-small">{taskFailureText(group, t)}</span>
               </li>
             );
           })}
