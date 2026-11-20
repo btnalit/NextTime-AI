@@ -258,6 +258,10 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
     const tick = screen.getByTestId('catalog-change-confirm-item-1');
     expect(tick.closest('label')?.textContent).toMatch(/去掉动作类型 restart/);
+    // Legacy 668: the confirmation says it is the rollback that moves the boundary, and which way.
+    expect(tick.closest('label')?.textContent).toContain(
+      '我确认撤销会改变权限边界（撤销后工作区里不再有本体 ops-assets）：',
+    );
     fireEvent.click(tick);
     expect(confirm.disabled).toBe(false);
     expect(screen.queryByTestId('catalog-change-missing')).toBeNull();
@@ -339,6 +343,39 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     await screen.findByTestId('catalog-change-detail');
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() => expect(screen.queryByTestId('catalog-change-rollback')).toBeNull());
+  });
+
+  it('legacy 668: a rollback’s boundary confirmation names the version it goes back to', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => detail(FIRST),
+      preview_roll_back_change_segment: () => ({
+        segment: segment(FIRST),
+        possible: true,
+        items: [
+          {
+            ordinal: 1,
+            kind: 'skill_version',
+            target: { skillId: 'skill-1', name: 'docker-triage' },
+            from: { version: 2, contentDigest: 'sha256:s2' },
+            to: { version: 1, contentDigest: 'sha256:s1' },
+            classification: 'authority_widening',
+            widening: [{ path: 'skill.markdown', reason: 'changed' }],
+            blocker: null,
+            blockedBy: null,
+          },
+        ],
+        inUse: { objects: 0, links: 0, capped: false },
+      }),
+    });
+    renderTab(http, FIRST);
+
+    fireEvent.click(await screen.findByTestId('catalog-change-rollback-trigger'));
+    const tick = await screen.findByTestId('catalog-change-confirm-item-1');
+    expect(tick.closest('label')?.textContent).toBe(
+      '我确认撤销会改变权限边界（撤销后 Skill docker-triage 从第 2 版回到第 1 版）：Skill 正文有改动',
+    );
   });
 
   it('a Skill or Worker item names its kind with a space on each side of the Latin word', async () => {
