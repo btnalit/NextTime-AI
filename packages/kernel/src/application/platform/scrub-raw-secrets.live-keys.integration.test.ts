@@ -26,9 +26,9 @@ import {
  * key the last row of the first window and, as an object's key, the last row past it, and in a
  * table keyed by text a text array and the primary key itself — plus a retired key's shape and a
  * clean audit row; then: the rows are listed by table and primary key only, each once, never a key
- * or its hash (a primary key holding a key or a Handle is masked); an executing run lists the Turn before it
- * hides the key, and a later run no longer can; once both keys are rotated, no seeded row is
- * listed.
+ * or its hash (a primary key holding a key, alone or inside a longer run, or a Handle is masked);
+ * an executing run lists the Turn before it hides the key, and a later run no longer can; once both
+ * keys are rotated, no seeded row is listed.
  *
  * Keys are minted per run (`api_key_hash` is unique across the database, and test databases are
  * reused); the scrub reads the whole database, so assertions are about the seeded rows, and a run
@@ -150,11 +150,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         LIVE_API_KEY_COMPARE_WINDOW + 50,
         JSON.stringify({ headers: { [memberKey]: true } }),
       ]);
-      // A key in a text array; a key, and a Handle, that are the row's primary key: listed masked.
+      // A key in a text array. Primary keys holding a key, alone or inside a longer run (listed for
+      // the key the row also holds alone), or a Handle: listed masked.
       await pool.query(`create table ${named} (name text primary key, tags text[])`);
       await pool.query(
-        `insert into ${named} values ('tagged', $1::text[]), ($2, '{}'), ($3, $4::text[]), ('plain', '{collector}')`,
-        [['collector', serviceKey], memberKey, HANDLE, [serviceKey]],
+        `insert into ${named} values
+           ('tagged', $1::text[]), ($2, '{}'), ($3, $4::text[]), ($5, $6::text[]), ($7, $4::text[]),
+           ('plain', '{collector}')`,
+        [
+          ['collector', serviceKey],
+          memberKey,
+          HANDLE,
+          [serviceKey],
+          `call_${memberKey}`,
+          [memberKey],
+          `${serviceKey}x`,
+        ],
       );
       await admin(async (client) => {
         await client.query('insert into workspaces (id, name) values ($1, $2)', [
@@ -300,6 +311,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       `chat_messages ${ids.toolMessage} ${ids.member}`,
       `chat_messages ${ids.userMessage} ${ids.member}`,
       `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.service}`,
       `named [redacted] ${ids.service}`,
       `named tagged ${ids.service}`,
       `tasks ${ids.task} ${ids.member}`,
@@ -328,9 +341,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect.stringMatching(/^\(\d+,\d+\)$/),
       ]);
       expect(
-        ours.find((row) => row.table === named && row.principalId === ids.member)?.row,
-      ).toEqual(['[redacted]']);
-      // Two Principals, thirteen copies: the keys to rotate are counted once each.
+        ours.filter((row) => row.table === named && row.row[0] !== 'tagged').map((row) => row.row),
+      ).toEqual([['[redacted]'], ['[redacted]'], ['[redacted]'], ['[redacted]']]);
+      // Two Principals, fifteen copies: the keys to rotate are counted once each.
       expect(new Set(ours.map((row) => row.principalId)).size).toBe(2);
       expect(result.liveApiKeys.keys).toBeGreaterThanOrEqual(2);
       expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);

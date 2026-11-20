@@ -207,7 +207,7 @@ export interface LiveApiKeyRow {
   /** The table (`public` schema). */
   readonly table: string;
   /** The row: its primary key's values as text, in the key's column order — `[workspaceId, id]`
-   *  for most tables; `[ctid]` for a table without a primary key. A value a value rule would cut is
+   *  for most tables; `[ctid]` for a table without a primary key. A value that may hold a secret is
    *  `SECRET_FIELD_MASK` instead (`shownRowKey`). */
   readonly row: readonly string[];
   /** The Principal the key is issued to (`principals.api_key_hash`: one key per Principal). */
@@ -351,13 +351,20 @@ function keyShapes(text: unknown): number {
   return typeof text === 'string' ? platformKeyShapes(text).length : 0;
 }
 
+/** A run of base64url characters as long as a platform API key or longer. A key may sit inside one
+ *  (`call_<key>`), where the value rules, which want a key standing alone, do not see it; a uuid
+ *  (36 characters) is never one. */
+const KEY_LENGTH_RUN = /[A-Za-z0-9_-]{43,}/;
+
 /** `row`'s primary key values as output: one a value rule would cut (a platform API key's shape, a
- *  Handle, any other) is masked whole, so a secret used as (part of) a text primary key
- *  (`connectors.name`, `quotas.key`, a `tool_call_id`) reaches neither the log nor the append-only
- *  audit row. Paging goes on from the values as read. */
+ *  Handle, any other) or that holds a `KEY_LENGTH_RUN` is masked whole, so a secret used as (part
+ *  of) a text primary key (`connectors.name`, `quotas.key`, a `tool_call_id`) reaches neither the
+ *  log nor the append-only audit row. Paging goes on from the values as read. */
 function shownRowKey(row: readonly string[]): string[] {
   return row.map((value) =>
-    scrubSecretValues(value).redactedValues > 0 ? SECRET_FIELD_MASK : value,
+    KEY_LENGTH_RUN.test(value) || scrubSecretValues(value).redactedValues > 0
+      ? SECRET_FIELD_MASK
+      : value,
   );
 }
 

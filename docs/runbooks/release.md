@@ -3665,7 +3665,8 @@ select 'reconcile', count(*) from action_requests r
       里查。在 JSON 的值、对象键和数组里都找。
     - **日志**：每对上一处打印一行 `live-api-key <表> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
       - `<行>` 是这一行的主键，多列时用 `/` 连接：大多数表是 `<工作区>/<id>`，`audit_records` 只有 `<id>`，没有主键的表给 `ctid`。
-        主键里某一列的值会被值规则删减（有人把 key 或 Handle 用作了连接器名之类的文本主键），这一列整个换成 `[redacted]`，日志和审计行都不出现它。
+        主键里某一列的值会被值规则删减，或含 43 个以上连续的 base64url 字符（有人把 key 或 Handle 用作或嵌进了连接器名之类的文本主键），
+        这一列整个换成 `[redacted]`，日志和审计行都不出现它。uuid 只有 36 个字符，不受影响。
       - 同一行里有两把 key 就打两行。
       - Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。
       - 不输出 key 的任何片段，不输出哈希，也不输出是哪一列。
