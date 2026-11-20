@@ -163,10 +163,12 @@ export type SkillPublishRecordWire = z.infer<typeof SkillPublishRecordWireSchema
  *  prefill): the summary plus `markdown` and the lifecycle/authorship fields `list_skills` leaves
  *  out (`SkillRow`'s own shape, `application/worker/skills.ts`).
  *
- *  `publishEvidence` (legacy 539): on the human channel, what this version was published on
+ *  `publishEvidence` (legacy 539): for a person, what this version was published on
  *  ({@link SkillPublishRecordWireSchema}); `null` for a draft, and for a version whose publish
  *  recorded no evidence — published before S10 E3-3 kept it, or not through `publish_skill`.
- *  Absent for a Handle: an agent is told nothing of an evaluation's cases or reasons (§3.3 I-E4). */
+ *  Absent for a Handle and for a service Principal (whose API key also authenticates on the human
+ *  channel): only a person is told of an evaluation's cases or reasons (§3.3 I-E4), as
+ *  `get_draft_evaluation` tells only a person. */
 export const SkillDetailWireSchema = SkillSummaryWireSchema.extend({
   markdown: z.string(),
   publishedBy: z.string().nullable(),

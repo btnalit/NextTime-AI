@@ -1745,7 +1745,8 @@ const metaCapabilities = [
       'id or version, or a draft the caller may not see. For a person, publishEvidence says what ' +
       'the version was published on: the evaluation reviewed (verdict, why), how many failures ' +
       'the publish acknowledged and each with its reason; null for a draft or a version whose ' +
-      'publish recorded none. Left out for a Handle.',
+      'publish recorded none. Left out for a Handle and for a service Principal (a person only, ' +
+      'as get_draft_evaluation).',
   },
   {
     // S11 W1a E2-1 (S10 §5.4; coordinator decisions 2026-10-29): a Skill family's statistics,

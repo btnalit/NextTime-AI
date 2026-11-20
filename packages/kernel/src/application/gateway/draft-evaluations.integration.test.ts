@@ -1788,6 +1788,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(agentRead).toMatchObject({ id: notesId, version: 2, status: 'published' });
       expect(agentRead).not.toHaveProperty('publishEvidence');
+      // Nor does a service Principal: its API key authenticates on the human channel, but it is
+      // not a person (`get_draft_evaluation` refuses it too) — review #501 on #1563.
+      const serviceRead = await readSkill(service, 2);
+      expect(serviceRead).toMatchObject({ id: notesId, version: 2, status: 'published' });
+      expect(serviceRead).not.toHaveProperty('publishEvidence');
       // A version published with no `publish_skill` record, then one recorded before S10 E3-3 kept
       // the evidence: neither says anything.
       const older = await skill('owner', {
