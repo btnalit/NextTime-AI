@@ -16,6 +16,8 @@ function handle(patch: Partial<HandleWire> = {}): HandleWire {
   return {
     jti: '11111111-1111-4111-8111-111111111111',
     sessionId: 'session-mcp',
+    sessionShortId: 'sessionm',
+    sessionNote: null,
     sessionKind: 'mcp_session',
     holder: 'bearer',
     onBehalfOf: 'p-owner',
