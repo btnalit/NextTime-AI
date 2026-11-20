@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SECRET_FIELD_MASK } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -204,7 +205,8 @@ export interface LiveApiKeyRow {
   /** The table (`public` schema). */
   readonly table: string;
   /** The row: its primary key's values as text, in the key's column order — `[workspaceId, id]`
-   *  for most tables; `[ctid]` for a table without a primary key. */
+   *  for most tables; `[ctid]` for a table without a primary key. A value holding a platform API
+   *  key's shape is `SECRET_FIELD_MASK` instead (`shownRowKey`). */
   readonly row: readonly string[];
   /** The Principal the key is issued to (`principals.api_key_hash`: one key per Principal). */
   readonly principalWorkspaceId: string;
@@ -345,6 +347,13 @@ const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 /** How many values of a platform API key's shape `text` holds (0 for a non-string). */
 function keyShapes(text: unknown): number {
   return typeof text === 'string' ? platformKeyShapes(text).length : 0;
+}
+
+/** `row`'s primary key values as output: one holding a platform API key's shape is masked whole, so
+ *  a key used as (part of) a text primary key (`connectors.name`, `quotas.key`, a `tool_call_id`)
+ *  reaches neither the log nor the append-only audit row. Paging goes on from the values as read. */
+function shownRowKey(row: readonly string[]): string[] {
+  return row.map((value) => (platformKeyShapes(value).length > 0 ? SECRET_FIELD_MASK : value));
 }
 
 /** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key shape in
@@ -962,12 +971,13 @@ export async function scrubRawSecrets(
               : new Map<string, IssuedKeyRow>();
           const live: LiveApiKeyRow[] = [];
           for (const { row, hashes: rowHashes } of read) {
+            const shown = shownRowKey(row);
             for (const hash of rowHashes) {
               const key = issued.get(hash);
               if (!key) continue;
               live.push({
                 table: table.name,
-                row,
+                row: shown,
                 principalWorkspaceId: key.workspace_id,
                 principalId: key.id,
                 principalKind: key.kind,

@@ -22,11 +22,13 @@ import {
  * whose service Principal and whose person's membership each hold a key, the key wherever one could
  * have been pasted or echoed — a person's chat message, an agent's reply, a tool-call result, an
  * agent Turn's summary (after `Bearer`, which the rewrite hides), a Task's input and, in an array,
- * its result, an Operation call's params, an audit row's params copy, and, as an object's key, the
- * last row of a table without a primary key, past the first window — plus a retired key's shape
- * and a clean audit row; then: the rows are listed by table and primary key only, never a key or
- * its hash; an executing run lists the Turn before it hides the key, and a later run no longer
- * can; once both keys are rotated, no seeded row is listed.
+ * its result, an Operation call's params, an audit row's params copy, in a table without a primary
+ * key the last row of the first window and, as an object's key, the last row past it, and in a
+ * table keyed by text a text array and the primary key itself — plus a retired key's shape and a
+ * clean audit row; then: the rows are listed by table and primary key only, each once, never a key
+ * (a key that is the primary key is masked) or its hash; an executing run lists the Turn before it
+ * hides the key, and a later run no longer can; once both keys are rotated, no seeded row is
+ * listed.
  *
  * Keys are minted per run (`api_key_hash` is unique across the database, and test databases are
  * reused); the scrub reads the whole database, so assertions are about the seeded rows, and a run
@@ -68,6 +70,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     };
     /** A table without a primary key, its rows named by `ctid`. */
     const unkeyed = `scrub_live_keys_${randomUUID().replaceAll('-', '')}`;
+    /** A table keyed by text, with a text array column. */
+    const named = `scrub_live_keys_named_${randomUUID().replaceAll('-', '')}`;
     const serviceKey = mintKey();
     const memberKey = mintKey();
     const retiredKey = mintKey();
@@ -98,7 +102,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       const seeded = new Set<string>(Object.values(ids));
       const ours = live.filter(
-        (row) => row.table === unkeyed || seeded.has(row.row.at(-1) as string),
+        (row) =>
+          row.table === unkeyed || row.table === named || seeded.has(row.row.at(-1) as string),
       );
       return {
         result,
@@ -109,7 +114,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           .map((row) =>
             row.table === unkeyed
               ? `unkeyed ${row.principalId}`
-              : `${row.table} ${row.row.at(-1)} ${row.principalId}`,
+              : row.table === named
+                ? `named ${row.row.join('/')} ${row.principalId}`
+                : `${row.table} ${row.row.at(-1)} ${row.principalId}`,
           )
           .sort(),
         live,
@@ -125,16 +132,27 @@ describe.runIf(DATABASE_URL !== undefined)(
           [`live-keys-${workspaceId}`],
         )
       ).rows[0]?.id as string;
-      // More rows than a window: the one holding the key, as an object's key, comes last.
+      // More rows than a window, inserted in order (`ctid` order, the table being new): a key in
+      // the last row of the first window, read once although the next window starts after it,
+      // and another, as an object's key, in the last row.
       await pool.query(`create table ${unkeyed} (n integer, doc jsonb)`);
-      await pool.query(
-        `insert into ${unkeyed} select n, jsonb_build_object('n', n) from generate_series(1, $1::integer) n`,
-        [LIVE_API_KEY_COMPARE_WINDOW + 49],
-      );
+      const filler = `insert into ${unkeyed} select n, jsonb_build_object('n', n) from generate_series($1::integer, $2::integer) n`;
+      await pool.query(filler, [1, LIVE_API_KEY_COMPARE_WINDOW - 1]);
+      await pool.query(`insert into ${unkeyed} values ($1, $2::jsonb)`, [
+        LIVE_API_KEY_COMPARE_WINDOW,
+        JSON.stringify({ note: `collector ${serviceKey}` }),
+      ]);
+      await pool.query(filler, [LIVE_API_KEY_COMPARE_WINDOW + 1, LIVE_API_KEY_COMPARE_WINDOW + 49]);
       await pool.query(`insert into ${unkeyed} values ($1, $2::jsonb)`, [
         LIVE_API_KEY_COMPARE_WINDOW + 50,
         JSON.stringify({ headers: { [memberKey]: true } }),
       ]);
+      // A key in a text array, and a key that is the row's primary key: listed masked.
+      await pool.query(`create table ${named} (name text primary key, tags text[])`);
+      await pool.query(
+        `insert into ${named} values ('tagged', $1::text[]), ($2, '{}'), ('plain', '{collector}')`,
+        [['collector', serviceKey], memberKey],
+      );
       await admin(async (client) => {
         await client.query('insert into workspaces (id, name) values ($1, $2)', [
           workspaceId,
@@ -267,6 +285,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       await pool.query(`drop table if exists ${unkeyed}`);
+      await pool.query(`drop table if exists ${named}`);
       await pool.end();
     });
 
@@ -277,9 +296,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       `chat_messages ${ids.assistantMessage} ${ids.service}`,
       `chat_messages ${ids.toolMessage} ${ids.member}`,
       `chat_messages ${ids.userMessage} ${ids.member}`,
+      `named [redacted] ${ids.member}`,
+      `named tagged ${ids.service}`,
       `tasks ${ids.task} ${ids.member}`,
       `tasks ${ids.task} ${ids.service}`,
       `unkeyed ${ids.member}`,
+      `unkeyed ${ids.service}`,
     ].sort();
 
     it('lists every stored copy of a key still issued by ids only — the table and row, the Principal, the user', async () => {
@@ -301,7 +323,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(ours.find((row) => row.table === unkeyed)?.row).toEqual([
         expect.stringMatching(/^\(\d+,\d+\)$/),
       ]);
-      // Two Principals, nine copies: the keys to rotate are counted once each.
+      expect(
+        ours.find((row) => row.table === named && row.principalId === ids.member)?.row,
+      ).toEqual(['[redacted]']);
+      // Two Principals, twelve copies: the keys to rotate are counted once each.
       expect(new Set(ours.map((row) => row.principalId)).size).toBe(2);
       expect(result.liveApiKeys.keys).toBeGreaterThanOrEqual(2);
       expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);
