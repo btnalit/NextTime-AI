@@ -3889,6 +3889,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 同 PR 修的超线性正则：`interfaces/mcp/index.ts` 的 Bearer 解析改为前缀检查加切片；`identity/users.ts` 的 `derivedLogin` 去首尾 `-` 改为 `/^-|-$/g`；gatekeeper-base `kinds/http.ts` 路径模板改为 `[^{}]`、base URL 去尾 `/` 改为循环。Zod 3 的 `.max()` 不阻止 `.regex()` 执行，参数正则看到的输入上限是传输层的 1 MiB。
 - 控制台应显示什么（PR 描述"控制台（前端）应显示什么"，归「控制台前端易用性整改」）：持久化工具行与实时 `ToolCallRowView` 同形、按 Turn 归组、运行中按 `toolCallId` 去重、标注"agent 报告的工具调用"、按关系浏览（遗留 147）；扣留超限提示与审计页 `redactedValues` 提示（遗留 159）。
 - 遗留：155（Worker 运行中的工具调用）、156（Handle 对模型 shell 可读，P1 根因）、157（Worker 提议只计数）、158（流式增量扫描）、159（控制台脱敏提示）。
+- 实现说明（遗留 155 内核一半：Worker 运行中的工具调用落库，#1531，2026-11-20 合入，7e8b760；迁移 task/0016）：写入——Worker 用自己 Handle 的会话报 `report_tool_calls`，运行由会话决定，已结束的运行 403。存储——和对话工具调用同一套 `buildToolCallRecord` + `storableValue`，表 `worker_run_tool_calls` 行级隔离，应用角色只有 select / insert，同一调用 id 只存第一次，每个运行最多 200 条。审计——不记 `calls`，只记计数。读取——`get_task_tool_calls` 可见性同 `get_task`（工作区所有者能读每个 Task 的记录，协调 2026-11-20 定，以后可改），按运行开始先后分页。秘密值——扩展截短参数时，内核要收集的秘密字段的值照原位置发出；`secretFieldLiterals` 与 `toolCallSecretKeyRule` 移到 shared，内核和扩展共用同一个收集函数和键规则；一条调用补回后超过 512 KiB 时不带结果发送、也不补秘密值。扩展——只在 `callerCapabilities` 带这个能力时上报，交结果前发完，单串只在 32768 以上切，整体预算整项省略。控制台一半（任务详情里显示 Worker 的工具调用，能力矩阵 console 由 none 改 required）由控制台负责人另开 PR。
 
 **llm-proxy 管理接口限流、上游响应体上限与密钥检查（#521，2026-10-09 合入，遗留 138 关闭、151 部分关闭）**
 
