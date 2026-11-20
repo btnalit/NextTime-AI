@@ -123,7 +123,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     function humanCaller(workspace: Workspace, principalId: string, role: Role): ResolvedCaller {
       return {
         channel: 'human',
-        principal: { workspaceId: workspace.id, id: principalId, kind: 'human', role, displayName: null },
+        principal: {
+          workspaceId: workspace.id,
+          id: principalId,
+          kind: 'human',
+          role,
+          displayName: null,
+        },
         session: {
           workspaceId: workspace.id,
           id: randomUUID(),
@@ -205,7 +211,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
           'gate',
         );
-        if ('connectorRefused' in outcome || 'rejected' in outcome || 'credentialRefused' in outcome) {
+        if (
+          'connectorRefused' in outcome ||
+          'rejected' in outcome ||
+          'credentialRefused' in outcome
+        ) {
           throw new Error(`platformGate: ${JSON.stringify(outcome)}`);
         }
         await client.query('commit');
@@ -290,7 +300,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         { skipRoleSwitch: true },
       );
-      return { id: created.workspaceId, ownerId: created.ownerPrincipalId, memberId, otherMemberId };
+      return {
+        id: created.workspaceId,
+        ownerId: created.ownerPrincipalId,
+        memberId,
+        otherMemberId,
+      };
     }
 
     beforeAll(async () => {
@@ -392,10 +407,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await refusal(ask(member(ws), enabledHere))).toBe('gate_already_enabled');
       // Nothing was written for any of them.
       const rows = await withAdminClient(pool, (client) =>
-        client.query(
-          'select 1 from connection_requests where gate_instance_id = any($1::text[])',
-          [['no-such-gate', discovered, selfServe, enabledHere]],
-        ),
+        client.query('select 1 from connection_requests where gate_instance_id = any($1::text[])', [
+          ['no-such-gate', discovered, selfServe, enabledHere],
+        ]),
       );
       expect(rows.rowCount).toBe(0);
     });
@@ -500,30 +514,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         `workspace_id = $1 and action = 'connection.request_cancelled' and resource_id = any($2::uuid[])`,
         [ws.id, [first.id, second.id]],
       );
-      expect(
-        audit.map((row) => ({ actor: row.actor_principal_id, payload: row.payload })),
-      ).toEqual([
-        {
-          actor: ws.memberId,
-          payload: {
-            resultingStatus: 'cancelled',
-            cancelReason: 'withdrawn',
-            kind: 'http',
-            gateId,
-            requestedBy: ws.memberId,
+      expect(audit.map((row) => ({ actor: row.actor_principal_id, payload: row.payload }))).toEqual(
+        [
+          {
+            actor: ws.memberId,
+            payload: {
+              resultingStatus: 'cancelled',
+              cancelReason: 'withdrawn',
+              kind: 'http',
+              gateId,
+              requestedBy: ws.memberId,
+            },
           },
-        },
-        {
-          actor: ws.ownerId,
-          payload: {
-            resultingStatus: 'cancelled',
-            cancelReason: 'declined',
-            kind: 'http',
-            gateId,
-            requestedBy: ws.memberId,
+          {
+            actor: ws.ownerId,
+            payload: {
+              resultingStatus: 'cancelled',
+              cancelReason: 'declined',
+              kind: 'http',
+              gateId,
+              requestedBy: ws.memberId,
+            },
           },
-        },
-      ]);
+        ],
+      );
       // A self connection's cancel keeps its target in the audit, as before.
       const selfReq = await withAdminClient(pool, (client) =>
         client.query<{ id: string }>(
@@ -551,7 +565,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       const a = await ask(member(ws), gateId);
       const b = await ask(member(otherWs), gateId);
       const withdrawn = await ask(otherMember(ws), gateId);
-      await call(otherMember(ws), 'cancel_connection_request', { connectionRequestId: withdrawn.id });
+      await call(otherMember(ws), 'cancel_connection_request', {
+        connectionRequestId: withdrawn.id,
+      });
       const untouched = await ask(member(ws), untouchedGate);
 
       await platform('update_gate_instance', { gateId, status: 'disabled' });
@@ -653,8 +669,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
         const asked = ask(member(ws), gateId).then(
           () => 'resolved',
-          (err: unknown) =>
-            err instanceof GateInstanceNotAvailableError ? err.code : String(err),
+          (err: unknown) => (err instanceof GateInstanceNotAvailableError ? err.code : String(err)),
         );
         // The request is blocked behind the lock, not refused or resolved yet.
         const early = await Promise.race([
