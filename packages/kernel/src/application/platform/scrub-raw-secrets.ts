@@ -149,6 +149,9 @@ export const RAW_SECRET_SCRUB_BATCH_SIZE = 500;
 export const RAW_SECRET_SCRUB_AUDIT_ACTION = 'cli.raw_secrets_scrubbed';
 /** Ids kept per counted category in the result and on the audit row (`onCounted` gets all). */
 export const MAX_EXAMPLES = 20;
+/** Rows per window of the key comparison (`liveApiKeys`). It only reads and holds no lock a rewrite
+ *  would, so its windows are not the rewrites' short ones (`batchSize`). */
+export const LIVE_API_KEY_COMPARE_WINDOW = 1_000;
 
 export const REWRITTEN_CATEGORIES = [
   'turnReports',
@@ -948,7 +951,7 @@ export async function scrubRawSecrets(
       for (;;) {
         const from = after;
         const outcome = await onLoginRole(pool, async (client) => {
-          const rows = await comparedWindow(client, table, from, batchSize);
+          const rows = await comparedWindow(client, table, from, LIVE_API_KEY_COMPARE_WINDOW);
           const last = rows.at(-1);
           if (!last) return null;
           const read = rows.map(({ row, values }) => ({ row, hashes: keyShapeHashes(values) }));
@@ -972,7 +975,12 @@ export async function scrubRawSecrets(
               });
             }
           }
-          return { examined: rows.length, live, after: last.row, done: rows.length < batchSize };
+          return {
+            examined: rows.length,
+            live,
+            after: last.row,
+            done: rows.length < LIVE_API_KEY_COMPARE_WINDOW,
+          };
         });
         if (outcome === null) break;
         batches += 1;

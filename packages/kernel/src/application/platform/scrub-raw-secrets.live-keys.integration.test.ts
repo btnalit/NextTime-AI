@@ -8,7 +8,11 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { platformKeyShapes } from '../../governance/redaction/index.js';
 import { hashApiKey } from '../gateway/auth.js';
 import type { LiveApiKeyRow, ScrubRawSecretsResult } from './scrub-raw-secrets.js';
-import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secrets.js';
+import {
+  LIVE_API_KEY_COMPARE_WINDOW,
+  RAW_SECRET_SCRUB_AUDIT_ACTION,
+  scrubRawSecrets,
+} from './scrub-raw-secrets.js';
 
 /**
  * application/platform/scrub-raw-secrets.live-keys.integration.test: DB-gated (real Postgres;
@@ -18,11 +22,11 @@ import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secr
  * whose service Principal and whose person's membership each hold a key, the key wherever one could
  * have been pasted or echoed — a person's chat message, an agent's reply, a tool-call result, an
  * agent Turn's summary (after `Bearer`, which the rewrite hides), a Task's input and, in an array,
- * its result, an Operation call's params, an audit row's params copy, and, as an object's key, a row
- * of a table without a primary key — plus a retired key's shape and a clean audit row; then: the
- * rows are listed by table and primary key only, never a key or its hash; an executing run lists
- * the Turn before it hides the key, and a later run no longer can; once both keys are rotated, no
- * seeded row is listed.
+ * its result, an Operation call's params, an audit row's params copy, and, as an object's key, the
+ * last row of a table without a primary key, past the first window — plus a retired key's shape
+ * and a clean audit row; then: the rows are listed by table and primary key only, never a key or
+ * its hash; an executing run lists the Turn before it hides the key, and a later run no longer
+ * can; once both keys are rotated, no seeded row is listed.
  *
  * Keys are minted per run (`api_key_hash` is unique across the database, and test databases are
  * reused); the scrub reads the whole database, so assertions are about the seeded rows, and a run
@@ -121,12 +125,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           [`live-keys-${workspaceId}`],
         )
       ).rows[0]?.id as string;
-      // 250 rows, more than a window: the one holding the key, as an object's key, comes last.
+      // More rows than a window: the one holding the key, as an object's key, comes last.
       await pool.query(`create table ${unkeyed} (n integer, doc jsonb)`);
       await pool.query(
-        `insert into ${unkeyed} select n, jsonb_build_object('n', n) from generate_series(1, 249) n`,
+        `insert into ${unkeyed} select n, jsonb_build_object('n', n) from generate_series(1, $1::integer) n`,
+        [LIVE_API_KEY_COMPARE_WINDOW + 49],
       );
-      await pool.query(`insert into ${unkeyed} values (250, $1::jsonb)`, [
+      await pool.query(`insert into ${unkeyed} values ($1, $2::jsonb)`, [
+        LIVE_API_KEY_COMPARE_WINDOW + 50,
         JSON.stringify({ headers: { [memberKey]: true } }),
       ]);
       await admin(async (client) => {
@@ -301,7 +307,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);
       expect(result.liveApiKeys.found).toBe(live.length);
       expect(result.liveApiKeys.tables).toBeGreaterThan(50);
-      expect(result.liveApiKeys.rows).toBeGreaterThan(250);
+      expect(result.liveApiKeys.rows).toBeGreaterThan(LIVE_API_KEY_COMPARE_WINDOW);
       // The audit rows holding a key's shape are counted, issued or not; the clean one is not.
       expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
       expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditRetired });
