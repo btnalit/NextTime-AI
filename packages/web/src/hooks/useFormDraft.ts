@@ -49,6 +49,9 @@ export function useFormDraft<T>({
   const [restored, setRestored] = useState(false);
   const checkedFor = useRef<string | null>(null);
   const done = useRef(false);
+  // A restore just ran and its value has not reached a render yet (legacy 668, UX on #1527: under
+  // StrictMode the effect runs again first, still seeing the form as it opened).
+  const awaitingRestored = useRef(false);
   const parseRef = useRef(parse);
   parseRef.current = parse;
   const restoreRef = useRef(restore);
@@ -63,9 +66,14 @@ export function useFormDraft<T>({
       if (parsed !== null) {
         reserveClientUidsIn(parsed);
         restoreRef.current(parsed);
+        awaitingRestored.current = true;
         setRestored(true);
         return;
       }
+    }
+    if (awaitingRestored.current) {
+      if (!edited) return;
+      awaitingRestored.current = false;
     }
     if (edited) saveDraftValue(scope, value);
     else {

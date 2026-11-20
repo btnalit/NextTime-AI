@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
@@ -384,6 +385,27 @@ describe('SkillEditor draft across an unmount (legacy 662)', () => {
     await waitFor(() => expect(screen.queryByTestId('restored-draft')).toBeNull());
     second.unmount();
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('legacy 668 (UX on #1527): a new draft restored under StrictMode still says it was restored', async () => {
+    const { caller } = http({ get_workspace: WORKSPACE('p-me') });
+    const first = render(<SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fill(/SKILL.md 正文/, 'half written');
+    await waitFor(() =>
+      expect(sessionStorage.getItem('nexttime.drafts')).toContain('half written'),
+    );
+    first.unmount();
+
+    // The same caller: who is editing is already known on the first render, as on a dev server
+    // that read it before — the restore and StrictMode's second run of the effect then meet.
+    render(
+      <StrictMode>
+        <SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('half written'));
+    expect(screen.getByTestId('restored-draft')).toBeTruthy();
+    expect(sessionStorage.getItem('nexttime.drafts')).toContain('half written');
   });
 
   it('nothing is kept for an editor opened and left as it was', async () => {
