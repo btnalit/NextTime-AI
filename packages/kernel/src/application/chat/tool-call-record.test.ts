@@ -9,6 +9,7 @@ import {
   redactMessageContent,
   redactToolArgs,
   redactToolResult,
+  rescrubStoredToolCallResult,
 } from './tool-call-record.js';
 
 /** A Handle-shaped compact JWT (header `{"alg":"EdDSA"}`). Synthetic — `.gitleaks.toml` allows
@@ -352,5 +353,63 @@ describe('review #493 on #1571 — a key on its own line of a tool’s JSON outp
       const stored = record({ result, hasResult: true });
       expect(stored.result?.text).toBe(JSON.stringify({ stdout: `line1\n${REDACTED}\n`, code: 0 }));
     }
+  });
+});
+
+describe('legacy 916 — a secret on its own line of a tool’s JSON output, by its name', () => {
+  /** Synthetic — `.gitleaks.toml` allows `abcdefghijklmnopqrstuvwxyz`. */
+  const SECRET = 'FAKEabcdefghijklmnopqrstuvwxyz';
+  /** `env` through a capability: its stdout reaches the scrub as JSON text, each line after `\n`. */
+  const dump = JSON.stringify({
+    stdout: `HOME=/workspace\nPGPASSWORD=${SECRET}\nAWS_SECRET_ACCESS_KEY=${SECRET}9\n`,
+    code: 0,
+  });
+  const hidden = JSON.stringify({
+    stdout: `HOME=/workspace\nPGPASSWORD=${REDACTED}\nAWS_SECRET_ACCESS_KEY=${REDACTED}\n`,
+    code: 0,
+  });
+
+  it('is hidden in the live result and in the record, counted the same', () => {
+    const result = textResult(dump);
+    const live = redactToolResult(result, 'some_tool');
+    expect(live.value).toEqual(textResult(hidden));
+    expect(live.redactedValues).toBe(2);
+    const stored = record({ name: 'some_tool', result, hasResult: true });
+    expect(stored.result?.text).toBe(hidden);
+    expect(stored.redactedValues).toBe(2);
+  });
+
+  it('a stored record that kept it is rewritten the same way, once', () => {
+    const stored = { ...record({ name: 'some_tool' }), result: { text: dump }, redactedValues: 0 };
+    const once = rescrubStoredToolCallResult(stored);
+    expect(once.value).toMatchObject({ result: { text: hidden }, redactedValues: 2 });
+    expect(once.redactedValues).toBe(2);
+    expect(rescrubStoredToolCallResult(once.value)).toEqual({
+      value: once.value,
+      redactedValues: 0,
+    });
+  });
+
+  it('the rewrite leaves a bare platform-key shape on its own line, as it leaves one anywhere', () => {
+    // One-way, and that shape is any 32 bytes in base64url: the scrub counts it instead.
+    const text = JSON.stringify({ stdout: 'line1\nFAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ\n' });
+    const stored = { ...record({ name: 'some_tool' }), result: { text }, redactedValues: 0 };
+    expect(rescrubStoredToolCallResult(stored)).toEqual({ value: stored, redactedValues: 0 });
+  });
+
+  it('an arg’s secret value the result quotes is hidden though JSON escaped a character of it', () => {
+    // A quote and a backslash: the JSON text carries `\"` and `\\`, so the literal is not in it.
+    const args = { password: 'pa"ss\\word-9' };
+    const result = textResult(JSON.stringify({ stdout: `login pa"ss\\word-9 failed` }));
+    const live = redactToolResult(result, 'some_tool', args);
+    expect(JSON.stringify(live.value)).not.toContain('word-9');
+    const stored = record({ name: 'some_tool', args, hasArgs: true, result, hasResult: true });
+    expect(stored.result?.text).toBe(JSON.stringify({ stdout: `login ${REDACTED} failed` }));
+    expect(stored.redactedValues).toBe(1 + 1);
+  });
+
+  it('leaves a result with nothing to hide byte for byte, escapes and all', () => {
+    const text = '{"stdout":"\\u4e2d\\/ok\\n","code":0}';
+    expect(record({ result: textResult(text), hasResult: true }).result?.text).toBe(text);
   });
 });

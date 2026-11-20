@@ -34,9 +34,10 @@ import {
  * replaced, whatever it looks like. A value hidden in the arguments stays hidden in the result,
  * however the result repeats it (legacy 185 — #526's "hidden == counted == masked"): the same key
  * rule runs over a result's text when that text is JSON (`redactSecretFieldsInJsonText` — a
- * capability tool's text is its result as JSON, and an ActionRequest's echoes its `params`), and the
- * arguments' hidden values are hidden as literals wherever else they appear (`secretFieldLiterals`
- * — a URL or command a gate rendered from them, an error quoting one).
+ * capability tool's text is its result as JSON, and an ActionRequest's echoes its `params`; its
+ * strings that hold an escape are scrubbed decoded too, legacy 916 — a line of output follows a
+ * `\n` there), and the arguments' hidden values are hidden as literals wherever else they appear
+ * (`secretFieldLiterals` — a URL or command a gate rendered from them, an error quoting one).
  *
  * Size, and time: a runtime frame may be up to 100 MiB, and redaction runs on the kernel's event
  * loop. So nothing past what is shown is read at all: a payload is read up to its preview length
@@ -88,9 +89,23 @@ function resultRule(toolName: string | null | undefined, args: unknown): ResultR
   };
 }
 
-/** The key rule when `text` is JSON, then the arguments' hidden values as literals. */
+/** A string of a result's JSON text, decoded: the arguments' hidden values as literals, then
+ *  every secret-looking value (legacy 916 — `redactSecretFieldsInJsonText`'s `scrubValue`). */
+function scrubDecodedResultString(value: string, rule: ResultRule): Scrubbed<string> {
+  const literals = scrubSecretLiterals(value, rule.literals);
+  const values = scrubSecretValues(literals.value);
+  return {
+    value: values.value,
+    redactedValues: literals.redactedValues + values.redactedValues,
+  };
+}
+
+/** The key rule when `text` is JSON — its strings decoded and scrubbed too — then the arguments'
+ *  hidden values as literals. */
 function maskResultText(text: string, rule: ResultRule): Scrubbed<string> {
-  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey);
+  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey, (value) =>
+    scrubDecodedResultString(value, rule),
+  );
   const literals = scrubSecretLiterals(fields.value, rule.literals);
   return {
     value: literals.value,
@@ -151,7 +166,9 @@ export function rescrubStoredToolCallResult(
     return { value: content, redactedValues: 0 };
   }
   const name = typeof content.name === 'string' ? content.name : null;
-  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name));
+  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name), (value) =>
+    scrubSecretValues(value, { patterns: STORED_REWRITE_SECRET_PATTERNS }),
+  );
   const values = scrubSecretValues(fields.value, { patterns: STORED_REWRITE_SECRET_PATTERNS });
   const redactedValues = fields.redactedValues + values.redactedValues;
   if (values.value === result.text) return { value: content, redactedValues: 0 };

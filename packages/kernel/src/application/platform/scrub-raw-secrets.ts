@@ -37,8 +37,8 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *   - `decisions`: the `summary` of a Decision whose Activity is an agent Turn (`record_decision`,
  *     legacy 183) — likewise;
  *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — the key rule
- *     over JSON text, then the value patterns but the key's shape (application/chat's
- *     `rescrubStoredToolCallResult`);
+ *     over JSON text, its escaped strings scrubbed decoded too (legacy 916), then the value
+ *     patterns but the key's shape (application/chat's `rescrubStoredToolCallResult`);
  *   - `selfConnectionAddresses`: the copy of a self-connected gate's `target` / `endpoint` the
  *     platform plane shows (`workspace_self_connections`, core 0045) — copied from a Gatekeeper
  *     written before legacy 186, it can carry what the address rule refuses; it is cut out

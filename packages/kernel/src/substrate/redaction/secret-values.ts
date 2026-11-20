@@ -520,30 +520,46 @@ interface WalkState {
   readonly patterns: readonly ValuePattern[];
 }
 
-function scrubInto(text: string, state: WalkState): string {
+/** `text` with the literals, then every value pattern, replaced. */
+function scrubPlain(
+  text: string,
+  literals: readonly string[],
+  patterns: readonly ValuePattern[],
+): Scrubbed<string> {
   let out = text;
-  if (state.jsonTextKey !== undefined) {
-    const fields = redactSecretFieldsInJsonText(out, state.jsonTextKey);
-    state.count += fields.redactedValues;
-    out = fields.value;
-  }
-  if (state.literals.length > 0) {
-    const literal = scrubSecretLiterals(out, state.literals);
-    state.count += literal.redactedValues;
+  let redactedValues = 0;
+  if (literals.length > 0) {
+    const literal = scrubSecretLiterals(out, literals);
+    redactedValues += literal.redactedValues;
     out = literal.value;
   }
-  for (const valuePattern of state.patterns) {
+  for (const valuePattern of patterns) {
     let scrubbed = '';
     let from = 0;
     for (const { start, end, replacement } of secretMatches(valuePattern, out)) {
       if (replacement === undefined) continue;
       scrubbed += out.slice(from, start) + replacement;
       from = end;
-      state.count += 1;
+      redactedValues += 1;
     }
     if (from > 0) out = scrubbed + out.slice(from);
   }
-  return out;
+  return { value: out, redactedValues };
+}
+
+function scrubInto(text: string, state: WalkState): string {
+  let out = text;
+  if (state.jsonTextKey !== undefined) {
+    // The strings of JSON text decoded too (legacy 916), then the text as it is.
+    const fields = redactSecretFieldsInJsonText(out, state.jsonTextKey, (value) =>
+      scrubPlain(value, state.literals, state.patterns),
+    );
+    state.count += fields.redactedValues;
+    out = fields.value;
+  }
+  const plain = scrubPlain(out, state.literals, state.patterns);
+  state.count += plain.redactedValues;
+  return plain.value;
 }
 
 function freshState(options: RedactSecretsOptions = {}): WalkState {
@@ -627,6 +643,16 @@ function decodedJsonKey(literal: string): string {
   }
 }
 
+/** A JSON string literal's value, or `undefined` when it does not decode. */
+function decodedJsonString(literal: string): string | undefined {
+  try {
+    const decoded: unknown = JSON.parse(literal);
+    return typeof decoded === 'string' ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * `text` that is JSON — or the start of JSON, cut anywhere — with every secret value under a key
  * `isSecretKey` names replaced by `"[redacted]"`: the field rule of `redactSecrets`'s
@@ -640,12 +666,23 @@ function decodedJsonKey(literal: string): string {
  * returned as it is, and so is everything from the first character that cannot continue it (a
  * runtime's `[… more characters omitted]` note) — the value patterns still run over all of it.
  *
- * One pass, linear in `text`: each character is visited once (a key is decoded once more, by
- * `JSON.parse` of its own literal), and nesting is an explicit stack, never recursion.
+ * `scrubValue`, when given, also runs over every other string value that holds an escape, decoded
+ * (legacy 916): the value patterns read JSON text as it is written, so a line of output
+ * such as `PGPASSWORD=…` or `Bearer …` reaches them as `…\nPGPASSWORD=…`, where the `n` of the
+ * escape is taken for the end of another word and the value is passed over. A string it changes
+ * is written back with `JSON.stringify` — its other escapes in their shortest form (`\u4e2d` as
+ * `中`) — and its count is added; one it leaves is kept byte for byte. A string without an escape
+ * reads the same decoded, so the patterns over the text see it as it is; a string the text ends
+ * inside is left to them too. Keys are names, not values: they are not scrubbed.
+ *
+ * One pass, linear in `text`: each character is visited once (a key, and a string `scrubValue`
+ * reads, is decoded once more, by `JSON.parse` of its own literal), and nesting is an explicit
+ * stack, never recursion.
  */
 export function redactSecretFieldsInJsonText(
   text: string,
   isSecretKey: (key: string) => boolean,
+  scrubValue?: (value: string) => Scrubbed<string>,
 ): Scrubbed<string> {
   const length = text.length;
   let index = 0;
@@ -725,6 +762,16 @@ export function redactSecretFieldsInJsonText(
           const inner = text.slice(index + 1, end);
           if (valueIsSecret && inner.trim() !== '' && inner !== REDACTED) {
             replace(index, Math.min(end + 1, length));
+          } else if (!valueIsSecret && scrubValue !== undefined && end < length) {
+            if (inner.includes('\\')) {
+              const decoded = decodedJsonString(text.slice(index, end + 1));
+              const scrubbed = decoded === undefined ? undefined : scrubValue(decoded);
+              if (scrubbed !== undefined && scrubbed.value !== decoded) {
+                parts.push(text.slice(copiedTo, index), JSON.stringify(scrubbed.value));
+                copiedTo = end + 1;
+                redactedValues += scrubbed.redactedValues;
+              }
+            }
           }
           top.expecting = 'next';
         } else {

@@ -1088,6 +1088,86 @@ describe('a cut never ends in the start of a secret (legacy 819)', () => {
   });
 });
 
+describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded (legacy 916)', () => {
+  const scrub = (text: string) =>
+    redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+  /** A tool's JSON result carrying `stdout` (and nothing else to hide). */
+  const result = (stdout: string) => JSON.stringify({ stdout, code: 0 });
+
+  // A line of output reaches the value patterns as `…\nNAME=…`: the `n` of the escape reads as
+  // the end of another word, and the name is passed over.
+  it.each([
+    [
+      'an env line',
+      `HOME=/workspace\nPGPASSWORD=${FAKE}\n`,
+      `HOME=/workspace\nPGPASSWORD=${REDACTED}\n`,
+    ],
+    ['a Basic credential', 'ok\nBasic dXNlcjpwYXNzd29yZA==', `ok\nBasic ${REDACTED}`],
+    [
+      'a --password flag',
+      `$ psql\n--password ${FAKE} -h db`,
+      `$ psql\n--password ${REDACTED} -h db`,
+    ],
+    ['a YAML key', `db:\npassword: '${FAKE}'`, `db:\npassword: '${REDACTED}'`],
+    ['a query string', `GET\napi_key=${FAKE}&x=1`, `GET\napi_key=${REDACTED}&x=1`],
+    ['after a tab', `a\tPGPASSWORD=${FAKE}`, `a\tPGPASSWORD=${REDACTED}`],
+  ])('hides %s that follows an escape', (_label, stdout, expected) => {
+    expect(scrub(result(stdout))).toEqual({ value: result(expected), redactedValues: 1 });
+  });
+
+  it('is needed: the value patterns over the text as written pass an env line after `\\n`', () => {
+    const text = result(`HOME=/workspace\nPGPASSWORD=${FAKE}`);
+    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+  });
+
+  it('keeps a string it leaves byte for byte, and writes one it changes as JSON.stringify does', () => {
+    const text = `{"a":"\\u4e2d\\/x\\n","b":"\\u4e2d\\nPGPASSWORD=${FAKE}"}`;
+    expect(scrub(text)).toEqual({
+      value: `{"a":"\\u4e2d\\/x\\n","b":${JSON.stringify(`中\nPGPASSWORD=${REDACTED}`)}}`,
+      redactedValues: 1,
+    });
+  });
+
+  it('leaves keys, strings without an escape and a string the text ends inside to the text pass', () => {
+    for (const text of [
+      '{"x\\nBasic dXNlcjpwYXNzd29yZA==":1}',
+      `{"a":"PGPASSWORD=${FAKE}"}`,
+      `{"a":"x\\nPGPASSWORD=${FAKE}`,
+    ]) {
+      expect(scrub(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  it('still replaces a secret-named field whole, and counts each once; a second pass changes nothing', () => {
+    const text = `{"password":"a\\nb","items":["x\\nPGPASSWORD=${FAKE}"]}`;
+    const once = scrub(text);
+    expect(once).toEqual({
+      value: `{"password":"${REDACTED}","items":[${JSON.stringify(`x\nPGPASSWORD=${REDACTED}`)}]}`,
+      redactedValues: 2,
+    });
+    expect(scrub(once.value)).toEqual({ value: once.value, redactedValues: 0 });
+  });
+
+  it('without scrubValue, strings are left to the text pass as before', () => {
+    const text = result(`x\nPGPASSWORD=${FAKE}`);
+    expect(redactSecretFieldsInJsonText(text, namesASecretField)).toEqual({
+      value: text,
+      redactedValues: 0,
+    });
+  });
+
+  it.each([
+    ['one long escaped string', `{"a":"${'\\nPGPASSWORD=x'.repeat(14_000)}"}`],
+    ['many escaped strings', `[${'"\\nPGPASSWORD=x",'.repeat(10_000)}"y"]`],
+    ['escapes only', `{"a":"${'\\n'.repeat(100_000)}"}`],
+  ])('%s × 200 KB within 1 s', (_name, text) => {
+    scrub(text.slice(0, 1_000));
+    const started = performance.now();
+    scrub(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
 describe('redactSecrets — jsonTextFields: the key rule over strings that are JSON text', () => {
   // The value patterns alone take only the token after `"credentials": ` (here the `{`).
   const text = '{"name": "db-1", "credentials": {"user": "bob", "pin": 1234}}';
@@ -1108,5 +1188,17 @@ describe('redactSecrets — jsonTextFields: the key rule over strings that are J
     for (const options of [{ isSecretKey: namesASecretField }, { jsonTextFields: true }]) {
       expect(shown(options).text).toContain('"user": "bob", "pin": 1234');
     }
+  });
+
+  it('scrubs its escaped strings decoded too — the literals and the patterns (legacy 916)', () => {
+    const dump = JSON.stringify({ stdout: `HOME=/w\nPGPASSWORD=${FAKE}\nNOTE=hunter2-plain-word` });
+    const redacted = redactSecrets(
+      { text: dump },
+      { isSecretKey: namesASecretField, jsonTextFields: true, literals: ['hunter2-plain-word'] },
+    );
+    expect((redacted.value as { text: string }).text).toBe(
+      JSON.stringify({ stdout: `HOME=/w\nPGPASSWORD=${REDACTED}\nNOTE=${REDACTED}` }),
+    );
+    expect(redacted.redactedValues).toBe(2);
   });
 });

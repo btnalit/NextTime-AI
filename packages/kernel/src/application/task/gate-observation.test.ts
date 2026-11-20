@@ -193,6 +193,19 @@ describe('gatePayloadKeptRaw — what the scrub counts (legacy 817)', () => {
     expect(gatePayloadKeptRaw(storedBefore({ rows: rows(400) }))).toBe(false);
   });
 
+  it('a result stored cut reads its strings decoded: a secret on its own line is found (legacy 916)', () => {
+    const log = `start\nPGPASSWORD=${PLAIN}\ndone`;
+    const before = storedBefore({ log, rows: rows(400) });
+    expect(before.truncated).toBe(true);
+    // The text holds the line after `\n`, which the value patterns over it pass.
+    expect(before.payload).toContain(`\\nPGPASSWORD=${PLAIN}`);
+    expect(gatePayloadKeptRaw(before)).toBe(true);
+    // Written now, it is hidden in the kept copy, which is not counted, with or without the marker.
+    const { payloadRedacted: _, ...unmarked } = storedNow({ log, rows: rows(400) });
+    expect(unmarked.payload).toContain('"log":"start\\nPGPASSWORD=[redacted]\\ndone"');
+    expect(gatePayloadKeptRaw(unmarked)).toBe(false);
+  });
+
   it('a row written now is marked as the kept copy and never counted', () => {
     for (const payload of [
       { database: { user: 'app', password: PLAIN } },

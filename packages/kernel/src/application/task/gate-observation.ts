@@ -140,7 +140,8 @@ export function keptGatePayload(payload: unknown): {
  * other row was written before legacy 237: a payload kept whole is judged by the rule itself
  * (`redactSuspectedSecrets` with `secretFields`); one stored cut, as text (`truncated`: the
  * serialized result cut at `GATE_OBSERVATION_PAYLOAD_MAX_CHARS`), by the same field rule over its
- * JSON text and then the value patterns over all of it — as a stored tool call's result is
+ * JSON text — its escaped strings scrubbed decoded too (legacy 916) — and then the value patterns
+ * over all of it — as a stored tool call's result is
  * (application/chat/tool-call-record.ts `rescrubStoredToolCallResult`). Over text the patterns
  * also read the JSON's punctuation (`"credentials":{` reads as a value given to `credentials`), so
  * a cut row can be counted that the rule would leave as it is: an upper bound, which is why a row
@@ -151,7 +152,7 @@ export function gatePayloadKeptRaw(content: Record<string, unknown>): boolean {
   if (content.payloadRedacted === true) return false;
   const payload = content.payload ?? null;
   if (content.truncated === true && typeof payload === 'string') {
-    const fields = redactSecretFieldsInJsonText(payload, namesASecretField);
+    const fields = redactSecretFieldsInJsonText(payload, namesASecretField, scrubSecretValues);
     return scrubSecretValues(fields.value).value !== payload;
   }
   const redacted = redactSuspectedSecrets(payload, { secretFields: true });
