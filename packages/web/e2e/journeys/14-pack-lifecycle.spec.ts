@@ -120,11 +120,18 @@ async function openPack(page: Page) {
 }
 
 /** A review that moves an authority boundary: `confirmLabel` held, saying what is still needed,
- *  until its one confirmation is ticked (I-A4) — the install, the upgrade and the rollback alike. */
-async function confirmBoundary(page: Page, dialogName: string, confirmLabel: string) {
+ *  until its one confirmation is ticked (I-A4) — the install, the upgrade and the rollback alike.
+ *  The rollback's confirmation says it is the rollback and the version it goes back to (legacy
+ *  668), so it is passed its own name. */
+async function confirmBoundary(
+  page: Page,
+  dialogName: string,
+  confirmLabel: string,
+  tickName: RegExp = /^我确认这会改变权限边界：/,
+) {
   const dialog = page.getByRole('dialog', { name: dialogName });
   const confirm = dialog.getByRole('button', { name: confirmLabel, exact: true });
-  const tick = dialog.getByRole('checkbox', { name: /^我确认这会改变权限边界：/ });
+  const tick = dialog.getByRole('checkbox', { name: tickName });
   await expect(tick).toHaveCount(1, { timeout: 15_000 });
   await expect(confirm).toBeDisabled();
   await expect(dialog.getByText('还差：勾选 1 项权限边界确认')).toBeVisible();
@@ -349,7 +356,12 @@ test.describe('Journey ⑭: 能力包的一生：导出、放进部署、审阅�
     await expect(change).toContainText(`能力包 ${PACK} v2`, { timeout: 15_000 });
     await change.getByRole('button', { name: '撤销这条安装记录…' }).click();
     // Back to v1's text is a change of what the Skill tells a Worker: confirmed like the upgrade.
-    await confirmBoundary(page, '撤销这条安装记录', '撤销');
+    await confirmBoundary(
+      page,
+      '撤销这条安装记录',
+      '撤销',
+      /^我确认撤销会改变权限边界（撤销后 .+ 从第 \d+ 版回到第 \d+ 版）：/,
+    );
     await expect(change.getByTestId('catalog-change-status')).toHaveText('已撤销', {
       timeout: 15_000,
     });
