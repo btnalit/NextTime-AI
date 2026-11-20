@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { LangProvider } from '../../lib/i18n.js';
-import { HandlesList, type HandlesScope } from './HandlesList.js';
+import { HandlesList, type HandlesScope, distinctShortIds } from './HandlesList.js';
 
 afterEach(() => {
   cleanup();
@@ -252,6 +252,68 @@ describe('HandlesList', () => {
       '已读到的会话凭证里还没有这一类的，点「加载更多」接着读。',
     );
     expect(screen.getByTestId('handles-self-more')).toBeTruthy();
+  });
+
+  it('legacy 902: names each session by its short id and note, in the row and in the revoke confirm', async () => {
+    const noted = handle({
+      jti: '55555555-5555-4555-8555-555555555555',
+      sessionId: '0f3a9c21-7b4e-4d6a-9e10-5c2b8a7d6e4f',
+      sessionShortId: '0f3a9c21',
+      sessionNote: '笔记本上的客户端',
+    });
+    const { http } = scriptedHttp(() => ({ items: [ENTRY, noted] }));
+    show(http);
+    const rowId = noted.sessionId;
+    const row = await screen.findByTestId(`handle-session-${rowId}`);
+    expect(within(row).getByTestId(`handle-session-short-${rowId}`).textContent).toBe(
+      '会话 0f3a9c21',
+    );
+    expect(within(row).getByTestId(`handle-session-note-${rowId}`).textContent).toBe(
+      '备注：笔记本上的客户端',
+    );
+    // A session no person issued has no note line.
+    expect(screen.queryByTestId('handle-session-note-session-entry')).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: '撤销' }));
+    const confirm = await screen.findByTestId(`handle-session-revoke-confirm-${rowId}`);
+    expect(confirm.textContent).toContain('（会话 0f3a9c21）');
+    expect(confirm.textContent).toContain('备注：笔记本上的客户端');
+  });
+
+  it('legacy 902: two listed sessions sharing a short id each show more of their id, until they differ', async () => {
+    const first = handle({
+      jti: '66666666-6666-4666-8666-666666666666',
+      sessionId: '0f3a9c21-7b4e-4d6a-9e10-5c2b8a7d6e4f',
+      sessionShortId: '0f3a9c21',
+    });
+    const second = handle({
+      jti: '77777777-7777-4777-8777-777777777777',
+      sessionId: '0f3a9c21-7b9f-4d6a-9e10-5c2b8a7d6e4f',
+      sessionShortId: '0f3a9c21',
+    });
+    const { http } = scriptedHttp(() => ({ items: [first, second, ENTRY] }));
+    show(http);
+    expect((await screen.findByTestId(`handle-session-short-${first.sessionId}`)).textContent).toBe(
+      '会话 0f3a9c217b4',
+    );
+    expect(screen.getByTestId(`handle-session-short-${second.sessionId}`).textContent).toBe(
+      '会话 0f3a9c217b9',
+    );
+    expect(screen.getByTestId('handle-session-short-session-entry').textContent).toContain(
+      ENTRY.sessionShortId,
+    );
+  });
+
+  it('distinctShortIds keeps a unique short id and lengthens only the ones that collide', () => {
+    const shown = distinctShortIds([
+      { sessionId: 'AAAAAAAA-1111-4000-8000-000000000000', sessionShortId: 'aaaaaaaa' },
+      { sessionId: 'aaaaaaaa-1112-4000-8000-000000000000', sessionShortId: 'aaaaaaaa' },
+      { sessionId: 'aaaaaaaa-2000-4000-8000-000000000000', sessionShortId: 'aaaaaaaa' },
+      { sessionId: 'bbbbbbbb-0000-4000-8000-000000000000', sessionShortId: 'bbbbbbbb' },
+    ]);
+    expect(shown.get('AAAAAAAA-1111-4000-8000-000000000000')).toBe('aaaaaaaa1111');
+    expect(shown.get('aaaaaaaa-1112-4000-8000-000000000000')).toBe('aaaaaaaa1112');
+    expect(shown.get('aaaaaaaa-2000-4000-8000-000000000000')).toBe('aaaaaaaa2');
+    expect(shown.get('bbbbbbbb-0000-4000-8000-000000000000')).toBe('bbbbbbbb');
   });
 
   it('reads in English', async () => {

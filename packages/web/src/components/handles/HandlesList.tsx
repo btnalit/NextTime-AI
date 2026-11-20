@@ -24,6 +24,9 @@ interface SessionGroup {
   readonly holder: HandleWire['holder'];
   readonly onBehalfOfKind: HandleWire['onBehalfOfKind'];
   readonly onBehalfOfName: string | null;
+  /** Legacy 168 (902): the session's short id, and the note given it when it was issued. */
+  readonly sessionShortId: string;
+  readonly sessionNote: string | null;
   readonly handles: readonly HandleWire[];
 }
 
@@ -43,9 +46,52 @@ function groupBySession(items: readonly HandleWire[]): readonly SessionGroup[] {
       holder: first.holder,
       onBehalfOfKind: first.onBehalfOfKind,
       onBehalfOfName: first.onBehalfOfName,
+      sessionShortId: first.sessionShortId,
+      sessionNote: first.sessionNote,
       handles,
     };
   });
+}
+
+/** A session id's hex digits, lowercase — what its short id is the start of. */
+function sessionHex(sessionId: string): string {
+  return sessionId.replaceAll('-', '').toLowerCase();
+}
+
+/**
+ * Legacy 168 (902): the short id each listed session is shown by. The kernel's `sessionShortId` (8
+ * hex digits) is not unique; where two listed sessions share one, each of them shows as many more
+ * digits of its id as it takes to differ from the others — so no two rows read the same.
+ */
+export function distinctShortIds(
+  sessions: readonly { readonly sessionId: string; readonly sessionShortId: string }[],
+): ReadonlyMap<string, string> {
+  const byShort = new Map<string, string[]>();
+  for (const { sessionId, sessionShortId } of sessions) {
+    const same = byShort.get(sessionShortId);
+    if (same) same.push(sessionId);
+    else byShort.set(sessionShortId, [sessionId]);
+  }
+  const shown = new Map<string, string>();
+  for (const [short, ids] of byShort) {
+    if (ids.length === 1) {
+      shown.set(ids[0] as string, short);
+      continue;
+    }
+    for (const id of ids) {
+      const hex = sessionHex(id);
+      let digits = short.length;
+      for (const other of ids) {
+        if (other === id) continue;
+        const otherHex = sessionHex(other);
+        let common = 0;
+        while (common < hex.length && hex[common] === otherHex[common]) common += 1;
+        digits = Math.max(digits, common + 1);
+      }
+      shown.set(id, hex.slice(0, Math.min(digits, hex.length)));
+    }
+  }
+  return shown;
 }
 
 export function sessionKindLabel(kind: SessionKind, t: Translate): string {
@@ -91,7 +137,9 @@ function sessionSpan(handles: readonly HandleWire[]): { issuedAt: string; expire
  * (「成员与授权」) — `list_handles`, never a token. Grouped by session, as they end: each says what
  * it is (its session kind), how it is held — the platform holds an agent's or a Worker's, which
  * ends with its conversation or Task; a client holds an MCP or service session's — when it was
- * issued and expires, and what it may call. A session a client holds can be ended here
+ * issued and expires, and what it may call. Each names its session by a short id (more digits
+ * where two rows share the first 8) and the note given it when issued, so two sessions of one kind
+ * or two of one service account can be told apart (legacy 902). A session a client holds can be ended here
  * (`revoke_handle`, which ends every Handle under it, so the confirm says how many); one the
  * platform holds says how it ends instead.
  */
@@ -128,6 +176,7 @@ export function HandlesList({
     );
     return groupBySession(mine);
   }, [state, scope]);
+  const shortIds = useMemo(() => distinctShortIds(groups), [groups]);
 
   if (state.status === 'loading') {
     return (
@@ -195,6 +244,7 @@ export function HandlesList({
               key={group.sessionId}
               http={http}
               group={group}
+              shortId={shortIds.get(group.sessionId) ?? group.sessionShortId}
               onRevoked={(result) => {
                 setEnded({ count: result.revokedHandleCount, kind: result.sessionKind });
                 void handles.reload();
@@ -265,11 +315,14 @@ function endedText(ended: { count: number; kind: SessionKind }, t: Translate): s
 function SessionRow({
   http,
   group,
+  shortId,
   onRevoked,
   onGone,
 }: {
   readonly http: CapabilityCaller;
   readonly group: SessionGroup;
+  /** How this row names its session — longer than 8 digits when another row shares those. */
+  readonly shortId: string;
   readonly onRevoked: (result: RevokeHandleResultWire) => void;
   /** The kernel no longer has it (revoked or expired meanwhile): the list reads again. */
   readonly onGone: () => void;
@@ -294,6 +347,13 @@ function SessionRow({
             {kind}
             {service ? ` · ${serviceName}` : null}
           </strong>
+          <span className="text-3 text-small" data-testid={`handle-session-short-${rowId}`}>
+            {t('会话 ', 'Session ')}
+            {/* Derived from the session id, so it differs run to run (masked in screenshots). */}
+            <span className="mono" data-volatile="">
+              {shortId}
+            </span>
+          </span>
           <span
             className={`chip chip-s ${group.holder === 'container' ? 'chip-neutral' : 'chip-info'}`}
             data-testid={`handle-session-holder-${rowId}`}
@@ -303,6 +363,12 @@ function SessionRow({
               : t('客户端持有', 'Held by a client')}
           </span>
         </div>
+        {group.sessionNote !== null ? (
+          <span className="text-2 text-small" data-testid={`handle-session-note-${rowId}`}>
+            {t('备注：', 'Note: ')}
+            {group.sessionNote}
+          </span>
+        ) : null}
         <span className="text-3 text-small">
           {t('签发于 ', 'Issued ')}
           <When at={issuedAt} />
@@ -353,8 +419,19 @@ function SessionRow({
               }
               title={
                 service
-                  ? t(`撤销服务账号 ${serviceName} 的会话`, `Revoke ${serviceName}'s session`)
-                  : t(`撤销这个${kind}`, `Revoke this ${lowerFirst(kind)}`)
+                  ? t(
+                      `撤销服务账号 ${serviceName} 的会话 ${shortId}`,
+                      `Revoke ${serviceName}'s session ${shortId}`,
+                    )
+                  : t(
+                      `撤销这个${kind}（会话 ${shortId}）`,
+                      `Revoke this ${lowerFirst(kind)} (session ${shortId})`,
+                    )
+              }
+              description={
+                group.sessionNote !== null
+                  ? t(`备注：${group.sessionNote}`, `Note: ${group.sessionNote}`)
+                  : undefined
               }
               impact={[
                 count > 1
