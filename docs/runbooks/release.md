@@ -3666,7 +3666,8 @@ select 'reconcile', count(*) from action_requests r
     - **日志**：每对上一处打印一行 `live-api-key <表> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
       - `<行>` 是这一行的主键，多列时用 `/` 连接：大多数表是 `<工作区>/<id>`，`audit_records` 只有 `<id>`，没有主键的表给 `ctid`。
         主键里某一列的值会被值规则删减，或含 43 个以上连续的 base64url 字符（有人把 key 或 Handle 用作或嵌进了连接器名之类的文本主键），
-        这一列整个换成 `[redacted]`，日志和审计行都不出现它。uuid 只有 36 个字符，不受影响。
+        这一列整个换成 `[redacted]`，日志和审计行都不出现它。uuid 只有 36 个字符，不受影响；44 个字符以上的 `gate_id`、`check_key` 这类名字也会显示成
+        `[redacted]`，处置不需要它们，按 Principal 轮换即可。
       - 同一行里有两把 key 就打两行。
       - Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。
       - 不输出 key 的任何片段，不输出哈希，也不输出是哪一列。
@@ -3704,6 +3705,19 @@ select 'reconcile', count(*) from action_requests r
   - 改写与写入的行为都没变。
 - **预检 SQL**：认不出没有前缀的 key（§3.207），这次不加列。精确计数看清洗日志。
 - **回滚**（见 §6，没有迁移）：只回退代码。上一版的清洗没有 `auditPayloads` 和比对，其他照旧。
+- 下一次主机升级的提示要带上本节。
+
+### 3.209 owner 查找可添加的平台用户（遗留 150，core 0064，0.69.2 之后的下一版）
+
+**迁移 core 0064**：只加一个 `security definer` 函数 `lookup_users_for_owner(text, integer)`，随 `--pull` 自动执行，不动数据，不锁表。
+
+- **函数**：只回答本事务所在工作区里有效（没停用）的 human 或 service owner，其他调用者报 42501。按登录名或显示名子串匹配（去掉首尾空白、不区分大小写，至少 2 个字符，`%`、`_` 不是通配符）。只列 `add_member` 能加的用户：没停用、不是本工作区的有效成员、不是验收残留（与 `list_users` 的 `hideResidual` 同一条件）。只返回登录名和显示名，最多 21 行。`search_path` 是 `public, pg_temp`，PUBLIC 没有执行权限，只授给 `nexttime_app`。
+- **行为变化**：新增能力 `lookup_users`（只在人的通道，minRole owner）：工作区 owner 按登录名或显示名查找可以添加的平台用户，最多 20 条，多了带 `truncated`。以前不是平台管理员的 owner 只能手打登录名。控制台的搜索选择由控制台一半接着做。
+- **升级影响**：没有需要手工执行的步骤。
+- **升级后只读核对**（以表的属主运行，结果记 `docs/private/`）：
+  - `select version from schema_migrations where module = 'core' and version = 64;` 返回一行。
+  - `select proconfig from pg_proc where proname = 'lookup_users_for_owner';` 含 `search_path=public, pg_temp`。
+- **回滚**（见 §6 一行）：只需回退代码，上一版从不调这个函数。要连 schema 一起撤：`drop function lookup_users_for_owner(text, integer);`，再删 `schema_migrations` 里 core 64 那一行。
 - 下一次主机升级的提示要带上本节。
 
 ## 4. Hotfix 流程
@@ -3907,6 +3921,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
 | 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#1531，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
 | 0.69.2 之后的下一版 | governance `0049_session_note`（#1549，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
+| 0.69.2 之后的下一版 | core `0064_lookup_users_for_owner`（遗留 150）：`security definer` 函数 `lookup_users_for_owner(text, integer)`，只回答本工作区有效的 owner，返回可添加用户的登录名和显示名（最多 21 行），不改数据 | 可逆 | 只加函数：上一版从不调它 | 只需回退代码。要撤 schema：`drop function lookup_users_for_owner(text, integer);`，再删 `schema_migrations` 里 core 64 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
