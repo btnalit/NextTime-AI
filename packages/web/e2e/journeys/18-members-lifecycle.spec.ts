@@ -14,15 +14,17 @@ import {
 } from './helpers.js';
 
 /**
- * Journey ⑱: 成员资格与服务凭证的一生——平台管理员把一个用户加进工作区、改角色、移出；所有者给一个服务
- * 凭证改角色、轮换 API key、停用它（遗留 657，缺口 G5：控制台写操作走真实内核）
+ * Journey ⑱: 成员资格与服务凭证的一生——平台管理员把一个用户加进工作区、改角色、移出；所有者撤销一个服务
+ * 凭证的会话凭证，给它改角色、轮换 API key、停用它（遗留 657，缺口 G5：控制台写操作走真实内核；遗留 168）
  *
  * 步骤:
  *   1. 平台管理员在「用户」里找到一个还不属于任何工作区的用户，点「管理 → 管理成员资格」，把他加入这条
  *      旅程的全新工作区，角色保持默认的成员（`add_membership`）。
  *   2. 在这一条成员资格上把角色改成运维（`set_membership_role`）。
  *   3. 点「移出」再「确认移出」（`remove_membership`）——成员资格留着、标为已移出。
- *   4. 工作区所有者在「成员与授权」打开一个服务凭证，把角色从成员改成运维、保存（`set_principal_role`）。
+ *   4a. 工作区所有者在「成员与授权」的「服务账号的会话凭证」里找到这个服务凭证的会话，撤销它
+ *      （`list_handles`、`revoke_handle`，遗留 168）。
+ *   4. 打开这个服务凭证，把角色从成员改成运维、保存（`set_principal_role`）。
  *   5. 「轮换 API key」，新 key 只显示一次（`rotate_api_key`）。
  *   6. 「停用成员」再「确认停用」（`disable_principal`）。
  * 状态覆盖:
@@ -33,6 +35,8 @@ import {
  *   - 无权限: 跳过——旅程 ⑧ 走过各角色打开成员与授权不出 403；非所有者看不到编辑区由组件测试覆盖。
  *   - 窄屏: 跳过——`00-gates/` 的截图门槛在 768 宽度下截过成员与授权和用户页。
  * 成功判据:
+ *   - 撤销后这一行消失、页面说凭证已失效；从页面外读 `list_handles` 不再有这个会话，撤销前能调用
+ *     `graph_overview` 的 Handle 之后被拒（401）。
  *   - 六个动作都由真实内核答复，页面跟着变（新的成员资格一行、已移出的标记、轮换后的新 key、状态「已停用」），
  *     并从页面外读内核状态确认真的变了：`list_user_memberships` 先是成员、再是运维、最后已移出；
  *     `list_principals` 里服务凭证的角色是运维、停用时间有了；轮换后新 key 能以这个服务凭证的身份调用
@@ -40,7 +44,7 @@ import {
  *
  * 准备工作在页面外做，不算控制台操作：平台管理员建一个不加入任何工作区的用户（`create_user`，旅程 ⑥ 与
  * `createPlatformUser` 在控制台里走过），所有者建一个成员角色的服务凭证（`create_principal`，旅程 ⑮ 同样在
- * 页面外建）。这条旅程只动自己建的用户、工作区和服务凭证，不碰平台管理员和共享的用户。只有页面发出的调用才
+ * 页面外建）并给它签发一个 Handle（`issue_service_handle`，integrations.spec.ts 在控制台里走过）。这条旅程只动自己建的用户、工作区和服务凭证，不碰平台管理员和共享的用户。只有页面发出的调用才
  * 算数（`lib/test.ts`），所以准备和核对都从 Node 调，六个动作都由页面发出。
  */
 
@@ -91,6 +95,15 @@ async function membershipIn(
     userId,
   });
   return items.find((membership) => membership.workspaceName === workspaceName);
+}
+
+/** A capability called with a Handle from Node — the raw response, so a refused Handle can be read
+ *  (the kernel resolves the Bearer token before the cookie, as `getWorkspaceWithKey`). */
+function graphOverviewWithHandle(page: Page, handle: string) {
+  return page.request.post('/api/cap/graph_overview', {
+    headers: { authorization: `Bearer ${handle}` },
+    data: {},
+  });
 }
 
 async function listedPrincipal(page: Page, id: string): Promise<PrincipalWire | undefined> {
@@ -185,8 +198,36 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
       { role: 'member', displayName: SERVICE_NAME },
     );
     const oldKey = service.apiKey;
+    const issued = await callCap<{ handle: string; sessionId: string }>(
+      page,
+      'issue_service_handle',
+      { principalId: service.principal.id, scope: ['graph_overview'] },
+    );
+    expect((await graphOverviewWithHandle(page, issued.handle)).status()).toBe(200);
 
     await goToByLabel(page, '成员与授权');
+
+    // --- 4a. 服务账号的会话凭证：这个服务凭证的会话，撤销（遗留 168） -----------------------------
+    const serviceHandles = page.getByTestId('handles-service');
+    const handleSession = serviceHandles.getByTestId(`handle-session-${issued.sessionId}`);
+    await expect(handleSession).toContainText(SERVICE_NAME, { timeout: 15_000 });
+    await expect(handleSession).toContainText('客户端持有');
+    await handleSession.getByRole('button', { name: '撤销', exact: true }).click();
+    const revokeConfirm = page.getByTestId(`handle-session-revoke-confirm-${issued.sessionId}`);
+    await expect(revokeConfirm).toContainText('这个凭证立即失效');
+    await revokeConfirm.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(serviceHandles.getByTestId('handles-service-revoked')).toContainText('已失效', {
+      timeout: 15_000,
+    });
+    await expect(handleSession).toHaveCount(0);
+    const { items: liveHandles } = await callCap<{ items: { sessionId: string }[] }>(
+      page,
+      'list_handles',
+      {},
+    );
+    expect(liveHandles.some((row) => row.sessionId === issued.sessionId)).toBe(false);
+    expect((await graphOverviewWithHandle(page, issued.handle)).status()).toBe(401);
+
     await page
       .getByRole('list', { name: 'Members', exact: true })
       .getByRole('button')

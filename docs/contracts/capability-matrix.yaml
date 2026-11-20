@@ -507,7 +507,7 @@ capabilities:
     console: required
     agents: [entry, admin]
   list_handles:
-    console: "none: 遗留 168 的控制台一半接着在「我的账户」与「成员与授权」列出 Handle（持有方式、签发与到期时间）并撤销；在那之前人看 Handle 走平台的「外部运行时」盘点与审计页"
+    console: required
     agents: []
   list_grants:
     console: required
@@ -915,8 +915,9 @@ capabilities:
     e2e: "waived: 657"
     repeat: "conflict: not_found"
   revoke_handle:
-    console: "none: 遗留 168 的控制台一半接着在 Handle 列表上加撤销；在那之前平台管理员在「外部运行时」盘点里撤销"
+    console: required
     agents: []
+    e2e: observed
     repeat: "conflict: handle_not_found"  # the first call revoked its session, so the same call again finds no live Handle (404)
   revoke_external_runtime:
     console: required

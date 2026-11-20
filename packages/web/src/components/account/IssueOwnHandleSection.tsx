@@ -83,6 +83,8 @@ function ceilingKindLabel(kind: CeilingKind, t: Translate): string {
 
 export interface IssueOwnHandleSectionProps {
   readonly http: CapabilityCaller;
+  /** Legacy 168: a Handle was issued — the page's Handle list reads again. */
+  readonly onIssued?: () => void;
 }
 
 function CopyButton({ text, label }: { readonly text: string; readonly label: string }) {
@@ -128,7 +130,7 @@ function CopyButton({ text, label }: { readonly text: string; readonly label: st
  * capabilities.ts`), so this section offers no history/revoke list — the howto doc's own
  * "排障"/撤销 section says the same.
  */
-export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
+export function IssueOwnHandleSection({ http, onIssued }: IssueOwnHandleSectionProps) {
   const t = useT();
   const ttlPresets = ttlPresetDaysWithin(OWN_HANDLE_TTL_PRESET_DAYS, issueHandleMaxTtlSeconds());
   const entryCeiling = entryCeilingCapabilities();
@@ -183,6 +185,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
         ...(Object.keys(scope).length > 0 ? { scope } : {}),
       };
       setIssued(await http.call<IssueHandleResult>('issue_handle', params));
+      onIssued?.();
     } catch (err) {
       setError(err);
     } finally {

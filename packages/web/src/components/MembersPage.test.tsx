@@ -46,6 +46,7 @@ function scriptedHttp(
   const calls: { name: string; params: unknown }[] = [];
   const base: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
     get_workspace: () => workspace('owner'),
+    list_handles: () => ({ items: [] }),
     ...handlers,
   };
   return {
@@ -106,6 +107,8 @@ describe('MembersPage', () => {
     // D3 / screenshot review of #305: the Handle-issuance trigger moved here from Access is gated
     // the same owner-only way as every other write button on this page.
     expect(screen.queryByTestId('issue-service-handle-trigger')).toBeNull();
+    // Legacy 168: nor the service accounts' Handles.
+    expect(screen.queryByTestId('handles-service')).toBeNull();
   });
 
   it('D3: an owner session can open the Handle-issuance drawer moved here from Access', async () => {
@@ -252,6 +255,35 @@ describe('MembersPage', () => {
     await screen.findByTestId('create-principal-key');
     fireEvent.click(screen.getByRole('button', { name: /我已复制/ }));
     expect(await screen.findByTestId('issue-service-handle-drawer')).toBeTruthy();
+  });
+
+  it('legacy 168: an owner sees the service accounts’ live Handles, and revokes a client’s', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [principal()] }),
+      list_handles: () => ({
+        items: [
+          {
+            jti: '44444444-4444-4444-8444-444444444444',
+            sessionId: 'session-service',
+            sessionKind: 'service',
+            holder: 'bearer',
+            onBehalfOf: 'p-ci',
+            onBehalfOfKind: 'service',
+            onBehalfOfName: 'ci-bot',
+            issuedAt: '2026-11-19T00:00:00.000Z',
+            expiresAt: '2026-12-19T00:00:00.000Z',
+            capabilities: ['list_tasks'],
+            revocable: true,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('handle-session-session-service');
+    expect(screen.getByRole('heading', { name: '服务账号的会话凭证' })).toBeTruthy();
+    expect(row.textContent).toContain('服务账号会话');
+    expect(row.textContent).toContain(' · ci-bot');
+    expect(within(row).getByRole('button', { name: '撤销' })).toBeTruthy();
   });
 
   it('C9: an owner session (authoritative role) keeps the owner-only buttons', async () => {

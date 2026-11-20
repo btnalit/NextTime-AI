@@ -36,6 +36,7 @@ function scriptedHttp(
   const base: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
     get_workspace: () => workspace('owner'),
     list_gatekeepers: () => ({ items: [] }),
+    list_handles: () => ({ items: [] }),
     ...handlers,
   };
   return {
@@ -499,6 +500,20 @@ describe('AccountPage: D3 Handle-issuance card', () => {
     );
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     expect(screen.queryByTestId('issue-own-handle-section')).toBeNull();
+  });
+
+  it('legacy 168: lists the Handles acting for the reader — a member too — and re-reads after issuing one', async () => {
+    const http = scriptedHttp({ get_workspace: () => workspace('member') });
+    render(
+      <AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} http={http} />,
+    );
+    expect((await screen.findByTestId('handles-self-empty')).textContent).toBe(
+      '现在没有代表你的会话凭证。',
+    );
+    expect(screen.getByText('会话凭证')).toBeTruthy();
+    expect(http.calls.filter((c) => c.name === 'list_handles')).toEqual([
+      { name: 'list_handles', params: {} },
+    ]);
   });
 
   it('is absent when no `http` is passed (no workspace in scope — platform-only admin, or the pre-session noWorkspace state)', () => {
