@@ -182,7 +182,11 @@ function VersionBlock({
         testId={`${testId}-numbers`}
       />
       {version.segments.length > 0 ? (
-        <details className="disclosure" data-testid={`${testId}-segments`}>
+        <details
+          className="disclosure"
+          open={version.segments.some((segment) => segment.reviewSuggested)}
+          data-testid={`${testId}-segments`}
+        >
           <summary>
             {t(
               `按运行环境（${version.segments.length} 组）`,

@@ -1013,7 +1013,7 @@ config/packs/
 mkdir -p ${NEXTTIME_DATA}/config/packs && cd ${NEXTTIME_DATA}/config/packs
 # 一条链：哪一步失败都不往下走；没有符号链接才 mv；内核以 uid 10001 读，所以要 chmod
 mkdir .incoming \
-  && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes.tar -C .incoming \
+  && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes-1.tar -C .incoming \
   && test -z "$(find .incoming -type l)" \
   && chmod -R a+rX .incoming \
   && mv -T .incoming/org-notes ./org-notes \
@@ -1057,7 +1057,8 @@ rm -r .incoming
 管理员智能体在试验工作区里摸索出来的本体族、Skill 和 Worker，经提案应用到一个工作区并验证通过之后，平台管理员可以把那一段导出成
 能力包，放进 §14.10 的附加包目录，别的工作区就能像装其他包一样装。
 
-- 能力：平台面的 `export_admin_proposal_pack`（`segmentId`、`summary`，可选 `notes`）。控制台入口在 AA5d-3 加。
+- 能力：平台面的 `export_admin_proposal_pack`（`segmentId`、`summary`，可选 `notes`）。控制台入口在「平台 → 管理员提案」里这一段的「导出成能力包」（AA5d-3），
+  下载的文件名是 `<包名>-<版本>.tar`（比如 `org-notes-1.tar`），里面是 `<包名>/<版本>/…`，按 §14.10 解进 `config/packs/`。
 - 包名就是提案的来源名（`sourceName`），版本是 1。提案应用时，新的 Skill 和 Worker 族就是按来源名派生 id 的，所以导出的包和应用过的
   工作区里的是同一批 id：放进去以后，那个工作区的「能力包」里它直接是「已是最新」，不用再装。
 - 带什么：本体族、Skill、Worker，内容就是这一段应用时的内容。Worker 不带门和模型（它们属于工作区），带它在提案里列的 `systems`；
@@ -1083,8 +1084,8 @@ rm -r .incoming
 
 `segmentId` 不是一个工作区部分（不存在，或是平台部分）就是 404 `admin_proposal_segment_not_found`。
 
-**放进附加包目录**：结果的 `files` 每一项是相对 `config/packs/` 的路径和内容。控制台入口（AA5d-3）之前，把整个响应存成 `export.json`，
-写成目录、打包，再按 §14.10 放进去。这一段要 `jq`，主机上不一定有，可以在装了 `jq` 的机器上做完，再把 tar 拷过去：
+**放进附加包目录**：结果的 `files` 每一项是相对 `config/packs/` 的路径和内容。从控制台导出时下载的就是打好的 tar，直接按 §14.10
+放进去；不经控制台时，把整个响应存成 `export.json`，写成目录、打包，再按 §14.10 放进去。这一段要 `jq`，主机上不一定有，可以在装了 `jq` 的机器上做完，再把 tar 拷过去：
 
 ```
 cap export_admin_proposal_pack '{"segmentId":"<segmentId>","summary":"<一句简介>"}' > export.json
@@ -1095,7 +1096,7 @@ jq -c '.result.files[]' ../export.json | while read -r f; do
   # 只写相对 config/packs/ 的路径：绝对路径、带 .. 的、空的都停下
   case "$p" in '' | /* | *..*) echo "路径不对，停下：$p"; exit 1 ;; esac
   mkdir -p "$(dirname "$p")" && printf '%s' "$f" | jq -j .content > "$p" || exit 1
-done && tar -cf ../<sourceName>.tar <sourceName>
+done && tar -cf ../<sourceName>-1.tar <sourceName>
 ```
 
 **已知限制**：

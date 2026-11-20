@@ -273,6 +273,61 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
     );
   });
 
+  it('legacy 668: 「原样」 leads the combinations; the list holding the 「建议复核」 is open, the other closed', async () => {
+    show(scriptedHttp('builder', () => stats()));
+    const combinations = await screen.findByTestId('worker-usage-version-2-combinations');
+    expect((combinations as HTMLDetailsElement).open).toBe(true);
+    // No run environment suggests the review, so that list stays closed.
+    expect((screen.getByTestId('worker-usage-version-2-segments') as HTMLDetailsElement).open).toBe(
+      false,
+    );
+    const order = within(combinations)
+      .getAllByTestId(/^worker-usage-version-2-combination-[^-]+$|as-defined$/)
+      .map((row) => row.getAttribute('data-testid'));
+    expect(order).toEqual([
+      'worker-usage-version-2-combination-as-defined',
+      `worker-usage-version-2-combination-${REF_A}`,
+      `worker-usage-version-2-combination-${REF_B}`,
+    ]);
+    expect(screen.getByTestId('worker-usage-version-2-review-reason').textContent).toContain(
+      '下面展开的那一组就是',
+    );
+  });
+
+  it('legacy 668: a result the output contract refused reads 「交回的结果被拒」 once, not beside 「没有交回结果」', async () => {
+    show(
+      scriptedHttp('owner', () =>
+        stats({
+          failureGroups: [
+            {
+              definitionVersion: 2,
+              specRef: REF_A,
+              specDigest: SPEC_A,
+              category: 'no_result',
+              refusal: 'output_rejected',
+              tasks: 1,
+              lastFailedAt: RECENT,
+            },
+            {
+              definitionVersion: 2,
+              specRef: null,
+              specDigest: null,
+              category: 'platform',
+              refusal: 'none',
+              tasks: 1,
+              lastFailedAt: RECENT,
+            },
+          ],
+        }),
+      ),
+    );
+    const groups = await screen.findAllByTestId('worker-usage-failure-group');
+    expect(groups[0]?.textContent).toContain('交回的结果被拒：不符合目标步骤的输出约定');
+    expect(groups[0]?.textContent).not.toContain('没有交回结果');
+    // The platform's reasons name the refused model calls of a spent budget.
+    expect(groups[1]?.textContent).toContain('模型预算用完而被平台拒绝模型调用');
+  });
+
   it('failed Tasks grouped by version, combination, category and what refused them', async () => {
     show(scriptedHttp('owner', () => stats()));
     const groups = await screen.findAllByTestId('worker-usage-failure-group');
@@ -280,7 +335,8 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
     expect(groups[0]?.textContent).toMatch(
       new RegExp(`v2 · 步骤调整（编号 ${REF_A}） · 2 个 Task`),
     );
-    expect(groups[0]?.textContent).toContain('超出时长或 token 预算');
+    // Ended another way after its result was refused: both are said.
+    expect(groups[0]?.textContent).toContain('超出时长或 token 预算 · 交回的结果被拒');
     expect(groups[1]?.textContent).toMatch(/v2 · 原样 · 1 个 Task/);
     expect(groups[1]?.textContent).toContain('有操作被策略拒绝');
   });

@@ -730,8 +730,8 @@ const TASK_FAILURE_CATEGORY_LABELS: Readonly<Record<TaskFailureCategory, Bilingu
   worker_error: { zh: 'Worker 运行出错', en: 'The Worker’s run failed' },
   limit_reached: { zh: '超出时长或 token 预算', en: 'Ran past its duration or token budget' },
   platform: {
-    zh: '平台原因：没能启动、运行丢失或被终止',
-    en: 'Platform side: never started, lost, or ended by the runtime',
+    zh: '平台原因：没能启动、运行丢失、被终止、工作区模型预算用完而被平台拒绝模型调用，或被评测防泄漏拦下',
+    en: 'Platform side: never started, lost, ended by the runtime, its model calls refused because the workspace’s model budget was spent, or held back by evaluation leak protection',
   },
   other: { zh: '其他原因', en: 'Another reason' },
 };
@@ -742,8 +742,8 @@ export function taskFailureCategoryLabel(category: TaskFailureCategory, t: Trans
 
 const TASK_REFUSAL_LABELS: Readonly<Record<TaskRefusal, BilingualLabel>> = {
   output_rejected: {
-    zh: '结果不符合目标步骤的输出约定',
-    en: 'Its result did not meet the goal step’s output contract',
+    zh: '交回的结果被拒：不符合目标步骤的输出约定',
+    en: 'Its result was refused: it did not meet the goal step’s output contract',
   },
   rejected: { zh: '有操作被审批人拒绝', en: 'A person rejected one of its actions' },
   expired: { zh: '有操作等审批直到过期', en: 'One of its actions expired awaiting approval' },
@@ -757,6 +757,19 @@ const TASK_REFUSAL_LABELS: Readonly<Record<TaskRefusal, BilingualLabel>> = {
 
 export function taskRefusalLabel(refusal: TaskRefusal, t: Translate): string {
   return lookup(TASK_REFUSAL_LABELS, refusal, t);
+}
+
+/** A failure group's reason in one line: its category, then what refused its work. A Task whose
+ *  result the goal step's output contract refused then ends 「没有交回结果」 (the refused result is
+ *  not kept), and the two side by side contradict each other (UX on #1064): that group says only
+ *  「交回的结果被拒」. Ended another way after the refusal (its time or budget ran out), both stay. */
+export function taskFailureText(
+  group: { readonly category: TaskFailureCategory; readonly refusal: TaskRefusal },
+  t: Translate,
+): string {
+  const refusal = taskRefusalLabel(group.refusal, t);
+  if (group.refusal === 'output_rejected' && group.category === 'no_result') return refusal;
+  return `${taskFailureCategoryLabel(group.category, t)} · ${refusal}`;
 }
 
 /** S11 W1a E2-2: where a goal made from a Procedure went wrong (`ProcedureFailurePlace`); a
