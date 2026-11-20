@@ -238,6 +238,22 @@ describe("boundToolCallArgs keeps the arguments' secret values the kernel hides 
       [`${start} 2`]: 'hunter33',
     });
     expect(secretFieldLiterals(alike, rule)).toEqual(['hunter22', 'hunter33'].sort().reverse());
+    // A key that is just that start, after one cut to it (#501 N1): both stay.
+    const plain = 'k'.repeat(SECRET_FIELD_NAME_JUDGED_CHARS);
+    const cutToPlain = boundToolCallArgs(
+      {
+        blob: 'x'.repeat(100),
+        [`${plain}${'x'.repeat(44)}`]: { password: 'hunter22' },
+        [plain]: { password: 'hunter33' },
+      },
+      { isSecretKey: rule, maxChars: 20 },
+    );
+    expect(cutToPlain).toEqual({
+      blob: 'x'.repeat(100),
+      [TOOL_CALL_PAYLOAD_LEFT_OUT]: TOOL_CALL_PAYLOAD_LEFT_OUT,
+      [`${plain} 2`]: { password: 'hunter22' },
+      [plain]: { password: 'hunter33' },
+    });
   });
 
   it('bounds arguments shaped like a pi result as any other value', () => {

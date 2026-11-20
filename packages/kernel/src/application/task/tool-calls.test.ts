@@ -133,6 +133,24 @@ describe('a Worker tool call as worker mode sends it (legacy 155)', () => {
       },
     ],
     [
+      'thousands of items before it, in the same array',
+      {
+        items: [
+          ...Array.from({ length: 4_000 }, (_, i) => `item ${i}`),
+          { token: 'Hunter2-s3cret' },
+        ],
+      },
+    ],
+    [
+      // #501 N1: the long key is cut to what the key rule judges, which is the next key's name.
+      'a key cut to the name of the next one',
+      {
+        blob: 'b'.repeat(40_000),
+        [`${'k'.repeat(256)}${'x'.repeat(44)}`]: { password: 'Hunter2-s3cret' },
+        ['k'.repeat(256)]: { password: 'Other-p4ssword' },
+      },
+    ],
+    [
       'deeper than worker mode descends',
       (() => {
         let deep: unknown = { headers: { authorization: 'Hunter2-s3cret' } };

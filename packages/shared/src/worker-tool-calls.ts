@@ -83,13 +83,17 @@ function sentText(text: string): string {
     : sliceKeepingPairs(text, WORKER_TOOL_CALL_PAYLOAD_SENT_CHARS);
 }
 
-/** A key on the way to a kept secret value, as `out` gets it: what the key rule judges of it (its
- *  start) — and, where two long keys start alike, a number after that start, so neither is lost. */
-function keptKey(out: Record<string, unknown>, key: string): string {
+/** A key of `source` on the way to a kept secret value, as `out` gets it: what the key rule judges
+ *  of it (its start). A start is no key of `source` and none `out` already has — else a number
+ *  after it — so nothing kept is written over, by a key that starts alike or by one that is just
+ *  that start. */
+function keptKey(out: Record<string, unknown>, source: object, key: string): string {
   if (key.length <= SECRET_FIELD_NAME_JUDGED_CHARS) return key;
   const start = sliceKeepingPairs(key, SECRET_FIELD_NAME_JUDGED_CHARS);
   let kept = start;
-  for (let n = 2; Object.hasOwn(out, kept); n += 1) kept = `${start} ${n}`;
+  for (let n = 2; Object.hasOwn(out, kept) || Object.hasOwn(source, kept); n += 1) {
+    kept = `${start} ${n}`;
+  }
   return kept;
 }
 
@@ -129,7 +133,7 @@ function keptSecrets(value: unknown, sites: SecretLiteralSites): unknown {
     } else {
       const out = target as Record<string, unknown>;
       for (const [key, item] of Object.entries(source as Record<string, unknown>)) {
-        keep(key, item, (kept) => defineEntry(out, keptKey(out, key), kept));
+        keep(key, item, (kept) => defineEntry(out, keptKey(out, source, key), kept));
       }
     }
   }
@@ -198,7 +202,7 @@ function boundValue(value: unknown, budget: Budget, depth: number): unknown {
       for (let rest = index; rest < entries.length; rest += 1) {
         const [restKey, restItem] = entries[rest] as [string, unknown];
         const kept = keptOf(value, restKey, restItem, budget);
-        if (kept !== undefined) defineEntry(out, keptKey(out, restKey), kept);
+        if (kept !== undefined) defineEntry(out, keptKey(out, value, restKey), kept);
       }
       break;
     }
