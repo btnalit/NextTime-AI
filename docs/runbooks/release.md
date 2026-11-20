@@ -3605,6 +3605,25 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §6 一行）：只需回退代码，上一版从不读写这张表。还在用新运行时镜像的 Worker 遇到上一版内核时，Handle 里没有 `report_tool_calls`，不会去报。要连 schema 一起撤：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失，它们只在这张表里）。
 - 下一次主机升级的提示要带上本节。
 
+### 3.207 签发 Handle 时可写备注，列表带会话短编号（#PR，遗留 168 补充，governance 0049，0.69.2 之后的下一版）
+
+**迁移 governance 0049**：`sessions` 加一列 `note`（可空）和约束 `sessions_note_bounded`，随 `--pull` 自动执行，不回填。
+
+- **约束**：`note` 为空，或是 1–200 个字符、首尾没有空格的文本。内核写入前已经去掉首尾空白、空白当作没有备注，长度上限和线上契约一致（`HANDLE_NOTE_MAX_LENGTH`，200），所以内核接受的备注总能写进去。
+- **行为变化**：
+  - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。看起来像凭据的（JWT、私钥、厂商密钥、`Bearer` 值、URL 里的密码，和审核凭据用的同一套高置信规则）返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容。
+  - 两个签发结果和 `list_handles` 的每一行多两个字段：`sessionShortId`（会话 id 的前 8 位十六进制，小写；由 id 算出，不是 token 的片段，不唯一）和 `sessionNote`（没有备注时为 `null`）。入口、Worker、管理员智能体等平台持有的会话没有备注，但有短编号。
+  - `revoke_handle` 的审计行多一个 `sessionShortId`，和列表里看到的一致。撤销仍按完整的 Handle id 走，短编号只给人看。
+  - 主机命令 `issue-service-handle` 还不能写备注；`list_external_runtimes` 还不显示备注和短编号。控制台的显示由控制台一半接着做。
+- **升级影响**：加列只改元数据；加约束要扫一遍 `sessions`（所有行的 `note` 都为空，校验只是读一遍），期间这张表被短暂锁住，签发 Handle、开新对话、启动 Worker 排队，其他功能不受影响。没有需要手工执行的步骤。
+- **升级前只读预检**（以表的属主运行，和前面几节一样；结果记 `docs/private/`）：`select count(*) from sessions;` 记下行数，估计加约束时锁表多久（本地 100 万行、数据在缓存里时约 0.2 s；主机磁盘慢、数据不在缓存里时会更久）。
+- **升级后只读核对**：
+  - `select version from schema_migrations where module = 'governance' and version = 49;` 返回一行。
+  - `select column_name from information_schema.columns where table_name = 'sessions' and column_name = 'note';` 返回一行。
+  - 在还没有人带备注签发之前，`select count(*) from sessions where note is not null;` 为 0。
+- **回滚**（见 §6 一行）：只需回退代码。上一版按列名插入 `sessions`，从不读写 `note`，新约束对空值总成立；新版本写下的备注留在表里，上一版看不到。要连 schema 一起撤：`alter table sessions drop column note`（约束随列删除，备注随之丢失），再删 `schema_migrations` 里 governance 49 那一行。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3805,6 +3824,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | governance `0047_connection_request_gate_instance`（#1521，遗留 254）：`connection_requests` 加 `gate_instance_id`、`cancel_reason`、`cancelled_at` 三列，`target` 可为空，加四个约束、部分唯一索引 `connection_requests_one_open_gate_enable`、索引 `connection_requests_gate_instance_idx` 和平台平面的两条策略；不回填 | 有条件可逆 | 上一版只认自接申请。它插入的行总带 `target`，取消时不写原因，这在新约束下都合法；但它把 `target` 当字符串读，有门实例申请（`gate_instance_id is not null`）时，它的所有者队列会出错。只有这类申请为 0 条时才能只回退代码；#1521 的 CI rehearsal 与可逆性探针通过 | 回退代码前按 §3.205 先删门实例申请，之后只回退代码。要撤 schema：先撤 0048，再删两条策略、两个索引、四个约束和三列，`target` 设回 `not null`，再删 `schema_migrations` 里 governance 47 那一行 |
 | 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
 | 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#1531，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
+| 0.69.2 之后的下一版 | governance `0049_session_note`（#PR，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

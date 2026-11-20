@@ -40027,6 +40027,10 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "note": {
+          "maxLength": 200,
+          "type": "string"
+        },
         "scope": {
           "additionalProperties": false,
           "properties": {
@@ -40107,11 +40111,22 @@
         "sessionId": {
           "minLength": 1,
           "type": "string"
+        },
+        "sessionNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionShortId": {
+          "type": "string"
         }
       },
       "required": [
         "handle",
         "sessionId",
+        "sessionShortId",
+        "sessionNote",
         "onBehalfOf",
         "expiresAt",
         "scope"
@@ -40168,6 +40183,10 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "note": {
+          "maxLength": 200,
+          "type": "string"
+        },
         "principalId": {
           "minLength": 1,
           "type": "string"
@@ -40234,12 +40253,23 @@
         },
         "sessionId": {
           "type": "string"
+        },
+        "sessionNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionShortId": {
+          "type": "string"
         }
       },
       "required": [
         "handle",
         "principalId",
         "sessionId",
+        "sessionShortId",
+        "sessionNote",
         "expiresAt",
         "scope"
       ],
@@ -45947,6 +45977,15 @@
                   "admin_agent"
                 ],
                 "type": "string"
+              },
+              "sessionNote": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sessionShortId": {
+                "type": "string"
               }
             },
             "required": [
@@ -45960,7 +45999,9 @@
               "issuedAt",
               "expiresAt",
               "capabilities",
-              "revocable"
+              "revocable",
+              "sessionShortId",
+              "sessionNote"
             ],
             "type": "object"
           },
