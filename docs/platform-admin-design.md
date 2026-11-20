@@ -143,7 +143,11 @@ API key 不是人的登录方式，是成员资格的自动化凭证（"我的�
 | 平台设置 | 这台平台的默认值与策略 | §6.6：`get_platform_settings` / `update_platform_settings` |
 
 工作区配置里的"成员"页语义变为从平台用户中添加（按登录名搜索 → 选角色）；`create_principal` 只剩 agent /
-service。"系统接入"页变为从平台集成目录**启用**门实例（管理员或受委托的 owner），普通用户不再有
+service。平台管理员用 `list_users` 搜索；不是平台管理员的 owner 用 `lookup_users`（遗留 150）。后者只回答本工作区
+有效的 owner，经 security definer 函数 `lookup_users_for_owner`（core 0064）读 `users`：按登录名或显示名子串匹配
+（不区分大小写，去掉首尾空白后至少 2 个字符，`%`、`_` 不是通配符）；只列 `add_member` 能加的人，即没停用、不是本工作区
+有效成员（被移出的不算）、不是验收残留（与 `list_users` 的 `hideResidual` 同一条件）；只给登录名和显示名；最多 20 条，
+登录名完全相同的排第一，再是登录名、显示名以查询开头的，多了带 `truncated`，不分页。"系统接入"页变为从平台集成目录**启用**门实例（管理员或受委托的 owner），普通用户不再有
 `request_connection` 卡片的入口——门由后台接好，用户只管用；`request_connection` 能力保留给 owner 与
 `connected_account` 模式下用户绑定本人账号的场景。
 

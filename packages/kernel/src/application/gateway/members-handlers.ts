@@ -1,4 +1,9 @@
-import type { PrincipalKind, PrincipalRefusalReason, Role } from '@nexttime/shared';
+import {
+  LOOKUP_USERS_LIMIT,
+  type PrincipalKind,
+  type PrincipalRefusalReason,
+  type Role,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   lockAuthoritiesForChange,
@@ -445,6 +450,44 @@ export const addMemberHandler: CapabilityHandler = async (client, workspaceId, p
           },
         }
       : {}),
+  };
+};
+
+/**
+ * `lookup_users` (legacy 150, #517 field inventory): the owner's side of `add_member` — the users
+ * this workspace's owner could add, so the members page picks a person instead of taking a login
+ * typed blind. A workspace transaction cannot read `users` beyond its own members (0021's
+ * `users_workspace_members` policy), so the search goes through `lookup_users_for_owner` (core
+ * 0064, `security definer`), which answers only an active owner of the transaction's own
+ * workspace and returns login and display name only. Matching, the users left out and the order
+ * are that function's (its own comment); this handler asks for one row more than it shows, to
+ * say `truncated`. The function refuses (42501) a caller that is not an active owner there —
+ * the gateway already checked the role, so that is a demotion or removal committed since, and
+ * is answered as the gateway would have answered it.
+ */
+export const lookupUsersHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+  const { query } = params as { query: string };
+  let rows: { login: string; display_name: string }[];
+  try {
+    rows = (
+      await client.query<{ login: string; display_name: string }>(
+        'select login, display_name from lookup_users_for_owner($1, $2)',
+        [query, LOOKUP_USERS_LIMIT + 1],
+      )
+    ).rows;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === '42501') {
+      throw new ForbiddenError(
+        'lookup_users: only an active owner of this workspace may look users up',
+      );
+    }
+    throw err;
+  }
+  const items = rows
+    .slice(0, LOOKUP_USERS_LIMIT)
+    .map((row) => ({ login: row.login, displayName: row.display_name }));
+  return {
+    result: rows.length > LOOKUP_USERS_LIMIT ? { items, truncated: true as const } : { items },
   };
 };
 

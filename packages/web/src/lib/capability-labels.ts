@@ -1226,6 +1226,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '按登录名把平台用户加入本工作区。',
     enHint: 'Adds a platform user to this workspace by login.',
   },
+  lookup_users: {
+    zh: '查找可添加的用户',
+    en: 'Look up users',
+    zhHint: '按登录名或显示名查找可以加入本工作区的平台用户，只显示登录名和显示名。',
+    enHint:
+      'Finds platform users who can be added to this workspace, by login or display name — login and display name only.',
+  },
   set_principal_role: {
     zh: '修改成员角色',
     en: 'Change member role',

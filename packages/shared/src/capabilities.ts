@@ -3483,6 +3483,26 @@ const membersCapabilities = [
     description:
       'Add an existing platform user to this workspace by login with a role (P-A1) — creates the membership Principal (no API key). 404 user_not_found for an unknown or disabled login, 409 already_member if they already belong here. A removed membership does not count: adding the person back creates a new membership, and the removed one stops belonging to them (the row stays, as do the drafts and goals made under it; they do not get those back). The audit row lists it under `detachedPrincipals`.',
   },
+  // Legacy 150 (#517 field inventory): the owner's side of `add_member` — pick the person instead
+  // of typing a login blind. A person's read (HUMAN_ONLY_CAPABILITY_NAMES): no agent searches the
+  // platform's users.
+  {
+    name: 'lookup_users',
+    group: 'members',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ query: z.string().min(2).max(100) }).strict(),
+    resultSchema: wire.LookupUsersResultWireSchema,
+    description:
+      'Find platform users this workspace’s owner can add with add_member: active users whose ' +
+      'login or display name contains the query (case-insensitive, at least 2 characters after ' +
+      'trimming; `%` and `_` match themselves), who are not already active members here — a ' +
+      'removed membership does not count — leaving out acceptance-run residue (awaiting ' +
+      'activation, with no live membership in an active standard or trial workspace). Login and ' +
+      'display name only. At most 20, exact login first, then logins and display names that ' +
+      'start with the query; `truncated` when more matched. Not paginated: narrow the query.',
+  },
   {
     name: 'set_principal_role',
     group: 'members',
@@ -6162,6 +6182,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'list_principals',
   'create_principal',
   'add_member',
+  // Legacy 150: an owner's search of the platform's users for add_member.
+  'lookup_users',
   'set_principal_role',
   'rotate_api_key',
   'disable_principal',

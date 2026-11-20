@@ -506,10 +506,10 @@ capabilities:
   list_goals:
     console: required
     agents: [entry, admin]
-  list_handles:
+  list_grants:
     console: required
     agents: []
-  list_grants:
+  list_handles:
     console: required
     agents: []
   list_models:
@@ -577,6 +577,9 @@ capabilities:
     agents: []
   list_workspaces:
     console: required
+    agents: []
+  lookup_users:
+    console: "none: 遗留 150 的控制台一半接着把「成员与授权 → 添加成员」的登录名改成搜索选择；在那之前 owner 照旧按登录名添加，平台管理员在「平台 → 用户」里选"
     agents: []
   mark_turn_outcome:
     console: required
@@ -914,16 +917,16 @@ capabilities:
     agents: []
     e2e: "waived: 657"
     repeat: "conflict: not_found"
-  revoke_handle:
-    console: required
-    agents: []
-    e2e: observed
-    repeat: "conflict: handle_not_found"  # the first call revoked its session, so the same call again finds no live Handle (404)
   revoke_external_runtime:
     console: required
     agents: []
     e2e: observed
     repeat: "conflict: runtime_not_found"  # revoked by the first call, so the same call again finds no active session (404)
+  revoke_handle:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: "conflict: handle_not_found"  # the first call revoked its session, so the same call again finds no live Handle (404)
   roll_back_change_segment:
     console: required
     agents: []

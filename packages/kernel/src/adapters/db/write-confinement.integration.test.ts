@@ -463,7 +463,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('L4-11 / L4-12 (same class, folded into core 0035)', () => {
-      it('security-definer helpers grant no EXECUTE to PUBLIC; lookup_user_by_login pins pg_temp last', async () => {
+      it('security-definer helpers grant no EXECUTE to PUBLIC; the two user lookups pin pg_temp last', async () => {
         const publicGrants = await asLoginRole((client) =>
           client.query<{ proname: string }>(
             `select p.proname
@@ -479,18 +479,25 @@ describe.runIf(DATABASE_URL !== undefined)(
                 'find_active_fact_for_identity',
                 'latest_fact_invalidated_for_identity',
                 'lookup_user_by_login',
+                // Legacy 150 (core 0064): the owner's search of the platform's users.
+                'lookup_users_for_owner',
               ],
             ],
           ),
         );
         expect(publicGrants.rows).toEqual([]);
 
-        const config = await asLoginRole((client) =>
-          client.query<{ proconfig: string[] | null }>(
-            `select proconfig from pg_proc where proname = 'lookup_user_by_login'`,
-          ),
-        );
-        expect(config.rows[0]?.proconfig).toContain('search_path=public, pg_temp');
+        for (const name of ['lookup_user_by_login', 'lookup_users_for_owner']) {
+          const config = await asLoginRole((client) =>
+            client.query<{ proconfig: string[] | null; prosecdef: boolean }>(
+              'select proconfig, prosecdef from pg_proc where proname = $1',
+              [name],
+            ),
+          );
+          expect(config.rows).toHaveLength(1);
+          expect(config.rows[0]?.proconfig).toContain('search_path=public, pg_temp');
+          expect(config.rows[0]?.prosecdef).toBe(true);
+        }
       });
 
       it('a Fact cannot be superseded and invalidated in one UPDATE', async () => {
