@@ -1,7 +1,6 @@
 import { MAX_WORKER_RUN_TOOL_CALL_RECORDS, type WorkerToolCallWire } from '@nexttime/shared';
 import { useMemo } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
-import { auditHref } from '../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { shortId } from '../lib/format.js';
@@ -12,7 +11,6 @@ import { PersistedToolCallRowView } from './ToolCallRowView.js';
 import { Button } from './kit/button.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Notice } from './kit/notice.js';
-import { RouteLink } from './kit/route-link.js';
 import { SkeletonRows } from './kit/skeleton.js';
 
 /** One run's records as listed: the run (from the Task's own `workerRuns`, when it is there), how
@@ -56,8 +54,9 @@ function groupByRun(
  * Paged by the kernel (100 a page, 「加载更多」 for the rest). While the Task runs the Worker keeps
  * reporting, so 「刷新」 reads the latest (a Task push reloads too). A run that holds the kernel's
  * cap says later calls were not kept; a call this console cannot read (a kernel newer than it) is
- * counted, never shown as "no calls". What the Worker reported, not what the gates did: the
- * audit trail is linked for that.
+ * counted, never shown as "no calls". What the Worker reported, not what the gates did: it says
+ * where those are (Linked approvals for writes, the audit trail under the gate for reads). The
+ * list is a disclosure, open, so a long one can be folded away from Linked approvals below.
  */
 export function TaskToolCalls({
   http,
@@ -90,15 +89,6 @@ export function TaskToolCalls({
   const unreadable = listed - readable;
   const more = data?.nextCursor !== undefined;
   const grouped = groups.length > 1 || runs.length > 1;
-  const auditLink = (
-    <RouteLink
-      href={auditHref({ resourceType: 'task', resourceId: taskId })}
-      whenRefused="hide"
-      testId="task-tool-calls-audit-link"
-    >
-      {t('门实际执行了什么以审计为准', 'What the gates actually did is in the audit trail')}
-    </RouteLink>
-  );
   const refresh = running ? (
     <Button
       variant="secondary"
@@ -154,26 +144,33 @@ export function TaskToolCalls({
         <>
           <div className="row-wrap">
             <span className="text-3 text-small" data-testid="task-tool-calls-count">
-              {more
-                ? t(
-                    `已显示 ${readable} 个，还有更多；按运行先后、运行内按报告先后排列。`,
-                    `Showing ${readable} call(s); there are more. Runs in the order they started, each run's calls in the order reported.`,
-                  )
-                : t(
-                    `共 ${readable} 个，按运行先后、运行内按报告先后排列。`,
-                    `${readable} call(s). Runs in the order they started, each run's calls in the order reported.`,
-                  )}{' '}
-              {running
-                ? t(
-                    '任务还在运行，Worker 每结束一次调用就报告一次。',
-                    'The task is still running; the Worker reports each call when it ends.',
-                  )
-                : null}{' '}
-              {t(
-                '这是 Worker 自己报告的调用，参数和结果在存下时已遮蔽疑似凭据并截断。',
-                'Reported by the Worker; arguments and results had credential-like values hidden and were shortened when stored.',
-              )}{' '}
-              {auditLink}
+              {[
+                more
+                  ? t(
+                      `已显示 ${readable} 个，还有更多；按运行先后、运行内按报告先后排列。`,
+                      `Showing ${readable} call(s); there are more. Runs in the order they started, each run's calls in the order reported.`,
+                    )
+                  : t(
+                      `共 ${readable} 个，按运行先后、运行内按报告先后排列。`,
+                      `${readable} call(s). Runs in the order they started, each run's calls in the order reported.`,
+                    ),
+                running
+                  ? t(
+                      '任务还在运行，Worker 每结束一次调用就报告一次。',
+                      'The task is still running; the Worker reports each call when it ends.',
+                    )
+                  : null,
+                // UX review on #1537: the task's own audit filter holds none of the Worker's gate
+                // calls (they are audited under the gate or the request, by the Worker's account),
+                // so this says where to look instead of linking there.
+                t(
+                  '这是 Worker 自己报告的调用，不是门的执行记录：存下时遮蔽了疑似凭据，超长的参数和结果已截断。Worker 发起的写操作见下面的「关联审批」；读操作在审计页里记在对应的门下。',
+                  "Reported by the Worker, not a record of what the gates did: credential-like values were hidden when stored, and long arguments and results were shortened. The Worker's write actions are under Linked approvals below; its reads are in the audit trail, under the gate they read.",
+                ),
+              ]
+                .filter((part) => part !== null)
+                // Chinese sentences run on without a space; English ones take one.
+                .join(t('', ' '))}
             </span>
             {refresh}
           </div>
@@ -185,64 +182,69 @@ export function TaskToolCalls({
               )}
             </span>
           ) : null}
-          {groups.map((group) => (
-            <div
-              key={group.workerRunId}
-              className="stack-s"
-              data-testid="task-tool-calls-run"
-              data-worker-run-id={group.workerRunId}
-            >
-              {grouped ? (
-                <span className="text-small" data-testid="task-tool-calls-run-title">
-                  <span className="mono" title={group.workerRunId}>
-                    {t('运行', 'Run')} {shortId(group.workerRunId)}
-                  </span>
-                  {group.run !== undefined
-                    ? t(`（第 ${group.run.attempt} 次尝试）`, ` (attempt ${group.run.attempt})`)
-                    : null}
-                  {t(` · ${group.records.length} 个`, ` · ${group.records.length} call(s)`)}
-                </span>
+          <details className="disclosure" open data-testid="task-tool-calls-disclosure">
+            <summary>{t(`调用列表（${readable} 个）`, `Calls (${readable})`)}</summary>
+            <div className="disclosure-body stack-s">
+              {groups.map((group) => (
+                <div
+                  key={group.workerRunId}
+                  className="stack-s"
+                  data-testid="task-tool-calls-run"
+                  data-worker-run-id={group.workerRunId}
+                >
+                  {grouped ? (
+                    <span className="text-small" data-testid="task-tool-calls-run-title">
+                      <span className="mono" title={group.workerRunId}>
+                        {t('运行', 'Run')} {shortId(group.workerRunId)}
+                      </span>
+                      {group.run !== undefined
+                        ? t(`（第 ${group.run.attempt} 次尝试）`, ` (attempt ${group.run.attempt})`)
+                        : null}
+                      {t(` · ${group.records.length} 个`, ` · ${group.records.length} call(s)`)}
+                    </span>
+                  ) : null}
+                  <div className="tool-calls" data-testid="task-tool-calls-list">
+                    {group.records.map((record) => (
+                      <PersistedToolCallRowView
+                        key={record.toolCallId}
+                        record={record}
+                        http={http}
+                        dated
+                      />
+                    ))}
+                  </div>
+                  {group.listed >= MAX_WORKER_RUN_TOOL_CALL_RECORDS ? (
+                    <Notice tone="warn" testId="task-tool-calls-run-full">
+                      {t(
+                        `这个运行记到了 ${MAX_WORKER_RUN_TOOL_CALL_RECORDS} 个的上限；之后如果还有调用，平台没有记下。`,
+                        `This run reached the limit of ${MAX_WORKER_RUN_TOOL_CALL_RECORDS} recorded calls; any later calls were not kept.`,
+                      )}
+                    </Notice>
+                  ) : null}
+                </div>
+              ))}
+              {more ? (
+                <div className="row" style={{ justifyContent: 'center' }}>
+                  <Button
+                    variant="secondary"
+                    aria-busy={calls.loadingMore || undefined}
+                    disabled={calls.loadingMore}
+                    onClick={() => void calls.loadMore()}
+                    data-testid="task-tool-calls-load-more"
+                  >
+                    {t('加载更多', 'Load more')}
+                  </Button>
+                </div>
               ) : null}
-              <div className="tool-calls" data-testid="task-tool-calls-list">
-                {group.records.map((record) => (
-                  <PersistedToolCallRowView
-                    key={record.toolCallId}
-                    record={record}
-                    http={http}
-                    dated
-                  />
-                ))}
-              </div>
-              {group.listed >= MAX_WORKER_RUN_TOOL_CALL_RECORDS ? (
-                <Notice tone="warn" testId="task-tool-calls-run-full">
-                  {t(
-                    `这个运行记到了 ${MAX_WORKER_RUN_TOOL_CALL_RECORDS} 个的上限；之后如果还有调用，平台没有记下。`,
-                    `This run reached the limit of ${MAX_WORKER_RUN_TOOL_CALL_RECORDS} recorded calls; any later calls were not kept.`,
-                  )}
-                </Notice>
+              {calls.loadMoreError !== null ? (
+                <ErrorBanner
+                  error={calls.loadMoreError}
+                  title={t('无法加载更多工具调用', 'Could not load more tool calls')}
+                  testId="task-tool-calls-load-more-error"
+                />
               ) : null}
             </div>
-          ))}
-          {more ? (
-            <div className="row" style={{ justifyContent: 'center' }}>
-              <Button
-                variant="secondary"
-                aria-busy={calls.loadingMore || undefined}
-                disabled={calls.loadingMore}
-                onClick={() => void calls.loadMore()}
-                data-testid="task-tool-calls-load-more"
-              >
-                {t('加载更多', 'Load more')}
-              </Button>
-            </div>
-          ) : null}
-          {calls.loadMoreError !== null ? (
-            <ErrorBanner
-              error={calls.loadMoreError}
-              title={t('无法加载更多工具调用', 'Could not load more tool calls')}
-              testId="task-tool-calls-load-more-error"
-            />
-          ) : null}
+          </details>
         </>
       )}
     </div>

@@ -112,9 +112,17 @@ describe('TaskToolCalls', () => {
       'run-a-call-2',
     ]);
     expect(screen.getByTestId('task-tool-calls-count').textContent).toContain('共 2 个');
-    expect(screen.getByTestId('task-tool-calls-count').textContent).toContain(
-      '这是 Worker 自己报告的调用',
-    );
+    const count = screen.getByTestId('task-tool-calls-count').textContent ?? '';
+    expect(count).toContain('这是 Worker 自己报告的调用，不是门的执行记录');
+    expect(count).toContain('超长的参数和结果已截断');
+    // UX review on #1537: where the gates' side is, said rather than linked to the task's audit
+    // filter (which holds none of the Worker's gate calls); Chinese sentences take no space.
+    expect(count).toContain('「关联审批」');
+    expect(count).not.toContain('。 ');
+    expect(screen.queryByRole('link')).toBeNull();
+    const disclosure = screen.getByTestId('task-tool-calls-disclosure') as HTMLDetailsElement;
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.querySelector('summary')?.textContent).toBe('调用列表（2 个）');
     expect(screen.queryByTestId('task-tool-calls-run-title')).toBeNull();
     expect(screen.queryByTestId('task-tool-calls-refresh')).toBeNull();
     expect(screen.queryByTestId('task-tool-calls-load-more')).toBeNull();
