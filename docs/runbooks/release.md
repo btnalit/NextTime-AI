@@ -3646,7 +3646,7 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §6 一行）：只需回退代码。上一版按列名插入 `sessions`，从不读写 `note`，新约束对空值总成立；新版本写下的备注留在表里，上一版看不到。要连 schema 一起撤：`alter table sessions drop column note`（约束随列删除，备注随之丢失），再删 `schema_migrations` 里 governance 49 那一行。
 - 下一次主机升级的提示要带上本节。
 
-### 3.208 存量里的平台 API key：审计行计数，比对仍有效的 key，按清单轮换（#PRNUM，遗留 168 补充的审计存量，0.69.2 之后的下一版）
+### 3.208 存量里的平台 API key：审计行计数，比对仍有效的 key，按清单轮换（#1553，遗留 168 补充的审计存量，0.69.2 之后的下一版）
 
 没有迁移。改的是 `scrub-raw-secrets`，也就是 `--pull` 在 `BACKUP_NOW` 之后自动跑的 `STEP raw-secret-scrub`（§3.25）。新写入的内容自 §3.207
 起在写入时就遮住平台 key（能力调用的参数副本、批准与拒绝的原因、门结果的审计副本、Worker 报告等），这一节只处理之前存下的。
