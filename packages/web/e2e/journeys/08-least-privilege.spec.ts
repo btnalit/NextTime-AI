@@ -220,8 +220,10 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
           ).toEqual([]);
           // Step 6 (legacy 260): an instance still waiting for 在本工作区启用 — the step asks this
           // role for nothing it cannot have, and offers it no enable button.
+          // Choosing an instance moves the wizard to its policy step at once, so the radio is
+          // gone before `check()` could confirm it: click it, as journey 17 does.
           const drawer = page.getByTestId('connect-system-drawer');
-          await drawer.getByRole('radio', { name: /CI spare MCP/ }).check({ timeout: 15_000 });
+          await drawer.getByRole('radio', { name: /CI spare MCP/ }).click({ timeout: 15_000 });
           const enableStep = drawer.getByTestId('launcher-workspace-enable');
           await expect(enableStep).toBeVisible({ timeout: 15_000 });
           await expect(
