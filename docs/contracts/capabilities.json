@@ -15089,6 +15089,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentsPaused": {
+          "type": "boolean"
+        },
         "gates": {
           "items": {
             "additionalProperties": false,
@@ -15264,6 +15267,28 @@
             },
             "required": [
               "code"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "owners": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "displayName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "principalId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "principalId",
+              "displayName"
             ],
             "type": "object"
           },

@@ -654,6 +654,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(listed.items.find((row) => row.id === ticked.id)?.publishedDefinition).toEqual(
           onV1Definition,
         );
+        // In the same read, each row names its own definition (#493 on #1565).
+        expect(listed.items.find((row) => row.id === onV2.id)?.publishedDefinition).toEqual({
+          version: 2,
+          requestIsCurrent: true,
+          requestDigest: onV2.operationDigest,
+          requestVersion: 2,
+        });
 
         // The request it was ticked on was made against v1: allowing "the latest" from it is refused.
         await expect(

@@ -201,6 +201,25 @@ export async function isLastActiveHumanOwner(
   return result.rows.length === 1 && result.rows[0]?.id === principalId;
 }
 
+/** Legacy 245: the workspace's active human owners — the people a member can ask for what only an
+ *  owner does — with the name each goes by now: the live `users.display_name` for a linked person,
+ *  else the Principal's own column (`list_principals`' rule, members-handlers.ts). "Active human
+ *  owner" is `isLastActiveHumanOwner`'s set: `kind = 'human'`, `role = 'owner'`, not disabled. In
+ *  the order they became Principals. */
+export async function listActiveHumanOwners(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<readonly { readonly principalId: string; readonly displayName: string | null }[]> {
+  const result = await client.query<{ id: string; display_name: string | null }>(
+    `select p.id, coalesce(u.display_name, p.display_name) as display_name
+     from principals p left join users u on u.id = p.user_id
+     where p.workspace_id = $1 and p.kind = 'human' and p.role = 'owner' and p.disabled_at is null
+     order by p.created_at, p.id`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => ({ principalId: row.id, displayName: row.display_name }));
+}
+
 /**
  * Finds an unexpired `kind='web'` session for `principal` (`on_behalf_of` = the principal itself
  * — a human always acts on its own behalf, I13) and reuses it, or creates a new one. `client` must
