@@ -1,5 +1,6 @@
-import { ROLE_VALUES, type Role } from '@nexttime/shared';
+import { type LookedUpUserWire, ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { invalidateCapability } from '../hooks/useCapability.js';
 import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -22,6 +23,7 @@ import { Field, describedBy } from './kit/field.js';
 import { Notice } from './kit/notice.js';
 import { Select } from './kit/select.js';
 import { StillNeeded } from './kit/still-needed.js';
+import { UserLookup } from './members/UserLookup.js';
 import { UserPicker } from './platform/UserPicker.js';
 
 export interface AddMemberFormProps {
@@ -29,9 +31,11 @@ export interface AddMemberFormProps {
   readonly onDone: (principal: PrincipalRow) => void;
   readonly onCancel: () => void;
   /** Whether the signed-in user is a platform administrator (`session.user?.platformRole ===
-   *  'admin'`). `true` opens straight on the user directory; `false` never tries it. Omitted:
-   *  the form tries `list_users` once in the background and offers the directory only if it
-   *  answers (a 403 means "not a platform administrator" and is remembered for the session). */
+   *  'admin'`). `true` opens straight on the user directory; `false` never tries it and opens on
+   *  the owner's search (`lookup_users`). Omitted: the form opens on the search, tries
+   *  `list_users` once in the background and switches to the directory only if it answers before
+   *  anything was picked or typed (a 403 means "not a platform administrator" and is remembered
+   *  for the session). */
   readonly platformAdmin?: boolean;
   /** This workspace — the directory marks its existing members and does not let them be
    *  picked (legacy 153 ⑤). */
@@ -40,6 +44,8 @@ export interface AddMemberFormProps {
 
 /** The probe asks for exactly `UserPicker`'s first page. */
 const DIRECTORY_PROBE = { limit: 50 } as const;
+
+type Mode = 'directory' | 'lookup' | 'typed';
 
 type DirectoryState =
   | { readonly kind: 'probing' }
@@ -57,11 +63,13 @@ type DirectoryState =
  * `CreatePrincipalForm`.
  *
  * Who the login belongs to: the user directory (`list_users`, `scope:'platform'`) is readable only
- * by a platform administrator, so for one the form offers `UserPicker` (search by login or display
- * name, then pick) instead of a blind text box. Everyone else types the login — normalized the way
- * the kernel will (trim + lower-case, "将保存为 alice") and checked against the login rule before
- * the round trip. A platform administrator can still switch to typing: the picker leaves out
- * accounts that have not set a password yet, and those can be added too.
+ * by a platform administrator, so for one the form offers `UserPicker` (browse or search by login
+ * or display name, then pick). A workspace owner who is not one searches with `lookup_users`
+ * (legacy 150, `members/UserLookup`): at least 2 characters, at most 20 matches, only people this
+ * workspace can add. Either can switch to typing the login — normalized the way the kernel will
+ * (trim + lower-case, "将保存为 alice") and checked against the login rule before the round trip:
+ * the directory leaves out accounts that have not set a password yet, the search leaves out
+ * acceptance-run residue, and those can be added too.
  *
  * Two kernel refusals get their own bilingual line instead of a banner: `user_not_found` (404 —
  * no such platform login, or it is disabled) and `already_member` (409), the two a typo or a
@@ -91,11 +99,10 @@ export function AddMemberForm({
         ? { kind: 'probing' }
         : { kind: 'unavailable' },
   );
-  const [mode, setMode] = useState<'directory' | 'typed'>(
-    platformAdmin === true ? 'directory' : 'typed',
-  );
+  const [mode, setMode] = useState<Mode>(platformAdmin === true ? 'directory' : 'lookup');
   const [probeAttempt, setProbeAttempt] = useState(0);
   const [pickedUserId, setPickedUserId] = useState('');
+  const [lookedUp, setLookedUp] = useState<LookedUpUserWire | null>(null);
   const [login, setLogin] = useState('');
   const [role, setRole] = useState<Role>('member');
   const [submitting, setSubmitting] = useState(false);
@@ -104,9 +111,9 @@ export function AddMemberForm({
   // and its banner, above the pinned action row, below the fold — focus goes to the banner.
   const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
 
-  // Read inside the probe's callback: a reader who already started typing keeps their text box.
-  const loginRef = useRef(login);
-  loginRef.current = login;
+  // Read inside the probe's callback: a reader who already typed or picked keeps what they have.
+  const startedRef = useRef(false);
+  startedRef.current = login.trim() !== '' || lookedUp !== null;
   const markDeniedRef = useRef(permissions.markDenied);
   markDeniedRef.current = permissions.markDenied;
 
@@ -119,7 +126,7 @@ export function AddMemberForm({
       () => {
         if (!live) return;
         setDirectoryState({ kind: 'available' });
-        if (loginRef.current.trim() === '') setMode('directory');
+        if (!startedRef.current) setMode('directory');
       },
       (err: unknown) => {
         if (!live) return;
@@ -144,15 +151,22 @@ export function AddMemberForm({
   const normalizedLogin = normalizeLoginInput(login);
   const typedLoginError = mode === 'typed' ? loginError(normalizedLogin, t) : null;
   const typedLoginNote = mode === 'typed' ? loginNormalizedNote(login, t) : null;
-  const submitLogin = mode === 'directory' ? (picked?.login ?? '') : normalizedLogin;
+  const submitLogin =
+    mode === 'directory'
+      ? (picked?.login ?? '')
+      : mode === 'lookup'
+        ? (lookedUp?.login ?? '')
+        : normalizedLogin;
   const ready = submitLogin !== '' && typedLoginError === null;
   // DoD item 4: a disabled 添加 says what it still waits for (the field labels' own words).
   const missing =
     submitLogin === ''
       ? [
-          mode === 'directory'
-            ? t('选择平台用户', 'pick a platform user')
-            : t('填写登录名', 'enter a login'),
+          mode === 'typed'
+            ? t('填写登录名', 'enter a login')
+            : mode === 'lookup'
+              ? t('选择用户', 'pick a user')
+              : t('选择平台用户', 'pick a platform user'),
         ]
       : typedLoginError !== null
         ? [t('改正登录名', 'fix the login')]
@@ -164,7 +178,10 @@ export function AddMemberForm({
     setSubmitting(true);
     setError(null);
     try {
-      onDone(await http.call<PrincipalRow>('add_member', { login: submitLogin, role }));
+      const principal = await http.call<PrincipalRow>('add_member', { login: submitLogin, role });
+      // The person just added is no longer someone this workspace can add.
+      invalidateCapability(http, 'lookup_users');
+      onDone(principal);
     } catch (err) {
       setError(err);
     } finally {
@@ -172,12 +189,44 @@ export function AddMemberForm({
     }
   }
 
-  function switchMode(next: 'directory' | 'typed'): void {
+  function switchMode(next: Mode): void {
     setMode(next);
     setError(null);
     // Carry the picked user into the text box, so typing starts from it rather than from empty.
-    if (next === 'typed' && picked) setLogin(picked.login);
+    if (next === 'typed') {
+      const carried =
+        mode === 'directory' ? picked?.login : mode === 'lookup' ? lookedUp?.login : '';
+      if (carried) setLogin(carried);
+    }
   }
+
+  const lookupInstead = (
+    <div className="row">
+      <Button
+        variant="ghost"
+        size="s"
+        onClick={() => switchMode('lookup')}
+        disabled={submitting}
+        data-testid="add-member-lookup-instead"
+      >
+        {t('改为查找并选择', 'Search and pick instead')}
+      </Button>
+    </div>
+  );
+
+  const typeInstead = (
+    <div className="row">
+      <Button
+        variant="ghost"
+        size="s"
+        onClick={() => switchMode('typed')}
+        disabled={submitting}
+        data-testid="add-member-type-instead"
+      >
+        {t('改为手动输入', 'Type a login instead')}
+      </Button>
+    </div>
+  );
 
   const inline = platformErrorMessage(error, t);
   const typedHint = [
@@ -222,17 +271,24 @@ export function AddMemberForm({
               )}
             </Notice>
           ) : null}
-          <div className="row">
-            <Button
-              variant="ghost"
-              size="s"
-              onClick={() => switchMode('typed')}
-              disabled={submitting}
-              data-testid="add-member-type-instead"
-            >
-              {t('改为手动输入', 'Type a login instead')}
-            </Button>
-          </div>
+          {typeInstead}
+        </>
+      ) : mode === 'lookup' ? (
+        <>
+          <UserLookup
+            http={http}
+            id="am-lookup"
+            label={t('用户', 'User')}
+            hint={t(
+              '输入登录名或显示名的一部分，再从列表里选。只列出能加进本工作区的人；查不到的账户可改为手动输入登录名。',
+              'Type part of a login or display name, then pick from the list. Only people who can be added to this workspace are listed. If someone is not found, type their login instead.',
+            )}
+            value={lookedUp}
+            onChange={setLookedUp}
+            disabled={submitting}
+            testId="add-member-lookup"
+          />
+          {typeInstead}
         </>
       ) : (
         <>
@@ -273,16 +329,21 @@ export function AddMemberForm({
               </Button>
             </div>
           ) : directoryState.kind === 'failed' ? (
-            <ErrorBanner
-              error={directoryState.error}
-              title={t(
-                '无法读取平台用户目录，可先手动输入',
-                'Could not load the platform user directory — type the login for now',
-              )}
-              onRetry={() => setProbeAttempt((n) => n + 1)}
-              testId="add-member-directory-error"
-            />
-          ) : null}
+            <>
+              {lookupInstead}
+              <ErrorBanner
+                error={directoryState.error}
+                title={t(
+                  '无法读取平台用户目录，可先手动输入',
+                  'Could not load the platform user directory — type the login for now',
+                )}
+                onRetry={() => setProbeAttempt((n) => n + 1)}
+                testId="add-member-directory-error"
+              />
+            </>
+          ) : (
+            lookupInstead
+          )}
         </>
       )}
 

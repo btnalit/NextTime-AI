@@ -9,6 +9,7 @@ import { AddMemberForm } from './AddMemberForm.js';
 import {
   comboboxOptionTexts,
   findComboboxOption,
+  openCombobox,
   pickComboboxOption,
 } from './kit/combobox.test-helpers.js';
 
@@ -75,19 +76,21 @@ function addParams(http: ReturnType<typeof scriptedHttp>): unknown {
 }
 
 describe('AddMemberForm', () => {
-  it('not a platform administrator: the login is typed, normalized like the kernel does, and validated', async () => {
+  it('not a platform administrator, typing instead: the login is normalized like the kernel does, and validated', async () => {
     const http = scriptedHttp({ list_users: forbidden, add_member: () => added });
     const { onDone } = renderForm(http);
     await waitFor(() => expect(http.calls.some((call) => call.name === 'list_users')).toBe(true));
+    fireEvent.click(screen.getByTestId('add-member-type-instead'));
 
     const login = screen.getByLabelText(/登录名/) as HTMLInputElement;
     fireEvent.change(login, { target: { value: ' Bob ' } });
     expect(screen.getByText(/将保存为 bob/)).toBeTruthy();
     fireEvent.blur(login);
     expect(login.value).toBe('bob');
-    // The directory stays out of sight for a non-administrator.
+    // The directory stays out of sight for a non-administrator; the search is one click back.
     expect(screen.queryByTestId('add-member-pick-instead')).toBeNull();
     expect(screen.queryByTestId('add-member-directory-error')).toBeNull();
+    expect(screen.getByTestId('add-member-lookup-instead')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
@@ -96,7 +99,8 @@ describe('AddMemberForm', () => {
 
   it('an invalid login names the problem and keeps Add disabled', () => {
     const http = scriptedHttp({ list_users: forbidden });
-    renderForm(http);
+    renderForm(http, false);
+    fireEvent.click(screen.getByTestId('add-member-type-instead'));
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'a b' } });
     expect(screen.getByRole('alert').textContent).toMatch(/不能包含「 」/);
     expect(screen.getByRole('button', { name: '添加' }).hasAttribute('disabled')).toBe(true);
@@ -228,9 +232,10 @@ describe('AddMemberForm', () => {
     expect(screen.getByTestId('add-member-user')).toBeTruthy();
   });
 
-  it('platformAdmin={false}: never reads the directory', async () => {
+  it('platformAdmin={false}: never reads the directory, and types a login when asked to', async () => {
     const http = scriptedHttp({ add_member: () => added });
     renderForm(http, false);
+    fireEvent.click(screen.getByTestId('add-member-type-instead'));
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'dana' } });
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
     await waitFor(() => expect(addParams(http)).toEqual({ login: 'dana', role: 'member' }));
@@ -246,6 +251,7 @@ describe('AddMemberForm', () => {
         }),
     });
     renderForm(http);
+    fireEvent.click(screen.getByTestId('add-member-type-instead'));
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'dana' } });
     answer({ items: [user()] });
     expect(await screen.findByTestId('add-member-pick-instead')).toBeTruthy();
@@ -262,6 +268,9 @@ describe('AddMemberForm', () => {
       },
     });
     renderForm(http);
+    // The form opens on the owner's search; the directory's failure is said where it is offered.
+    expect(screen.getByTestId('add-member-lookup')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('add-member-type-instead'));
     const banner = await screen.findByTestId('add-member-directory-error');
     expect(screen.getByLabelText(/登录名/)).toBeTruthy();
     fireEvent.click(within(banner).getByRole('button', { name: /重试/ }));
@@ -285,5 +294,116 @@ describe('AddMemberForm', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(http.calls.filter((c) => c.name === 'list_users')).toHaveLength(1);
+  });
+
+  describe('legacy 150: an owner who is not a platform administrator searches with lookup_users', () => {
+    const dana = { login: 'dana', displayName: 'Dana' };
+    const danny = { login: 'danny', displayName: 'Danny Ho' };
+
+    it('asks nothing under 2 characters, then lists the matches and sends the picked login', async () => {
+      const http = scriptedHttp({
+        lookup_users: () => ({ items: [dana, danny] }),
+        add_member: () => added,
+      });
+      const { onDone } = renderForm(http, false);
+      const lookup = screen.getByTestId('add-member-lookup');
+      expect(screen.getByTestId('add-member-missing').textContent).toContain('选择用户');
+
+      fireEvent.change(lookup, { target: { value: 'd' } });
+      openCombobox(lookup);
+      expect(screen.getByTestId('add-member-lookup-empty').textContent).toBe(
+        '输入至少 2 个字符开始查找。',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(http.calls.some((call) => call.name === 'lookup_users')).toBe(false);
+
+      fireEvent.change(lookup, { target: { value: ' Da ' } });
+      await findComboboxOption(lookup, 'danny — Danny Ho');
+      expect(comboboxOptionTexts(lookup)).toEqual(['dana — Dana', 'danny — Danny Ho']);
+      expect(http.calls.find((call) => call.name === 'lookup_users')?.params).toEqual({
+        query: 'Da',
+      });
+
+      await pickComboboxOption(lookup, 'danny — Danny Ho');
+      expect((lookup as HTMLInputElement).value).toBe('danny — Danny Ho');
+      fireEvent.click(screen.getByRole('button', { name: '添加' }));
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+      expect(addParams(http)).toEqual({ login: 'danny', role: 'member' });
+      expect(http.calls.some((call) => call.name === 'list_users')).toBe(false);
+    });
+
+    it('a cut-off answer says to type more; no match says who is left out', async () => {
+      const http = scriptedHttp({
+        lookup_users: (params) =>
+          (params as { query: string }).query === 'da'
+            ? { items: [dana, danny], truncated: true }
+            : { items: [] },
+      });
+      renderForm(http, false);
+      const lookup = screen.getByTestId('add-member-lookup');
+      fireEvent.change(lookup, { target: { value: 'da' } });
+      await findComboboxOption(lookup, 'dana — Dana');
+      expect(screen.getByText('只列出最先匹配的 20 个，输入更多字符缩小范围。')).toBeTruthy();
+
+      fireEvent.change(lookup, { target: { value: 'zz' } });
+      await waitFor(() =>
+        expect(screen.getByTestId('add-member-lookup-empty').textContent).toBe(
+          '没有可以添加的匹配用户。已是本工作区成员的人和已停用的账户不会列出。',
+        ),
+      );
+      expect(screen.queryByText(/只列出最先匹配/)).toBeNull();
+    });
+
+    it('"改为手动输入" carries the picked login over, and the search is one click back', async () => {
+      const http = scriptedHttp({ lookup_users: () => ({ items: [dana] }) });
+      renderForm(http, false);
+      const lookup = screen.getByTestId('add-member-lookup');
+      fireEvent.change(lookup, { target: { value: 'dan' } });
+      await pickComboboxOption(lookup, 'dana — Dana');
+      fireEvent.click(screen.getByTestId('add-member-type-instead'));
+      expect((screen.getByLabelText(/登录名/) as HTMLInputElement).value).toBe('dana');
+      fireEvent.click(screen.getByTestId('add-member-lookup-instead'));
+      expect((screen.getByTestId('add-member-lookup') as HTMLInputElement).value).toBe(
+        'dana — Dana',
+      );
+    });
+
+    it('a failed search says so, with a retry', async () => {
+      let attempts = 0;
+      const http = scriptedHttp({
+        lookup_users: () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('network down');
+          return { items: [dana] };
+        },
+      });
+      renderForm(http, false);
+      const lookup = screen.getByTestId('add-member-lookup');
+      fireEvent.change(lookup, { target: { value: 'da' } });
+      const banner = await screen.findByTestId('add-member-lookup-error');
+      expect(banner.textContent).toContain('无法查找用户');
+      fireEvent.click(within(banner).getByRole('button', { name: /重试/ }));
+      await findComboboxOption(lookup, 'dana — Dana');
+      expect(screen.queryByTestId('add-member-lookup-error')).toBeNull();
+    });
+
+    it('a pick made before the directory answered keeps the search', async () => {
+      let answer: (value: unknown) => void = () => undefined;
+      const http = scriptedHttp({
+        list_users: () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+        lookup_users: () => ({ items: [dana] }),
+      });
+      renderForm(http);
+      const lookup = screen.getByTestId('add-member-lookup');
+      fireEvent.change(lookup, { target: { value: 'da' } });
+      await pickComboboxOption(lookup, 'dana — Dana');
+      answer({ items: [user()] });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.getByTestId('add-member-lookup')).toBeTruthy();
+      expect(screen.queryByTestId('add-member-user')).toBeNull();
+    });
   });
 });

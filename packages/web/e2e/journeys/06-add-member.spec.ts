@@ -8,7 +8,7 @@ import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from
  *
  * 步骤:
  *   1. （平台管理员）新建一个平台用户（不预先绑定到任何工作区）。
- *   2. （工作区 owner）在 成员与授权 页"添加成员"，按该用户的登录名把它加入这个工作区，给一个角色。
+ *   2. （工作区 owner）在 成员与授权 页"添加成员"，按登录名查找该用户、从列表里选中，把它加入这个工作区，给一个角色。
  *   3. 新成员用平台账户的临时密码登录，被强制改密。
  *   4. 新成员切到这个工作区，确认"可用"：能看到 使用 分组（对话/任务/图谱/我的智能体/我的账户；
  *      待我审批只给读得了审批队列的 operator 与所有者），看不到 治理 分组（member 角色，§5.9
@@ -56,7 +56,13 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
     await page.getByRole('button', { name: /添加成员/ }).click();
     const addDrawer = page.getByTestId('add-member-drawer');
     await expect(addDrawer).toBeVisible();
-    await addDrawer.locator('#am-login').fill(memberLogin);
+    // Legacy 150: an owner who is not a platform administrator searches (`lookup_users`) and picks.
+    const lookup = addDrawer.getByRole('combobox', { name: /^用户/ });
+    await lookup.fill(memberLogin);
+    const option = addDrawer.getByRole('option').filter({ hasText: `${memberLogin} — ` });
+    await expect(option).toHaveCount(1, { timeout: 15_000 });
+    await option.click();
+    await expect(lookup).toHaveValue(new RegExp(`^${memberLogin} — `));
     // Role left at its default (`member`) — AddMemberForm.tsx's own initial state.
     await addDrawer.getByRole('button', { name: '添加' }).click();
     await expect(addDrawer).toBeHidden({ timeout: 15_000 });

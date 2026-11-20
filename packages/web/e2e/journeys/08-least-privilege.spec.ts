@@ -128,7 +128,13 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       await page.getByRole('button', { name: /添加成员/ }).click();
       const addDrawer = page.getByTestId('add-member-drawer');
       await expect(addDrawer).toBeVisible();
-      await addDrawer.locator('#am-login').fill(login);
+      // Legacy 150: an owner who is not a platform administrator searches (`lookup_users`) and picks.
+      const lookup = addDrawer.getByRole('combobox', { name: /^用户/ });
+      await lookup.fill(login);
+      const option = addDrawer.getByRole('option').filter({ hasText: `${login} — ` });
+      await expect(option).toHaveCount(1, { timeout: 15_000 });
+      await option.click();
+      await expect(lookup).toHaveValue(new RegExp(`^${login} — `));
       await addDrawer.locator('#am-role').selectOption(role);
       await addDrawer.getByRole('button', { name: '添加' }).click();
       await expect(addDrawer).toBeHidden({ timeout: 15_000 });

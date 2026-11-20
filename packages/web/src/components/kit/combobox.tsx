@@ -43,6 +43,9 @@ export interface ComboboxProps {
   readonly loading?: boolean;
   /** Shown in the list when nothing matches (or the list is empty). */
   readonly emptyText?: ReactNode;
+  /** A note at the foot of the open list, under the options — e.g. a search answered on the
+   *  server that returned only its first matches. */
+  readonly footer?: ReactNode;
   readonly disabled?: boolean;
   readonly invalid?: boolean;
   readonly mono?: boolean;
@@ -102,6 +105,7 @@ export function Combobox({
   placeholder,
   loading = false,
   emptyText,
+  footer,
   disabled = false,
   invalid = false,
   mono = false,
@@ -426,6 +430,7 @@ export function Combobox({
                   : t('没有匹配项。', 'No match.'))}
             </p>
           ) : null}
+          {!loading && footer ? <p className="combobox-note">{footer}</p> : null}
           {hidden > 0 ? (
             <p className="combobox-note">
               {t(
