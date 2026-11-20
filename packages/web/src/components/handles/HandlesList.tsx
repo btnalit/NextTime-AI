@@ -231,6 +231,11 @@ export function HandlesList({
 
 const LIST_PARAMS: Readonly<Record<string, unknown>> = {};
 
+/** A session kind mid-sentence in English: only its first letter lowered, so "(MCP)" stays. */
+function lowerFirst(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
 /** What a revocation ended, in one sentence: one Handle or several, a client's or automation's. */
 function endedText(ended: { count: number; kind: SessionKind }, t: Translate): string {
   const kind = sessionKindLabel(ended.kind, t);
@@ -239,21 +244,21 @@ function endedText(ended: { count: number; kind: SessionKind }, t: Translate): s
     return service
       ? t(
           `已撤销：这个${kind}的凭证已失效，用它的自动化会被拒绝，要再用需要重新签发并换上新凭证。`,
-          `Revoked: the Handle of that ${kind.toLowerCase()} no longer works; automation using it is refused until a new one is issued and swapped in.`,
+          `Revoked: the Handle of that ${lowerFirst(kind)} no longer works; automation using it is refused until a new one is issued and swapped in.`,
         )
       : t(
           `已撤销：这个${kind}的凭证已失效，用它的客户端会被拒绝，要再用需要重新签发。`,
-          `Revoked: the Handle of that ${kind.toLowerCase()} no longer works; a client using it is refused and needs a new one.`,
+          `Revoked: the Handle of that ${lowerFirst(kind)} no longer works; a client using it is refused and needs a new one.`,
         );
   }
   return service
     ? t(
         `已撤销：这个${kind}下的 ${ended.count} 个凭证已失效，用它们的自动化会被拒绝，要再用需要重新签发并换上新凭证。`,
-        `Revoked: the ${ended.count} Handles of that ${kind.toLowerCase()} no longer work; automation using them is refused until new ones are issued and swapped in.`,
+        `Revoked: the ${ended.count} Handles of that ${lowerFirst(kind)} no longer work; automation using them is refused until new ones are issued and swapped in.`,
       )
     : t(
         `已撤销：这个${kind}下的 ${ended.count} 个凭证已失效，用它们的客户端会被拒绝，要再用需要重新签发。`,
-        `Revoked: the ${ended.count} Handles of that ${kind.toLowerCase()} no longer work; a client using them is refused and needs a new one.`,
+        `Revoked: the ${ended.count} Handles of that ${lowerFirst(kind)} no longer work; a client using them is refused and needs a new one.`,
       );
 }
 
@@ -349,7 +354,7 @@ function SessionRow({
               title={
                 service
                   ? t(`撤销服务账号 ${serviceName} 的会话`, `Revoke ${serviceName}'s session`)
-                  : t(`撤销这个${kind}`, `Revoke this ${kind.toLowerCase()}`)
+                  : t(`撤销这个${kind}`, `Revoke this ${lowerFirst(kind)}`)
               }
               impact={[
                 count > 1

@@ -259,6 +259,10 @@ describe('HandlesList', () => {
     expect(mcp.textContent).toContain('Client outside the platform (MCP)');
     expect(mcp.textContent).toContain('Held by a client');
     expect(within(mcp).getByRole('button', { name: 'Revoke' })).toBeTruthy();
+    fireEvent.click(within(mcp).getByRole('button', { name: 'Revoke' }));
+    expect(
+      (await screen.findByTestId('handle-session-revoke-confirm-session-mcp')).textContent,
+    ).toContain('Revoke this client outside the platform (MCP)');
     expect(screen.getByTestId('handle-session-ends-session-entry').textContent).toContain(
       'ends with its chat or Task',
     );
