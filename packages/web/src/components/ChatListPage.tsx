@@ -35,7 +35,7 @@ export function ChatListPage({ client, http, onSelectChat, adminAgent }: ChatLis
   return (
     <div className="chat-page" data-testid="chats-page">
       <div className="chat-workspace-banner">
-        <ExecutionReadinessCard http={http} />
+        <ExecutionReadinessCard http={http} trialWorkspace={adminAgent} />
       </div>
       <div className="chat-workspace" data-active-pane="list">
         <ChatListPane client={client} onSelectChat={onSelectChat} adminAgent={adminAgent} />

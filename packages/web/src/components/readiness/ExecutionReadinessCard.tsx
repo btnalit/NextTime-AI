@@ -36,6 +36,11 @@ export interface ExecutionReadinessCardProps {
   readonly http: CapabilityCaller;
   /** The page the card is mounted on (`hrefs.*`); a fix link to it is not offered (audit P1-4). */
   readonly currentHref?: string;
+  /** Legacy 624: a platform administrator in a trial workspace (`admin_trial`), where the 管理员智能体
+   *  is the one they mostly talk to. The strip is still the entry agent's (「新对话」 starts one), so
+   *  it says so by name, and an empty trial workspace is told how its systems arrive — through the
+   *  admin agent's requests — instead of the entry agent having nothing to act on. */
+  readonly trialWorkspace?: boolean;
 }
 
 /**
@@ -68,6 +73,7 @@ export function ExecutionReadinessCard(props: ExecutionReadinessCardProps) {
 function ReadinessCardBody({
   http,
   currentHref,
+  trialWorkspace = false,
   roleChecked,
 }: ExecutionReadinessCardProps & { readonly roleChecked: boolean }) {
   const t = useT();
@@ -95,7 +101,14 @@ function ReadinessCardBody({
       />
     );
   }
-  return <ExecutionReadinessStrip data={readiness.state.data} health={health} reader={reader} />;
+  return (
+    <ExecutionReadinessStrip
+      data={readiness.state.data}
+      health={health}
+      reader={reader}
+      trialWorkspace={trialWorkspace}
+    />
+  );
 }
 
 type GateWire = ExecutionReadinessWire['gates'][number];
@@ -138,11 +151,14 @@ function ExecutionReadinessStrip({
   data,
   health,
   reader,
+  trialWorkspace,
 }: {
   readonly data: ExecutionReadinessWire;
   /** Legacy 253: gate id → health (`useReadinessGateHealth`); empty while unknown. */
   readonly health: ReadonlyMap<string, GateHealthWire>;
   readonly reader: ReadinessReader;
+  /** Legacy 624: see `ExecutionReadinessCardProps.trialWorkspace`. */
+  readonly trialWorkspace: boolean;
 }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
@@ -167,7 +183,14 @@ function ExecutionReadinessStrip({
         >
           {first ? (
             <li className="row-wrap" data-testid="execution-readiness-missing-item">
-              <span>{missingCauseText(first, gateNames, t, refusalKinds)}</span>
+              <span>
+                {trialWorkspace
+                  ? t(
+                      '这个试验工作区还没有接入系统。管理员智能体会在对话里申请接入，你在「系统与授权」里完成连接后就接上了；也可以自己启用一个门。入口 agent（新对话）同样要等有了系统才能用。',
+                      'This trial workspace has no system connected yet. The admin agent asks to connect one in its chat, and it is connected once you complete the connection under Systems & access; you can also enable a gate yourself. The entry agent (New chat) needs a system too before it can act.',
+                    )
+                  : missingCauseText(first, gateNames, t, refusalKinds)}
+              </span>
               <FixHint
                 href={missingLinkHref(first, reader)}
                 label={missingLinkLabel(first, t, reader)}
@@ -203,10 +226,15 @@ function ExecutionReadinessStrip({
       <div className="stack-s">
         <div className="row-wrap">
           <strong data-testid="execution-readiness-summary">
-            {t(
-              `我的智能体能用 ${usableCount}/${data.gates.length} 个系统`,
-              `Your agent can use ${usableCount}/${data.gates.length} system(s)`,
-            )}
+            {trialWorkspace
+              ? t(
+                  `入口 agent（新对话）能用 ${usableCount}/${data.gates.length} 个系统`,
+                  `The entry agent (New chat) can use ${usableCount}/${data.gates.length} system(s)`,
+                )
+              : t(
+                  `我的智能体能用 ${usableCount}/${data.gates.length} 个系统`,
+                  `Your agent can use ${usableCount}/${data.gates.length} system(s)`,
+                )}
           </strong>
           {/* Bugfix (PR #324 review): an inline chip per unusable gate turned "0/5 usable" into a
            *  wall of amber. Usable systems still get their own chip; every unusable one folds into
