@@ -34,6 +34,13 @@ const TEXTS: readonly string[] = [
   // A platform API key with its prefix (legacy 906): alone, after `_` and `/`, with more after it,
   // and after a letter (not one).
   'key ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ, call_ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ /ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZmore agentk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ',
+  // In JSON text (review #493 on #1571): a key on its own line of a tool's output, after a
+  // `\uXXXX` escape, after a URL-encoded `/`, and the bare shape after `\n`; after `%` and one
+  // hex digit is not one.
+  '{"stdout":"line1\\nntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ\\n","stderr":"\\uff1antk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ"} keys%2Fntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ a%2ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ old\\nFAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ',
+  // A Handle and a vendor key the same way (review #501 on #1571), and a key whose body spells a
+  // vendor key, hidden whole.
+  `{"stdout":"a\\n${HANDLE}\\nsk_live_${FAKE}"} q=my%20${HANDLE} key ntk_FAKE-sk-abcdefghijklmnopqrstuvwxyz0123456XY.`,
 ];
 
 /** Everything a scrubber emits for `pieces`, then its flush. */
