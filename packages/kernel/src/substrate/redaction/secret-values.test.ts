@@ -6,10 +6,12 @@ import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
+  PLATFORM_API_KEY_PREFIX,
   PLATFORM_KEY_SHAPE_PATTERNS,
   REDACTED,
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
+  platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
@@ -55,6 +57,49 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
     ['a Handle after CJK text', `我的 Handle 是${HANDLE}。`, `我的 Handle 是${REDACTED}。`],
   ])('replaces %s', (_label, input, expected) => {
     expect(scrubSecretValues(input).value).toBe(expected);
+  });
+
+  describe('in JSON text and URL encoding (review #501 on #1571)', () => {
+    const certain = (text: string) =>
+      redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+    const stored = (text: string) =>
+      scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+
+    // A tool's result is JSON text: a secret alone on its line of output follows `\n`, and the
+    // letter or digit ending an escape or a URL-encoded byte is not the end of another word.
+    it.each([
+      [
+        'a Handle on its own line',
+        JSON.stringify({ stdout: `line1\n${HANDLE}\n` }),
+        JSON.stringify({ stdout: `line1\n${REDACTED}\n` }),
+      ],
+      ['a Handle after \\uXXXX', `"\\uff1a${HANDLE}"`, `"\\uff1a${REDACTED}"`],
+      ['a Handle in a query string', `q=my%20${HANDLE}`, `q=my%20${REDACTED}`],
+      [
+        'a vendor key on its own line',
+        JSON.stringify(`a\nsk_live_${FAKE}`),
+        JSON.stringify(`a\n${REDACTED}`),
+      ],
+      [
+        'a vendor key after \\t',
+        JSON.stringify(`a\tghp_${FAKE}`),
+        JSON.stringify(`a\t${REDACTED}`),
+      ],
+      ['a vendor key URL-encoded', `keys%2Fsk-proj-${FAKE}`, `keys%2F${REDACTED}`],
+    ])('hides %s — in every set', (_label, text, expected) => {
+      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
+      expect(stored(text)).toEqual({ value: expected, redactedValues: 1 });
+    });
+
+    it.each([
+      ['a Handle after a backslash and a letter that is no JSON escape', `\\a${HANDLE}`],
+      ['a vendor prefix ending another word', `ask_live_${FAKE}`],
+      ['a vendor prefix after % and one hex digit', `a%2sk_live_${FAKE}`],
+    ])('leaves %s', (_label, text) => {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+      expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+    });
   });
 
   // Found by the stream's split-everywhere property test: the stream redacted these, the whole
@@ -118,6 +163,21 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
   });
 });
 
+/**
+ * A random value, drawn again while it spells out a vendor key's prefix where a word starts
+ * (`sk-`, `ghp_`, …: `VENDOR_KEY` in secret-values.ts). A digest that does is taken by the vendor
+ * rule, by that prefix and not by its shape — rarely, but often enough across 2,000 draws to fail
+ * a run now and then (review #501 on #1571: about 2% of runs).
+ */
+function drawWithoutVendorPrefix(draw: () => string): string {
+  const VENDOR_PREFIX =
+    /\b(?:sk-|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|AKIA|AIza|hf_)/;
+  for (;;) {
+    const value = draw();
+    if (!VENDOR_PREFIX.test(value)) return value;
+  }
+}
+
 describe('a platform API key standing alone (legacy 168)', () => {
   const certain = (text: string) =>
     redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
@@ -130,6 +190,14 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ['with - and _ only', `${PLATFORM_KEY.slice(0, 41)}-_`, REDACTED],
     ['in a JSON string', `{"k":"${PLATFORM_KEY}"}`, `{"k":"${REDACTED}"}`],
     ['in parentheses, before a comma', `(${PLATFORM_KEY}),`, `(${REDACTED}),`],
+    // A tool's result is JSON text: a key on its own line of output follows `\n` (review #493 on
+    // #1571), and Python's json.dumps writes `密钥：` as `\u5bc6\u94a5\uff1a`.
+    [
+      'on its own line of JSON text',
+      JSON.stringify({ stdout: `line1\n${PLATFORM_KEY}\n` }),
+      JSON.stringify({ stdout: `line1\n${REDACTED}\n` }),
+    ],
+    ['after a \\uXXXX escape', `"\\uff1a${PLATFORM_KEY}"`, `"\\uff1a${REDACTED}"`],
   ])(
     'is replaced %s — hidden, never refused by the high-confidence set',
     (_label, text, expected) => {
@@ -165,6 +233,8 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ['between a + and a / in a longer base64 run', `QUJD+${PLATFORM_KEY}/REVG`],
     ['after a / in a base64 run', `QUJD/${PLATFORM_KEY}`],
     ['before a + in a base64 run', `${PLATFORM_KEY}+REVG`],
+    // A URL-encoded byte may stand for `/` or `+`, which this shape is not taken after.
+    ['after a URL-encoded /', `keys%2F${PLATFORM_KEY}`],
   ])('is not matched %s', (_label, text) => {
     expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
     expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
@@ -174,7 +244,12 @@ describe('a platform API key standing alone (legacy 168)', () => {
     for (let i = 0; i < 2_000; i += 1) {
       const value = randomBytes(32).toString('base64');
       expect(value).toHaveLength(44);
-      for (const text of [value, `PublicKey = ${value}`, `Digest: SHA-256=${value}, sent`]) {
+      for (const text of [
+        value,
+        `PublicKey = ${value}`,
+        `Digest: SHA-256=${value}, sent`,
+        JSON.stringify(`[Peer]\nPublicKey =\n${value}`),
+      ]) {
         expect(scrubSecretValues(text).redactedValues).toBe(0);
         expect(certain(text).redactedValues).toBe(0);
       }
@@ -189,8 +264,10 @@ describe('a platform API key standing alone (legacy 168)', () => {
     });
     // … and the high-confidence set, which refuses a call outright, never matches it.
     for (let i = 0; i < 2_000; i += 1) {
-      const digest = createHash('sha256').update(randomBytes(16)).digest('base64url');
-      const x = randomBytes(32).toString('base64url');
+      const digest = drawWithoutVendorPrefix(() =>
+        createHash('sha256').update(randomBytes(16)).digest('base64url'),
+      );
+      const x = drawWithoutVendorPrefix(() => randomBytes(32).toString('base64url'));
       for (const text of [
         digest,
         `eventId ${digest}`,
@@ -248,11 +325,118 @@ describe('a platform API key standing alone (legacy 168)', () => {
         ...(block.match(/.{1,64}/g) ?? []),
         '-----END CERTIFICATE-----',
       ].join('\n');
-      for (const text of [block, `data:application/octet-stream;base64,${block}`, pem]) {
+      for (const text of [
+        block,
+        `data:application/octet-stream;base64,${block}`,
+        pem,
+        JSON.stringify({ stdout: pem }),
+      ]) {
         expect(scrubSecretValues(text).redactedValues).toBe(0);
         expect(certain(text).redactedValues).toBe(0);
       }
     }
+  });
+});
+
+describe('a platform API key with its prefix (legacy 906)', () => {
+  const certain = (text: string) =>
+    redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+  const stored = (text: string) =>
+    scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+  const KEY = `ntk_${PLATFORM_KEY}`;
+
+  it.each([
+    ['alone', KEY, REDACTED],
+    ['in a sentence', `my key is ${KEY}, keep it`, `my key is ${REDACTED}, keep it`],
+    ['in a JSON string', `{"k":"${KEY}"}`, `{"k":"${REDACTED}"}`],
+    ['after CJK text', `密钥：${KEY}。`, `密钥：${REDACTED}。`],
+    ['after `_` in a longer run', `call_${KEY}`, `call_${REDACTED}`],
+    ['after `/` in a URL path', `/keys/${KEY}/x`, `/keys/${REDACTED}/x`],
+    ['after `-`', `x-${KEY}`, `x-${REDACTED}`],
+    ['with more after it', `${KEY}tail`, `${REDACTED}tail`],
+    ['all lower case after the prefix', `ntk_${'a'.repeat(43)}`, REDACTED],
+    // A letter or a digit that ends a JSON escape or a URL-encoded byte stands for what precedes
+    // the key (review #493 on #1571): a tool's result is JSON text, a key on its own line of
+    // output follows `\n`, and Python's json.dumps writes `密钥：` as `\u5bc6\u94a5\uff1a`.
+    [
+      'on its own line of JSON text',
+      JSON.stringify({ stdout: `line1\n${KEY}\n` }),
+      JSON.stringify({ stdout: `line1\n${REDACTED}\n` }),
+    ],
+    ['after \\t in JSON text', JSON.stringify(`a\t${KEY}`), JSON.stringify(`a\t${REDACTED}`)],
+    ['after \\r in JSON text', JSON.stringify(`a\r${KEY}`), JSON.stringify(`a\r${REDACTED}`)],
+    ['after \\b in JSON text', JSON.stringify(`a\b${KEY}`), JSON.stringify(`a\b${REDACTED}`)],
+    ['after \\f in JSON text', JSON.stringify(`a\f${KEY}`), JSON.stringify(`a\f${REDACTED}`)],
+    [
+      'after \\uXXXX escapes',
+      `"\\u5bc6\\u94a5\\uff1a${KEY}"`,
+      `"\\u5bc6\\u94a5\\uff1a${REDACTED}"`,
+    ],
+    ['after a URL-encoded space', `q=my%20${KEY}`, `q=my%20${REDACTED}`],
+    ['after a URL-encoded /', `keys%2F${KEY}`, `keys%2F${REDACTED}`],
+  ])(
+    'is hidden %s — by the full set, refused by the high-confidence set, rewritten in stored rows',
+    (_label, text, expected) => {
+      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
+      expect(stored(text)).toEqual({ value: expected, redactedValues: 1 });
+    },
+  );
+
+  it.each([
+    ['one character short', `ntk_${PLATFORM_KEY.slice(0, 42)}`],
+    ['after a letter, the end of another word', `agentk_${PLATFORM_KEY}`],
+    ['after a digit', `2ntk_${PLATFORM_KEY}`],
+    ['in upper case', `NTK_${PLATFORM_KEY}`],
+    ['after a backslash and a letter that is no JSON escape', `\\antk_${PLATFORM_KEY}`],
+    ['after a \\u escape one hex digit short', `x\\u4e2ntk_${PLATFORM_KEY}`],
+    ['after % and one hex digit', `a%2ntk_${PLATFORM_KEY}`],
+  ])('is not matched %s', (_label, text) => {
+    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+
+  it('a minted key always has it, never the bare shape, and is the key platformApiKeys gives', () => {
+    // generateApiKey's own recipe (application/gateway/auth.ts).
+    for (let i = 0; i < 2_000; i += 1) {
+      const key = `${PLATFORM_API_KEY_PREFIX}${randomBytes(32).toString('base64url')}`;
+      expect(key).toHaveLength(47);
+      for (const scrub of [scrubSecretValues, certain, stored]) {
+        expect(scrub(`key ${key}.`)).toMatchObject({
+          value: `key ${REDACTED}.`,
+          redactedValues: 1,
+        });
+      }
+      expect(platformKeyShapes(key)).toEqual([]);
+      expect(platformApiKeys(`k=${key} (${key})`)).toEqual([key, key]);
+    }
+  });
+
+  it('is hidden whole when its body spells a vendor key (`-sk-` and 16 more; review #501 on #1571)', () => {
+    // 43 characters, upper and lower case and digits: the vendor rule alone would take `sk-…XY`.
+    const body = 'FAKE-sk-abcdefghijklmnopqrstuvwxyz0123456XY';
+    expect(body).toHaveLength(43);
+    for (const scrub of [scrubSecretValues, certain, stored]) {
+      expect(scrub(`key ntk_${body}.`)).toMatchObject({
+        value: `key ${REDACTED}.`,
+        redactedValues: 1,
+      });
+    }
+    // The shape minted before the prefix, likewise — hidden whole by the full set.
+    expect(scrubSecretValues(`key ${body}.`)).toEqual({
+      value: `key ${REDACTED}.`,
+      redactedValues: 1,
+    });
+  });
+
+  it('platformApiKeys gives prefixed keys and pre-prefix shapes as written, in order', () => {
+    const text = `old ${PLATFORM_KEY}, new ${KEY}; call_${KEY} not ${WIREGUARD_KEY} nor agentk_${PLATFORM_KEY}`;
+    expect(platformApiKeys(text)).toEqual([PLATFORM_KEY, KEY, KEY]);
+    expect(platformKeyShapes(text)).toEqual([PLATFORM_KEY]);
+    expect(platformApiKeys('nothing here')).toEqual([]);
+    const json = JSON.stringify({ stdout: `${PLATFORM_KEY}\n${KEY}\n` });
+    expect(platformApiKeys(json)).toEqual([PLATFORM_KEY, KEY]);
+    expect(platformKeyShapes(json)).toEqual([PLATFORM_KEY]);
   });
 });
 
@@ -287,6 +471,18 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     '-----BEGIN RSA PRIVATE KEY-----',
     'Ab1',
     `${'Ab1'.repeat(14)}A `,
+    'ntk_',
+    '_ntk_a',
+    `ntk_${'a'.repeat(42)} `,
+    '\\n',
+    '\\nntk_',
+    '\\u00e9ntk_',
+    '%2Fntk_',
+    `\\n${'Ab1'.repeat(15)}`,
+    '\\neyJ',
+    '%20eyJaaaaaa.',
+    '\\nsk-',
+    '%2Fsk_live_',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));

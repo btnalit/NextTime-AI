@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { platformKeyShapes } from '../../governance/redaction/index.js';
-import { hashApiKey } from '../gateway/auth.js';
+import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import type { LiveApiKeyRow, ScrubRawSecretsResult } from './scrub-raw-secrets.js';
 import {
   LIVE_API_KEY_COMPARE_WINDOW,
@@ -30,6 +30,9 @@ import {
  * an executing run lists the Turn before it hides the key, and a later run no longer can; once both
  * keys are rotated, no seeded row is listed.
  *
+ * A key minted with its `ntk_` prefix (legacy 906) is found the same way, alone and inside a longer
+ * run (last describe).
+ *
  * Keys are minted per run (`api_key_hash` is unique across the database, and test databases are
  * reused); the scrub reads the whole database, so assertions are about the seeded rows, and a run
  * takes as long as the shared test database is large.
@@ -41,7 +44,8 @@ const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJ
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-/** A key as `generateApiKey` mints one, redrawn in the rare case it lacks the shape's mix. */
+/** A key as `generateApiKey` minted one before legacy 906 (no prefix), redrawn in the rare case it
+ *  lacks the shape's mix. */
 function mintKey(): string {
   for (;;) {
     const key = randomBytes(32).toString('base64url');
@@ -414,6 +418,77 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rotated.listed).toEqual([]);
       // The audit rows stay as written (I11) and stay counted.
       expect(rotated.counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
+    }, 300_000);
+  },
+);
+
+describe.runIf(DATABASE_URL !== undefined)(
+  'scrubRawSecrets (integration, real Postgres) — a key minted with its prefix (legacy 906)',
+  () => {
+    let pool: Pool;
+    const workspaceId = randomUUID();
+    const ids = { service: randomUUID(), alone: randomUUID(), inRun: randomUUID() };
+    const key = generateApiKey();
+
+    function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+      return withWorkspace(pool, { workspaceId, principalId: ids.service }, fn, {
+        skipRoleSwitch: true,
+      });
+    }
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      await admin(async (client) => {
+        await client.query('insert into workspaces (id, name) values ($1, $2)', [
+          workspaceId,
+          'scrub-live-prefixed-key-test',
+        ]);
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
+           values ($1, $2, 'service', 'member', 'backup collector', $3)`,
+          [workspaceId, ids.service, hashApiKey(key)],
+        );
+        await client.query(
+          `insert into audit_records (workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload) values
+             ($1, $2, $3, 'issue_service_handle', 'session', $4, $5::jsonb),
+             ($1, $6, $3, 'issue_service_handle', 'session', $4, $7::jsonb)`,
+          [
+            workspaceId,
+            ids.alone,
+            ids.service,
+            randomUUID(),
+            JSON.stringify({ params: { note: `for the collector, key ${key}` } }),
+            ids.inRun,
+            JSON.stringify({ params: { note: `tool call_${key} failed` } }),
+          ],
+        );
+      });
+    });
+
+    afterAll(async () => {
+      await admin((client) =>
+        client.query(
+          'update principals set api_key_hash = null where workspace_id = $1 and id = $2',
+          [workspaceId, ids.service],
+        ),
+      );
+      await pool.end();
+    });
+
+    it('lists the rows holding it, alone or after `_` in a longer run, by ids only', async () => {
+      expect(key).toMatch(/^ntk_[A-Za-z0-9_-]{43}$/);
+      const live: LiveApiKeyRow[] = [];
+      const result = await scrubRawSecrets(pool, {
+        confirm: false,
+        batchSize: 200,
+        onLiveApiKey: (row) => live.push(row),
+      });
+      const ours = live.filter((row) => row.principalId === ids.service);
+      expect(ours.map((row) => row.row.at(-1)).sort()).toEqual([ids.alone, ids.inRun].sort());
+      expect(new Set(ours.map((row) => row.table))).toEqual(new Set(['audit_records']));
+      expect(JSON.stringify({ result, live })).not.toContain(key);
+      expect(JSON.stringify({ result, live })).not.toContain(hashApiKey(key));
     }, 300_000);
   },
 );

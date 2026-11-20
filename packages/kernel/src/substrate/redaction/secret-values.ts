@@ -32,7 +32,8 @@ import {
  * What is replaced inside any string:
  *   - a PEM private key; an `Authorization` / `Cookie` header's value (the rest of the line);
  *   - a compact JWT (a Handle is one); a `Bearer`/`Basic` credential;
- *   - a vendor key with a well-known prefix; a platform API key (43 base64url characters alone);
+ *   - a vendor key with a well-known prefix; a platform API key (`ntk_` and 43 base64url
+ *     characters, or the 43 characters alone for one minted before the prefix);
  *   - the value of an upper-case env assignment whose name names a secret anywhere (`PGPASSWORD=`,
  *     `CAPABILITY_HANDLE=`, quoted or not);
  *   - the value of a `name: value` / `name=value` whose name's last word names a secret (YAML,
@@ -190,22 +191,71 @@ const PEM_PRIVATE_KEY: ValuePattern = {
   redact: () => REDACTED,
 };
 
+/**
+ * What, written just before a secret, stands for a character the text was encoded from rather
+ * than ending a word, though it ends in a letter or a digit: a JSON string escape (`\n`, `\t`,
+ * `\r`, `\b`, `\f`, `\u4e2d`). A tool's result is JSON text, so a secret alone on its line of
+ * output (`cat` of a file holding only a key) reaches a scrub as `…\nntk_…` or `…\neyJ…`; Python's
+ * `json.dumps` writes Chinese as `\uXXXX`, so `密钥：` before it becomes `…\uff1a`. Review #493
+ * and #501 on #1571. The rules that start where a run of a secret's characters starts take it as
+ * a start too.
+ */
+const AFTER_JSON_ESCAPE = String.raw`(?<=\\[bfnrt]|\\u[0-9A-Fa-f]{4})`;
+
+/** A URL-encoded byte (`%20`, `%3D`, `%2F`) just before a secret, likewise: a query string
+ *  `q=my%20key%20…` or an encoded path. Not for a rule that is never taken after `/` or `+`
+ *  (`MINTED_PLATFORM_KEY`), which `%2F` and `%2B` stand for. */
+const AFTER_URL_ENCODED_BYTE = String.raw`(?<=%[0-9A-Fa-f]{2})`;
+
 // A compact JWS/JWT: three base64url segments, the first a JSON header (`{"` → `eyJ`). Starts only
-// where a base64url run starts — `\b` would also start after every `-` inside one.
+// where a base64url run starts — `\b` would also start after every `-` inside one — or after a
+// JSON escape or a URL-encoded byte.
 const COMPACT_JWT: ValuePattern = {
-  pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
+  pattern: new RegExp(
+    String.raw`(?:(?<![A-Za-z0-9_-])|${AFTER_JSON_ESCAPE}|${AFTER_URL_ENCODED_BYTE})eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}`,
+    'g',
+  ),
   redact: () => REDACTED,
 };
 
+// A vendor's key by its prefix, where a word starts (`\b`), or after a JSON escape or a
+// URL-encoded byte.
 const VENDOR_KEY: ValuePattern = {
-  pattern:
-    /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,})/g,
+  pattern: new RegExp(
+    String.raw`(?:\b|${AFTER_JSON_ESCAPE}|${AFTER_URL_ENCODED_BYTE})(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,})`,
+    'g',
+  ),
+  redact: () => REDACTED,
+};
+
+/** What every platform API key the kernel mints starts with (`generateApiKey`,
+ *  application/gateway/auth.ts; legacy 906): it names a key as one wherever it is pasted, so the
+ *  key no longer has to be told apart from a digest by its shape alone. */
+export const PLATFORM_API_KEY_PREFIX = 'ntk_';
+
+/**
+ * A platform API key as the kernel mints it since legacy 906: `ntk_` and 32 random bytes in
+ * base64url (43 characters). The prefix makes it a credential wherever it stands, unlike the bare
+ * shape of a key minted before (`MINTED_PLATFORM_KEY`, below): hidden by every set — the
+ * high-confidence one too, which refuses a call carrying it, and the rewrite of stored rows, where
+ * no digest or public key can have this shape. Found inside a longer run after `_`, `-` or `/` too
+ * (`call_ntk_…`, a URL path), not after a letter or a digit, where `ntk_` ends some other word —
+ * unless that letter or digit ends a JSON escape or a URL-encoded byte (`AFTER_JSON_ESCAPE`,
+ * `AFTER_URL_ENCODED_BYTE`), which stand for what precedes the key. The 43 characters after the
+ * prefix are hidden even when more follow. Linear: each lookbehind reads at most six characters,
+ * the literal prefix comes next, and the scan after it is bounded.
+ */
+const PREFIXED_PLATFORM_KEY: ValuePattern = {
+  pattern: new RegExp(
+    String.raw`(?:(?<![A-Za-z0-9])|${AFTER_JSON_ESCAPE}|${AFTER_URL_ENCODED_BYTE})ntk_[A-Za-z0-9_-]{43}`,
+    'g',
+  ),
   redact: () => REDACTED,
 };
 
 /**
- * A platform API key as the kernel mints it (`generateApiKey`, application/gateway/auth.ts: 32
- * random bytes, base64url without padding — exactly 43 characters), standing alone: a run of
+ * A platform API key as the kernel minted it before legacy 906 (32 random bytes, base64url
+ * without padding — exactly 43 characters, no prefix), standing alone: a run of
  * exactly 43 base64url characters, mixing upper and lower case with a digit, `-` or `_` (a random
  * key lacks one of those only about once in 7,500; a word or a lower-case hex digest never has
  * them all). Nothing of either base64 alphabet on either side — not base64url's, and not standard
@@ -215,16 +265,25 @@ const VENDOR_KEY: ValuePattern = {
  * right after `/` or `+`, as in a URL path, which a key never travels in (it is sent only as
  * `Authorization: Bearer`). It has no prefix to find it by, and whoever holds it acts as that
  * person or service account on every `/api` route (legacy 168: a key pasted into a Handle's note
- * would have been kept and listed as written). Starts only where a run starts, so a longer run is
- * passed over in linear time.
+ * would have been kept and listed as written). Starts only where a run starts, or right after a
+ * JSON escape (`AFTER_JSON_ESCAPE`: `\n` before a key on its own line of a tool's JSON output is
+ * a line break, not part of the run) — not after a URL-encoded byte, which may stand for the `/`
+ * or `+` this shape is not taken after. Each start reads at most 43 characters, so it is linear.
  *
  * Hidden, never refused: any other 32 bytes in base64url (a SHA-256 digest, an Ed25519 public
  * key's JWK `x`, a random id) has the same shape, so this is in `SECRET_VALUE_PATTERNS` only — such
  * a value is masked wherever values are scrubbed (the accepted over-redaction), and not in
  * `HIGH_CONFIDENCE_SECRET_PATTERNS`, where it would refuse a call outright.
+ *
+ * Kept while keys minted before the prefix are still issued: they authenticate as before, and
+ * without this they would be written down as they are again. Dropped once the host's old keys are
+ * rotated (legacy 906, second step); only then does a digest of this shape stop being hidden.
  */
 const MINTED_PLATFORM_KEY: ValuePattern = {
-  pattern: /(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])/g,
+  pattern: new RegExp(
+    String.raw`(?:(?<![A-Za-z0-9_+/-])|${AFTER_JSON_ESCAPE})[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])`,
+    'g',
+  ),
   redact: (match) =>
     /[A-Z]/.test(match) && /[a-z]/.test(match) && /[0-9_-]/.test(match) ? REDACTED : undefined,
 };
@@ -257,8 +316,11 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
         ? `${scheme}${space}${REDACTED}`
         : undefined,
   },
-  VENDOR_KEY,
+  // Before the vendor rule (review #501 on #1571): a key's random body can spell `-sk-` and 16
+  // more, and the vendor rule, run first, hid only that tail and left the rest of the key.
+  PREFIXED_PLATFORM_KEY,
   MINTED_PLATFORM_KEY,
+  VENDOR_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
   {
@@ -299,7 +361,8 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 ];
 
 /**
- * `SECRET_VALUE_PATTERNS` but a platform API key standing alone (`MINTED_PLATFORM_KEY`): what a
+ * `SECRET_VALUE_PATTERNS` but a pre-prefix platform API key standing alone (`MINTED_PLATFORM_KEY`;
+ * a prefixed key, `PREFIXED_PLATFORM_KEY`, is rewritten like any other credential): what a
  * one-way rewrite of rows already stored hides (application/platform/scrub-raw-secrets — historical
  * Turn reports, agent Decisions, tool-call records; legacy 168 review). The key's shape is any 32
  * bytes in base64url, so masking it there would lose every digest and public key in that history for
@@ -311,7 +374,8 @@ export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VA
   (valuePattern) => valuePattern !== MINTED_PLATFORM_KEY,
 );
 
-/** Only a platform API key standing alone — what a rewrite of stored rows leaves and counts. */
+/** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
+ *  counts. */
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
 
 /**
@@ -330,10 +394,26 @@ export function platformKeyShapes(text: string): string[] {
 }
 
 /**
+ * Every platform API key `text` holds, as written and in order: a prefixed one (`ntk_…`, legacy
+ * 906) and every bare shape of one minted before (`platformKeyShapes`). Only for comparing stored
+ * copies against the keys issued, by their hash (application/platform/scrub-raw-secrets.ts's
+ * `liveApiKeys`): hash each one and drop it, never store, log or show it.
+ */
+export function platformApiKeys(text: string): string[] {
+  const found: { readonly start: number; readonly key: string }[] = [];
+  for (const valuePattern of [PREFIXED_PLATFORM_KEY, MINTED_PLATFORM_KEY]) {
+    for (const { start, end, replacement } of secretMatches(valuePattern, text)) {
+      if (replacement !== undefined) found.push({ start, key: text.slice(start, end) });
+    }
+  }
+  return found.sort((a, b) => a.start - b.start).map(({ key }) => key);
+}
+
+/**
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
- * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
+ * a platform API key with its `ntk_` prefix (legacy 906), an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
  * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
  * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
  * `Authorization:` header (`Authorization: token ****` does not match), and a URL's password that
@@ -341,9 +421,10 @@ export function platformKeyShapes(text: string): string[] {
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
  * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
  * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
- * `Bearer` value; nor a platform API key standing alone (`MINTED_PLATFORM_KEY`): its shape is any 32
- * random bytes in base64url — a SHA-256 digest, an Ed25519 public key's JWK `x` — so a call that
- * names one by its digest would be refused (legacy 168 review). For refusing content outright (an
+ * `Bearer` value; nor a platform API key minted before the prefix, standing alone
+ * (`MINTED_PLATFORM_KEY`): its shape is any 32 random bytes in base64url — a SHA-256 digest, an
+ * Ed25519 public key's JWK `x` — so a call that names one by its digest would be refused (legacy
+ * 168 review). For refusing content outright (an
  * observe-class Operation's params, legacy 175), where every other pattern is only recorded.
  */
 export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
@@ -367,6 +448,8 @@ export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
     redact: (_match, [scheme, space, value]) =>
       value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
+  // Before the vendor rule, as in `SECRET_VALUE_PATTERNS`.
+  PREFIXED_PLATFORM_KEY,
   VENDOR_KEY,
   {
     pattern: URL_PASSWORD,
