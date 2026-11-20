@@ -78,6 +78,44 @@ describe('AgentRuntimeEventWireSchema', () => {
     ).toBe(false);
   });
 
+  it('turnEnded.modelRefusal (legacy 168): a known value parses; an unknown one reads as absent and keeps the frame', () => {
+    const known = AgentRuntimeEventWireSchema.safeParse({
+      type: 'turnEnded',
+      status: 'completed',
+      modelRefusal: 'unbound_source',
+      ...correlation(),
+    });
+    expect(known.success).toBe(true);
+    if (known.success) {
+      expect((known.data as { modelRefusal?: string }).modelRefusal).toBe('unbound_source');
+    }
+
+    // A newer agent-host's new refusal must not cost the kernel the Turn's end.
+    for (const unknown of ['budget_exhausted', 42, null]) {
+      const parsed = AgentRuntimeEventWireSchema.safeParse({
+        type: 'turnEnded',
+        status: 'completed',
+        modelRefusal: unknown,
+        ...correlation(),
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect((parsed.data as { modelRefusal?: string }).modelRefusal).toBeUndefined();
+        expect(parsed.data.type).toBe('turnEnded');
+      }
+    }
+
+    const without = AgentRuntimeEventWireSchema.safeParse({
+      type: 'turnEnded',
+      status: 'completed',
+      ...correlation(),
+    });
+    expect(without.success).toBe(true);
+    if (without.success) {
+      expect('modelRefusal' in without.data && without.data.modelRefusal !== undefined).toBe(false);
+    }
+  });
+
   it('toolCallEnded.isError: parses true, rejects a non-boolean, and omitted stays omitted', () => {
     const withError = AgentRuntimeEventWireSchema.safeParse({
       type: 'toolCallEnded',

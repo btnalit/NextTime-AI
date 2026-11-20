@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
   type HandleBinding,
   type HandleBindingSource,
+  UNBOUND_SOURCE_CODE,
+  UNBOUND_SOURCE_MESSAGE,
   createHandleBindingReader,
 } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
@@ -240,11 +242,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       const app = server();
       const { token } = await mintHandle('entry');
       bind(CONTAINER_ADDRESS, token);
-      expect((await getObject(app, OTHER_CONTAINER_ADDRESS)).statusCode).toBe(401);
-      expect(
-        (await getObject(app, CONTROL_ADDRESS, { 'x-forwarded-for': CONTAINER_ADDRESS }))
-          .statusCode,
-      ).toBe(401);
+      const unbound = await getObject(app, OTHER_CONTAINER_ADDRESS);
+      expect(unbound.statusCode).toBe(401);
+      // Legacy 168: an agent container with nothing bound is told so (the platform is reconnecting
+      // it), so its tool error says to try again — the code and message name no Handle.
+      expect(unbound.json().error).toEqual({
+        code: UNBOUND_SOURCE_CODE,
+        message: UNBOUND_SOURCE_MESSAGE,
+      });
+      const forwarded = await getObject(app, CONTROL_ADDRESS, {
+        'x-forwarded-for': CONTAINER_ADDRESS,
+      });
+      expect(forwarded.statusCode).toBe(401);
+      expect(forwarded.json().error).toEqual({ code: 'unauthorized', message: 'unauthorized' });
+    });
+
+    it('legacy 168: every other refusal of a workers-network request stays the generic 401', async () => {
+      const app = server();
+      const { token: entry } = await mintHandle('entry');
+      const { token: bearer } = await mintHandle('mcp_session');
+      const generic = { code: 'unauthorized', message: 'unauthorized' };
+      // A credential of its own, from a bound container and from an unbound one.
+      bind(CONTAINER_ADDRESS, entry);
+      for (const address of [CONTAINER_ADDRESS, OTHER_CONTAINER_ADDRESS]) {
+        const own = await getObject(app, address, { authorization: `Bearer ${bearer}` });
+        expect(own.statusCode, address).toBe(401);
+        expect(own.json().error, address).toEqual(generic);
+      }
+      // A bearer Handle bound to the address: bound, but refused as a binding.
+      bind(CONTAINER_ADDRESS, bearer);
+      const boundBearer = await getObject(app, CONTAINER_ADDRESS);
+      expect(boundBearer.statusCode).toBe(401);
+      expect(boundBearer.json().error).toEqual(generic);
     });
 
     it('address reuse: an address authenticates as whichever container is bound there now, and as nothing once unbound', async () => {

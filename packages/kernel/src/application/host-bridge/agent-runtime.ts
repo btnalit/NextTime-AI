@@ -10,7 +10,7 @@
  * `index.ts`'s module doc for how the two are wired together (through this file's types alone,
  * plus the outbox for the *inbound* half) without either module importing the other.
  */
-import type { EvaluationStartRefusal } from '@nexttime/shared';
+import type { EvaluationStartRefusal, TurnModelRefusal } from '@nexttime/shared';
 
 export interface StartTurnInput {
   readonly workspaceId: string;
@@ -82,6 +82,10 @@ export type AgentRuntimeEventFields =
        *  (`system.turn_not_started`). Absent for any other end, a seal check that could not run
        *  included (nothing was found to say). */
       readonly notStarted?: EvaluationStartRefusal;
+      /** Legacy 168: the Turn's last model call was refused, and why (agent-host reads it from pi's
+       *  record of the call) — a `completed` Turn then ends `failed`, and the chat is told
+       *  (`system.agent_reconnecting`). Absent for any other end. */
+      readonly modelRefusal?: TurnModelRefusal;
     };
 
 /**

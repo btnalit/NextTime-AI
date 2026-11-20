@@ -66,6 +66,13 @@ export class KernelError extends Error {
   }
 }
 
+/** A kernel refusal as `<code>: <message>`, so a model reading it sees which refusal it got. A
+ *  message that already starts with its code stays as it is — legacy 168: `unbound_source`'s does
+ *  (`UNBOUND_SOURCE_MESSAGE`, `@nexttime/shared`), so every tool error carries it, prefixed or not. */
+export function refusalText(code: string, message: string): string {
+  return message.startsWith(`${code}:`) ? message : `${code}: ${message}`;
+}
+
 interface CapabilitySuccessEnvelope {
   ok: true;
   result: unknown;

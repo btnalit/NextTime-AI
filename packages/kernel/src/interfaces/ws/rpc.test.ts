@@ -16,6 +16,7 @@ import {
   EvaluationProbeHoldError,
 } from '../../application/eval-seal/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
+import { HandleRevokeError } from '../../application/gateway/handles-handlers.js';
 import {
   ConflictNotFoundError,
   ConnectionSecretExpiredError,
@@ -317,6 +318,27 @@ describe('mapDispatchError — legacy 175 observe params', () => {
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,
+    });
+  });
+});
+
+describe('mapDispatchError — legacy 168 revoke_handle (legacy 897)', () => {
+  it('handle_not_found maps to NOT_FOUND and handle_container_held to ILLEGAL_TRANSITION, like HTTP 404 / 409', () => {
+    const notFound = new HandleRevokeError(
+      'handle_not_found',
+      'no live Handle of yours has this id',
+    );
+    expect(mapDispatchError(notFound)).toEqual({
+      code: WS_ERROR_CODES.NOT_FOUND,
+      message: notFound.message,
+    });
+    const held = new HandleRevokeError(
+      'handle_container_held',
+      'held by the platform for an agent',
+    );
+    expect(mapDispatchError(held)).toEqual({
+      code: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+      message: held.message,
     });
   });
 });

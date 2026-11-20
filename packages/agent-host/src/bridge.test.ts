@@ -3,6 +3,7 @@ import {
   buildAbortCommand,
   buildPromptCommand,
   buildSwitchSessionCommand,
+  modelRefusalOf,
   translatePiEvent,
 } from './bridge.js';
 
@@ -342,5 +343,54 @@ describe('buildPromptCommand / buildSwitchSessionCommand / buildAbortCommand', (
 
   it('builds a bare abort command', () => {
     expect(buildAbortCommand()).toEqual({ type: 'abort' });
+  });
+});
+
+describe('modelRefusalOf (legacy 168)', () => {
+  const ended = (message: Record<string, unknown>) => ({ type: 'message_end', message });
+  const errorEnd = (errorMessage: string) =>
+    ended({ role: 'assistant', content: [], stopReason: 'error', errorMessage });
+
+  it("reads llm-proxy's unbound refusal from pi's error text, for each provider API's shape", () => {
+    // openai-completions: pi-ai's formatProviderError — "<status>: <body>".
+    expect(
+      modelRefusalOf(
+        errorEnd(
+          '401: {"code":"unbound_source","message":"unbound_source: no Handle is bound to this agent container address; the platform is reconnecting the agent"}',
+        ),
+      ),
+    ).toBe('unbound_source');
+    // anthropic-messages: the SDK folds the body into its message — "<status> <body>".
+    expect(
+      modelRefusalOf(
+        errorEnd(
+          '401 {"error":{"code":"unbound_source","message":"unbound_source: no Handle is bound to this agent container address; the platform is reconnecting the agent"}}',
+        ),
+      ),
+    ).toBe('unbound_source');
+  });
+
+  it('is null for any other end of an assistant message, a refusal of another kind included', () => {
+    expect(
+      modelRefusalOf(ended({ role: 'assistant', content: [{ type: 'text', text: 'ok' }] })),
+    ).toBeNull();
+    expect(
+      modelRefusalOf(errorEnd('401: {"error":{"code":"unauthorized","message":"unauthorized"}}')),
+    ).toBeNull();
+    // The word without a 401 (an upstream answer quoting it), and a 401 without the word.
+    expect(modelRefusalOf(errorEnd('500: upstream said unbound_source'))).toBeNull();
+    expect(modelRefusalOf(errorEnd('401 Unauthorized'))).toBeNull();
+    // Part of a longer word is not the code.
+    expect(modelRefusalOf(errorEnd('401: not_unbound_source_really'))).toBeNull();
+    expect(
+      modelRefusalOf(ended({ role: 'assistant', content: [], stopReason: 'error' })),
+    ).toBeNull();
+  });
+
+  it('says nothing (undefined) about any other event', () => {
+    expect(modelRefusalOf(ended({ role: 'user', content: 'hi' }))).toBeUndefined();
+    expect(modelRefusalOf({ type: 'agent_settled' })).toBeUndefined();
+    expect(modelRefusalOf({ type: 'message_end' })).toBeUndefined();
+    expect(modelRefusalOf('not an event')).toBeUndefined();
   });
 });

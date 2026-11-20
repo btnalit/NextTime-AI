@@ -5,7 +5,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { WorkerResultContractSchema, namesASecretField } from '@nexttime/shared';
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
-import { type KernelClient, KernelError } from '../kernel-client.js';
+import { type KernelClient, KernelError, refusalText } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import {
   type AllowedOperationWire,
@@ -408,7 +408,7 @@ const MAX_FIXABLE_REJECTIONS_SURFACED = 2;
  *  interpolates the Handle — `KernelError.message` never carries it. */
 function describeKernelRejection(error: KernelError, willAcceptRetry: boolean): string {
   const code = error.code ?? error.kind;
-  const head = `report_result: the platform rejected this result contract — ${code}: ${error.message}.`;
+  const head = `report_result: the platform rejected this result contract — ${refusalText(code, error.message)}.`;
   if (willAcceptRetry) {
     return `${head} Correct the contract and call report_result again.`;
   }

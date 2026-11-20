@@ -85,6 +85,31 @@ describe('SystemStatusLineView', () => {
     expect(screen.getByTestId('system-status-line').textContent).toContain('「平台设置」');
   });
 
+  it('legacy 168: a Turn cut short while the platform reconnects the agent reads as amber, says to send it again, and opens nothing', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'agent_reconnecting',
+          text: 'The agent could not finish this message',
+          turnId: 'turn-1',
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    const row = screen.getByTestId('system-status-line');
+    expect(row.getAttribute('data-variant')).toBe('agent_reconnecting');
+    const label = screen.getByTestId('system-status-failure');
+    expect(label.textContent).toBe('智能体正在重新连接平台');
+    expect(label.className).toContain('text-warn');
+    expect(label.className).not.toContain('text-danger');
+    expect(row.textContent).toContain('这条消息没有处理完，请稍后再发一次。');
+    // The reader's language, not the kernel's English fallback.
+    expect(row.textContent).not.toContain('could not finish');
+    expect(document.querySelector('.chip')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
   it('renders status badge and text for an action_update line', () => {
     render(
       <SystemStatusLineView

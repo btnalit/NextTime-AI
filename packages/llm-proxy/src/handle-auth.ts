@@ -27,7 +27,9 @@ export type HandleAuthFailureReason =
   | 'credential_from_bound_source';
 
 /** Every failure mode here maps to HTTP 401 in proxy.ts (S1.7 acceptance: "无 Handle 401；过期 /
- *  撤销 Handle 401") — `reason` exists for logging/metrics, not to vary the response. */
+ *  撤销 Handle 401") — `reason` exists for logging/metrics, not to vary the response, with one
+ *  exception: `unbound_source` answers its own code (`UNBOUND_SOURCE_CODE`, legacy 168), so the
+ *  chat can say the platform is reconnecting the agent. */
 export class HandleAuthError extends Error {
   readonly reason: HandleAuthFailureReason;
 

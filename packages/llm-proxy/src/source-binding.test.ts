@@ -8,6 +8,8 @@ import {
   type HandleBinding,
   type HandleBindingReader,
   SOURCE_BOUND_CAPABILITY_HANDLE,
+  UNBOUND_SOURCE_CODE,
+  UNBOUND_SOURCE_MESSAGE,
   createHandleBindingReader,
 } from '@nexttime/shared';
 import { SignJWT, generateKeyPair } from 'jose';
@@ -267,11 +269,23 @@ describe('llm-proxy source binding — an agent container (workers-network peer)
 
   it('refuses an address with no binding (after waiting for one), and a binding that is not container-held', async () => {
     const t = await setUp({ workersSubnet: LOOPBACK_WORKERS_SUBNET });
-    expect((await t.chat({ authorization: marker })).status).toBe(401);
+    const unbound = await t.chat({ authorization: marker });
+    expect(unbound.status).toBe(401);
+    // Legacy 168: the unbound address is told so, in the message too (a model SDK's error shows
+    // only that), and the Anthropic route the same way; every other refusal stays generic.
+    expect(JSON.parse(unbound.body)).toEqual({
+      error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE },
+    });
+    expect(UNBOUND_SOURCE_MESSAGE.startsWith(`${UNBOUND_SOURCE_CODE}:`)).toBe(true);
+    expect(JSON.parse((await t.messages({})).body).error.code).toBe(UNBOUND_SOURCE_CODE);
     t.bind(await t.handle());
-    expect((await t.chat({ authorization: marker })).status).toBe(401);
+    const notContainerHeld = await t.chat({ authorization: marker });
+    expect(notContainerHeld.status).toBe(401);
+    expect(JSON.parse(notContainerHeld.body)).toEqual({
+      error: { code: 'unauthorized', message: 'unauthorized' },
+    });
     expect(t.upstreamAuth).toEqual([]);
-    expect(t.refusals()).toEqual(['unbound_source', 'presentation_refused']);
+    expect(t.refusals()).toEqual(['unbound_source', 'unbound_source', 'presentation_refused']);
   });
 
   it('refuses everything while the bindings file is missing (fail closed) — no fallback to a header', async () => {

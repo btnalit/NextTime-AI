@@ -1,4 +1,8 @@
-import type { AgentRuntimeEventWire } from '@nexttime/shared';
+import {
+  type AgentRuntimeEventWire,
+  type TurnModelRefusal,
+  UNBOUND_SOURCE_CODE,
+} from '@nexttime/shared';
 
 /**
  * bridge: pi's own RPC event vocabulary (`docs/rpc.md`, pi 0.84.4 — see below for exactly which
@@ -179,6 +183,31 @@ function translateMessageEnd(event: Record<string, unknown>): BridgeResult {
   const text = extractAssistantText(message.content);
   if (!text) return { kind: 'none' };
   return { kind: 'event', fields: { type: 'message', role: 'assistant', content: { text } } };
+}
+
+/** Legacy 168: llm-proxy's refusal of a model call from a container nothing is bound to, as it
+ *  reaches pi's `errorMessage`. Every provider API llm-proxy serves composes that text from the
+ *  401 and its body or message (pi-ai's `formatProviderError`; the Anthropic SDK folds the body
+ *  into its message), and llm-proxy's message itself starts with the code. Both are required, so
+ *  an upstream error that merely mentions the word is not read as one. */
+const HTTP_401 = /\b401\b/;
+const UNBOUND_SOURCE_WORD = new RegExp(`\\b${UNBOUND_SOURCE_CODE}\\b`);
+
+/**
+ * Legacy 168: what one pi event says about the Turn's last model call — `undefined` when it is not
+ * the end of an assistant message (it says nothing), `null` for an assistant message that ended
+ * any other way, `'unbound_source'` for one that ended because llm-proxy refused the call: nothing
+ * is bound to the container's address while the platform reconnects it. `host.ts` keeps the last
+ * one per Turn and reports it on `turnEnded` (`modelRefusal`). Never carries pi's error text.
+ */
+export function modelRefusalOf(raw: unknown): TurnModelRefusal | null | undefined {
+  const event = asRecord(raw);
+  if (!event || event.type !== 'message_end') return undefined;
+  const message = asRecord(event.message);
+  if (!message || message.role !== 'assistant') return undefined;
+  if (message.stopReason !== 'error' || typeof message.errorMessage !== 'string') return null;
+  const text = message.errorMessage;
+  return HTTP_401.test(text) && UNBOUND_SOURCE_WORD.test(text) ? 'unbound_source' : null;
 }
 
 /** Translates one already-JSON-parsed line of pi's RPC stdout. `raw` is untyped — every field is

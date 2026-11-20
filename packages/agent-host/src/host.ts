@@ -1,8 +1,13 @@
-import type { AgentRuntimeEventWire, KernelToAgentHostFrame } from '@nexttime/shared';
+import type {
+  AgentRuntimeEventWire,
+  KernelToAgentHostFrame,
+  TurnModelRefusal,
+} from '@nexttime/shared';
 import {
   buildAbortCommand,
   buildPromptCommand,
   buildSwitchSessionCommand,
+  modelRefusalOf,
   translatePiEvent,
 } from './bridge.js';
 import type { AttachedContainerIo, ContainerIoClient } from './container-io.js';
@@ -156,6 +161,10 @@ interface ActiveTurn {
    *  (not `turnEnded`) territory if the switch fails or a `stopTurn` overtakes it. */
   pendingSwitchId: string | undefined;
   pendingPrompt: string | undefined;
+  /** Legacy 168: why this Turn's last model call was refused, from the last assistant message pi
+   *  ended (`modelRefusalOf`); `null` when it was not, or no model call has ended yet. Reported on
+   *  `turnEnded` so the kernel can tell the chat the Turn has no answer, and why. */
+  modelRefusal: TurnModelRefusal | null;
 }
 
 /** One resident container's identity here: whose (`principalId`) and which (`agentKind`,
@@ -427,15 +436,33 @@ export function createHost(options: HostOptions): Host {
       return;
     }
 
+    // Legacy 168: the last assistant message decides — a refused call pi later got past (another
+    // call answered after it) no longer explains anything.
+    const refusal = modelRefusalOf(parsed);
+    if (turn && refusal !== undefined) turn.modelRefusal = refusal;
+
     const result = translatePiEvent(parsed);
     if (result.kind === 'none') return;
     if (!turn) return; // an event with no tracked turn to correlate it to — drop it
 
     if (result.kind === 'turnSettled') {
       activeTurns.delete(ref.key);
+      if (turn.modelRefusal !== null) {
+        log(
+          JSON.stringify({
+            level: 'warn',
+            msg: "agent-host: the Turn's last model call was refused",
+            principalId,
+            agentKind: ref.agentKind,
+            turnId: turn.turnId,
+            modelRefusal: turn.modelRefusal,
+          }),
+        );
+      }
       kernelLink.sendRuntimeEvent({
         type: 'turnEnded',
         status: turn.stopRequested ? 'interrupted' : 'completed',
+        ...(turn.modelRefusal !== null ? { modelRefusal: turn.modelRefusal } : {}),
         workspaceId: turn.workspaceId,
         chatId: turn.chatId,
         turnId: turn.turnId,
@@ -564,6 +591,7 @@ export function createHost(options: HostOptions): Host {
         stopRequested: false,
         pendingSwitchId: undefined,
         pendingPrompt: undefined,
+        modelRefusal: null,
       };
       activeTurns.set(ref.key, turn);
 

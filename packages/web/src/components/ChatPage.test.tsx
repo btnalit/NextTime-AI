@@ -1890,6 +1890,30 @@ describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => 
     expect(line.textContent).not.toContain('我的智能体');
   });
 
+  it('legacy 168: a Turn cut short while the platform reconnects the agent shows a line saying to send the message again', async () => {
+    const fake = fakeClient({});
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    act(() => {
+      fake.deliver(persisted(1, 'user', '查一下库存'));
+      fake.deliver({
+        ...persisted(2, 'user', ''),
+        role: 'system',
+        kind: 'system.agent_reconnecting',
+        content: {
+          kind: 'system.agent_reconnecting',
+          text: 'The agent could not finish this message: the platform is reconnecting it. Send the message again in a moment.',
+          turnId: 'turn-1',
+        },
+      });
+    });
+    const line = await screen.findByTestId('system-status-line');
+    expect(line.getAttribute('data-variant')).toBe('agent_reconnecting');
+    expect(line.textContent).toContain('智能体正在重新连接平台');
+    expect(line.textContent).toContain('请稍后再发一次');
+  });
+
   it('S11 AA4e: says above the composer when no target is chosen yet, and links to choosing them', async () => {
     const trialStatus = (targets: readonly unknown[]) => ({
       enabled: true,

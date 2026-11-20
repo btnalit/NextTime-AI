@@ -951,5 +951,132 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.metadata).not.toHaveProperty('notStarted');
       expect(await systemMessages(chatId)).toEqual([]);
     });
+
+    // ---------------------------------------------------------------------------------------------
+    // Legacy 168: llm-proxy refused the Turn's last model call — no Handle bound to the agent
+    // container's address while the platform reconnects it (agent-host's `turnEnded.modelRefusal`).
+    // ---------------------------------------------------------------------------------------------
+
+    const RECONNECTING_TEXT =
+      'The agent could not finish this message: the platform is reconnecting it. Send the message again in a moment.';
+
+    it('legacy 168: a completed or failed Turn whose last model call was refused ends failed with the refusal on it and a system.agent_reconnecting message, pushed before the end; a replayed end writes no second one', async () => {
+      for (const reported of ['completed', 'failed'] as const) {
+        const { chatId, turnId } = await startTurn();
+        const pushes: ChatPushEvent[] = [];
+        const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event));
+        try {
+          await sink.handle({
+            ...turnEnded(chatId, turnId, reported),
+            modelRefusal: 'unbound_source',
+          });
+          await vi.waitFor(() =>
+            expect(pushes.map((event) => event.type)).toContain('chat.metadata'),
+          );
+        } finally {
+          unsubscribe();
+        }
+
+        const row = await turnRow(turnId);
+        expect(row?.status).toBe('failed');
+        expect(row?.metadata.modelRefusal).toBe('unbound_source');
+        expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+        const content = { kind: 'system.agent_reconnecting', text: RECONNECTING_TEXT, turnId };
+        expect(await systemMessages(chatId)).toEqual([
+          expect.objectContaining({
+            kind: 'system.agent_reconnecting',
+            text: RECONNECTING_TEXT,
+            content,
+          }),
+        ]);
+        expect(pushes.filter((event) => event.type !== 'chat.stream')).toEqual([
+          {
+            type: 'chat.message',
+            chatId,
+            message: expect.objectContaining({
+              role: 'system',
+              kind: 'system.agent_reconnecting',
+              text: RECONNECTING_TEXT,
+              content,
+            }),
+          },
+          { type: 'chat.metadata', chatId, metadata: { turnId, turnStatus: 'failed' } },
+        ]);
+
+        await sink.handle({
+          ...turnEnded(chatId, turnId, reported),
+          modelRefusal: 'unbound_source',
+        });
+        expect(await systemMessages(chatId)).toHaveLength(1);
+        expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+        // The Turn is over: sending the message again starts a new one.
+        await expect(
+          dispatchCapability({ pool }, human(), 'send_chat_message', { chatId, text: 'again' }),
+        ).resolves.toMatchObject({ turnId: expect.any(String) });
+      }
+    });
+
+    it('legacy 168: Stop still comes first — a stopped Turn whose last model call was refused ends interrupted, with no message', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+
+      await dispatchCapability({ pool }, human(), 'stop_agent', { chatId });
+      await sink.handle({
+        ...turnEnded(chatId, turnId, 'completed'),
+        modelRefusal: 'unbound_source',
+      });
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('interrupted');
+      expect(row?.metadata).not.toHaveProperty('modelRefusal');
+      expect(await turnCompletedStatuses(turnId)).toEqual(['interrupted']);
+      expect(await systemMessages(chatId)).toEqual([]);
+    });
+
+    it('legacy 168: a Turn the budget refused says that — one system.model_refused message, no reconnecting one', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+
+      await sink.handle({
+        ...turnEnded(chatId, turnId, 'completed'),
+        modelRefusal: 'unbound_source',
+      });
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('failed');
+      expect(row?.metadata.modelRefused).toEqual({
+        scope: 'workspace_daily_tokens',
+        refusedCalls: 1,
+      });
+      expect(row?.metadata).not.toHaveProperty('modelRefusal');
+      expect((await systemMessages(chatId)).map((message) => message.kind)).toEqual([
+        'system.model_refused',
+      ]);
+    });
+
+    it('legacy 168: an interrupted end with a refusal says nothing of it, and a Turn the seal kept from starting says only that', async () => {
+      const interrupted = await startTurn();
+      await sink.handle({
+        ...turnEnded(interrupted.chatId, interrupted.turnId, 'interrupted'),
+        modelRefusal: 'unbound_source',
+      });
+      expect((await turnRow(interrupted.turnId))?.status).toBe('interrupted');
+      expect((await turnRow(interrupted.turnId))?.metadata).not.toHaveProperty('modelRefusal');
+      expect(await systemMessages(interrupted.chatId)).toEqual([]);
+
+      const sealed = await startTurn();
+      await sink.handle({
+        ...turnEnded(sealed.chatId, sealed.turnId, 'failed'),
+        notStarted: 'evaluation_paused',
+        modelRefusal: 'unbound_source',
+      });
+      const row = await turnRow(sealed.turnId);
+      expect(row?.metadata.notStarted).toBe('evaluation_paused');
+      expect(row?.metadata).not.toHaveProperty('modelRefusal');
+      expect((await systemMessages(sealed.chatId)).map((message) => message.kind)).toEqual([
+        'system.turn_not_started',
+      ]);
+    });
   },
 );

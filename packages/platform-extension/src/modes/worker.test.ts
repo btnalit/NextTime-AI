@@ -3,6 +3,7 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { UNBOUND_SOURCE_CODE, UNBOUND_SOURCE_MESSAGE } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
@@ -506,6 +507,25 @@ describe('registerWorkerMode', () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     errorSpy.mockRestore();
     logSpy.mockRestore();
+  });
+
+  it('legacy 168: report_result refused while the platform reconnects the agent names the code once', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      raw: true,
+      status: 401,
+      body: { ok: false, error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE } },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await tool.execute('call-1', { summary: 'x' }, undefined, undefined, fakeCtx());
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain(`rejected this result contract — ${UNBOUND_SOURCE_MESSAGE}.`);
+    expect(text).not.toContain(`${UNBOUND_SOURCE_CODE}: ${UNBOUND_SOURCE_CODE}`);
+    errorSpy.mockRestore();
   });
 
   it('report_result surfaces a fixable rejection at most twice, then ends the turn — a Worker that keeps re-sending (a scripted one replays its last step) cannot spin', async () => {

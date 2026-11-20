@@ -68,6 +68,7 @@ function humanCaller(workspaceId: string, principalId: string, role: Role): Reso
 interface Page {
   items: HandleWire[];
   nextCursor?: string;
+  truncated?: true;
 }
 
 describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integration)', () => {
@@ -330,6 +331,41 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     expect(fromStart.items.map((item) => item.jti)).toEqual([newestFirst[0]]);
   });
 
+  it('a limit over 500 reads 500 and says it was cut (truncated); the rest is on the next page', async () => {
+    // Legacy 897 (#493's P13 on #1539): 501 live Handles — one session's, its attenuated children.
+    const principal = await insertPrincipal(workspaceId, 'human', 'member', 'capped');
+    const root = await seedHandle(principal, 'mcp_session');
+    await asAdmin(workspaceId, (client) =>
+      client.query(
+        `insert into capability_handles
+           (workspace_id, jti, session_id, on_behalf_of, scope, expires_at, parent_jti)
+         select $1, gen_random_uuid(), $2, $3, $4, now() + interval '30 minutes', $5
+           from generate_series(1, 500)`,
+        [
+          workspaceId,
+          root.sessionId,
+          principal,
+          JSON.stringify({ capabilities: ['search'], resources: {} }),
+          root.jti,
+        ],
+      ),
+    );
+
+    const capped = await list(principal, 'member', { limit: 501 });
+    expect(capped.items).toHaveLength(500);
+    expect(capped.truncated).toBe(true);
+    expect(capped.nextCursor).toBeDefined();
+    const rest = await list(principal, 'member', { limit: 501, cursor: capped.nextCursor });
+    expect(rest.items).toHaveLength(1);
+    expect(rest.nextCursor).toBeUndefined();
+    expect(new Set([...capped.items, ...rest.items].map((item) => item.jti)).size).toBe(501);
+
+    // At the cap, nothing is cut.
+    const atCap = await list(principal, 'member', { limit: 500 });
+    expect(atCap.items).toHaveLength(500);
+    expect(atCap.truncated).toBeUndefined();
+  });
+
   it('a member ends their own MCP session: its session is revoked with every Handle under it, audited; a second call finds nothing', async () => {
     const own = await seedHandle(memberId, 'mcp_session');
     // A second Handle under the same session (an attenuated child) ends with it.
@@ -438,6 +474,68 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       queryAudit(client, workspaceId, { action: 'revoke_handle', resourceId: own.sessionId }),
     );
     expect(audit).toHaveLength(1);
+  });
+
+  it('a Handle issued under the session while the revocation starts is counted with the Handles it ends — in the result and the audit row', async () => {
+    // Legacy 897 (#493's P11b on #1539). Issuing a Handle holds its session row `for share` until
+    // it commits (governance 0042, part 3). The revocation takes that row (`lockSessions`) before
+    // it counts, so it waits for the issuer and counts the new child, which 0042's trigger then
+    // revokes with the session. Counting before the lock would read one Handle fewer than ended —
+    // the audit row would under-report what the revocation did.
+    const own = await seedHandle(memberId, 'mcp_session');
+    const child = randomUUID();
+    let revoking: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    await asAdmin(workspaceId, async (client) => {
+      await client.query(
+        `insert into capability_handles
+           (workspace_id, jti, session_id, on_behalf_of, scope, expires_at, parent_jti)
+         values ($1, $2, $3, $4, $5, now() + interval '30 minutes', $6)`,
+        [
+          workspaceId,
+          child,
+          own.sessionId,
+          memberId,
+          JSON.stringify({ capabilities: ['search'], resources: {} }),
+          own.jti,
+        ],
+      );
+      const issuer = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]
+        ?.pid;
+      revoking = Promise.allSettled([revoke(memberId, 'member', own.jti)]);
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ n: string }>(
+            'select count(*)::text as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+            [issuer],
+          );
+          expect(waiting.rows[0]?.n).toBe('1');
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+    });
+    const [outcome] = await (revoking as Promise<PromiseSettledResult<unknown>[]>);
+
+    expect(outcome).toEqual({
+      status: 'fulfilled',
+      value: {
+        jti: own.jti,
+        sessionId: own.sessionId,
+        sessionKind: 'mcp_session',
+        revokedHandleCount: 2,
+      },
+    });
+    const live = await asAdmin(workspaceId, (client) =>
+      client.query(
+        'select jti from capability_handles where session_id = $1 and revoked_at is null',
+        [own.sessionId],
+      ),
+    );
+    expect(live.rows).toEqual([]);
+    const audit = await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
+      queryAudit(client, workspaceId, { action: 'revoke_handle', resourceId: own.sessionId }),
+    );
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.payload).toMatchObject({ revokedHandleCount: 2 });
   });
 
   it('a container-held Handle is refused (409 handle_container_held) and nothing changes', async () => {

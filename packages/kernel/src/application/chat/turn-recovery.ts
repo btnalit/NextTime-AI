@@ -2,6 +2,7 @@ import {
   type EvaluationStartRefusal,
   type SystemMessageContent,
   TURN_TRANSITIONS,
+  type TurnModelRefusal,
   type TurnStatus,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -60,6 +61,15 @@ import { insertChatMessage } from './service.js';
  * says why (`turnEnded.notStarted`); `endTurn` records that on the Turn and writes a
  * `system.turn_not_started` message into its Chat — which refusal, never what was withheld.
  *
+ * A Turn whose last model call llm-proxy refused because no Handle was bound to the agent
+ * container's address (legacy 168): the platform is reconnecting the agent — a new container, or
+ * its binding not yet written. pi records the refusal as an error answer with no text, which the
+ * chat never shows, so the Turn used to end `completed` with nothing in it. agent-host now says so
+ * (`turnEnded.modelRefusal`), and `endTurn` reads a `completed` on such a Turn as `failed`, records
+ * `metadata.modelRefusal`, and writes a `system.agent_reconnecting` message into its Chat. Stop
+ * intent and a budget refusal (above) come first: a stopped Turn says nothing more, and a Turn the
+ * budget refused says that.
+ *
  * Push after commit: `endTurn` only writes; the caller pushes the returned `EndedTurn` with
  * `publishTurnEnded` once its transaction has committed (the event sink after `withWorkspace`, a
  * capability handler from `afterCommit`). A push from inside the transaction told a connected client
@@ -82,12 +92,16 @@ export interface EndedTurn {
   readonly status: TurnEndStatus;
   readonly chatId: string | null;
   /** The system message written into the Chat with the end, to push with it: why the Turn has no
-   *  reply — `system.model_refused` (legacy 589) or `system.turn_not_started` (legacy 515). */
+   *  reply — `system.model_refused` (legacy 589), `system.turn_not_started` (legacy 515) or
+   *  `system.agent_reconnecting` (legacy 168). */
   readonly systemMessage?: {
     readonly id: string;
     readonly createdAt: Date;
     readonly sequence: number;
-    readonly content: SystemModelRefusedMessage | SystemTurnNotStartedMessage;
+    readonly content:
+      | SystemModelRefusedMessage
+      | SystemTurnNotStartedMessage
+      | SystemAgentReconnectingMessage;
   };
 }
 
@@ -96,6 +110,18 @@ type SystemTurnNotStartedMessage = Extract<
   SystemMessageContent,
   { kind: 'system.turn_not_started' }
 >;
+type SystemAgentReconnectingMessage = Extract<
+  SystemMessageContent,
+  { kind: 'system.agent_reconnecting' }
+>;
+
+/** Why a Turn ended, as its runtime said (`turnEnded`): what `endTurn` records beyond the status. */
+export interface TurnEndReason {
+  /** Legacy 515: the evaluation seal kept the Turn from starting. Read on a `failed` end only. */
+  readonly notStarted?: EvaluationStartRefusal;
+  /** Legacy 168: the Turn's last model call was refused. Read on a `completed` or `failed` end. */
+  readonly modelRefusal?: TurnModelRefusal;
+}
 
 /** The `system.model_refused` content for a Turn the platform refused (legacy 589). The `text` is
  *  the fallback a client without the kind's own rendering shows. */
@@ -135,6 +161,17 @@ export function turnNotStartedContent(
   };
 }
 
+/** The `system.agent_reconnecting` content for a Turn whose last model call was refused while the
+ *  platform reconnects the agent (legacy 168). Says nothing about any Handle or address; the
+ *  `text` is the fallback a client without the kind's own rendering shows. */
+export function agentReconnectingContent(turnId: string): SystemAgentReconnectingMessage {
+  return {
+    kind: 'system.agent_reconnecting',
+    text: 'The agent could not finish this message: the platform is reconnecting it. Send the message again in a moment.',
+    turnId,
+  };
+}
+
 /** The states `TURN_TRANSITIONS` lets a Turn reach `status` from. */
 function sourceStatesFor(status: TurnEndStatus): string[] {
   return TURN_TRANSITIONS.edges.filter((edge) => edge.to === status).map((edge) => edge.from);
@@ -150,17 +187,27 @@ function sourceStatesFor(status: TurnEndStatus): string[] {
  * visible): a duplicate or late report is a no-op, with no second `TurnCompleted` and nothing to
  * push.
  *
- * Legacy 515: `notStarted` — the evaluation seal kept the Turn from starting — on a `failed` end
- * is recorded on the Turn (`metadata.notStarted`) and told to its Chat (`system.turn_not_started`).
+ * Legacy 515: `reason.notStarted` — the evaluation seal kept the Turn from starting — on a `failed`
+ * end is recorded on the Turn (`metadata.notStarted`) and told to its Chat
+ * (`system.turn_not_started`).
+ *
+ * Legacy 168: `reason.modelRefusal` on a `completed` or `failed` end of a Turn nobody asked to
+ * stop and the budget did not refuse ends it `failed`, is recorded on the Turn
+ * (`metadata.modelRefusal`) and told to its Chat (`system.agent_reconnecting`).
  */
 export async function endTurn(
   client: PoolClient,
   workspaceId: string,
   turnId: string,
   status: TurnEndStatus,
-  notStarted?: EvaluationStartRefusal,
+  reason: TurnEndReason = {},
 ): Promise<EndedTurn | undefined> {
-  const seal = status === 'failed' && notStarted !== undefined ? notStarted : null;
+  const seal = status === 'failed' && reason.notStarted !== undefined ? reason.notStarted : null;
+  // A Turn that never started made no model call to refuse.
+  const modelRefusal =
+    seal === null && (status === 'completed' || status === 'failed') && reason.modelRefusal
+      ? reason.modelRefusal
+      : null;
   // Only a `completed` can turn out to be a refused Turn; any other end keeps what it reports.
   const refusal =
     status === 'completed' ? await entryTurnRefusedOnly(client, workspaceId, turnId) : null;
@@ -169,6 +216,7 @@ export async function endTurn(
     status: TurnEndStatus;
     model_refused: boolean;
     not_started: boolean;
+    reconnecting: boolean;
   }>(
     `update activities
      set status = case when $3::text = 'completed' and metadata ? 'stopRequestedAt'
@@ -177,17 +225,23 @@ export async function endTurn(
                        then 'failed'
                        when $3::text = 'completed' and $5::boolean
                        then 'failed'
+                       when $3::text = 'completed' and $8::text is not null
+                       then 'failed'
                        else $3::text end,
          metadata = case when $3::text = 'completed' and $5::boolean
                               and not metadata ? 'stopRequestedAt'
                          then metadata || jsonb_build_object('modelRefused', $6::jsonb)
                          when $7::text is not null
                          then metadata || jsonb_build_object('notStarted', $7::text)
+                         when $8::text is not null and not ($3::text = 'completed' and $5::boolean)
+                              and not metadata ? 'stopRequestedAt'
+                         then metadata || jsonb_build_object('modelRefusal', $8::text)
                          else metadata end,
          ended_at = now()
      where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = any($4::text[])
      returning chat_id, status, metadata ? 'modelRefused' as model_refused,
-               metadata ? 'notStarted' as not_started`,
+               metadata ? 'notStarted' as not_started,
+               metadata ? 'modelRefusal' as reconnecting`,
     [
       workspaceId,
       turnId,
@@ -196,6 +250,7 @@ export async function endTurn(
       refusal !== null,
       refusal ? JSON.stringify({ scope: refusal.scope, refusedCalls: refusal.refusedCalls }) : null,
       seal,
+      modelRefusal,
     ],
   );
   const row = result.rows[0];
@@ -215,7 +270,9 @@ export async function endTurn(
       ? modelRefusedContent(turnId, refusal)
       : seal !== null && row.not_started
         ? turnNotStartedContent(turnId, seal)
-        : null;
+        : modelRefusal !== null && row.reconnecting
+          ? agentReconnectingContent(turnId)
+          : null;
   if (content !== null && row.chat_id !== null) {
     // Like every system message (application/linkage), not one of the Turn's own messages: the
     // Turn is named in the content.

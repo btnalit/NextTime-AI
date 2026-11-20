@@ -27,10 +27,11 @@ import { z } from 'zod';
  * hand, the same way `packages/shared/src/events.ts`'s existing `ChatStreamPayload` schema already
  * mirrors a subset of it) the four event-specific variants plus the four correlation fields every
  * `AgentRuntimeEvent` carries (`workspaceId`/`chatId`/`turnId`/`principalId`). Deliberately does
- * **not** carry a `reason` string on the `turnEnded` variant — see the kernel-side runtime's own
- * doc comment on `agent-host-runtime.ts` for why (keeping this schema exactly shape-compatible
- * with the pre-existing `AgentRuntimeEventFields` type, rather than widening a foundational S1.4
- * type for this task's sake).
+ * **not** carry a free-form `reason` string on the `turnEnded` variant — see the kernel-side
+ * runtime's own doc comment on `agent-host-runtime.ts` for why (keeping this schema exactly
+ * shape-compatible with the pre-existing `AgentRuntimeEventFields` type, rather than widening a
+ * foundational S1.4 type for this task's sake). The one thing it does say about why is a closed
+ * set, `modelRefusal` (legacy 168), mirrored on the kernel's `AgentRuntimeEvent` the same way.
  */
 
 /** agent-host's budget for one worker-supervisor `/resident/spawn` call (its supervisor client's
@@ -93,10 +94,26 @@ const AgentRuntimeEventMessageSchema = z
   })
   .strict();
 
+/**
+ * Legacy 168: why the entry agent's last model call in a Turn was refused, when agent-host could
+ * tell from pi's own record of it — a closed set, never the provider's error text. Only
+ * `unbound_source` today: llm-proxy refused it because no Handle is bound to the container's
+ * address (`UNBOUND_SOURCE_CODE`, handle-binding.ts) while the platform reconnects the agent.
+ */
+export const TURN_MODEL_REFUSAL_VALUES = ['unbound_source'] as const;
+export const TurnModelRefusalSchema = z.enum(TURN_MODEL_REFUSAL_VALUES);
+export type TurnModelRefusal = z.infer<typeof TurnModelRefusalSchema>;
+
 const AgentRuntimeEventTurnEndedSchema = z
   .object({
     type: z.literal('turnEnded'),
     status: z.enum(['completed', 'interrupted', 'failed']),
+    // Legacy 168: set when the Turn's last model call was refused (`TurnModelRefusal`) — the
+    // kernel then ends a `completed` Turn as `failed` and tells its chat. Optional and additive:
+    // an older agent-host never sends it. A value this side does not know reads as absent rather
+    // than refusing the frame (`.catch`): the frame carries the Turn's end, which must not be lost
+    // to a newer agent-host's new refusal.
+    modelRefusal: TurnModelRefusalSchema.optional().catch(undefined),
     ...CorrelationFieldsSchema,
   })
   .strict();

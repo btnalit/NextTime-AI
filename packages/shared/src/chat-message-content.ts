@@ -20,7 +20,7 @@ import { GOAL_RUN_CHANGE_VALUES } from './transitions.js';
  * kinds: system.task_update, system.action_pending, system.action_update; extend the chat message
  * schema/enum in the existing style"; S11 GO5e-2 adds `system.goal_update`; legacy 589 adds
  * `system.model_refused`, which `application/chat` writes when it ends a Turn; legacy 515
- * `system.turn_not_started`, written the same way).
+ * `system.turn_not_started`, and legacy 168 `system.agent_reconnecting`, written the same way).
  *
  * `chat_messages.role` (migrations/core/0008_chat_messages.sql) already reserves `'system'` for
  * exactly this future case (that migration's own comment says so) — this file is the "existing
@@ -44,6 +44,7 @@ export const SYSTEM_MESSAGE_KIND_VALUES = [
   'system.goal_update',
   'system.model_refused',
   'system.turn_not_started',
+  'system.agent_reconnecting',
 ] as const;
 export type SystemMessageKind = (typeof SYSTEM_MESSAGE_KIND_VALUES)[number];
 
@@ -148,6 +149,19 @@ const SystemTurnNotStartedContent = z.object({
   reason: EvaluationStartRefusalSchema,
 });
 
+/**
+ * Legacy 168: the entry agent's last model call in a Turn was refused because no Handle was bound
+ * to its container's address — the platform is reconnecting the agent (a new container, or its
+ * binding not yet written) — so the Turn ended `failed` without a complete answer. Written into
+ * that Turn's chat (`turnId`) by the kernel when it ends the Turn, from agent-host's report
+ * (`turnEnded.modelRefusal`). Sending the message again is what the person can do.
+ */
+const SystemAgentReconnectingContent = z.object({
+  kind: z.literal('system.agent_reconnecting'),
+  text: z.string(),
+  turnId: z.string(),
+});
+
 export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemTaskUpdateContent,
   SystemActionPendingContent,
@@ -155,6 +169,7 @@ export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemGoalUpdateContent,
   SystemModelRefusedContent,
   SystemTurnNotStartedContent,
+  SystemAgentReconnectingContent,
 ]);
 export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
 

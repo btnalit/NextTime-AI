@@ -9,11 +9,12 @@ import {
  * chat-message-content.test: round-trip/rejection coverage for the `SystemMessageContent`
  * variants `application/linkage` (kernel) writes into `chat_messages.content` — docs/development-
  * tasks.md S2.11 deliverable 1, S11 GO5e-2's `system.goal_update`, legacy 589's
- * `system.model_refused` and legacy 515's `system.turn_not_started`.
+ * `system.model_refused`, legacy 515's `system.turn_not_started` and legacy 168's
+ * `system.agent_reconnecting`.
  */
 
 describe('SYSTEM_MESSAGE_KIND_VALUES', () => {
-  it('lists the three S2.11 chat message kinds, S11 GO5e-2 system.goal_update, legacy 589 system.model_refused and legacy 515 system.turn_not_started', () => {
+  it('lists the three S2.11 chat message kinds, S11 GO5e-2 system.goal_update, legacy 589 system.model_refused, legacy 515 system.turn_not_started and legacy 168 system.agent_reconnecting', () => {
     expect(SYSTEM_MESSAGE_KIND_VALUES).toEqual([
       'system.task_update',
       'system.action_pending',
@@ -21,6 +22,7 @@ describe('SYSTEM_MESSAGE_KIND_VALUES', () => {
       'system.goal_update',
       'system.model_refused',
       'system.turn_not_started',
+      'system.agent_reconnecting',
     ]);
   });
 });
@@ -110,6 +112,13 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     turnId: 'turn3',
     reason: 'evaluation_paused',
   },
+  // Legacy 168: an entry Turn whose last model call was refused while the platform reconnects the
+  // agent (no Handle bound to its container's address yet).
+  {
+    kind: 'system.agent_reconnecting',
+    text: 'The agent is reconnecting to the platform: send the message again shortly',
+    turnId: 'turn4',
+  },
 ];
 
 describe('SystemMessageContentSchema', () => {
@@ -169,6 +178,12 @@ describe('SystemMessageContentSchema', () => {
         turnId: 'turn1',
         reason: 'spawn_failed',
       }),
+    ).toThrow();
+  });
+
+  it('rejects system.agent_reconnecting without the Turn it ended (turnId)', () => {
+    expect(() =>
+      SystemMessageContentSchema.parse({ kind: 'system.agent_reconnecting', text: 'x' }),
     ).toThrow();
   });
 
