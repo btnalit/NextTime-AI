@@ -249,7 +249,8 @@ export type QuotaListEntryWire = z.infer<typeof QuotaListEntryWireSchema>;
 /**
  * Legacy 168: one live Capability Handle as `list_handles` shows it — the caller's own (every
  * session kind), and for a workspace owner also those of the workspace's service Principals
- * (`issue_service_handle`). Never the token: the kernel keeps no copy of it, only this record
+ * (`issue_service_handle`) — not the platform's internal ones (`__…__`), so `onBehalfOfName` is
+ * never an internal name. Never the token: the kernel keeps no copy of it, only this record
  * (`capability_handles`). `holder` follows from the session kind as everywhere
  * (`holderForSessionKind`): `container` for an entry agent's, a WorkerRun's or an admin agent's
  * Handle, which the platform holds and which ends with its conversation or Task; `bearer` for one

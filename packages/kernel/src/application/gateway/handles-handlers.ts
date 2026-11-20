@@ -4,12 +4,14 @@ import type {
   RevokeHandleResultWire,
   SessionKind,
 } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
 import {
   CONTAINER_HELD_SESSION_KINDS,
   holderForSessionKind,
   lockSessions,
 } from '../../governance/capability/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { isInternalPrincipalDisplayName } from './members-handlers.js';
 
 /**
  * application/gateway/handles-handlers (legacy 168): `list_handles` and `revoke_handle` — the
@@ -19,7 +21,12 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * I13): their entry agent's, their Workers', their admin agent's (container-held) and the MCP
  * sessions they issued (bearer). A workspace owner also sees the Handles of the workspace's
  * service Principals — the ones they issue with `issue_service_handle`. Never another member's:
- * a member's MCP sessions are theirs, and seeing someone's container Handles serves nothing.
+ * a member's MCP sessions are theirs, and seeing someone's container Handles serves nothing. Nor
+ * the platform's own internal service Principals' (`__goal_planner__`, `__evaluation_service__`,
+ * …; members-handlers.ts `isInternalPrincipalDisplayName`, the kernel's one rule for them): the
+ * platform holds and manages those, a workspace can do nothing with them (`issue_service_handle`
+ * refuses them as `platform_managed`), and listing them would hand the console an internal name
+ * to explain.
  *
  * Ending one. Only a bearer Handle, and only by ending its session the way the platform ends an
  * external runtime (`revokeExternalRuntime`): the session is revoked and every Handle issued
@@ -81,11 +88,29 @@ interface HandleRow {
 
 /** The visibility rule above, as SQL over `capability_handles h` / `sessions s` / `principals p`:
  *  live (unrevoked, unexpired, its session not revoked) and acting for `$2`, or — when `$3` (the
- *  caller is an owner) — for a service Principal. */
+ *  caller is an owner) — for a service Principal other than the internal ones in `$4`. */
 const VISIBLE_HANDLE = `
   h.workspace_id = $1 and h.revoked_at is null and h.expires_at > now()
   and s.status <> 'revoked'
-  and (h.on_behalf_of = $2 or ($3::boolean and p.kind = 'service'))`;
+  and (h.on_behalf_of = $2
+       or ($3::boolean and p.kind = 'service' and not (p.id = any($4::uuid[]))))`;
+
+/** The workspace's internal service Principals (module doc comment), by the kernel's one rule —
+ *  read only for an owner, the one caller the rule's service clause admits. */
+async function internalServicePrincipalIds(
+  client: PoolClient,
+  workspaceId: string,
+  owner: boolean,
+): Promise<string[]> {
+  if (!owner) return [];
+  const result = await client.query<{ id: string; display_name: string | null }>(
+    `select id, display_name from principals where workspace_id = $1 and kind = 'service'`,
+    [workspaceId],
+  );
+  return result.rows
+    .filter((row) => isInternalPrincipalDisplayName(row.display_name))
+    .map((row) => row.id);
+}
 
 const HANDLE_FROM = `
   from capability_handles h
@@ -132,16 +157,25 @@ export const listHandlesHandler: CapabilityHandler = async (client, workspaceId,
   const requested = input.limit ?? DEFAULT_LIST_HANDLES_LIMIT;
   const limit = Math.min(Math.max(requested, 1), MAX_LIST_HANDLES_LIMIT);
   const cursor = decodeCursor(input.cursor);
+  const internal = await internalServicePrincipalIds(client, workspaceId, owner);
   const result = await client.query<HandleRow>(
     `select h.jti, h.session_id, s.kind as session_kind, h.on_behalf_of,
             p.kind as principal_kind, p.display_name, h.created_at, h.expires_at, h.scope
      ${HANDLE_FROM}
      where ${VISIBLE_HANDLE}
-       and ($4::timestamptz is null
-            or (date_trunc('milliseconds', h.created_at), h.jti) < ($4::timestamptz, $5::uuid))
+       and ($5::timestamptz is null
+            or (date_trunc('milliseconds', h.created_at), h.jti) < ($5::timestamptz, $6::uuid))
      order by date_trunc('milliseconds', h.created_at) desc, h.jti desc
-     limit $6`,
-    [workspaceId, principalId, owner, cursor?.issuedAt ?? null, cursor?.jti ?? null, limit + 1],
+     limit $7`,
+    [
+      workspaceId,
+      principalId,
+      owner,
+      internal,
+      cursor?.issuedAt ?? null,
+      cursor?.jti ?? null,
+      limit + 1,
+    ],
   );
   const rows = result.rows.slice(0, limit);
   const last = rows[rows.length - 1];
@@ -159,6 +193,7 @@ export const listHandlesHandler: CapabilityHandler = async (client, workspaceId,
 export const revokeHandleHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const input = params as { jti: string };
   const { principalId, owner } = caller(ctx);
+  const internal = await internalServicePrincipalIds(client, workspaceId, owner);
   const found = await client.query<{
     session_id: string;
     session_kind: SessionKind;
@@ -166,14 +201,14 @@ export const revokeHandleHandler: CapabilityHandler = async (client, workspaceId
   }>(
     `select h.session_id, s.kind as session_kind, h.on_behalf_of
      ${HANDLE_FROM}
-     where ${VISIBLE_HANDLE} and h.jti = $4::uuid`,
-    [workspaceId, principalId, owner, input.jti],
+     where ${VISIBLE_HANDLE} and h.jti = $5::uuid`,
+    [workspaceId, principalId, owner, internal, input.jti],
   );
   const handle = found.rows[0];
   if (!handle) {
     throw new HandleRevokeError(
       'handle_not_found',
-      'no live Handle of yours (or, for an owner, of a service Principal) has this id',
+      'no live Handle of yours (or, for an owner, of a workspace service Principal) has this id',
     );
   }
   if (CONTAINER_HELD_SESSION_KINDS.has(handle.session_kind)) {

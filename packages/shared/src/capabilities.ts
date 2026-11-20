@@ -2449,7 +2449,8 @@ const governanceCapabilities = [
     description:
       'List the live (unrevoked, unexpired) CapabilityHandles acting for the caller — their entry ' +
       'agent’s, their Workers’, their admin agent’s and the MCP sessions they issued — and, for a ' +
-      'workspace owner, those of the workspace’s service Principals; never another member’s. Each ' +
+      'workspace owner, those of the workspace’s service Principals (not the platform’s own ' +
+      'internal ones, which it holds and manages); never another member’s. Each ' +
       'says how it is held (container: the platform holds it, it ends with its conversation or ' +
       'Task; bearer: a client holds it), when it was issued and expires, what it may call and ' +
       'whether revoke_handle may end it. Never the token. Newest first, keyset-paginated (limit, ' +

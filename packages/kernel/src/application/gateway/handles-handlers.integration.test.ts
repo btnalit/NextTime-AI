@@ -5,7 +5,7 @@ import type { HandleWire, Role, SessionKind } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type {
@@ -276,6 +276,37 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
     );
   });
 
+  it('an owner neither sees nor ends the platform’s internal service Principals’ Handles', async () => {
+    // Named the way the platform names its own (members-handlers.ts `isInternalPrincipalDisplayName`).
+    const internalId = await insertPrincipal(
+      workspaceId,
+      'service',
+      'member',
+      '__handles_internal_service__',
+    );
+    const heldByPlatform = await seedHandle(internalId, 'worker_run');
+    const bearer = await seedHandle(internalId, 'service');
+    // A workspace service Principal whose name only looks a little like one stays listed.
+    const lookalikeId = await insertPrincipal(workspaceId, 'service', 'member', '__lookalike');
+    const lookalike = await seedHandle(lookalikeId, 'service');
+
+    const { items } = await list(ownerId, 'owner');
+    const jtis = items.map((item) => item.jti);
+    expect(jtis).not.toContain(heldByPlatform.jti);
+    expect(jtis).not.toContain(bearer.jti);
+    expect(jtis).toContain(lookalike.jti);
+    expect(items.some((item) => item.onBehalfOf === internalId)).toBe(false);
+    expect(items.some((item) => /^__.+__$/.test(item.onBehalfOfName ?? ''))).toBe(false);
+
+    for (const hidden of [heldByPlatform, bearer]) {
+      await expect(revoke(ownerId, 'owner', hidden.jti)).rejects.toMatchObject({
+        code: 'handle_not_found',
+        status: 404,
+      });
+      expect(await sessionStatus(hidden.sessionId)).toBe('active');
+    }
+  });
+
   it('pages newest first; a cursor that does not decode reads from the start', async () => {
     const principal = await insertPrincipal(workspaceId, 'human', 'member', 'pager');
     const base = Date.now() - 60_000;
@@ -352,6 +383,61 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       code: 'handle_not_found',
       status: 404,
     });
+  });
+
+  it('two revocations of one Handle at once: one ends it, the other finds nothing — one audit row', async () => {
+    // A double click on the console's revoke button: both calls see the live Handle; the one that
+    // takes the session row second finds it revoked. The row is held here until both are waiting
+    // on it, so the two always race (otherwise the second may simply start after the first ended).
+    const own = await seedHandle(memberId, 'mcp_session');
+    let both: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    await asAdmin(workspaceId, async (client) => {
+      await client.query('select 1 from sessions where id = $1 for no key update', [own.sessionId]);
+      const holder = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]
+        ?.pid;
+      both = Promise.allSettled([
+        revoke(memberId, 'member', own.jti),
+        revoke(memberId, 'member', own.jti),
+      ]);
+      await vi.waitFor(
+        async () => {
+          // Waiting on this transaction, or queued behind a call that is (a row lock's second
+          // waiter waits on the first).
+          const waiting = await pool.query<{ n: string }>(
+            `with recursive waiting(pid) as (
+               select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))
+               union
+               select a.pid from pg_stat_activity a
+                 join waiting w on w.pid = any(pg_blocking_pids(a.pid))
+             )
+             select count(*)::text as n from waiting`,
+            [holder],
+          );
+          expect(waiting.rows[0]?.n).toBe('2');
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+    });
+    const outcomes = await (both as Promise<PromiseSettledResult<unknown>[]>);
+
+    const ended = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+    const refused = outcomes.filter((outcome) => outcome.status === 'rejected');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.value).toEqual({
+      jti: own.jti,
+      sessionId: own.sessionId,
+      sessionKind: 'mcp_session',
+      revokedHandleCount: 1,
+    });
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.reason).toBeInstanceOf(HandleRevokeError);
+    expect(refused[0]?.reason).toMatchObject({ code: 'handle_not_found', status: 404 });
+    expect(await sessionStatus(own.sessionId)).toBe('revoked');
+
+    const audit = await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
+      queryAudit(client, workspaceId, { action: 'revoke_handle', resourceId: own.sessionId }),
+    );
+    expect(audit).toHaveLength(1);
   });
 
   it('a container-held Handle is refused (409 handle_container_held) and nothing changes', async () => {
