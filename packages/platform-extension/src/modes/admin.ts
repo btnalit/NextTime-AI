@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { type AgentProposalTargetsWire, getCapability } from '@nexttime/shared';
-import { type KernelClient, KernelError } from '../kernel-client.js';
+import { type KernelClient, KernelError, refusalText } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
 import {
@@ -151,7 +151,7 @@ export function withRefusalCode(error: unknown): unknown {
   if (!(error instanceof KernelError) || error.kind !== 'capability_error' || !error.code) {
     return error;
   }
-  return new KernelError(error.kind, `${error.code}: ${error.message}`, {
+  return new KernelError(error.kind, refusalText(error.code, error.message), {
     code: error.code,
     cause: error,
   });

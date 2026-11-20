@@ -271,6 +271,32 @@ describe('system.model_refused (legacy 589)', () => {
   });
 });
 
+describe('system.agent_reconnecting (legacy 168)', () => {
+  it('parses the Turn; without the Turn it is nothing', () => {
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({
+          kind: 'system.agent_reconnecting',
+          text: 'The agent could not finish this message',
+          turnId: 'turn-1',
+        }),
+      ),
+    ).toEqual({
+      variant: 'agent_reconnecting',
+      text: 'The agent could not finish this message',
+      turnId: 'turn-1',
+    });
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.agent_reconnecting', turnId: 'turn-1' }, 'kept'),
+      ),
+    ).toEqual({ variant: 'agent_reconnecting', text: 'kept', turnId: 'turn-1' });
+    expect(
+      systemStatusLineFromMessage(chatMessage({ kind: 'system.agent_reconnecting', text: 'x' })),
+    ).toBeUndefined();
+  });
+});
+
 describe('system.turn_not_started (legacy 515)', () => {
   it('parses the Turn and why; a reason it does not know reads as absent; without the Turn it is nothing', () => {
     expect(

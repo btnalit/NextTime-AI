@@ -99,12 +99,23 @@ export interface TurnNotStartedStatusLine {
   readonly reason: EvaluationStartRefusal | null;
 }
 
+/** Legacy 168: the agent's last model call for a message was refused while the platform
+ *  reconnects it (a new container, or its binding not yet written), so the Turn ended without a
+ *  complete answer. Worded in the reader's language by `SystemStatusLineView`; the kernel's English
+ *  `text` is what a console without this kind shows. */
+export interface AgentReconnectingStatusLine {
+  readonly variant: 'agent_reconnecting';
+  readonly text: string;
+  readonly turnId: string;
+}
+
 export type SystemStatusLineData =
   | ActionUpdateStatusLine
   | TaskUpdateStatusLine
   | GoalUpdateStatusLine
   | ModelRefusedStatusLine
-  | TurnNotStartedStatusLine;
+  | TurnNotStartedStatusLine
+  | AgentReconnectingStatusLine;
 
 function oneOf<T extends string>(values: readonly T[], value: unknown): T | null {
   return typeof value === 'string' && (values as readonly string[]).includes(value)
@@ -197,6 +208,16 @@ export function systemStatusLineFromMessage(
       text: typeof content.text === 'string' ? content.text : message.text,
       turnId,
       reason: oneOf(EVALUATION_START_REFUSAL_VALUES, content.reason),
+    };
+  }
+
+  if (content.kind === 'system.agent_reconnecting') {
+    const turnId = content.turnId;
+    if (typeof turnId !== 'string') return undefined;
+    return {
+      variant: 'agent_reconnecting',
+      text: typeof content.text === 'string' ? content.text : message.text,
+      turnId,
     };
   }
 

@@ -82,6 +82,21 @@ export type HandlePresentation =
   | { readonly kind: 'bearer' }
   | { readonly kind: 'refused'; readonly reason: 'unbound_source' };
 
+/**
+ * Legacy 168: the wire error code llm-proxy (a model call) and the kernel (a capability call, and
+ * `/api/source-binding`) answer a `workers`-network request with when nothing is bound to its
+ * address — the `refused` presentation above. It is what an agent container sees while the
+ * platform reconnects it (its binding not yet, or no longer, written), unlike the other 401s,
+ * which stay a generic `unauthorized`. The code says nothing a peer on that network could not
+ * learn from being refused, and nothing about any Handle.
+ */
+export const UNBOUND_SOURCE_CODE = 'unbound_source';
+
+/** The message that goes with {@link UNBOUND_SOURCE_CODE}. It starts with the code, so a client
+ *  that shows only an error's message (a model SDK's error, a tool error's text) still carries it:
+ *  agent-host recognises a model call refused this way from that text (`modelRefusalOf`). */
+export const UNBOUND_SOURCE_MESSAGE = `${UNBOUND_SOURCE_CODE}: no Handle is bound to this agent container address; the platform is reconnecting the agent`;
+
 export function decideHandlePresentation(input: {
   readonly binding: HandleBinding | undefined;
   readonly fromWorkersSubnet: boolean;

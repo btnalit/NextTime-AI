@@ -3,6 +3,7 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { UNBOUND_SOURCE_CODE, UNBOUND_SOURCE_MESSAGE } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
@@ -439,6 +440,21 @@ describe('registerEntryMode', () => {
     await expect(
       tool.execute('call-1', { objectId: 'missing' }, undefined, undefined, fakeCtx()),
     ).rejects.toThrow('no such object');
+  });
+
+  it('legacy 168: a call refused while the platform reconnects the agent reaches the model with its code', async () => {
+    kernel.setHandler('get_object', () => ({
+      raw: true,
+      status: 401,
+      body: { ok: false, error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE } },
+    }));
+    const tool = fake.tools.get('get_object');
+    if (!tool) throw new Error('get_object tool not registered');
+
+    await expect(
+      tool.execute('call-1', { objectId: 'x' }, undefined, undefined, fakeCtx()),
+    ).rejects.toMatchObject({ message: UNBOUND_SOURCE_MESSAGE });
+    expect(UNBOUND_SOURCE_MESSAGE.startsWith(`${UNBOUND_SOURCE_CODE}: `)).toBe(true);
   });
 
   it('the input handler strips a turn_id marker and transforms the text', () => {

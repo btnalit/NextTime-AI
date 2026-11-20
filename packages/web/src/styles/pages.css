@@ -697,9 +697,11 @@
    there is no reply, when the budget resets, who can raise it — so it is never cut: it wraps on
    the rows under its label, and the line reads as a box rather than a pill. Legacy 515 (UX
    acceptance of #1498): so is the sentence of a Turn the evaluation seal kept from starting —
-   why there is no reply and who can change it. */
+   why there is no reply and who can change it. Legacy 168 (UX acceptance of #1545): and of a
+   Turn ended while the platform reconnects the agent — what to do (send it again). */
 .system-status-line[data-variant="model_refused"],
-.system-status-line[data-variant="turn_not_started"] {
+.system-status-line[data-variant="turn_not_started"],
+.system-status-line[data-variant="agent_reconnecting"] {
   flex-wrap: wrap;
   align-items: baseline;
   row-gap: 2px;
@@ -709,7 +711,8 @@
 }
 
 .system-status-line[data-variant="model_refused"] .system-status-text,
-.system-status-line[data-variant="turn_not_started"] .system-status-text {
+.system-status-line[data-variant="turn_not_started"] .system-status-text,
+.system-status-line[data-variant="agent_reconnecting"] .system-status-text {
   white-space: normal;
 }
 

@@ -504,13 +504,10 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                     unrecorded,
                   );
                 }
-                return endTurn(
-                  client,
-                  event.workspaceId,
-                  event.turnId,
-                  event.status,
-                  event.notStarted,
-                );
+                return endTurn(client, event.workspaceId, event.turnId, event.status, {
+                  ...(event.notStarted ? { notStarted: event.notStarted } : {}),
+                  ...(event.modelRefusal ? { modelRefusal: event.modelRefusal } : {}),
+                });
               },
             );
           } finally {

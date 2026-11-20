@@ -6,6 +6,8 @@ import {
   type HandleClaims,
   type LlmUsageStatus,
   SOURCE_BOUND_CAPABILITY_HANDLE,
+  UNBOUND_SOURCE_CODE,
+  UNBOUND_SOURCE_MESSAGE,
   handleHolderOf,
   isRedirectStatus,
   resolveCorrelationId,
@@ -546,7 +548,16 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
             reason: err.reason,
           }),
         );
-        sendJson(res, 401, { error: { code: 'unauthorized', message: 'unauthorized' } });
+        // Legacy 168: an agent container nothing is bound to is told so — the platform is
+        // reconnecting it (agent-host turns this into the chat's reason the Turn has no answer).
+        // Every other refusal stays a generic `unauthorized`.
+        sendJson(
+          res,
+          401,
+          err.reason === 'unbound_source'
+            ? { error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE } }
+            : { error: { code: 'unauthorized', message: 'unauthorized' } },
+        );
         return;
       }
       throw err;

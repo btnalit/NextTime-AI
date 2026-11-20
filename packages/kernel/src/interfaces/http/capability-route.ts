@@ -1,4 +1,9 @@
-import { IllegalTransition, getCapability } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  UNBOUND_SOURCE_CODE,
+  UNBOUND_SOURCE_MESSAGE,
+  getCapability,
+} from '@nexttime/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   GateConnectionSecretsUnavailableError,
@@ -253,7 +258,7 @@ import {
   RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
-import type { SourceBinding } from '../source-binding/index.js';
+import { type SourceBinding, SourceBindingRefused } from '../source-binding/index.js';
 
 /**
  * interfaces/http/capability-route: `POST /api/cap/<name>` (design doc §9.3; docs/development-
@@ -312,6 +317,12 @@ const AUTHORITY_CHANGED_CONFLICT: ErrorMapping = {
 
 export function mapCapabilityError(err: unknown, capability = 'create_connection'): ErrorMapping {
   if (err instanceof UnauthorizedError) {
+    // Legacy 168: an agent container whose address has no Handle bound — the platform is
+    // reconnecting it — is told that, so its tool error says to try again rather than reading as
+    // a lost credential. Every other refusal stays the generic 401.
+    if (err.cause instanceof SourceBindingRefused && err.cause.reason === 'unbound_source') {
+      return { status: 401, code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE };
+    }
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
   }
   // P-A1 platform-plane errors (application/gateway/platform-handlers.ts): `*_not_found` → 404,

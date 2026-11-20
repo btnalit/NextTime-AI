@@ -90,6 +90,7 @@ describe('endTurn', () => {
       false,
       null,
       null,
+      null,
     ]);
     expect(updateQuery?.text).toContain("metadata ? 'stopRequestedAt'");
     expect(outboxPayload(queries)).toMatchObject({
@@ -167,6 +168,7 @@ describe('endTurn: refused model calls (legacy 589)', () => {
       true,
       JSON.stringify({ scope: 'workspace_daily_cost', refusedCalls: 2 }),
       null,
+      null,
     ]);
     // Stop intent comes first in the UPDATE itself.
     expect(updateQuery?.text.indexOf("metadata ? 'stopRequestedAt'")).toBeLessThan(
@@ -185,7 +187,7 @@ describe('endTurn: refused model calls (legacy 589)', () => {
     await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed');
 
     const updateQuery = queries.find((q) => q.text.startsWith('update activities'));
-    expect(updateQuery?.values?.slice(4)).toEqual([false, null, null]);
+    expect(updateQuery?.values?.slice(4)).toEqual([false, null, null, null]);
   });
 
   it('an end other than completed never reads the usage', async () => {
@@ -200,16 +202,65 @@ describe('endTurn: refused model calls (legacy 589)', () => {
 describe('endTurn: a Turn the evaluation seal kept from starting (legacy 515)', () => {
   it('hands the reason to the guarded UPDATE on a failed end only', async () => {
     const failed = createFakeClient({ chat_id: CHAT_ID, status: 'failed' });
-    await endTurn(failed.client, WORKSPACE_ID, TURN_ID, 'failed', 'evaluation_paused');
+    await endTurn(failed.client, WORKSPACE_ID, TURN_ID, 'failed', {
+      notStarted: 'evaluation_paused',
+    });
     const update = failed.queries.find((q) => q.text.startsWith('update activities'));
-    expect(update?.values?.slice(4)).toEqual([false, null, 'evaluation_paused']);
+    expect(update?.values?.slice(4)).toEqual([false, null, 'evaluation_paused', null]);
     expect(update?.text).toContain("jsonb_build_object('notStarted', $7::text)");
 
     const stopped = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
-    await endTurn(stopped.client, WORKSPACE_ID, TURN_ID, 'interrupted', 'evaluation_withheld');
+    await endTurn(stopped.client, WORKSPACE_ID, TURN_ID, 'interrupted', {
+      notStarted: 'evaluation_withheld',
+    });
     const kept = stopped.queries.find((q) => q.text.startsWith('update activities'));
-    expect(kept?.values?.slice(4)).toEqual([false, null, null]);
+    expect(kept?.values?.slice(4)).toEqual([false, null, null, null]);
     expect(stopped.queries.some((q) => q.text.includes('chat_messages'))).toBe(false);
+  });
+});
+
+describe('endTurn: a Turn whose last model call was refused while the agent reconnects (legacy 168)', () => {
+  it('hands the refusal to the guarded UPDATE on a completed or failed end, never on an interrupted one', async () => {
+    for (const status of ['completed', 'failed'] as const) {
+      const ended = createFakeClient({ chat_id: CHAT_ID, status: 'failed' });
+      await endTurn(ended.client, WORKSPACE_ID, TURN_ID, status, {
+        modelRefusal: 'unbound_source',
+      });
+      const update = ended.queries.find((q) => q.text.startsWith('update activities'));
+      expect(update?.values?.slice(4)).toEqual([false, null, null, 'unbound_source']);
+      expect(update?.text).toContain("jsonb_build_object('modelRefusal', $8::text)");
+    }
+
+    const stopped = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
+    await endTurn(stopped.client, WORKSPACE_ID, TURN_ID, 'interrupted', {
+      modelRefusal: 'unbound_source',
+    });
+    const kept = stopped.queries.find((q) => q.text.startsWith('update activities'));
+    expect(kept?.values?.slice(4)).toEqual([false, null, null, null]);
+    expect(stopped.queries.some((q) => q.text.includes('chat_messages'))).toBe(false);
+  });
+
+  it('a Turn the seal kept from starting made no model call: only the seal is handed on', async () => {
+    const { client, queries } = createFakeClient({ chat_id: CHAT_ID, status: 'failed' });
+    await endTurn(client, WORKSPACE_ID, TURN_ID, 'failed', {
+      notStarted: 'evaluation_paused',
+      modelRefusal: 'unbound_source',
+    });
+    const update = queries.find((q) => q.text.startsWith('update activities'));
+    expect(update?.values?.slice(4)).toEqual([false, null, 'evaluation_paused', null]);
+  });
+
+  it('stop intent and a budget refusal come first in the UPDATE itself', async () => {
+    const { client, queries } = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
+    await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed', { modelRefusal: 'unbound_source' });
+    const text = queries.find((q) => q.text.startsWith('update activities'))?.text ?? '';
+    const statusCase = text.slice(0, text.indexOf('metadata = case'));
+    expect(statusCase.indexOf("metadata ? 'stopRequestedAt'")).toBeLessThan(
+      statusCase.indexOf('$8::text'),
+    );
+    expect(statusCase.indexOf('$5::boolean')).toBeLessThan(statusCase.indexOf('$8::text'));
+    // A row that did not record the refusal (stopped, or the budget refused) gets no message.
+    expect(queries.some((q) => q.text.includes('chat_messages'))).toBe(false);
   });
 });
 
@@ -245,6 +296,7 @@ describe('endUnknownRuntimeTurn', () => {
       'interrupted',
       ['running'],
       false,
+      null,
       null,
       null,
     ]);

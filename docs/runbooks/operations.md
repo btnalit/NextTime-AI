@@ -541,6 +541,7 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 | `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |
 | `/api/llm-admin/*` 401 `token_expired` | 令牌 5 分钟到期 | 控制台自动重取一次；持续 401 检查 caddy → llm-proxy 与 `config/handle.pub` 是否同一密钥对 |
 | Task 失败「模型调用被平台拒绝」（`model_refused`）/ 目标暂停 `model_refused` / 对话里「模型调用被平台拒绝」 | 工作区当天的 token 或费用配额用完了，llm-proxy 拒绝了这次的每一个模型调用（遗留 589） | 等下一个 UTC 零点重置，或调高配额：费用配额在工作区「模型与配额」；`LLM_DAILY_TOKEN_BUDGET` 在 kernel.env，改它是主机变更。暂停的目标由请求者继续 |
+| 对话里「智能体正在重新连接平台」，消息没有处理完 / agent-host 日志 `modelRefusal: "unbound_source"` / 工具错误以 `unbound_source:` 开头 | llm-proxy 或内核按来源绑定拒绝了入口容器的请求：这个容器的地址上还没有、或已经没有绑定（容器刚换，或绑定写入失败），遗留 168 | 偶尔一次是正常的，请人再发一次即可。持续出现时，查 worker-supervisor 日志里的绑定写入和对账，以及 `env-source-binding` 自检 |
 | `nexttime_llm_proxy_refusal_delivery_timeouts_total` 在涨 / llm-proxy 日志 `refusal delivery timed out` | llm-proxy 5 s 内没能把拒绝记录交给内核（内核慢或连不上） | 先查内核健康和 `/internal/llm-usage` 有没有报错；同一时段结束的 Task、试跑、Turn 可能按旧判定收了空结果，对照 `llm_usage` 里该工作区 `status = 'refused'` 的行人工复核 |
 | 从旧版本升级后密钥表单一直显示「待配置」 | 主机仍是升级前的目录布局（`models.json` 还在 `config/` 下） | 按 `docs/runbooks/release.md` §3.2 做一次性目录迁移 |
 

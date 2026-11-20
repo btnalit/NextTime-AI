@@ -4,6 +4,8 @@ import {
   type HandleBindingReader,
   type HandleBindingSource,
   SOURCE_BOUND_CAPABILITY_HANDLE,
+  UNBOUND_SOURCE_CODE,
+  UNBOUND_SOURCE_MESSAGE,
   createHandleBindingReader,
   decideHandlePresentation,
   normalizePeerAddress,
@@ -225,7 +227,7 @@ export function registerSourceBindingSelfRoute(
     if (!bound) {
       return reply.code(401).send({
         ok: false,
-        error: { code: 'unbound_source', message: 'no Handle is bound to this address' },
+        error: { code: UNBOUND_SOURCE_CODE, message: UNBOUND_SOURCE_MESSAGE },
       });
     }
     return { ok: true, containerId: bound.containerId };
