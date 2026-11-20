@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Operation, Role } from '@nexttime/shared';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -648,6 +648,95 @@ describe.runIf(DATABASE_URL !== undefined)(
           principalId: memberId,
         }),
       ).rejects.toThrow(ForbiddenError);
+    });
+
+    it('legacy 245 / 538: names the active human owners, and says whether the seal pauses the agents acting for the principal', async () => {
+      const fresh = await adminFreshWorkspaceOwner('readiness-owners-and-pause');
+      const admin = <T>(work: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId: fresh.workspaceId, principalId: fresh.ownerId }, work, {
+          skipRoleSwitch: true,
+        });
+      const insertPrincipal = (
+        kind: 'human' | 'service',
+        role: Role,
+        displayName: string,
+        extra: { readonly userId?: string; readonly disabled?: boolean } = {},
+      ) =>
+        admin(async (client) => {
+          const id = randomUUID();
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name, user_id, disabled_at)
+             values ($1, $2, $3, $4, $5, $6, case when $7 then now() end)`,
+            [
+              fresh.workspaceId,
+              id,
+              kind,
+              role,
+              displayName,
+              extra.userId ?? null,
+              extra.disabled === true,
+            ],
+          );
+          return id;
+        });
+      // A second owner who renamed themselves since joining: the live name, not the stale copy.
+      const userId = await admin(async (client) => {
+        const result = await client.query<{ id: string }>(
+          'insert into users (login, display_name) values ($1, $2) returning id',
+          [`owner-two-${randomUUID().slice(0, 8)}`, 'Owner Two (live)'],
+        );
+        return result.rows[0]?.id as string;
+      });
+      const secondOwnerId = await insertPrincipal('human', 'owner', 'Owner Two (stale)', {
+        userId,
+      });
+      // Never named: a disabled owner, a service Principal with the owner role, an operator.
+      await insertPrincipal('human', 'owner', 'disabled owner', { disabled: true });
+      await insertPrincipal('service', 'owner', 'service owner');
+      await insertPrincipal('human', 'operator', 'an operator');
+      const readerId = await insertPrincipal('human', 'member', 'a member');
+
+      const reader = humanCaller(fresh.workspaceId, readerId, 'member');
+      const owner = humanCaller(fresh.workspaceId, fresh.ownerId, 'owner');
+      const read = async (caller: ResolvedCaller, params: Record<string, unknown> = {}) =>
+        (await dispatchCapability({ pool }, caller, 'execution_readiness', params)) as {
+          readonly agentsPaused?: boolean;
+          readonly owners?: readonly { principalId: string; displayName: string | null }[];
+        };
+
+      const before = await read(reader);
+      expect(before.owners).toEqual([
+        { principalId: fresh.ownerId, displayName: 'owner' },
+        { principalId: secondOwnerId, displayName: 'Owner Two (live)' },
+      ]);
+      expect(before.agentsPaused).toBe(false);
+
+      // The seal pauses the reader's agents: their readiness says so, whoever reads it; the
+      // owner's own does not.
+      const holdId = await admin(async (client) => {
+        const result = await client.query<{ id: string }>(
+          `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+           values ($1, $2, 3, '{"capabilityResult": 3, "capabilityError": 0, "workerStart": 0}')
+           returning id`,
+          [fresh.workspaceId, readerId],
+        );
+        return result.rows[0]?.id as string;
+      });
+      expect((await read(reader)).agentsPaused).toBe(true);
+      expect((await read(owner, { principalId: readerId })).agentsPaused).toBe(true);
+      expect((await read(owner)).agentsPaused).toBe(false);
+
+      // Released: read live, so at once.
+      await admin((client) =>
+        client.query(
+          `update eval_seal_holds
+              set status = 'released', released_at = now(), released_by = $3,
+                  release_reason = 'checked'
+            where workspace_id = $1 and id = $2`,
+          [fresh.workspaceId, holdId, fresh.ownerId],
+        ),
+      );
+      expect((await read(reader)).agentsPaused).toBe(false);
     });
   },
 );

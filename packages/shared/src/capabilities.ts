@@ -2587,7 +2587,11 @@ const governanceCapabilities = [
       '(unknown until the gate has announced); for a gate the workspace connected itself, a live ' +
       'probe of the gate’s own health endpoint (3 s timeout, all gates at once, after the read’s ' +
       'transaction has ended; ok, unreachable or unauthorized). Health changes no status, reason ' +
-      'or ready. Without it (the default) no gate is probed and none carries health. An operator+ ' +
+      'or ready. Without it (the default) no gate is probed and none carries health. Legacy 538: ' +
+      'agentsPaused says whether the evaluation seal pauses the agents acting for principalId now ' +
+      '(every call of one is refused until the workspace owner releases it; ready is unchanged). ' +
+      'Legacy 245: owners names the workspace’s active human owners (principalId and the name they ' +
+      'go by), whom a member asks for what only an owner does. An operator+ ' +
       'may pass another member’s principalId (same visibility floor as list_grants); any other ' +
       'caller may only check their own.',
   },
