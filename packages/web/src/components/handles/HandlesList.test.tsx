@@ -153,11 +153,42 @@ describe('HandlesList', () => {
     const done = await screen.findByTestId('handles-self-revoked');
     expect(done.tagName).toBe('OUTPUT');
     expect(done.textContent).toContain('2 个凭证已失效');
+    expect(done.textContent).toContain('用它们的客户端');
+    // The row and its button are gone: focus lands on the line saying what happened.
+    await waitFor(() => expect(document.activeElement).toBe(done));
     await waitFor(() => expect(screen.queryByTestId('handle-session-session-mcp')).toBeNull());
     expect(calls.filter((call) => call.name === 'revoke_handle')).toEqual([
       { name: 'revoke_handle', params: { jti: MCP_A.jti } },
     ]);
     expect(calls.filter((call) => call.name === 'list_handles')).toHaveLength(2);
+  });
+
+  it('revoking a service account’s session names the account and says its automation stops', async () => {
+    let revoked = false;
+    const { http } = scriptedHttp((name) => {
+      if (name === 'revoke_handle') {
+        revoked = true;
+        return {
+          jti: SERVICE.jti,
+          sessionId: 'session-service',
+          sessionKind: 'service',
+          revokedHandleCount: 1,
+        };
+      }
+      return { items: revoked ? [] : [SERVICE] };
+    });
+    show(http, 'service');
+    fireEvent.click(await screen.findByTestId('handle-session-revoke-session-service'));
+    const confirm = await screen.findByTestId('handle-session-revoke-confirm-session-service');
+    expect(confirm.textContent).toContain('撤销服务账号 ci-bot 的会话');
+    expect(confirm.textContent).toContain('这个凭证立即失效');
+    expect(confirm.textContent).toContain('用这个凭证的自动化（如采集器、脚本）立即被拒绝');
+    expect(confirm.textContent).not.toContain('Claude Code');
+    fireEvent.click(within(confirm).getByRole('button', { name: '撤销' }));
+    const done = await screen.findByTestId('handles-service-revoked');
+    expect(done.textContent).toBe(
+      '已撤销：这个服务账号会话的凭证已失效，用它的自动化会被拒绝，要再用需要重新签发并换上新凭证。',
+    );
   });
 
   it('a session already gone when revoked just reads the list again', async () => {

@@ -115,6 +115,11 @@ export function HandlesList({
     void reload();
   }, [revision, reload]);
   const [ended, setEnded] = useState<{ count: number; kind: SessionKind } | null>(null);
+  // The revoked row is gone with its button, so focus moves to the line saying what happened.
+  const endedRef = useRef<HTMLOutputElement>(null);
+  useEffect(() => {
+    if (ended !== null) endedRef.current?.focus();
+  }, [ended]);
   const state = handles.state;
   const groups = useMemo(() => {
     if (state.status !== 'ready') return [];
@@ -159,11 +164,13 @@ export function HandlesList({
             )}
       </p>
       {ended !== null ? (
-        <output className="text-small" data-testid={`handles-${scope}-revoked`}>
-          {t(
-            `已撤销：这个${sessionKindLabel(ended.kind, t)}下的 ${ended.count} 个凭证已失效，用它们的客户端会被拒绝，要再用需要重新签发。`,
-            `Revoked: the ${ended.count} Handle(s) of that ${sessionKindLabel(ended.kind, t).toLowerCase()} no longer work; a client using them is refused and needs a new one.`,
-          )}
+        <output
+          className="text-small"
+          ref={endedRef}
+          tabIndex={-1}
+          data-testid={`handles-${scope}-revoked`}
+        >
+          {endedText(ended, t)}
         </output>
       ) : null}
       {groups.length === 0 ? (
@@ -224,6 +231,32 @@ export function HandlesList({
 
 const LIST_PARAMS: Readonly<Record<string, unknown>> = {};
 
+/** What a revocation ended, in one sentence: one Handle or several, a client's or automation's. */
+function endedText(ended: { count: number; kind: SessionKind }, t: Translate): string {
+  const kind = sessionKindLabel(ended.kind, t);
+  const service = ended.kind === 'service';
+  if (ended.count === 1) {
+    return service
+      ? t(
+          `已撤销：这个${kind}的凭证已失效，用它的自动化会被拒绝，要再用需要重新签发并换上新凭证。`,
+          `Revoked: the Handle of that ${kind.toLowerCase()} no longer works; automation using it is refused until a new one is issued and swapped in.`,
+        )
+      : t(
+          `已撤销：这个${kind}的凭证已失效，用它的客户端会被拒绝，要再用需要重新签发。`,
+          `Revoked: the Handle of that ${kind.toLowerCase()} no longer works; a client using it is refused and needs a new one.`,
+        );
+  }
+  return service
+    ? t(
+        `已撤销：这个${kind}下的 ${ended.count} 个凭证已失效，用它们的自动化会被拒绝，要再用需要重新签发并换上新凭证。`,
+        `Revoked: the ${ended.count} Handles of that ${kind.toLowerCase()} no longer work; automation using them is refused until new ones are issued and swapped in.`,
+      )
+    : t(
+        `已撤销：这个${kind}下的 ${ended.count} 个凭证已失效，用它们的客户端会被拒绝，要再用需要重新签发。`,
+        `Revoked: the ${ended.count} Handles of that ${kind.toLowerCase()} no longer work; a client using them is refused and needs a new one.`,
+      );
+}
+
 function SessionRow({
   http,
   group,
@@ -245,6 +278,8 @@ function SessionRow({
   const kind = sessionKindLabel(group.sessionKind, t);
   const count = group.handles.length;
   const rowId = group.sessionId;
+  const service = group.onBehalfOfKind === 'service';
+  const serviceName = group.onBehalfOfName ?? t('服务账号', 'service account');
 
   return (
     <li className="data-row" data-testid={`handle-session-${rowId}`}>
@@ -252,9 +287,7 @@ function SessionRow({
         <div className="data-row-title">
           <strong>
             {kind}
-            {group.onBehalfOfKind === 'service'
-              ? ` · ${group.onBehalfOfName ?? t('服务账号', 'service account')}`
-              : null}
+            {service ? ` · ${serviceName}` : null}
           </strong>
           <span
             className={`chip chip-s ${group.holder === 'container' ? 'chip-neutral' : 'chip-info'}`}
@@ -313,7 +346,11 @@ function SessionRow({
                   {t('撤销', 'Revoke')}
                 </Button>
               }
-              title={t(`撤销这个${kind}`, `Revoke this ${kind.toLowerCase()}`)}
+              title={
+                service
+                  ? t(`撤销服务账号 ${serviceName} 的会话`, `Revoke ${serviceName}'s session`)
+                  : t(`撤销这个${kind}`, `Revoke this ${kind.toLowerCase()}`)
+              }
               impact={[
                 count > 1
                   ? t(
@@ -321,10 +358,15 @@ function SessionRow({
                       `Its ${count} Handles stop working at once`,
                     )
                   : t('这个凭证立即失效', 'Its Handle stops working at once'),
-                t(
-                  '用它的客户端（如 Claude Code）会被拒绝，要再用需要重新签发',
-                  'A client using it (such as Claude Code) is refused and needs a new one',
-                ),
+                service
+                  ? t(
+                      '用这个凭证的自动化（如采集器、脚本）立即被拒绝，直到重新签发并换上新凭证',
+                      'Automation using it (such as a collector or a script) is refused at once until a new one is issued and swapped in',
+                    )
+                  : t(
+                      '用它的客户端（如 Claude Code）会被拒绝，要再用需要重新签发',
+                      'A client using it (such as Claude Code) is refused and needs a new one',
+                    ),
               ]}
               confirmLabel={t('撤销', 'Revoke')}
               danger
