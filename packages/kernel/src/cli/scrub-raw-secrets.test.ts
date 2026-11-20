@@ -70,6 +70,9 @@ describe('formatScrubReport', () => {
         ...counts(1),
         examples: [{ workspaceId: 'ws-1', id: 'observation-1' }],
       },
+      turnReportKeyShapes: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'turn-1' }] },
+      decisionKeyShapes: counts(0),
+      toolCallRecordKeyShapes: counts(0),
       connectedSystemDuplicates: {
         ...counts(1),
         examples: [{ workspaceId: 'ws-1', id: 'system-2' }],
@@ -81,7 +84,7 @@ describe('formatScrubReport', () => {
   it('ends a dry run with the one-line summary apply-release echoes, naming rows by id only', () => {
     const lines = formatScrubReport(result(false), undefined);
     expect(lines.at(-1)).toBe(
-      'scrub-raw-secrets: dry-run would-rewrite=10 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 gateCallObservations=1 connectedSystemDuplicates=1 batches=7',
+      'scrub-raw-secrets: dry-run would-rewrite=10 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 gateCallObservations=1 turnReportKeyShapes=1 decisionKeyShapes=0 toolCallRecordKeyShapes=0 connectedSystemDuplicates=1 batches=7',
     );
     expect(lines).toContain('connectedSystems: examined=10 would-rewrite=2 values=3');
     expect(lines).toContain(
@@ -105,6 +108,9 @@ describe('formatScrubReport', () => {
     );
     expect(lines).toContain(
       'gateCallObservations (counted, not rewritten): examined=10 carrying=1 ids=ws-1/observation-1',
+    );
+    expect(lines).toContain(
+      'turnReportKeyShapes (counted, not rewritten): examined=10 carrying=1 ids=ws-1/turn-1',
     );
     expect(lines.some((line) => line.startsWith('audit:'))).toBe(false);
   });

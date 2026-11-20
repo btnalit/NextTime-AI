@@ -35,6 +35,9 @@ const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJ
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 /** No value pattern knows it: only a field name gives it away. */
 const PLAIN = 'hunter2-plain-word';
+/** 43 base64url characters standing alone: a platform API key's shape, and as much a base64url
+ *  SHA-256 digest's (legacy 168 review). Synthetic — spelled out from the alphabet. */
+const KEY_SHAPE = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
 
 describe.runIf(DATABASE_URL !== undefined)(
   'scrubRawSecrets (integration, real Postgres) — legacy 183–187 rows written before the fix',
@@ -84,7 +87,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       otherObservation: randomUUID(),
     };
     const turnMetadata = {
-      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}`,
+      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}`,
       decisions: [`use PGPASSWORD=${FAKE}`, 'keep the plain one'],
       model: 'm',
     };
@@ -96,7 +99,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       outcome: 'done',
       args: { text: '{"password":"[redacted]"}', totalChars: 30, truncated: false },
       result: {
-        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}"\n}`,
+        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "x": "${KEY_SHAPE}"\n}`,
         totalChars: 70,
         truncated: false,
       },
@@ -292,7 +295,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             ids.agentDecision,
             ids.turn,
-            `rotate it; the old one was PGPASSWORD=${FAKE}`,
+            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE}`,
             ids.approvalDecision,
             ids.approvalActivity,
             `approved; PGPASSWORD=${FAKE}`,
@@ -549,6 +552,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['objectProperties', ids.observed],
         ['gateCallObservations', ids.gateCallRaw],
         ['gateCallObservations', ids.gateCallRawCut],
+        // Legacy 168 review: a platform API key's shape is counted, never rewritten.
+        ['turnReportKeyShapes', ids.turn],
+        ['decisionKeyShapes', ids.agentDecision],
+        ['toolCallRecordKeyShapes', ids.toolMessage],
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         if (result.categories[name].affected <= 20) expect(listed(name)).toContain(id);
@@ -564,6 +571,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         'objectProperties',
         'auditResults',
         'gateCallObservations',
+        'turnReportKeyShapes',
+        'decisionKeyShapes',
+        'toolCallRecordKeyShapes',
         'connectedSystemDuplicates',
       ] as const) {
         expect(counted.filter((row) => row.category === name)).toHaveLength(
@@ -598,18 +608,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       const after = await snapshot();
 
       expect(after.turn).toEqual({
-        summary: 'ran env: CAPABILITY_HANDLE=[redacted]',
+        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}`,
         decisions: ['use PGPASSWORD=[redacted]', 'keep the plain one'],
         model: 'm',
       });
-      expect(after.agentDecision).toBe('rotate it; the old one was PGPASSWORD=[redacted]');
+      expect(after.agentDecision).toBe(
+        `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=[redacted]`,
+      );
       // A person's Decision is not agent text: out of this scrub's scope.
       expect(after.approvalDecision).toBe(`approved; PGPASSWORD=${FAKE}`);
       expect(after.tool).toEqual({
         ...toolContent,
         result: {
           ...toolContent.result,
-          text: '{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]"\n}',
+          text: `{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]",\n  "x": "${KEY_SHAPE}"\n}`,
         },
         redactedValues: 3,
       });
@@ -696,6 +708,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const id of [ids.gateCallRaw, ids.gateCallRawCut]) {
         expect(counted).toContainEqual({ category: 'gateCallObservations', id });
       }
+      // Legacy 168 review: the rewrite keeps a platform API key's shape (any 32 bytes in base64url:
+      // a digest, a public key) and lists the row by id instead, for the keys still valid among
+      // them to be found and rotated.
+      expect(counted).toContainEqual({ category: 'turnReportKeyShapes', id: ids.turn });
+      expect(counted).toContainEqual({ category: 'decisionKeyShapes', id: ids.agentDecision });
+      expect(counted).toContainEqual({ category: 'toolCallRecordKeyShapes', id: ids.toolMessage });
+      expect(counted).not.toContainEqual({
+        category: 'toolCallRecordKeyShapes',
+        id: ids.cleanToolMessage,
+      });
 
       const audit = await admin(
         async (client) =>
@@ -714,7 +736,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         actor_user_id: null,
         payload: { channel: 'cli', attributedActor: false, completed: true },
       });
-      for (const leak of [HANDLE, FAKE, PLAIN, 'issued-plain-value']) {
+      for (const leak of [HANDLE, FAKE, PLAIN, KEY_SHAPE, 'issued-plain-value']) {
         expect(JSON.stringify(audit)).not.toContain(leak);
       }
     });
@@ -729,6 +751,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       // workspace's copies, so none is left anywhere; a clean copy counted on every run would never
       // clear, and the snapshot above cannot see that (rewriting a value to itself changes nothing).
       expect(second.categories.connectionActivities).toMatchObject({ affected: 0, values: 0 });
+      // A platform API key's shape is never rewritten, so its row is listed on every run.
+      expect(second.categories.turnReports).toMatchObject({ affected: 0, values: 0 });
+      expect(second.categories.turnReportKeyShapes.affected).toBeGreaterThanOrEqual(1);
     });
   },
 );

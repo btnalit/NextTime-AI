@@ -6,7 +6,10 @@ import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
+  PLATFORM_KEY_SHAPE_PATTERNS,
   REDACTED,
+  SECRET_VALUE_PATTERNS,
+  STORED_REWRITE_SECRET_PATTERNS,
   redactSecretFieldsInJsonText,
   redactSecrets,
   scrubSecretLiterals,
@@ -196,6 +199,22 @@ describe('a platform API key standing alone (legacy 168)', () => {
         expect(certain(text).redactedValues).toBe(0);
       }
     }
+  });
+
+  it('a rewrite of stored rows leaves the shape and counts it instead (legacy 168 review)', () => {
+    const stored = `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${HANDLE}`;
+    expect(scrubSecretValues(stored, { patterns: STORED_REWRITE_SECRET_PATTERNS })).toEqual({
+      value: `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${REDACTED}`,
+      redactedValues: 1,
+    });
+    expect(
+      scrubSecretValues(stored, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
+    ).toBe(1);
+    // Every other pattern is kept, in order.
+    expect(STORED_REWRITE_SECRET_PATTERNS).toHaveLength(SECRET_VALUE_PATTERNS.length - 1);
+    expect(
+      SECRET_VALUE_PATTERNS.filter((p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p)),
+    ).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
   });
 
   it('no stretch of a 4 KB standard base64 block is one — on one line or folded as PEM', () => {

@@ -299,6 +299,22 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 ];
 
 /**
+ * `SECRET_VALUE_PATTERNS` but a platform API key standing alone (`MINTED_PLATFORM_KEY`): what a
+ * one-way rewrite of rows already stored hides (application/platform/scrub-raw-secrets — historical
+ * Turn reports, agent Decisions, tool-call records; legacy 168 review). The key's shape is any 32
+ * bytes in base64url, so masking it there would lose every digest and public key in that history for
+ * good: such a value is counted by row id instead (`PLATFORM_KEY_SHAPE_PATTERNS`), for the keys
+ * still valid among them to be found and rotated. What is written from now on is masked by the full
+ * set.
+ */
+export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VALUE_PATTERNS.filter(
+  (valuePattern) => valuePattern !== MINTED_PLATFORM_KEY,
+);
+
+/** Only a platform API key standing alone — what a rewrite of stored rows leaves and counts. */
+export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
+
+/**
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
@@ -447,9 +463,13 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
 }
 
 /** `text` with every secret-looking value replaced. Linear in `text`; a caller holding text of
- *  unbounded size bounds it first. */
-export function scrubSecretValues(text: string): Scrubbed<string> {
-  const state = freshState();
+ *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`; a rewrite of rows
+ *  already stored passes `STORED_REWRITE_SECRET_PATTERNS`. */
+export function scrubSecretValues(
+  text: string,
+  options: { readonly patterns?: readonly ValuePattern[] } = {},
+): Scrubbed<string> {
+  const state = freshState({ patterns: options.patterns ?? SECRET_VALUE_PATTERNS });
   return { value: scrubInto(text, state), redactedValues: state.count };
 }
 
