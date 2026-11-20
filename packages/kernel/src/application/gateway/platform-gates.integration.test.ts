@@ -3373,7 +3373,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(stored.rows).toEqual([
             { target: `https://${host}/d`, endpoint: `https://${host}/gate` },
           ]);
-        });
+        }, 120_000);
 
         it('the platform sees a self connection by scheme, host and port only — never a token in its path or query (#620 review)', async () => {
           const other = await createWorkspaceWithOwner(pool, {
@@ -3764,7 +3764,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           // Nothing a search finds changed with the rewrite.
           expect(await searched(shown)).toEqual(expect.arrayContaining([gatekeeperId, systemId]));
           expect(await searched(fake)).toEqual([]);
-        });
+        }, 120_000);
       });
     });
 

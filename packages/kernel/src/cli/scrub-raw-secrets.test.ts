@@ -89,11 +89,13 @@ describe('formatScrubReport', () => {
       },
     },
     liveApiKeys: {
+      tables: 80,
+      rows: 900,
       found: 3,
       keys: 2,
       examples: [
-        { ...SERVICE_KEY_ROW, category: 'auditPayloads', workspaceId: 'ws-1', id: 'audit-2' },
-        { ...SERVICE_KEY_ROW, category: 'turnReports', workspaceId: 'ws-1', id: 'turn-1' },
+        { ...SERVICE_KEY_ROW, table: 'audit_records', row: ['audit-2'] },
+        { ...SERVICE_KEY_ROW, table: 'activities', row: ['ws-1', 'turn-1'] },
       ],
     },
     auditRecordId: executed ? 'audit-row' : null,
@@ -135,40 +137,39 @@ describe('formatScrubReport', () => {
     );
     // The Principals whose keys are still issued, each once; the rest are on the per-row lines.
     expect(lines).toContain(
-      'liveApiKeys (still issued, rotate each): keys=2 found=3 principals=ws-1/service-1,… (all 3: the "live-api-key" lines)',
+      'liveApiKeys (still issued, rotate each): tables=80 rows=900 keys=2 found=3 principals=ws-1/service-1,… (all 3: the "live-api-key" lines)',
     );
     expect(lines.some((line) => line.startsWith('audit:'))).toBe(false);
   });
 
   it('with no key still issued, says so and lists nobody', () => {
     const lines = formatScrubReport(
-      { ...result(false), liveApiKeys: { found: 0, keys: 0, examples: [] } },
+      {
+        ...result(false),
+        liveApiKeys: { tables: 80, rows: 900, found: 0, keys: 0, examples: [] },
+      },
       undefined,
     );
-    expect(lines).toContain('liveApiKeys (still issued, rotate each): keys=0 found=0');
+    expect(lines).toContain(
+      'liveApiKeys (still issued, rotate each): tables=80 rows=900 keys=0 found=0',
+    );
     expect(lines.at(-1)).toMatch(/ liveApiKeys=0 batches=7$/);
   });
 
-  it('prints each row holding a key still issued by ids: the row, the Principal, the user', () => {
+  it('prints each row holding a key still issued by ids: the table and row, the Principal, the user', () => {
+    expect(
+      formatLiveApiKeyRow({ ...SERVICE_KEY_ROW, table: 'audit_records', row: ['audit-3'] }),
+    ).toBe('live-api-key audit_records audit-3 principal ws-1/service-1 service');
     expect(
       formatLiveApiKeyRow({
-        ...SERVICE_KEY_ROW,
-        category: 'auditPayloads',
-        workspaceId: null,
-        id: 'audit-3',
-      }),
-    ).toBe('live-api-key auditPayloads audit-3 principal ws-1/service-1 service');
-    expect(
-      formatLiveApiKeyRow({
-        category: 'toolCallRecords',
-        workspaceId: 'ws-2',
-        id: 'message-1',
+        table: 'chat_messages',
+        row: ['ws-2', 'message-1'],
         principalWorkspaceId: 'ws-2',
         principalId: 'member-1',
         principalKind: 'human',
         userId: 'user-1',
       }),
-    ).toBe('live-api-key toolCallRecords ws-2/message-1 principal ws-2/member-1 human user user-1');
+    ).toBe('live-api-key chat_messages ws-2/message-1 principal ws-2/member-1 human user user-1');
   });
 
   it('prints each counted row by id, one line per row', () => {

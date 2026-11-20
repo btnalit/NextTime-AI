@@ -13,17 +13,20 @@ import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secr
 /**
  * application/platform/scrub-raw-secrets.live-keys.integration.test: DB-gated (real Postgres;
  * auto-skip without DATABASE_URL). Platform API keys written into stored rows before legacy 168's
- * review masked them: the audit rows that hold one are counted (`auditPayloads`), and every stored
- * copy the scrub reads is compared, by hash, against the keys issued (`liveApiKeys`). Seeds a
- * workspace whose service Principal and whose person's membership each hold a key, the key in an
- * audit row's params copy, a Task input, an agent Turn's summary (after `Bearer`, which the rewrite
- * hides) and a tool-call result (standing alone, which it keeps) — plus a retired key's shape and a
- * clean audit row; then: the rows are listed by ids only, never a key or its hash; an executing
- * run lists the Turn before it hides the key, and a later run no longer can; once both keys are
- * rotated, no seeded row is listed.
+ * review masked them: the audit rows that hold one are counted (`auditPayloads`), and every row of
+ * the database is compared, by hash, against the keys issued (`liveApiKeys`). Seeds a workspace
+ * whose service Principal and whose person's membership each hold a key, the key wherever one could
+ * have been pasted or echoed — a person's chat message, an agent's reply, a tool-call result, an
+ * agent Turn's summary (after `Bearer`, which the rewrite hides), a Task's input and, in an array,
+ * its result, an Operation call's params, an audit row's params copy, and, as an object's key, a row
+ * of a table without a primary key — plus a retired key's shape and a clean audit row; then: the
+ * rows are listed by table and primary key only, never a key or its hash; an executing run lists
+ * the Turn before it hides the key, and a later run no longer can; once both keys are rotated, no
+ * seeded row is listed.
  *
  * Keys are minted per run (`api_key_hash` is unique across the database, and test databases are
- * reused); the scrub reads the whole database, so assertions are about the seeded rows.
+ * reused); the scrub reads the whole database, so assertions are about the seeded rows, and a run
+ * takes as long as the shared test database is large.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -47,14 +50,20 @@ describe.runIf(DATABASE_URL !== undefined)(
     const ids = {
       member: randomUUID(),
       service: randomUUID(),
+      gatekeeper: randomUUID(),
       chat: randomUUID(),
       turn: randomUUID(),
+      userMessage: randomUUID(),
+      assistantMessage: randomUUID(),
       toolMessage: randomUUID(),
       task: randomUUID(),
+      actionRequest: randomUUID(),
       auditLive: randomUUID(),
       auditRetired: randomUUID(),
       auditClean: randomUUID(),
     };
+    /** A table without a primary key, its rows named by `ctid`. */
+    const unkeyed = `scrub_live_keys_${randomUUID().replaceAll('-', '')}`;
     const serviceKey = mintKey();
     const memberKey = mintKey();
     const retiredKey = mintKey();
@@ -73,7 +82,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    /** A run, with every row it lists by `onLiveApiKey` and `onCounted`, and every line's text. */
+    /** A run, with every row it lists by `onLiveApiKey` and `onCounted`. */
     async function run(confirm: boolean) {
       const live: LiveApiKeyRow[] = [];
       const counted: { category: string; id: string }[] = [];
@@ -84,13 +93,20 @@ describe.runIf(DATABASE_URL !== undefined)(
         onCounted: (category, row) => counted.push({ category, id: row.id }),
       });
       const seeded = new Set<string>(Object.values(ids));
+      const ours = live.filter(
+        (row) => row.table === unkeyed || seeded.has(row.row.at(-1) as string),
+      );
       return {
         result,
         counted,
-        /** The seeded rows listed, as `category id principal` — the other test files' rows aside. */
-        listed: live
-          .filter((row) => seeded.has(row.id))
-          .map((row) => `${row.category} ${row.id} ${row.principalId}`)
+        ours,
+        /** The seeded rows listed, as `table row principal` — the other test files' rows aside. */
+        listed: ours
+          .map((row) =>
+            row.table === unkeyed
+              ? `unkeyed ${row.principalId}`
+              : `${row.table} ${row.row.at(-1)} ${row.principalId}`,
+          )
           .sort(),
         live,
       };
@@ -105,6 +121,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           [`live-keys-${workspaceId}`],
         )
       ).rows[0]?.id as string;
+      // 250 rows, more than a window: the one holding the key, as an object's key, comes last.
+      await pool.query(`create table ${unkeyed} (n integer, doc jsonb)`);
+      await pool.query(
+        `insert into ${unkeyed} select n, jsonb_build_object('n', n) from generate_series(1, 249) n`,
+      );
+      await pool.query(`insert into ${unkeyed} values (250, $1::jsonb)`, [
+        JSON.stringify({ headers: { [memberKey]: true } }),
+      ]);
       await admin(async (client) => {
         await client.query('insert into workspaces (id, name) values ($1, $2)', [
           workspaceId,
@@ -124,6 +148,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           ],
         );
         await client.query(
+          `insert into objects (workspace_id, id, object_type, properties)
+           values ($1, $2, 'Gatekeeper', '{"name": "collector"}'::jsonb)`,
+          [workspaceId, ids.gatekeeper],
+        );
+        await client.query(
           'insert into chats (workspace_id, id, owner_principal_id) values ($1, $2, $3)',
           [workspaceId, ids.chat, ids.member],
         );
@@ -139,10 +168,25 @@ describe.runIf(DATABASE_URL !== undefined)(
             ids.member,
           ],
         );
+        // A person pasting their key, the agent echoing the other; neither is ever rewritten.
+        await client.query(
+          `insert into chat_messages (workspace_id, id, chat_id, turn_id, role, content, sequence)
+           values ($1, $2, $3, null, 'user', $4::jsonb, 1),
+                  ($1, $5, $3, $6, 'assistant', $7::jsonb, 2)`,
+          [
+            workspaceId,
+            ids.userMessage,
+            ids.chat,
+            JSON.stringify({ text: `use my key ${memberKey} for this` }),
+            ids.assistantMessage,
+            ids.turn,
+            JSON.stringify({ text: `Done — the collector authenticates as ${serviceKey}.` }),
+          ],
+        );
         // Standing alone in a JSON value: kept by the rewrite, counted as a key's shape.
         await client.query(
           `insert into chat_messages (workspace_id, id, chat_id, turn_id, role, content, sequence)
-           values ($1, $2, $3, $4, 'tool', $5::jsonb, 1)`,
+           values ($1, $2, $3, $4, 'tool', $5::jsonb, 3)`,
           [
             workspaceId,
             ids.toolMessage,
@@ -162,15 +206,30 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           ],
         );
+        // Two keys in one row: one line each. The result's is in an array.
         await client.query(
-          `insert into tasks (workspace_id, id, status, on_behalf_of, worker_definition_id, worker_definition_version, input)
-           values ($1, $2, 'completed', $3, $4, 1, $5::jsonb)`,
+          `insert into tasks (workspace_id, id, status, on_behalf_of, worker_definition_id, worker_definition_version, input, result)
+           values ($1, $2, 'completed', $3, $4, 1, $5::jsonb, $6::jsonb)`,
           [
             workspaceId,
             ids.task,
             ids.member,
             randomUUID(),
             JSON.stringify({ job: 'collect', with: serviceKey }),
+            JSON.stringify({ steps: ['logged in', `as ${memberKey}`] }),
+          ],
+        );
+        // An Operation call's own params, kept as given: it is executed from them.
+        await client.query(
+          `insert into action_requests
+             (workspace_id, id, gatekeeper_id, action_kind, blast_radius, on_behalf_of, actor_runtime, params)
+           values ($1, $2, $3, 'opCollect', 'low', $4, 'human', $5::jsonb)`,
+          [
+            workspaceId,
+            ids.actionRequest,
+            ids.gatekeeper,
+            ids.member,
+            JSON.stringify({ apiKey: serviceKey }),
           ],
         );
         await client.query(
@@ -201,37 +260,48 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, [ids.member, ids.service]],
         ),
       );
+      await pool.query(`drop table if exists ${unkeyed}`);
       await pool.end();
     });
 
-    it('lists every stored copy of a key still issued by ids only — the row, the Principal, the user', async () => {
-      const { result, counted, listed, live } = await run(false);
-      expect(listed).toEqual(
-        [
-          `auditPayloads ${ids.auditLive} ${ids.service}`,
-          `taskInputs ${ids.task} ${ids.service}`,
-          `toolCallRecords ${ids.toolMessage} ${ids.member}`,
-          `turnReports ${ids.turn} ${ids.service}`,
-        ].sort(),
-      );
-      const member = live.find((row) => row.id === ids.toolMessage);
-      expect(member).toEqual({
-        category: 'toolCallRecords',
-        workspaceId,
-        id: ids.toolMessage,
+    const EVERY_COPY = [
+      `action_requests ${ids.actionRequest} ${ids.service}`,
+      `activities ${ids.turn} ${ids.service}`,
+      `audit_records ${ids.auditLive} ${ids.service}`,
+      `chat_messages ${ids.assistantMessage} ${ids.service}`,
+      `chat_messages ${ids.toolMessage} ${ids.member}`,
+      `chat_messages ${ids.userMessage} ${ids.member}`,
+      `tasks ${ids.task} ${ids.member}`,
+      `tasks ${ids.task} ${ids.service}`,
+      `unkeyed ${ids.member}`,
+    ].sort();
+
+    it('lists every stored copy of a key still issued by ids only — the table and row, the Principal, the user', async () => {
+      const { result, counted, ours, listed, live } = await run(false);
+      expect(listed).toEqual(EVERY_COPY);
+      expect(ours.find((row) => row.row.at(-1) === ids.userMessage)).toEqual({
+        table: 'chat_messages',
+        row: [workspaceId, ids.userMessage],
         principalWorkspaceId: workspaceId,
         principalId: ids.member,
         principalKind: 'human',
         userId,
       });
-      expect(live.find((row) => row.id === ids.auditLive)).toMatchObject({
+      expect(ours.find((row) => row.row.at(-1) === ids.auditLive)).toMatchObject({
+        row: [ids.auditLive],
         principalKind: 'service',
         userId: null,
       });
-      // The *KeyShapes re-reads and auditResults compare nothing: one line per row and key.
-      expect(live.filter((row) => row.id === ids.toolMessage)).toHaveLength(1);
+      expect(ours.find((row) => row.table === unkeyed)?.row).toEqual([
+        expect.stringMatching(/^\(\d+,\d+\)$/),
+      ]);
+      // Two Principals, nine copies: the keys to rotate are counted once each.
+      expect(new Set(ours.map((row) => row.principalId)).size).toBe(2);
       expect(result.liveApiKeys.keys).toBeGreaterThanOrEqual(2);
+      expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);
       expect(result.liveApiKeys.found).toBe(live.length);
+      expect(result.liveApiKeys.tables).toBeGreaterThan(50);
+      expect(result.liveApiKeys.rows).toBeGreaterThan(250);
       // The audit rows holding a key's shape are counted, issued or not; the clean one is not.
       expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
       expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditRetired });
@@ -240,11 +310,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const leak of leaks) {
         expect(JSON.stringify({ result, live, counted })).not.toContain(leak);
       }
-    });
+    }, 300_000);
 
     it('an executing run lists the key it then hides; a later run cannot see it, nor any key once rotated', async () => {
       const executed = await run(true);
-      expect(executed.listed).toContain(`turnReports ${ids.turn} ${ids.service}`);
+      expect(executed.listed).toEqual(EVERY_COPY);
       const audit = await admin(
         async (client) =>
           (
@@ -271,11 +341,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The rewrite hid the Turn's copy: only the first run's list has it.
       const after = await run(false);
       expect(after.listed).toEqual(
-        [
-          `auditPayloads ${ids.auditLive} ${ids.service}`,
-          `taskInputs ${ids.task} ${ids.service}`,
-          `toolCallRecords ${ids.toolMessage} ${ids.member}`,
-        ].sort(),
+        EVERY_COPY.filter((line) => line !== `activities ${ids.turn} ${ids.service}`),
       );
 
       // Re-keyed (`rotate_api_key`) and dropped (a person's password change): nothing left.
@@ -293,6 +359,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rotated.listed).toEqual([]);
       // The audit rows stay as written (I11) and stay counted.
       expect(rotated.counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
-    });
+    }, 300_000);
   },
 );

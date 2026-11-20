@@ -624,7 +624,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const id of [ids.systemA, ids.systemB, ids.systemHeld]) {
         expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id });
       }
-    });
+    }, 180_000);
 
     it('--yes rewrites the copies people read, counts the rest, and audits counts only', async () => {
       const counted: { category: string; id: string }[] = [];
@@ -773,7 +773,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const leak of [HANDLE, FAKE, PLAIN, KEY_SHAPE, 'issued-plain-value']) {
         expect(JSON.stringify(audit)).not.toContain(leak);
       }
-    });
+    }, 180_000);
 
     it('a second run rewrites nothing it already rewrote', async () => {
       const before = await snapshot();
@@ -788,6 +788,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       // A platform API key's shape is never rewritten, so its row is listed on every run.
       expect(second.categories.turnReports).toMatchObject({ affected: 0, values: 0 });
       expect(second.categories.turnReportKeyShapes.affected).toBeGreaterThanOrEqual(1);
-    });
+    }, 180_000);
   },
 );

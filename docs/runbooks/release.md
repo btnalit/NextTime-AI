@@ -1096,8 +1096,8 @@ SQL 列出的自连门清单就是要逐个确认的范围。
   （注释措辞见遗留 839）。#1549（遗留 168 补充）之后的下一版起只计数 11 类：加 `turnReportKeyShapes`、`decisionKeyShapes`、
   `toolCallRecordKeyShapes`，即改写的前 3 类里仍留着平台 API key 形状（单独出现的 43 个 base64url 字符）的行。改写不碰这种形状：任何 32 字节值的
   base64url 编码（摘要、公钥）都长这样，而改写是单向的。这 3 类不改写，所以每次运行都会再计，见 §3.207。§3.208 起只计数 12 类：
-  加 `auditPayloads`，即 payload 里有值规则会删减内容的审计行（任何 action），审计只增不减，所以这个计数不会归零；同时比对仍有效的平台
-  API key（`liveApiKeys`），见 §3.208。
+  加 `auditPayloads`，即 payload 里有值规则会删减内容的审计行（任何 action），审计只增不减，所以这个计数不会归零；同时在改写之前读全库，
+  比对仍有效的平台 API key（`liveApiKeys`），见 §3.208。
 - 只列、不改 1 类（v0.50.0 起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
   运行）；报告里这一类的标签是 `listed, nothing to fix`，与只计数的类别分开看。dry run 只列以往运行留下的：剪后是否撞名，要等前面的名字改写之后才知道。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
@@ -3637,7 +3637,7 @@ select 'reconcile', count(*) from action_requests r
   - **原有的只计数类别**（Fact 和 Object 的属性、任务输入、`auditResults`、`gateCallObservations`）用完整规则判断，含这种形状的行也会被计入，同样只计数。
   - 其他审计行（能力调用的参数副本等）里存着的平台 key 不在这次清洗范围内，由审计存量那一项另行处理（§3.208：`auditPayloads`）。
   - 预检 SQL（`scrub-raw-secrets.preflight.sql`）按关键字匹配，认不出没有前缀的 key，所以它给的上界不含这种形态。精确计数看这一步的日志和 `cli.raw_secrets_scrubbed` 审计行；把各类计数记 `docs/private/`。
-  - **处置**（victor 在主机上决定和执行）：按 §3.208。清洗把上面 3 类的行、审计行和其他读到的行里的形状与仍有效的 key 比对（`liveApiKeys`），只输出行 id、API key 的 id 和账号 id；按清单逐个轮换，再复跑确认「仍有效」归零。不要手工改这些行。
+  - **处置**（victor 在主机上决定和执行）：按 §3.208。清洗在改写之前把全库每一行里的形状与仍有效的 key 比对（`liveApiKeys`），只输出表名和行的主键、API key 的 id 和账号 id；按清单逐个轮换，再复跑确认「仍有效」归零。不要手工改这些行。
 - **升级前只读预检**（以表的属主运行，和前面几节一样；结果记 `docs/private/`）：`select count(*) from sessions;` 记下行数，估计加约束时锁表多久（本地 100 万行、数据在缓存里时约 0.2 s；主机磁盘慢、数据不在缓存里时会更久）。
 - **升级后只读核对**：
   - `select version from schema_migrations where module = 'governance' and version = 49;` 返回一行。
@@ -3646,7 +3646,7 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §6 一行）：只需回退代码。上一版按列名插入 `sessions`，从不读写 `note`，新约束对空值总成立；新版本写下的备注留在表里，上一版看不到。要连 schema 一起撤：`alter table sessions drop column note`（约束随列删除，备注随之丢失），再删 `schema_migrations` 里 governance 49 那一行。
 - 下一次主机升级的提示要带上本节。
 
-### 3.208 存量里的平台 API key：审计行计数，比对仍有效的 key，按清单轮换（#1553，遗留 168 补充的审计存量，0.69.2 之后的下一版）
+### 3.208 存量里的平台 API key：审计行计数，全库比对仍有效的 key，按清单轮换（#1553，遗留 168 补充的审计存量，0.69.2 之后的下一版）
 
 没有迁移。改的是 `scrub-raw-secrets`，也就是 `--pull` 在 `BACKUP_NOW` 之后自动跑的 `STEP raw-secret-scrub`（§3.25）。新写入的内容自 §3.207
 起在写入时就遮住平台 key（能力调用的参数副本、批准与拒绝的原因、门结果的审计副本、Worker 报告等），这一节只处理之前存下的。
@@ -3657,15 +3657,22 @@ select 'reconcile', count(*) from action_requests r
     - 只按值判断，不看字段名：审计 payload 自己的字段（`credentialReview`、`suspectedSecretValues`）名字就像秘密，按字段名判会全部计入。
     - 会计入的有三种：遗留 180 之前写下的参数副本原文；§3.207 之前写下的平台 key；只是长得像 key 的值（base64url 编码的 32 字节摘要、公钥）。
     - 审计只增不减（I11），这个计数不会归零，也不需要处置。`action_request.complete` / `.fail` 的行可能同时计入 `auditResults`。
-  - **比对仍有效的 key（`liveApiKeys`）**：清洗读到的每一行，在改写之前，把里面每个平台 key 形状（单独出现的 43 个 base64url 字符，§3.207）按
-    `principals.api_key_hash` 的算法算 sha256，与现有的 key 比对。对上的就是仍然签发着的 key。
-    - 日志每对上一处打印一行：`live-api-key <类别> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
-      `<行>` 是这一行的 id；Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。不输出 key 的任何
-      片段，也不输出哈希。
-    - 报告多一行 `liveApiKeys (still issued, rotate each): keys=<数> found=<处> principals=…`；最后的汇总行多一项 `liveApiKeys=<数>`，
-      数的是要轮换的 key（按 Principal 去重）；`cli.raw_secrets_scrubbed` 审计行多一个 `liveApiKeys`（计数和前 20 处，同样只有 id）。
-    - 范围是清洗读的所有列：改写的 7 类、只计数的类别、全部审计行的 payload。`*KeyShapes` 三类与 `auditResults` 读的行已由别的类别比对过，
-      不重复。同一行被两类读到时会列两次，比如观察到的 ConnectedSystem 的属性，dry run 时会列在 `connectedSystems` 和 `objectProperties` 下。
+  - **全库比对仍有效的 key（`liveApiKeys`）**：清洗在改写任何东西之前，先把全库读一遍，再与现有的 key 比对。对上的就是仍然签发着的 key。
+    - **读哪些**：`public` schema 的每张表、每一行，每个文本、JSON 和文本数组列。表和列从系统目录读，以后迁移新加的表也自动在内。只跳过
+      两列凭据自己的哈希：`principals.api_key_hash` 和 `users.password_hash`。所以人发的对话消息、agent 的回复、能力调用的
+      `action_requests.params`、Worker 的报告、备注、提案等，凡是 key 可能被贴进或回显的地方都在内，不只是上面各类别读的那些列。
+    - **怎么比**：每个平台 key 形状（单独出现的 43 个 base64url 字符，§3.207）按 `principals.api_key_hash` 的算法算 sha256，到 `principals`
+      里查。在 JSON 的值、对象键和数组里都找。
+    - **日志**：每对上一处打印一行 `live-api-key <表> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
+      - `<行>` 是这一行的主键，多列时用 `/` 连接：大多数表是 `<工作区>/<id>`，`audit_records` 只有 `<id>`，没有主键的表给 `ctid`。
+      - 同一行里有两把 key 就打两行。
+      - Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。
+      - 不输出 key 的任何片段，不输出哈希，也不输出是哪一列。
+    - **报告和审计行**：报告多一行 `liveApiKeys (still issued, rotate each): tables=<表数> rows=<行数> keys=<数> found=<处> principals=…`，
+      `tables` 和 `rows` 是这次比对读了多少。最后的汇总行多一项 `liveApiKeys=<数>`，数的是要轮换的 key（按 Principal 去重）。
+      `cli.raw_secrets_scrubbed` 审计行多一个 `liveApiKeys`，含计数和前 20 处，同样只有 id。
+    - **`liveApiKeys=0` 说明什么**：库里存着的每一行都没有单独出现的、仍有效的 key。它不覆盖库以外的副本（`BACKUP_NOW` 的备份文件、
+      日志），也认不出不是单独出现的 key（比如被编码进更长的 base64 串里）。
     - 所在工作区或用户被停用的 key 也算仍有效：重新启用后它又能用。Principal 被停用后 key 已清除（core 0059），不会再对上。
 - **处置**（victor 在主机上决定和执行，结果记 `docs/private/`；只读，或只动清单上的账号）：
   1. **取清单**：在这次升级的清洗日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log` 里找 `live-api-key` 开头的行，就是清单；汇总行的
@@ -3677,7 +3684,7 @@ select 'reconcile', count(*) from action_requests r
        （`key-rotation.md` §5）。确定不再用的，可以停用（`disable_principal`）。
      - `human`：运维 CLI 早年签发给人的遗留 key（`key-rotation.md` §5.1）。由该用户在控制台改一次密码，或平台管理员重置其密码；这会清掉此人
        所有成员身份的 key，不再补发（D-25）。还在用这把 key 的脚本或验收，改用服务凭证。
-     - 清单里的行不用改，也改不了（审计只增）。key 失效之后，那串字符就没有用了。
+     - 清单里的行不用改，审计行也改不了（审计只增）。key 失效之后，那串字符就没有用了，备份文件和日志里的副本也一样。
   3. **复跑确认归零**（dry run，什么都不写，也不写审计行；经 SSH 时用 `ssh -n`）：
 
      ```sh
@@ -3687,8 +3694,10 @@ select 'reconcile', count(*) from action_requests r
 
      期望只打印一行汇总，其中 `liveApiKeys=0`；多出来的 `live-api-key` 行就是还没轮换的。复跑只能看到库里还存着的副本，所以第 1 步清单上的
      每个 Principal 都轮换过，才算完成。
-- **升级影响**：清洗多按 id 分批读一遍 `audit_records`，表大时 `STEP raw-secret-scrub` 会更久，可用 §3.25 的行数查询估计。比对时，每批最多
-  按哈希查一次 `principals`（走 `api_key_hash` 的唯一索引）。改写与写入的行为都没变。
+- **升级影响**：`STEP raw-secret-scrub` 会更久。比对要把全库再读一遍，每张表按主键分批，读的量和 `BACKUP_NOW` 的备份相当；`auditPayloads`
+  还要按 id 分批读一遍 `audit_records`。可参考这次 `BACKUP_NOW` 的耗时，或用 `select pg_size_pretty(pg_database_size(current_database()));`
+  估计。比对时，每批最多按哈希查一次 `principals`（走 `api_key_hash` 的唯一索引）。
+  改写与写入的行为都没变。
 - **预检 SQL**：认不出没有前缀的 key（§3.207），这次不加列。精确计数看清洗日志。
 - **回滚**（见 §6，没有迁移）：只回退代码。上一版的清洗没有 `auditPayloads` 和比对，其他照旧。
 - 下一次主机升级的提示要带上本节。

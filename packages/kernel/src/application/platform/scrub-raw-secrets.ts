@@ -112,23 +112,26 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
  * kept as `examples` — the sample the audit row carries, which must stay bounded.
  *
- * **Keys still issued (`liveApiKeys`).** Every value of a platform API key's shape in the columns a
- * scan reads, as read — before that scan rewrites anything — is hashed the way
- * `principals.api_key_hash` stores a key (`hashApiKey`) and looked up there. A match is a key still
- * issued, listed (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the row
- * and the scan that read it, the Principal holding the key (one key per Principal: the key's id)
- * and, for a person's membership, their user (the account) — never the key, never a hash. Every
- * scan compares what it reads but the `*KeyShapes` scans (their rows are compared by the rewrite
- * scan of the same table) and `auditResults` (`auditPayloads` reads every audit row's payload); a
- * row read by two scans (an observed ConnectedSystem's properties) can be listed under both. A key
- * the rewrite then hides (`Bearer <key>`, a secret-named JSON field) is listed by that run only, so
- * the keys to rotate are the ones the first run lists; a later run listing none says no stored copy
- * it reads still holds an issued key. A key stops matching once its Principal is re-keyed
- * (`rotate_api_key`), loses it (its person changes their password or has it reset:
+ * **Keys still issued (`liveApiKeys`).** Before anything is rewritten, every table in the `public`
+ * schema is read once more, each text, JSON and text-array column of every row (but the two
+ * credential hashes, `principals.api_key_hash` and `users.password_hash`): a person's chat message,
+ * an agent's reply, an Operation call's `action_requests.params`, a Worker's report, a note, a
+ * proposal — wherever a key could have been pasted or echoed, not only where the scans above look.
+ * Every value of a platform API key's shape in them is hashed the way `principals.api_key_hash`
+ * stores a key (`hashApiKey`) and looked up there. A match is a key still issued, listed
+ * (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the table and the row's
+ * primary key (its `ctid` for a table without one), the Principal holding the key (one key per
+ * Principal: the key's id) and, for a person's membership, their user (the account) — never the
+ * key, never a hash, never which column. One line per row and key. A key the rewrite then hides
+ * (`Bearer <key>`, a secret-named JSON field) is listed by that run only, so the keys to rotate are
+ * the ones the first run lists; a later run listing none says no row of the database, as stored,
+ * still holds an issued key's value standing alone. A key stops matching once its Principal is
+ * re-keyed (`rotate_api_key`), loses it (its person changes their password or has it reset:
  * `revokeUserCredentials`) or is disabled (core 0059); a key on a disabled workspace or user still
  * matches, since re-enabling either would let it authenticate again. The hashes reach the database
  * only as the lookup's parameter, as every API call's key does (gateway/auth.ts
- * `lookupPrincipalByApiKeyHash`).
+ * `lookupPrincipalByApiKeyHash`). Not compared: anything outside this database — the dump
+ * `BACKUP_NOW` takes, the logs.
  *
  * **How.** Per table, windows of `batchSize` rows in primary-key order, each one short transaction
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
@@ -195,11 +198,11 @@ export interface RawSecretCategoryCounts {
 
 /** A row holding a platform API key still issued, by ids only — never the key, never its hash. */
 export interface LiveApiKeyRow {
-  /** The scan that read the row. */
-  readonly category: RawSecretCategory;
-  /** The row, as a counted row is named. */
-  readonly workspaceId: string | null;
-  readonly id: string;
+  /** The table (`public` schema). */
+  readonly table: string;
+  /** The row: its primary key's values as text, in the key's column order — `[workspaceId, id]`
+   *  for most tables; `[ctid]` for a table without a primary key. */
+  readonly row: readonly string[];
   /** The Principal the key is issued to (`principals.api_key_hash`: one key per Principal). */
   readonly principalWorkspaceId: string;
   readonly principalId: string;
@@ -210,7 +213,10 @@ export interface LiveApiKeyRow {
 }
 
 export interface LiveApiKeyCounts {
-  /** Rows holding a key still issued, once per scan and key. */
+  /** Tables read, and their rows: what was compared. */
+  tables: number;
+  rows: number;
+  /** Rows holding a key still issued, once per row and key. */
   found: number;
   /** The Principals among them: the keys still to rotate. */
   keys: number;
@@ -274,9 +280,6 @@ interface Scan {
   /** Rows after `after` in key order, at most `limit`. */
   readonly window: (client: PoolClient, after: Cursor, limit: number) => Promise<ScannedRow[]>;
   readonly inspect: (row: ScannedRow) => Finding | null;
-  /** The columns, as read, compared against the keys issued (`liveApiKeys`); omitted for a scan
-   *  whose rows another scan compares. */
-  readonly issuedKeysIn?: (row: ScannedRow) => unknown;
 }
 
 /** Keyset over a `(workspace_id, id)` primary key: `filter` narrows the rows (no parameters). */
@@ -381,6 +384,89 @@ async function issuedKeysAmong(
   return new Map(rows.map((row) => [row.api_key_hash, row]));
 }
 
+/** Never compared: the credentials' own hashes, which are not where a key is copied. */
+const NOT_COMPARED_COLUMNS: ReadonlySet<string> = new Set([
+  'principals.api_key_hash',
+  'users.password_hash',
+]);
+
+interface ComparedTable {
+  readonly name: string;
+  /** The primary key's columns and types, in key order; `ctid` for a table without one. */
+  readonly key: readonly { readonly name: string; readonly type: string }[];
+  /** The text, JSON and text-array columns compared. */
+  readonly columns: readonly string[];
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+/** Every table of the `public` schema (a partitioned one once, not per partition) with a column a
+ *  key could be copied into: a string type (`text`, `varchar`, …), `json`, `jsonb`, or an array of
+ *  one. Read from the catalog, so a table a later migration adds is compared without a change here. */
+async function comparedTables(client: PoolClient): Promise<ComparedTable[]> {
+  const { rows } = await client.query<{
+    name: string;
+    key: { name: string; type: string }[];
+    columns: string[];
+  }>(
+    `select c.relname as name,
+            coalesce((select json_agg(json_build_object(
+                               'name', a.attname, 'type', format_type(a.atttypid, a.atttypmod))
+                             order by k.ord)
+                        from pg_index i
+                       cross join unnest(i.indkey) with ordinality as k(attnum, ord)
+                        join pg_attribute a on a.attrelid = i.indrelid and a.attnum = k.attnum
+                       where i.indrelid = c.oid and i.indisprimary), '[]') as key,
+            coalesce((select json_agg(a.attname order by a.attnum)
+                        from pg_attribute a
+                        join pg_type t on t.oid = a.atttypid
+                        left join pg_type e on t.typcategory = 'A' and e.oid = t.typelem
+                       where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                         and (t.typcategory = 'S' or t.typname in ('json', 'jsonb')
+                              or e.typcategory = 'S' or e.typname in ('json', 'jsonb'))), '[]')
+              as columns
+       from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relispartition
+      order by c.relname`,
+  );
+  return rows
+    .map((row) => ({
+      name: row.name,
+      key: row.key.length > 0 ? row.key : [{ name: 'ctid', type: 'tid' }],
+      columns: row.columns.filter((column) => !NOT_COMPARED_COLUMNS.has(`${row.name}.${column}`)),
+    }))
+    .filter((table) => table.columns.length > 0);
+}
+
+/** `table`'s rows after `after` (its key's values as text; `null` from the start) in key order, at
+ *  most `limit`: each one's key as text and its compared columns' values. */
+async function comparedWindow(
+  client: PoolClient,
+  table: ComparedTable,
+  after: readonly string[] | null,
+  limit: number,
+): Promise<{ row: string[]; values: unknown[] }[]> {
+  const key = table.key.map((column) => quoteIdent(column.name)).join(', ');
+  const bound =
+    after === null
+      ? ''
+      : `where (${key}) > (${table.key.map((column, i) => `$${i + 2}::${column.type}`).join(', ')})`;
+  const { rows } = await client.query<Record<string, unknown>>(
+    `select ${table.key.map((column, i) => `${quoteIdent(column.name)}::text as k${i}`).join(', ')},
+            ${table.columns.map((column, i) => `${quoteIdent(column)} as v${i}`).join(', ')}
+       from public.${quoteIdent(table.name)} ${bound}
+      order by ${key} limit $1`,
+    [limit, ...(after ?? [])],
+  );
+  return rows.map((row) => ({
+    row: table.key.map((_, i) => row[`k${i}`] as string),
+    values: table.columns.map((_, i) => row[`v${i}`]),
+  }));
+}
+
 /** A counted Finding for `count` key shapes, or `null` for none. */
 function keyShapeFinding(count: number): Finding | null {
   return count > 0 ? { values: count } : null;
@@ -430,7 +516,6 @@ const SCANS: readonly Scan[] = [
   {
     category: 'turnReports',
     window: turnReportWindow,
-    issuedKeysIn: (row) => (row as ScannedRow & { metadata: unknown }).metadata,
     inspect: (row) => {
       const metadata = (row as ScannedRow & { metadata: Record<string, unknown> }).metadata;
       const patch: Record<string, unknown> = {};
@@ -467,7 +552,6 @@ const SCANS: readonly Scan[] = [
   {
     category: 'decisions',
     window: decisionWindow,
-    issuedKeysIn: (row) => (row as ScannedRow & { summary: unknown }).summary,
     inspect: (row) => {
       const summary = (row as ScannedRow & { summary: string }).summary;
       const scrubbed = scrubSecretValues(summary, STORED_REWRITE);
@@ -485,7 +569,6 @@ const SCANS: readonly Scan[] = [
   {
     category: 'toolCallRecords',
     window: toolCallRecordWindow,
-    issuedKeysIn: (row) => (row as ScannedRow & { content: unknown }).content,
     inspect: (row) => {
       const content = (row as ScannedRow & { content: Record<string, unknown> }).content;
       const scrubbed = rescrubStoredToolCallResult(content);
@@ -546,10 +629,6 @@ const SCANS: readonly Scan[] = [
           [after.workspaceId, after.id, limit],
         )
       ).rows,
-    issuedKeysIn: (row) => {
-      const read = row as ScannedRow & { target: string; endpoint: string };
-      return [read.target, read.endpoint];
-    },
     inspect: (row) => {
       const read = row as ScannedRow & { target: string; endpoint: string };
       const write = {
@@ -576,7 +655,6 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, properties ->> 'name' as name`,
       `object_type = 'Gatekeeper' and properties ->> 'name' is not null`,
     ),
-    issuedKeysIn: (row) => (row as ScannedRow & { name: string }).name,
     inspect: (row) => {
       const { name } = row as ScannedRow & { name: string };
       const shown = redactConnectionAddress('target', name);
@@ -599,10 +677,6 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, identity_key, properties',
       `object_type = 'ConnectedSystem'`,
     ),
-    issuedKeysIn: (row) => {
-      const read = row as ScannedRow & { identity_key: unknown; properties: unknown };
-      return [read.identity_key, read.properties];
-    },
     inspect: (row) => {
       const read = row as ScannedRow & {
         identity_key: Record<string, unknown> | null;
@@ -640,7 +714,6 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, metadata ->> 'target' as target`,
       `kind = 'governance.create_connection' and jsonb_typeof(metadata -> 'target') = 'string'`,
     ),
-    issuedKeysIn: (row) => (row as ScannedRow & { target: string }).target,
     inspect: (row) => {
       const { target } = row as ScannedRow & { target: string };
       const shown = redactConnectionAddress('target', target);
@@ -659,7 +732,6 @@ const SCANS: readonly Scan[] = [
   {
     category: 'taskInputs',
     window: workspaceKeyset('tasks', 'workspace_id, id, input', 'input is not null'),
-    issuedKeysIn: (row) => (row as ScannedRow & { input: unknown }).input,
     inspect: (row) => {
       const input = (row as ScannedRow & { input: unknown }).input;
       const masked = redactSuspectedSecrets(input, { secretFields: true });
@@ -676,7 +748,6 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, target',
       'target is not null',
     ),
-    issuedKeysIn: (row) => (row as ScannedRow & { target: string }).target,
     inspect: (row) =>
       findConnectionParamsCredential({ target: (row as ScannedRow & { target: string }).target })
         ? { values: 1 }
@@ -689,10 +760,6 @@ const SCANS: readonly Scan[] = [
       `workspace_id, id, properties ->> 'target' as target, properties ->> 'endpoint' as endpoint`,
       `object_type = 'Gatekeeper'`,
     ),
-    issuedKeysIn: (row) => {
-      const read = row as ScannedRow & { target: string | null; endpoint: string | null };
-      return [read.target, read.endpoint];
-    },
     inspect: (row) =>
       findConnectionParamsCredential(
         row as ScannedRow & { target: string | null; endpoint: string | null },
@@ -716,15 +783,6 @@ const SCANS: readonly Scan[] = [
           [after.id, limit],
         )
       ).rows,
-    issuedKeysIn: (row) => {
-      const read = row as ScannedRow & {
-        target: string;
-        endpoint: string;
-        definition_target: string | null;
-        manifest_source: string | null;
-      };
-      return [read.target, read.endpoint, read.definition_target, read.manifest_source];
-    },
     inspect: (row) => {
       const instance = row as ScannedRow & {
         target: string;
@@ -744,7 +802,6 @@ const SCANS: readonly Scan[] = [
   {
     category: 'factProperties',
     window: workspaceKeyset('links', 'workspace_id, id, properties', `properties <> '{}'::jsonb`),
-    issuedKeysIn: (row) => (row as ScannedRow & { properties: unknown }).properties,
     inspect: (row) => {
       const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
       const { redactedValues } = scrubGraphProperties(properties);
@@ -758,7 +815,6 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, properties',
       `properties <> '{}'::jsonb and object_type not in (${KERNEL_AUTHORED_OBJECT_TYPES.map((type) => `'${type}'`).join(', ')})`,
     ),
-    issuedKeysIn: (row) => (row as ScannedRow & { properties: unknown }).properties,
     inspect: (row) => {
       const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
       const { redactedValues } = scrubGraphProperties(properties);
@@ -813,7 +869,6 @@ const SCANS: readonly Scan[] = [
           [after.id, limit],
         )
       ).rows,
-    issuedKeysIn: (row) => (row as ScannedRow & { payload: unknown }).payload,
     inspect: (row) => {
       const { count } = findSuspectedSecrets((row as ScannedRow & { payload: unknown }).payload);
       return count > 0 ? { values: count } : null;
@@ -832,7 +887,6 @@ const SCANS: readonly Scan[] = [
           [after.workspaceId, after.id, limit, GATE_OBSERVATION_ACTIVITY_KIND],
         )
       ).rows,
-    issuedKeysIn: (row) => (row as ScannedRow & { content: unknown }).content,
     inspect: (row) =>
       gatePayloadKeptRaw((row as ScannedRow & { content: Record<string, unknown> }).content)
         ? { values: 1 }
@@ -873,7 +927,7 @@ export async function scrubRawSecrets(
     [...REWRITTEN_CATEGORIES, ...COUNTED_CATEGORIES].map((name) => [name, emptyCounts()]),
   ) as Record<RawSecretCategory, RawSecretCategoryCounts>;
   const rewrites = new Set<RawSecretCategory>(REWRITTEN_CATEGORIES);
-  const liveApiKeys: LiveApiKeyCounts = { found: 0, keys: 0, examples: [] };
+  const liveApiKeys: LiveApiKeyCounts = { tables: 0, rows: 0, found: 0, keys: 0, examples: [] };
   const livePrincipals = new Set<string>();
   let batches = 0;
   const result = (auditRecordId: string | null): ScrubRawSecretsResult => ({
@@ -887,6 +941,53 @@ export async function scrubRawSecrets(
 
   let failure: unknown;
   try {
+    // First, every row as stored: before any rewrite below hides a key in it.
+    for (const table of await onLoginRole(pool, comparedTables)) {
+      liveApiKeys.tables += 1;
+      let after: readonly string[] | null = null;
+      for (;;) {
+        const from = after;
+        const outcome = await onLoginRole(pool, async (client) => {
+          const rows = await comparedWindow(client, table, from, batchSize);
+          const last = rows.at(-1);
+          if (!last) return null;
+          const read = rows.map(({ row, values }) => ({ row, hashes: keyShapeHashes(values) }));
+          const hashes = new Set(read.flatMap((entry) => [...entry.hashes]));
+          const issued =
+            hashes.size > 0
+              ? await issuedKeysAmong(client, [...hashes])
+              : new Map<string, IssuedKeyRow>();
+          const live: LiveApiKeyRow[] = [];
+          for (const { row, hashes: rowHashes } of read) {
+            for (const hash of rowHashes) {
+              const key = issued.get(hash);
+              if (!key) continue;
+              live.push({
+                table: table.name,
+                row,
+                principalWorkspaceId: key.workspace_id,
+                principalId: key.id,
+                principalKind: key.kind,
+                userId: key.user_id,
+              });
+            }
+          }
+          return { examined: rows.length, live, after: last.row, done: rows.length < batchSize };
+        });
+        if (outcome === null) break;
+        batches += 1;
+        after = outcome.after;
+        liveApiKeys.rows += outcome.examined;
+        for (const found of outcome.live) {
+          input.onLiveApiKey?.(found);
+          liveApiKeys.found += 1;
+          livePrincipals.add(`${found.principalWorkspaceId}/${found.principalId}`);
+          liveApiKeys.keys = livePrincipals.size;
+          if (liveApiKeys.examples.length < MAX_EXAMPLES) liveApiKeys.examples.push(found);
+        }
+        if (outcome.done) break;
+      }
+    }
     for (const scan of SCANS) {
       const counts = categories[scan.category];
       let cursor: Cursor = scan.start ?? { workspaceId: NIL_UUID, id: NIL_UUID };
@@ -896,11 +997,6 @@ export async function scrubRawSecrets(
           const last = rows.at(-1);
           if (!last) return null;
           const window = { ...emptyCounts(), examined: rows.length };
-          // Hashed as read, before any rewrite below.
-          const source = scan.issuedKeysIn;
-          const read = source
-            ? rows.map((row) => ({ row, hashes: keyShapeHashes(source(row)) }))
-            : [];
           for (const row of rows) {
             const finding = scan.inspect(row);
             if (finding === null) continue;
@@ -915,30 +1011,8 @@ export async function scrubRawSecrets(
               if ((updated.rowCount ?? 0) === 0) window.skipped += 1;
             }
           }
-          const hashes = new Set(read.flatMap((entry) => [...entry.hashes]));
-          const issued =
-            hashes.size > 0
-              ? await issuedKeysAmong(client, [...hashes])
-              : new Map<string, IssuedKeyRow>();
-          const live: LiveApiKeyRow[] = [];
-          for (const { row, hashes: rowHashes } of read) {
-            for (const hash of rowHashes) {
-              const key = issued.get(hash);
-              if (!key) continue;
-              live.push({
-                category: scan.category,
-                workspaceId: row.workspace_id,
-                id: row.id,
-                principalWorkspaceId: key.workspace_id,
-                principalId: key.id,
-                principalKind: key.kind,
-                userId: key.user_id,
-              });
-            }
-          }
           return {
             window,
-            live,
             cursor: { workspaceId: last.workspace_id ?? NIL_UUID, id: last.id },
             done: rows.length < batchSize,
           };
@@ -954,13 +1028,6 @@ export async function scrubRawSecrets(
         for (const example of outcome.window.examples) {
           input.onCounted?.(scan.category as CountedRawSecretCategory, example);
           if (counts.examples.length < MAX_EXAMPLES) counts.examples.push(example);
-        }
-        for (const found of outcome.live) {
-          input.onLiveApiKey?.(found);
-          liveApiKeys.found += 1;
-          livePrincipals.add(`${found.principalWorkspaceId}/${found.principalId}`);
-          liveApiKeys.keys = livePrincipals.size;
-          if (liveApiKeys.examples.length < MAX_EXAMPLES) liveApiKeys.examples.push(found);
         }
         if (outcome.done) break;
       }
