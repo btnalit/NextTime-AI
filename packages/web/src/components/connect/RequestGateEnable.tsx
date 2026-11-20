@@ -2,7 +2,7 @@ import type { AvailableGateInstanceWire, ConnectionRequestWire } from '@nexttime
 import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { cancelConnectionRequestOverrides } from '../../lib/connections.js';
-import type { ErrorOverrides } from '../../lib/errors.js';
+import { type ErrorOverrides, describeError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
@@ -50,6 +50,8 @@ export function RequestGateEnable({
   const [submitting, setSubmitting] = useState(false);
   const [askError, setAskError] = useState<unknown>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // The request was no longer open when 撤回 ran: answered or withdrawn elsewhere meanwhile.
+  const [alreadyAnswered, setAlreadyAnswered] = useState(false);
 
   // A new read from the server (a refresh, the launcher's poll) replaces what this control holds.
   const readId = myEnableRequest?.id;
@@ -66,6 +68,7 @@ export function RequestGateEnable({
     if (submitting) return;
     setSubmitting(true);
     setAskError(null);
+    setAlreadyAnswered(false);
     try {
       const request = await http.call<ConnectionRequestWire>('request_gate_instance_enable', {
         gateId,
@@ -82,8 +85,16 @@ export function RequestGateEnable({
 
   async function withdraw(): Promise<void> {
     if (current === undefined) return;
-    // A refusal stays in the confirm (already enabled or declined: refresh to see it).
-    await http.call('cancel_connection_request', { connectionRequestId: current.id });
+    try {
+      await http.call('cancel_connection_request', { connectionRequestId: current.id });
+    } catch (err) {
+      // #1521 review (console owner, optional 1): the owner enabled or declined it, or it was
+      // withdrawn in another tab — it is not open any more, so 「已申请」 goes and a line says
+      // what happened; nothing was withdrawn. Any other refusal stays in the confirm.
+      const code = describeError(err).code;
+      if (code !== 'illegal_transition' && code !== 'not_found') throw err;
+      setAlreadyAnswered(true);
+    }
     setCurrent(undefined);
     onChange?.(undefined);
   }
@@ -140,7 +151,17 @@ export function RequestGateEnable({
       />
     );
   const error = (
-    <InlineError error={askError} overrides={askOverrides(t)} testId={`${testId}-error`} />
+    <>
+      <InlineError error={askError} overrides={askOverrides(t)} testId={`${testId}-error`} />
+      {alreadyAnswered ? (
+        <output className="text-3 text-small" data-testid={`${testId}-already-answered`}>
+          {t(
+            '这条申请已经不在等待中：所有者可能已经启用或拒绝了它，没有撤回什么。刷新后可以看到现在的情况。',
+            'The request was no longer waiting: the owner may already have enabled or declined it, so nothing was withdrawn. Refresh to see where it stands.',
+          )}
+        </output>
+      ) : null}
+    </>
   );
 
   if (compact) {
@@ -165,12 +186,12 @@ export function RequestGateEnable({
         <span data-testid={`${testId}-state`}>
           {current === undefined
             ? t(
-                `在本工作区启用「${gateName}」由工作区所有者完成。申请后，所有者会在「系统与授权 → 连接申请」里看到它；启用并授权给你之后，它会出现在你的「系统与授权」里。`,
-                `The workspace owner enables “${gateName}” in this workspace. Once you ask, the owner sees it under Systems & access → Connection requests; once it is enabled and granted to you, it shows up under Systems & access.`,
+                `在本工作区启用「${gateName}」由工作区所有者完成。申请后，所有者会在「系统与授权 → 连接申请」里看到它；所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。`,
+                `The workspace owner enables “${gateName}” in this workspace. Once you ask, the owner sees it under Systems & access → Connection requests; once the owner enables it, it shows up under Systems & access, and its write operations also need the owner to grant them to you.`,
               )
             : t(
-                `你已申请在本工作区启用「${gateName}」，等工作区所有者启用。启用并授权给你之后，它会出现在你的「系统与授权」里。`,
-                `You asked for “${gateName}” to be enabled in this workspace; it waits for the workspace owner. Once it is enabled and granted to you, it shows up under Systems & access.`,
+                `你已申请在本工作区启用「${gateName}」，等工作区所有者启用。所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。`,
+                `You asked for “${gateName}” to be enabled in this workspace; it waits for the workspace owner. Once the owner enables it, it shows up under Systems & access, and its write operations also need the owner to grant them to you.`,
               )}
         </span>
         <span className="row-wrap" style={{ alignItems: 'center' }}>
@@ -202,6 +223,11 @@ function askOverrides(t: Translate): ErrorOverrides {
     gate_not_found: t(
       '平台目录里已经没有这个门实例，没有提交申请。',
       'The platform catalog no longer has this instance; nothing was asked.',
+    ),
+    // #1521 UX acceptance: the fifth refusal it shares with the owner's enable.
+    gate_not_ready: t(
+      '门宿主还没有接管这个门实例（还没有公告任何 Operation），所有者暂时也启用不了，所以没有提交申请。等它接管后再申请。',
+      'The gate host has not taken this instance over yet (it has announced no Operations), so the owner could not enable it either; nothing was asked. Ask again once it has.',
     ),
   };
 }

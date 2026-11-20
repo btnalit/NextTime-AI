@@ -604,8 +604,8 @@ export function SystemsPage({
       button: t('拒绝', 'Decline'),
       title: t('拒绝启用申请', 'Decline the enable request'),
       description: t(
-        '申请标为「所有者拒绝」，这个门实例在本工作区不启用；申请人以后可以再申请。',
-        'The request is marked declined by the owner and the instance is not enabled here; the requester can ask again later.',
+        '申请标为「所有者拒绝」，这个门实例在本工作区不启用；申请人以后可以再申请。申请人那里只会重新显示「申请启用」，看不到被拒；需要的话另外告诉对方。',
+        'The request is marked declined by the owner and the instance is not enabled here; the requester can ask again later. The requester only sees “Ask to enable” again, not that it was declined; tell them separately if they should know.',
       ),
       confirm: t('拒绝申请', 'Decline request'),
     };
@@ -907,9 +907,13 @@ export function SystemsPage({
               {requestRows.map((row) => (
                 <div className="row-wrap" key={row.id} data-testid="request-row">
                   <StatusChip machine="connectionRequest" status={row.status} size="s" />
-                  <span className="tag" data-testid="request-kind">
-                    {transportKindLabel(row.kind, t)}
-                  </span>
+                  {/* Legacy 254: a request to enable a platform instance asks for the instance,
+                   *  not for a kind of connection — its transport says nothing to the owner. */}
+                  {row.gateInstance === undefined ? (
+                    <span className="tag" data-testid="request-kind">
+                      {transportKindLabel(row.kind, t)}
+                    </span>
+                  ) : null}
                   <RequestSubject row={row} />
                   {row.status === 'cancelled' && row.cancelReason !== undefined ? (
                     <span className="text-3 text-small" data-testid="request-cancel-reason">
@@ -948,15 +952,15 @@ export function SystemsPage({
                     <span className="row-wrap">
                       {row.gateInstance !== undefined ? (
                         // Legacy 254: the owner answers by enabling the instance — the same
-                        // preview and confirm as 「待启用的平台实例」; the enable completes it.
-                        canEnable ? (
+                        // preview and confirm as 「待启用的平台实例」; the enable completes it. An
+                        // instance the platform deleted (no name left to read) cannot be
+                        // enabled: only 拒绝 is offered.
+                        canEnable && row.gateInstance.displayName !== null ? (
                           <EnableGateConfirm
                             key={row.id}
                             http={http}
                             gateId={row.gateInstance.gateId}
-                            gateDisplayName={
-                              row.gateInstance.displayName ?? row.gateInstance.gateId
-                            }
+                            gateDisplayName={row.gateInstance.displayName}
                             label={t('启用', 'Enable')}
                             platformAdmin={platformAdmin}
                             onEnabled={handleEnabledFromRequest}
@@ -988,7 +992,11 @@ export function SystemsPage({
                         }
                         title={cancelCopy(row).title}
                         description={cancelCopy(row).description}
-                        target={`${transportKindLabel(row.kind, t)} · ${requestTargetText(row, t)}`}
+                        target={
+                          row.gateInstance === undefined
+                            ? `${transportKindLabel(row.kind, t)} · ${requestTargetText(row, t)}`
+                            : requestTargetText(row, t)
+                        }
                         confirmLabel={cancelCopy(row).confirm}
                         cancelLabel={t('保留', 'Keep')}
                         danger

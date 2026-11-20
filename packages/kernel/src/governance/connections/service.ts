@@ -114,9 +114,9 @@ export async function requestConnection(
 //     one `connection.request_completed` audit row per request naming requester and enabler;
 //   * `cancelled` / `withdrawn` or `declined` — `cancelConnectionRequest` (its requester, or the
 //     owner turning down someone else's);
-//   * `cancelled` / `gate_unavailable` — the platform deleted or disabled the instance, or took its
-//     connector out of platform-preset mode: `cancelGateInstanceEnableRequests`, in the platform's
-//     own transaction (governance/0047's `connection_requests_platform_cancel` allows that edge and
+//   * `cancelled` / `gate_unavailable` — the platform deleted or disabled the instance (a platform
+//     change rolled back included), or took its connector out of platform-preset mode:
+//     `cancelGateInstanceEnableRequests`, in the platform's own transaction (governance/0047's `connection_requests_platform_cancel` allows that edge and
 //     no other).
 //
 // No outbox event: `ConnectionRequested` (packages/shared/src/events.ts) carries a `target`, and
@@ -284,6 +284,26 @@ export async function cancelGateInstanceEnableRequests(
         a.workspaceId.localeCompare(b.workspaceId) ||
         a.id.localeCompare(b.id),
     );
+}
+
+/**
+ * What a platform audit row lists of the requests `cancelGateInstanceEnableRequests` ended
+ * (`cancelledConnectionRequests`: workspace, request id, gate, requester) — one shape for every
+ * platform call that makes an instance unenableable. Nothing when none were open.
+ */
+export function cancelledGateInstanceEnableRequestsAuditPayload(
+  cancelled: readonly ConnectionRequestRow[],
+): { readonly cancelledConnectionRequests?: readonly Record<string, string | null>[] } {
+  return cancelled.length > 0
+    ? {
+        cancelledConnectionRequests: cancelled.map((request) => ({
+          workspaceId: request.workspaceId,
+          id: request.id,
+          gateId: request.gateInstanceId,
+          requestedBy: request.requestedBy,
+        })),
+      }
+    : {};
 }
 
 export async function getConnectionRequest(

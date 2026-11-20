@@ -472,9 +472,11 @@ export function cancelReasonText(reason: ConnectionRequestCancelReason, t: Trans
     case 'declined':
       return t('所有者拒绝', 'declined by the owner');
     case 'gate_unavailable':
+      // The request row is where the workspace reads this: a platform transaction writes no
+      // workspace audit row (coordinator, #1521).
       return t(
-        '平台停用或删除了这个门实例，或不再向工作区开放它',
-        'the platform disabled or deleted the instance, or stopped offering it to workspaces',
+        '平台停用或删除了这个门实例，或不再向工作区开放它，申请已自动取消',
+        'the platform disabled or deleted the instance, or stopped offering it to workspaces; the request was cancelled automatically',
       );
   }
 }

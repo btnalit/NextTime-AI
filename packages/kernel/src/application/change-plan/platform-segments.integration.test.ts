@@ -1322,6 +1322,164 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toBe(false);
     });
 
+    // Legacy 254 (#501 on #1521, S2): a rollback disabling an instance is a platform disable like
+    // `update_gate_instance`'s — no workspace can enable it afterwards, so the requests asking a
+    // workspace owner to enable it end in the same transaction, and its audit row lists them.
+    it('a rollback that disables an instance ends its open enable requests cancelled / gate_unavailable, a lost one’s too, listed on its gate_instance.disabled row; a withdrawn one stays withdrawn', async () => {
+      const { user, agent } = await administrator();
+      const decider = await otherAdministrator();
+      const target = await newTarget();
+      const other = await newTarget();
+      const system = `tickets-${unique()}`;
+      const enabled = `aa3c1-${unique()}`;
+      const lost = `aa3c1-${unique()}`;
+      const { platformSegmentId } = await proposePlatform(
+        agent,
+        [gateItem(enabled, system), gateItem(lost, system)],
+        [target],
+      );
+      const recordId = (await previewAndApply(decider, platformSegmentId)).changeSegment.id;
+      for (const gateId of [enabled, lost]) {
+        await call<GateInstanceWire>(platformCaller(user), 'update_gate_instance', {
+          gateId,
+          status: 'enabled',
+        });
+      }
+      const ask = (workspace: Target, gateId: string, withdrawn = false) =>
+        withAdminClient(pool, async (client) => {
+          const inserted = await client.query<{ id: string }>(
+            `insert into connection_requests
+               (workspace_id, kind, gate_instance_id, requested_by, status, cancel_reason,
+                cancelled_at)
+             values ($1, 'http', $2, $3, $4, $5, $6) returning id`,
+            [
+              workspace.workspaceId,
+              gateId,
+              workspace.ownerPrincipalId,
+              withdrawn ? 'cancelled' : 'requested',
+              withdrawn ? 'withdrawn' : null,
+              withdrawn ? new Date() : null,
+            ],
+          );
+          return inserted.rows[0]?.id ?? '';
+        });
+      const onEnabled = await ask(target, enabled);
+      const otherOnEnabled = await ask(other, enabled);
+      const withdrawnOnEnabled = await ask(other, enabled, true);
+      const onLost = await ask(target, lost);
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update gate_instances set status = 'lost', status_before_lost = 'enabled' where gate_id = $1`,
+          [lost],
+        ),
+      );
+
+      await call<PlatformChangeRollbackResultWire>(
+        platformCaller(user),
+        'roll_back_platform_change_segment',
+        { changeSegmentId: recordId },
+      );
+
+      const requests = await withAdminClient(pool, async (client) => {
+        const result = await client.query<{
+          id: string;
+          status: string;
+          cancel_reason: string | null;
+          cancelled_at: Date | null;
+        }>(
+          `select id, status, cancel_reason, cancelled_at from connection_requests
+            where id = any($1::uuid[])`,
+          [[onEnabled, otherOnEnabled, withdrawnOnEnabled, onLost]],
+        );
+        return new Map(result.rows.map((row) => [row.id, row]));
+      });
+      for (const id of [onEnabled, otherOnEnabled, onLost]) {
+        expect(requests.get(id)).toMatchObject({
+          status: 'cancelled',
+          cancel_reason: 'gate_unavailable',
+          cancelled_at: expect.any(Date),
+        });
+      }
+      expect(requests.get(withdrawnOnEnabled)).toMatchObject({
+        status: 'cancelled',
+        cancel_reason: 'withdrawn',
+      });
+      const listed = (gateId: string) =>
+        platformAudits('gate_instance.disabled', { resourceRef: gateId }).then(
+          (rows) => rows[0]?.payload.cancelledConnectionRequests,
+        );
+      const entry = (workspace: Target, id: string, gateId: string) => ({
+        workspaceId: workspace.workspaceId,
+        id,
+        gateId,
+        requestedBy: workspace.ownerPrincipalId,
+      });
+      expect(await listed(enabled)).toEqual(
+        [entry(target, onEnabled, enabled), entry(other, otherOnEnabled, enabled)].sort(
+          (a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.id.localeCompare(b.id),
+        ),
+      );
+      expect(await listed(lost)).toEqual([entry(target, onLost, lost)]);
+    });
+
+    it('a rollback racing an enable request: it waits on the availability lock, then ends the request the other transaction committed', async () => {
+      const { user, agent } = await administrator();
+      const decider = await otherAdministrator();
+      const target = await newTarget();
+      const gateId = `aa3c1-${unique()}`;
+      const { platformSegmentId } = await proposePlatform(
+        agent,
+        [gateItem(gateId, `tickets-${unique()}`)],
+        [target],
+      );
+      const recordId = (await previewAndApply(decider, platformSegmentId)).changeSegment.id;
+      await call<GateInstanceWire>(platformCaller(user), 'update_gate_instance', {
+        gateId,
+        status: 'enabled',
+      });
+      // `request_gate_instance_enable`, in flight: its transaction holds the availability lock
+      // shared and has written the request, not yet committed.
+      const held = await pool.connect();
+      let requestId = '';
+      try {
+        await held.query('begin');
+        await held.query('select pg_advisory_xact_lock_shared(hashtext($1::text))', [
+          `gate_instance_availability:${gateId}`,
+        ]);
+        const inserted = await held.query<{ id: string }>(
+          `insert into connection_requests (workspace_id, kind, gate_instance_id, requested_by)
+           values ($1, 'http', $2, $3) returning id`,
+          [target.workspaceId, gateId, target.ownerPrincipalId],
+        );
+        requestId = inserted.rows[0]?.id ?? '';
+        const rolledBack = call<PlatformChangeRollbackResultWire>(
+          platformCaller(user),
+          'roll_back_platform_change_segment',
+          { changeSegmentId: recordId },
+        ).then(
+          () => 'rolled back',
+          (err: unknown) => String(err),
+        );
+        const early = await Promise.race([
+          rolledBack,
+          new Promise((resolve) => setTimeout(() => resolve('waiting'), 300)),
+        ]);
+        expect(early).toBe('waiting');
+        await held.query('commit');
+        expect(await rolledBack).toBe('rolled back');
+      } finally {
+        held.release();
+      }
+      const request = await withAdminClient(pool, (client) =>
+        client.query<{ status: string; cancel_reason: string | null }>(
+          'select status, cancel_reason from connection_requests where id = $1',
+          [requestId],
+        ),
+      );
+      expect(request.rows[0]).toEqual({ status: 'cancelled', cancel_reason: 'gate_unavailable' });
+      expect((await gateRow(gateId))?.status).toBe('disabled');
+    });
+
     it('the rollback preview names the workspaces that enabled each instance, by name, at most 50 (AA4 F7)', async () => {
       const { user, trial, agent } = await administrator();
       const target = await newTarget();

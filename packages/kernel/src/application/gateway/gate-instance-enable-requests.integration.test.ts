@@ -688,6 +688,86 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rows.rowCount).toBe(0);
     });
 
+    // #493 on #1521 (optional 1): the two directions the race above leaves to a hand-written
+    // transaction — the platform's real handler waiting behind a request in flight, and the
+    // owner's real enable waiting behind a platform disable in flight.
+    it('the platform disable racing a request in flight: update_gate_instance waits on the availability lock, then cancels what the other transaction committed', async () => {
+      const gateId = await platformGate();
+      const held = await pool.connect();
+      let requestId = '';
+      try {
+        await held.query('begin');
+        await held.query('select pg_advisory_xact_lock_shared(hashtext($1::text))', [
+          `gate_instance_availability:${gateId}`,
+        ]);
+        const inserted = await held.query<{ id: string }>(
+          `insert into connection_requests (workspace_id, kind, gate_instance_id, requested_by)
+           values ($1, 'http', $2, $3) returning id`,
+          [ws.id, gateId, ws.memberId],
+        );
+        requestId = inserted.rows[0]?.id ?? '';
+        const disabled = platform('update_gate_instance', { gateId, status: 'disabled' }).then(
+          () => 'disabled',
+          (err: unknown) => String(err),
+        );
+        const early = await Promise.race([
+          disabled,
+          new Promise((resolve) => setTimeout(() => resolve('waiting'), 300)),
+        ]);
+        expect(early).toBe('waiting');
+        await held.query('commit');
+        expect(await disabled).toBe('disabled');
+      } finally {
+        held.release();
+      }
+      expect(await requestRow(ws.id, requestId)).toMatchObject({
+        status: 'cancelled',
+        cancel_reason: 'gate_unavailable',
+      });
+    });
+
+    it('an enable racing the platform disable: enable_gate_instance waits on the availability lock, then reads the disable', async () => {
+      const gateId = await platformGate();
+      const preview = await call<PreviewGateInstanceEnableResultWire>(
+        owner(ws),
+        'preview_gate_instance_enable',
+        { gateId },
+      );
+      const held = await pool.connect();
+      try {
+        await held.query('begin');
+        await held.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+          `gate_instance_availability:${gateId}`,
+        ]);
+        await held.query("update gate_instances set status = 'disabled' where gate_id = $1", [
+          gateId,
+        ]);
+        const enabled = call(owner(ws), 'enable_gate_instance', {
+          gateId,
+          manifestDigest: preview.manifestDigest,
+        }).then(
+          () => 'enabled',
+          (err: unknown) => (err instanceof GateInstanceNotAvailableError ? err.code : String(err)),
+        );
+        const early = await Promise.race([
+          enabled,
+          new Promise((resolve) => setTimeout(() => resolve('waiting'), 300)),
+        ]);
+        expect(early).toBe('waiting');
+        await held.query('commit');
+        expect(await enabled).toBe('gate_not_enabled');
+      } finally {
+        held.release();
+      }
+      const links = await withAdminClient(pool, (client) =>
+        client.query(
+          'select 1 from workspace_gate_links where workspace_id = $1 and gate_id = $2',
+          [ws.id, gateId],
+        ),
+      );
+      expect(links.rowCount).toBe(0);
+    });
+
     it('create_connection cannot complete a gate instance enable request (409 connection_request_is_gate_enable)', async () => {
       const gateId = await platformGate();
       const request = await ask(member(ws), gateId);
@@ -817,6 +897,80 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(selfUpdate.rowCount).toBe(0);
         expect((await requestRow(ws.id, open.id))?.status).toBe('requested');
         expect((await requestRow(ws.id, selfId))?.status).toBe('requested');
+      });
+
+      // #501 on #1521 (S1): a policy's `with check` sees only the new row, so governance 0048's
+      // guard holds what a request is about against every writer — the platform plane's one edge
+      // cannot carry another change with it, nor can the workspace plane or a role without RLS.
+      it('governance 0048: what a request is about never changes — not alongside the platform’s cancel, not from a workspace, not without RLS', async () => {
+        const gateId = await platformGate();
+        const open = await ask(member(ws), gateId);
+        const before = await requestRow(ws.id, open.id);
+        const cancel =
+          "status = 'cancelled', cancel_reason = 'gate_unavailable', cancelled_at = now()";
+        const changes: readonly [string, unknown[]][] = [
+          ['requested_by = $2', [ws.otherMemberId]],
+          ["kind = 'ssh'", []],
+          ["requested_at = now() - interval '1 day'", []],
+          ['gate_instance_id = $2', [`${gateId}-elsewhere`]],
+          ['id = $2', [randomUUID()]],
+          // Moving it to another workspace: refused by the guard before the requester's foreign
+          // key is even checked.
+          ['workspace_id = $2', [otherWs.id]],
+          // #493 on #1521 (optional 3): who completed it is written by completing it only.
+          ['completed_by = $2', [ws.ownerId]],
+        ];
+        for (const [change, extra] of changes) {
+          const sql = `update connection_requests set ${cancel}, ${change} where id = $1`;
+          const platformWrite = await withPlatform(
+            pool,
+            { userId: admin.id },
+            (client: PoolClient) => client.query(sql, [open.id, ...extra]),
+          ).then(
+            () => 'written',
+            (err: { code?: string }) => err.code,
+          );
+          expect(platformWrite, change).toBe('23514');
+        }
+        // The workspace plane, its own request: the guard, not only its policy.
+        const workspaceWrite = await withWorkspace(
+          pool,
+          { workspaceId: ws.id, principalId: ws.ownerId },
+          (client) =>
+            client.query('update connection_requests set requested_by = $2 where id = $1', [
+              open.id,
+              ws.otherMemberId,
+            ]),
+        ).then(
+          () => 'written',
+          (err: { code?: string }) => err.code,
+        );
+        expect(workspaceWrite).toBe('23514');
+        // Without RLS at all, a self connection's target included.
+        const selfReq = await withAdminClient(pool, (client) =>
+          client.query<{ id: string }>(
+            `insert into connection_requests (workspace_id, kind, target, requested_by)
+             values ($1, 'http', 'https://fixed.example.invalid', $2) returning id`,
+            [ws.id, ws.memberId],
+          ),
+        );
+        const unguarded = await withAdminClient(pool, (client) =>
+          client.query(
+            `update connection_requests set target = 'https://moved.example.invalid' where id = $1`,
+            [selfReq.rows[0]?.id],
+          ),
+        ).then(
+          () => 'written',
+          (err: { code?: string }) => err.code,
+        );
+        expect(unguarded).toBe('23514');
+        // Nothing moved; the platform's one edge on its own still goes through.
+        expect(await requestRow(ws.id, open.id)).toEqual(before);
+        const cancelled = await withPlatform(pool, { userId: admin.id }, (client: PoolClient) =>
+          client.query(`update connection_requests set ${cancel} where id = $1`, [open.id]),
+        );
+        expect(cancelled.rowCount).toBe(1);
+        expect((await requestRow(ws.id, open.id))?.cancel_reason).toBe('gate_unavailable');
       });
     });
   },

@@ -2238,6 +2238,23 @@ describe('SystemsPage: legacy 254 — a request to enable a platform instance in
     expect(within(row).queryByRole('button', { name: '完成' })).toBeNull();
     expect(within(row).getByTestId('enable-request-cr-g').textContent).toBe('启用');
     expect(within(row).getByTestId('cancel-request-cr-g').textContent).toBe('拒绝');
+    // It asks for the instance, not a kind of connection: no transport tag.
+    expect(within(row).queryByTestId('request-kind')).toBeNull();
+  });
+
+  it('a request still open on an instance the platform deleted offers only 拒绝', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [gateRequest({ gateInstance: { gateId: 'stock', displayName: null } })],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-gate-instance').textContent).toBe(
+      '启用平台实例 stock（平台已删除这个实例）',
+    );
+    expect(within(row).queryByTestId('enable-request-cr-g')).toBeNull();
+    expect(within(row).getByTestId('cancel-request-cr-g').textContent).toBe('拒绝');
   });
 
   it('拒绝 asks first, names the instance, and the row then reads declined by the owner', async () => {
@@ -2256,7 +2273,10 @@ describe('SystemsPage: legacy 254 — a request to enable a platform instance in
     const confirm = await screen.findByTestId('cancel-request-confirm');
     expect(confirm.textContent).toContain('拒绝启用申请');
     expect(confirm.textContent).toContain('启用平台实例「库存」');
+    // #1521 UX acceptance: the owner is told the requester will not see it was declined.
+    expect(confirm.textContent).toContain('申请人那里只会重新显示「申请启用」，看不到被拒');
     expect(confirm.textContent).not.toContain('undefined');
+    expect(confirm.textContent).not.toContain('HTTP');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'cancel_connection_request')).toBe(true),
@@ -2356,8 +2376,8 @@ describe('SystemsPage: legacy 254 — a request to enable a platform instance in
     expect(within(deleted).getByTestId('request-gate-instance').textContent).toBe(
       '启用平台实例 stock（平台已删除这个实例）',
     );
-    expect(within(deleted).getByTestId('request-cancel-reason').textContent).toContain(
-      '平台停用或删除了这个门实例',
+    expect(within(deleted).getByTestId('request-cancel-reason').textContent).toBe(
+      '平台停用或删除了这个门实例，或不再向工作区开放它，申请已自动取消',
     );
     expect(within(withdrawn).getByTestId('request-cancel-reason').textContent).toBe('申请人撤回');
     expect(within(old).queryByTestId('request-cancel-reason')).toBeNull();

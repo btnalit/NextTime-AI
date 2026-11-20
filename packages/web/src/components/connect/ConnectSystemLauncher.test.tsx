@@ -618,7 +618,11 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     next();
     fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
     next();
-    expect(await screen.findByTestId('launcher-workspace-enable-owner-only')).toBeTruthy();
+    const ownerOnly = await screen.findByTestId('launcher-workspace-enable-owner-only');
+    // #1521 UX acceptance: it shows up once enabled (reads need no grant); writes need one.
+    expect(ownerOnly.textContent).toContain(
+      '所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。',
+    );
     expect(screen.queryByTestId('launcher-workspace-enable-request')).toBeNull();
     expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
   });

@@ -8,9 +8,9 @@ import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared
 import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
 import {
-  type ConnectionRequestRow,
   assertConnectionParamsCarryNoCredentials,
   cancelGateInstanceEnableRequests,
+  cancelledGateInstanceEnableRequestsAuditPayload,
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import { gateAddressOrigin } from '../../governance/gatekeepers/index.js';
@@ -64,30 +64,19 @@ import { PlatformAdminError } from './platform-handlers.js';
  * credential (the platform never holds one).
  */
 
-/**
+/*
  * Legacy 254 (the coordinator's requirement 3): what the platform does to the open requests that a
  * workspace owner enable a gate instance once no workspace can enable it — the instance disabled,
- * deleted, or its connector taken out of platform-preset mode. They end `cancelled` /
- * `gate_unavailable` in this transaction (`cancelGateInstanceEnableRequests`), after the change and
- * under the instances' availability lock, taken exclusive before anything changed
- * (`application/gates/availability.ts`): a request in flight either committed first and is
- * cancelled here, or reads the change and is refused. The call's platform audit row lists them
- * (`cancelledConnectionRequests`: workspace, request id, requester). A `lost` instance keeps its
- * requests open: losing contact is not the administrator's decision, and the gate usually comes
- * back (an enable meanwhile is refused `gate_not_enabled`).
+ * deleted, or its connector taken out of platform-preset mode (and a platform change rolled back,
+ * `application/change-plan/platform-segments.ts`). They end `cancelled` / `gate_unavailable` in
+ * this transaction (`cancelGateInstanceEnableRequests`), after the change and under the instances'
+ * availability lock, taken exclusive before anything changed (`application/gates/availability.ts`):
+ * a request in flight either committed first and is cancelled here, or reads the change and is
+ * refused. The call's platform audit row lists them
+ * (`cancelledGateInstanceEnableRequestsAuditPayload`: workspace, request id, gate, requester). A
+ * `lost` instance keeps its requests open: losing contact is not the administrator's decision, and
+ * the gate usually comes back (an enable meanwhile is refused `gate_not_enabled`).
  */
-function cancelledRequestsAuditPayload(cancelled: readonly ConnectionRequestRow[]) {
-  return cancelled.length > 0
-    ? {
-        cancelledConnectionRequests: cancelled.map((request) => ({
-          workspaceId: request.workspaceId,
-          id: request.id,
-          gateId: request.gateInstanceId,
-          requestedBy: request.requestedBy,
-        })),
-      }
-    : {};
-}
 
 /** The instance as stored — what the handlers below decide on. What they return goes through
  *  `displayedGateInstance` (its addresses as every gate address is shown). */
@@ -184,7 +173,7 @@ export const setConnectorModeHandler: CapabilityHandler = async (
     resourceType: 'connector',
     resourceId: input.name,
     ...(cancelledRequests.length > 0
-      ? { auditPayload: cancelledRequestsAuditPayload(cancelledRequests) }
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
       : {}),
   };
 };
@@ -240,7 +229,7 @@ export const updateGateInstanceHandler: CapabilityHandler = async (
     resourceType: 'gate_instance',
     resourceId: after.gateId,
     ...(cancelledRequests.length > 0
-      ? { auditPayload: cancelledRequestsAuditPayload(cancelledRequests) }
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
       : {}),
   };
 };
@@ -649,7 +638,7 @@ export const deleteGateInstanceHandler: CapabilityHandler = async (
     resourceType: 'gate_instance',
     resourceId: input.gateId,
     ...(cancelledRequests.length > 0
-      ? { auditPayload: cancelledRequestsAuditPayload(cancelledRequests) }
+      ? { auditPayload: cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests) }
       : {}),
   };
 };

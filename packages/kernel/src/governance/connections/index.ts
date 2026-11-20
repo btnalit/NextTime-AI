@@ -27,6 +27,7 @@ export {
   listOpenGateInstanceEnableRequests,
   completeGateInstanceEnableRequests,
   cancelGateInstanceEnableRequests,
+  cancelledGateInstanceEnableRequestsAuditPayload,
   connectGatekeeper,
   GatekeeperNotFoundError,
 } from './service.js';
