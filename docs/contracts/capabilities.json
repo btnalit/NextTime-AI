@@ -34072,6 +34072,126 @@
             "proposedBy": {
               "type": "string"
             },
+            "publishEvidence": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acknowledgedFailures": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "acknowledgements": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "evaluationId": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "evaluationId",
+                          "caseId",
+                          "reason"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "evaluation": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "observationId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "regression_case_lost",
+                                    "mechanism_not_shown",
+                                    "below_margin",
+                                    "above_baseline",
+                                    "within_margin",
+                                    "too_few_trials",
+                                    "holdout_disagrees",
+                                    "no_holdout_cases",
+                                    "no_confirm_cases",
+                                    "errored_trials",
+                                    "budget",
+                                    "environment_differs",
+                                    "environment_unknown",
+                                    "content_withheld",
+                                    "canary_reported"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "verdict": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "regressed",
+                                    "refuted",
+                                    "worse",
+                                    "better",
+                                    "non_inferior",
+                                    "inconclusive",
+                                    "unmeasured",
+                                    "contaminated"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "verdict",
+                            "reason",
+                            "observationId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "evaluation",
+                    "acknowledgedFailures",
+                    "acknowledgements"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "publishedAt": {
               "type": [
                 "string",

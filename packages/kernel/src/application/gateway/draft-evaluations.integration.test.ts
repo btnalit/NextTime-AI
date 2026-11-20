@@ -14,6 +14,7 @@ import {
   type HandleClaims,
   type Operation,
   type Role,
+  type SkillDetailWire,
   type SkillPublishEvidenceWire,
   evalCallCountPath,
 } from '@nexttime/shared';
@@ -34,6 +35,7 @@ import {
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { EvaluationProbeHoldError, resetEvaluationSealForTests } from '../eval-seal/index.js';
 import {
@@ -59,6 +61,7 @@ import {
   expireDraftsOnce,
   proposeSkill,
   proposeWorkerDefinition,
+  publishSkill,
   publishWorkerDefinition,
   skillDraftDigest,
 } from '../worker/index.js';
@@ -1627,7 +1630,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         {
           evaluationId: worse.id,
           caseId: caseIds.dev,
-          reason: 'The dev case asks for a host this Skill no longer restarts.',
+          // A zero-width space a reader cannot see (legacy 539: read back as legacy 420 shows it).
+          reason: 'The dev case asks for a host\u200B this Skill no longer restarts.',
         },
         {
           evaluationId: regressed.id,
@@ -1737,6 +1741,79 @@ describe.runIf(DATABASE_URL !== undefined)(
         worse.id,
         regressed.id,
       ]);
+
+      // Legacy 539: the version itself says what it was published on — to anyone who reads it as
+      // a person, the acknowledgement reasons shown as free text is shown.
+      const readSkill = (who: ResolvedCaller, version: number) =>
+        call<SkillDetailWire>(who, 'get_skill', { skillId: notesId, version });
+      expect((await readSkill(person('member'), 2)).publishEvidence).toEqual({
+        evaluation: {
+          id: worse.id,
+          verdict: 'worse',
+          reason: 'below_margin',
+          observationId: summary.rows[0]?.id,
+        },
+        acknowledgedFailures: 2,
+        acknowledgements: [
+          {
+            ...reasons[0],
+            reason: 'The dev case asks for a host\\u{200B} this Skill no longer restarts.',
+          },
+          reasons[1],
+        ],
+      });
+      // Version 1 was published with no evaluation of its content: evidence, none of it.
+      expect((await readSkill(person('member'), 1)).publishEvidence).toEqual({
+        evaluation: null,
+        acknowledgedFailures: 0,
+        acknowledgements: [],
+      });
+      // A Handle reads the version without it: an agent is told nothing of an evaluation's cases
+      // or reasons (I-E4).
+      const now = Math.floor(Date.now() / 1000);
+      const agentRead = await readSkill(
+        {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: people.owner,
+            scope: { capabilities: ['get_skill'], resources: {} },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        },
+        2,
+      );
+      expect(agentRead).toMatchObject({ id: notesId, version: 2, status: 'published' });
+      expect(agentRead).not.toHaveProperty('publishEvidence');
+      // A version published with no `publish_skill` record, then one recorded before S10 E3-3 kept
+      // the evidence: neither says anything.
+      const older = await skill('owner', {
+        name: 'older-notes',
+        description: 'Kept notes before evaluations existed.',
+        markdown: '# Older notes\n\nWrite it down.',
+      });
+      await asApp((client) => publishSkill(client, workspaceId, people.owner, older.id));
+      const readOlder = () =>
+        call<SkillDetailWire>(person('member'), 'get_skill', { skillId: older.id, version: 1 });
+      expect(await readOlder()).toMatchObject({ status: 'published', publishEvidence: null });
+      await asApp((client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: people.owner,
+          action: 'publish_skill',
+          resourceType: 'skill',
+          resourceId: older.id,
+          payload: {
+            channel: 'human',
+            onBehalfOf: people.owner,
+            params: { skillId: older.id, version: 1, draftDigest: older.digest },
+          },
+        }),
+      );
+      expect((await readOlder()).publishEvidence).toBeNull();
 
       // The family's next draft sees what was tried before and did not hold.
       const next = await skill(

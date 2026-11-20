@@ -9,6 +9,7 @@ import {
 import { ProcedureStepSchema } from '../procedure.js';
 import { SkillApplicableSchema } from '../skill.js';
 import { WorkerDefinitionDerivationWireSchema } from './combination-candidates.js';
+import { DraftEvaluationReasonSchema, DraftEvaluationVerdictSchema } from './eval.js';
 
 /**
  * wire/worker: WorkerDefinition / Skill / Procedure wire shapes (docs/wire-contract-conventions.md
@@ -121,14 +122,57 @@ export const SkillSummaryWireSchema = SkillSummaryBaseWireSchema.extend({
 }).strict();
 export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
 
+/**
+ * Legacy 539: the evidence a published Skill version was published on — the version's own
+ * provenance, as the audit record of its `publish_skill` keeps it (application/eval
+ * `checkPublishEvidence` writes it, `readSkillPublishRecord` reads it back):
+ *
+ * - `evaluation`: the draft evaluation the publisher reviewed — the newest finished one of this
+ *   content — with its verdict, why, and the graph's summary Observation of it (`observationId`;
+ *   `null` for one that finished before it was kept); `null` when the content had none.
+ * - `acknowledgedFailures`: how many failures the publish acknowledged, over every evaluation of
+ *   this content that asks for them (review #493 on #842, O1) — so "published after acknowledging
+ *   N failures" is `acknowledgedFailures > 0`.
+ * - `acknowledgements`: each of them — its evaluation, its case, and the publisher's reason, shown
+ *   as the kernel shows free text it keeps as written (legacy 420).
+ *
+ * Every evaluation named here is of the content published, so anyone who reads the version on the
+ * human channel may also read it whole (`get_draft_evaluation`: "anyone once that draft is
+ * published as it was evaluated").
+ */
+export const SkillPublishRecordWireSchema = z
+  .object({
+    evaluation: z
+      .object({
+        id: z.string(),
+        verdict: DraftEvaluationVerdictSchema.nullable(),
+        reason: DraftEvaluationReasonSchema.nullable(),
+        observationId: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
+    acknowledgedFailures: z.number().int().nonnegative(),
+    acknowledgements: z.array(
+      z.object({ evaluationId: z.string(), caseId: z.string(), reason: z.string() }).strict(),
+    ),
+  })
+  .strict();
+export type SkillPublishRecordWire = z.infer<typeof SkillPublishRecordWireSchema>;
+
 /** `get_skill`'s result (S8 W1-C, leftover 48 "无 get_skill" — Skill "编辑" needs the full body to
  *  prefill): the summary plus `markdown` and the lifecycle/authorship fields `list_skills` leaves
- *  out (`SkillRow`'s own shape, `application/worker/skills.ts`). */
+ *  out (`SkillRow`'s own shape, `application/worker/skills.ts`).
+ *
+ *  `publishEvidence` (legacy 539): on the human channel, what this version was published on
+ *  ({@link SkillPublishRecordWireSchema}); `null` for a draft, and for a version whose publish
+ *  recorded no evidence — published before S10 E3-3 kept it, or not through `publish_skill`.
+ *  Absent for a Handle: an agent is told nothing of an evaluation's cases or reasons (§3.3 I-E4). */
 export const SkillDetailWireSchema = SkillSummaryWireSchema.extend({
   markdown: z.string(),
   publishedBy: z.string().nullable(),
   createdAt: z.string(),
   publishedAt: z.string().nullable(),
+  publishEvidence: SkillPublishRecordWireSchema.nullable().optional(),
 });
 export type SkillDetailWire = z.infer<typeof SkillDetailWireSchema>;
 
