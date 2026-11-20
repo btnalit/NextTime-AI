@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode, Suspense } from 'react';
+import { isChunkLoadError, reloadForChunkError } from '../lib/chunk-reload.js';
 import { useT } from '../lib/i18n.js';
 
 export interface RouteBoundaryProps {
@@ -36,7 +37,10 @@ function RouteErrorFallback({ onReload }: RouteErrorFallbackProps) {
         </svg>
         <p className="empty-state-title">{t('页面加载失败', 'Page failed to load')}</p>
         <p className="empty-state-body">
-          可能是发布替换了资源文件，导致本页脚本无法获取。刷新页面即可恢复。
+          {t(
+            '本页的脚本没有取到，可能是网络刚切换过，或者新版本替换了资源文件。刷新页面即可恢复。',
+            'This page’s script did not load — the network may have just changed, or a new release replaced the files. Reloading the page fixes it.',
+          )}
         </p>
         <div className="empty-state-action">
           <button type="button" className="btn btn-primary" onClick={onReload}>
@@ -48,25 +52,60 @@ function RouteErrorFallback({ onReload }: RouteErrorFallbackProps) {
   );
 }
 
+/** Legacy 880: the page's chunk failed to load and the boundary is reloading the page by itself
+ *  (`lib/chunk-reload`) — a quiet line in the page area while the server is checked. */
+function RouteReloading() {
+  const t = useT();
+  return (
+    <div className="page">
+      <div className="empty-state" data-testid="route-load-error" data-state="reloading">
+        <output className="empty-state-body block">
+          {t(
+            '本页的脚本没有取到，正在重新加载页面…',
+            'This page’s script did not load. Reloading the page…',
+          )}
+        </output>
+      </div>
+    </div>
+  );
+}
+
 interface RouteErrorBoundaryState {
   readonly error: Error | null;
+  /** `reloading` while a failed chunk's automatic reload is being tried (legacy 880); `failed`
+   *  for any other render error, and once that reload is not tried. */
+  readonly phase: 'reloading' | 'failed';
 }
 
 /** Catches a failed `React.lazy` dynamic import (e.g. a deploy replaced the hashed chunk file
- *  this tab's `index.html` still references — the browser's `import()` then rejects, and React
- *  re-throws that rejection into render, past `Suspense`, to the nearest error boundary). A
- *  hook cannot catch a render error, so this stays a class component (the one place in this
- *  package that needs to be). */
+ *  this tab's `index.html` still references, or the network changed mid-fetch — the browser's
+ *  `import()` then rejects, and React re-throws that rejection into render, past `Suspense`, to
+ *  the nearest error boundary). The browser keeps that failure for the page's lifetime, so for a
+ *  chunk-load error it reloads the page once by itself (`lib/chunk-reload`, legacy 880) and falls
+ *  back to the 「刷新页面」 screen only when that is not safe to try. A hook cannot catch a render
+ *  error, so this stays a class component (the one place in this package that needs to be). */
 class RouteErrorBoundary extends Component<RouteBoundaryProps, RouteErrorBoundaryState> {
-  override state: RouteErrorBoundaryState = { error: null };
+  override state: RouteErrorBoundaryState = { error: null, phase: 'failed' };
+  private unmounted = false;
 
   static getDerivedStateFromError(error: unknown): RouteErrorBoundaryState {
-    return { error: error instanceof Error ? error : new Error(String(error)) };
+    return {
+      error: error instanceof Error ? error : new Error(String(error)),
+      phase: isChunkLoadError(error) ? 'reloading' : 'failed',
+    };
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
     // The one diagnostic trail a chunk-load failure leaves — no error-reporting sink wired yet.
     console.error('[RouteBoundary] route chunk failed to load', error, info.componentStack);
+    if (!isChunkLoadError(error)) return;
+    void reloadForChunkError().then((reloading) => {
+      if (!reloading && !this.unmounted) this.setState({ phase: 'failed' });
+    });
+  }
+
+  override componentWillUnmount(): void {
+    this.unmounted = true;
   }
 
   private readonly reload = (): void => {
@@ -75,7 +114,11 @@ class RouteErrorBoundary extends Component<RouteBoundaryProps, RouteErrorBoundar
 
   override render(): ReactNode {
     if (this.state.error) {
-      return <RouteErrorFallback onReload={this.reload} />;
+      return this.state.phase === 'reloading' ? (
+        <RouteReloading />
+      ) : (
+        <RouteErrorFallback onReload={this.reload} />
+      );
     }
     return this.props.children;
   }

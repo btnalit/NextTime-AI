@@ -1,4 +1,4 @@
-import { type ReactNode, Suspense, lazy, memo } from 'react';
+import { Component, type ReactNode, Suspense, lazy, memo } from 'react';
 import type { ChatMessage } from '../../lib/ws-client.js';
 
 /** `react-markdown` + `remark-gfm` would add ~191 kB raw / ~59 kB gzip to the single main chunk if
@@ -13,6 +13,37 @@ import type { ChatMessage } from '../../lib/ws-client.js';
 const Markdown = lazy(() =>
   import('../kit/markdown.js').then((mod) => ({ default: mod.Markdown })),
 );
+
+/** Legacy 880: the Markdown chunk is the one chunk loaded *inside* a page. Should it fail to load
+ *  (a network change mid-fetch; the browser then keeps the failure for the page's lifetime), the
+ *  message shows its raw text — what `Suspense` showed while it loaded — instead of the error
+ *  reaching `RouteBoundary`, which would replace the whole chat page, the composer's unsent draft
+ *  with it. */
+class PlainTextOnError extends Component<
+  { readonly text: string; readonly children: ReactNode },
+  { readonly failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(error: unknown): void {
+    console.error('[MessageBody] Markdown failed to load or render; showing plain text', error);
+  }
+
+  override render(): ReactNode {
+    if (this.state.failed) {
+      return (
+        <span className="pre-wrap" data-markdown="unavailable">
+          {this.props.text}
+        </span>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /**
  * components/chat/MessageBody (S8 W1-A2, audit C2): the `.message-bubble` content for one chat
@@ -70,9 +101,11 @@ export const MessageBody = memo(function MessageBody({
   }
   return (
     <div className="message-bubble message-text" style={{ whiteSpace: 'normal' }}>
-      <Suspense fallback={<span className="pre-wrap">{text}</span>}>
-        <Markdown content={text} />
-      </Suspense>
+      <PlainTextOnError text={text}>
+        <Suspense fallback={<span className="pre-wrap">{text}</span>}>
+          <Markdown content={text} />
+        </Suspense>
+      </PlainTextOnError>
       {trailing}
     </div>
   );

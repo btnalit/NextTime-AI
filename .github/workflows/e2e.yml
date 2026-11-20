@@ -648,7 +648,13 @@ jobs:
           cat >"$RUNNER_TEMP/restart-kernel.sh" <<'SH'
           set -eu
           cd "$GITHUB_WORKSPACE"
+          # Legacy 880: `--force-recreate` throws the old container away with its logs, so the dump
+          # after a failed run only ever showed the new one. Keep the old one's for that dump: in
+          # $RUNNER_TEMP (0600), on this runner only — never uploaded, gone with the runner when
+          # the job ends; the failure step below prints it, unless it holds a credential of this run.
           # `sudo -n`, as the always-allow seed: fail instead of waiting on a password prompt.
+          (umask 077 && sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            logs --no-color --timestamps kernel >"$RUNNER_TEMP/kernel-before-restart-$(date +%s).log" 2>&1) || true
           sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
             up -d --no-deps --force-recreate kernel >&2
           i=0
@@ -981,9 +987,32 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # Legacy 880: timestamps, to line the kernel's side up with the Playwright trace (whose
+      # console and network entries — the chat socket's handshake included — carry the browser's
+      # side; `cap-calls.jsonl` says which socket requests the kernel answered). Raw socket frames
+      # are not dumped: the first one carries the page's API key. Then every kernel container
+      # e2e/resilience replaced, oldest first — a file that holds one of this run's own keys or
+      # passwords (the list the caddy log check uses) is not printed, only named, on top of the
+      # `::add-mask::` those values already have.
       - name: docker compose logs (on failure)
         if: failure()
-        run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color --timestamps
+          forbidden="$RUNNER_TEMP/kernel-log-forbidden-values"
+          (umask 077 && printf '%s\n' "${WEB_E2E_API_KEY:-}" "${WEB_E2E_API_KEY_B:-}" \
+            "$(cat "$RUNNER_TEMP/switch-workspace.key" 2>/dev/null || true)" \
+            "${WEB_E2E_ADMIN_INITIAL_PASSWORD:-}" "${WEB_E2E_OWNER_PASSWORD:-}" \
+            "${WEB_E2E_TEMP_PASSWORD:-}" | grep -v '^$' >"$forbidden") || true
+          for f in "$RUNNER_TEMP"/kernel-before-restart-*.log; do
+            [ -e "$f" ] || continue
+            if [ -s "$forbidden" ] && grep -qFf "$forbidden" "$f"; then
+              echo "=== $(basename "$f"): not printed, it holds a credential of this run"
+              continue
+            fi
+            echo "=== $(basename "$f"): the kernel container e2e/resilience replaced"
+            cat "$f"
+          done
+          rm -f "$forbidden"
 
       # The kernel's outbox dispatcher swallows consumer errors unless it is constructed with an
       # `onError` hook (application/outbox/dispatcher.ts), so a linkage consumer that fails on a
