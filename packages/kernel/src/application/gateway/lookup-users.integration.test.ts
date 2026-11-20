@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { createUser } from '../identity/index.js';
-import { ForbiddenError } from './authorize.js';
+import { CapabilityCallRefusedError, ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { lookupUsersHandler } from './members-handlers.js';
@@ -66,6 +66,7 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
   let operatorId: string;
   let auditorId: string;
   let disabledOwnerId: string;
+  let agentOwnerId: string;
   let otherOwnerId: string;
 
   async function asAdmin<T>(ws: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -93,7 +94,7 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
   async function insertPrincipal(
     ws: string,
     options: {
-      kind?: 'human' | 'service';
+      kind?: 'human' | 'service' | 'agent';
       role?: Role;
       userId?: string;
       disabled?: boolean;
@@ -151,6 +152,7 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
     operatorId = await insertPrincipal(workspaceId, { role: 'operator' });
     auditorId = await insertPrincipal(workspaceId, { role: 'auditor' });
     disabledOwnerId = await insertPrincipal(workspaceId, { role: 'owner', disabled: true });
+    agentOwnerId = await insertPrincipal(workspaceId, { kind: 'agent', role: 'owner' });
     otherOwnerId = await insertPrincipal(otherWorkspaceId, { role: 'owner' });
   });
 
@@ -264,11 +266,20 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
       ...Array.from({ length: 19 }, (_, i) => `${tag}-a${String(i + 1).padStart(2, '0')}`),
     ]);
 
+    // Exactly 20: all of them, and nothing more to say.
+    const twenty = newTag();
+    for (let i = 1; i <= 20; i += 1) {
+      await newUser(`${twenty}-${String(i).padStart(2, '0')}`, 'Twenty');
+    }
+    const all = await lookUp(twenty);
+    expect(all.items).toHaveLength(20);
+    expect(all).not.toHaveProperty('truncated');
+
     // Exact login, then logins and then display names that start with the query, then the rest
-    // by login.
+    // by login — a display-name match after a login match although its login sorts first.
     const small = newTag();
     await newUser(`a-${small}`, 'Contains');
-    const displayFirst = `m-${newTag()}`;
+    const displayFirst = `a0-${newTag()}`;
     await newUser(displayFirst, `${small} Display`);
     await newUser(`${small}-z`, 'Prefix');
     await newUser(small, 'Exact');
@@ -290,8 +301,9 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
       [operatorId, 'operator'],
       [auditorId, 'auditor'],
     ] as const) {
-      await expect(lookUp(tag, caller(workspaceId, id, role))).rejects.toBeInstanceOf(
-        ForbiddenError,
+      // Refused by the gateway for the role, before the function would refuse it too.
+      await expect(lookUp(tag, caller(workspaceId, id, role))).rejects.toSatisfy(
+        (err) => err instanceof CapabilityCallRefusedError && err.reason === 'role',
       );
     }
   });
@@ -319,6 +331,8 @@ describe.runIf(DATABASE_URL !== undefined)('lookup_users (integration)', () => {
       [workspaceId, memberId],
       [workspaceId, auditorId],
       [workspaceId, disabledOwnerId],
+      // An owner, but an agent: not a person nor a service account.
+      [workspaceId, agentOwnerId],
       // An owner, but of another workspace than the transaction's.
       [workspaceId, otherOwnerId],
       [workspaceId, randomUUID()],
