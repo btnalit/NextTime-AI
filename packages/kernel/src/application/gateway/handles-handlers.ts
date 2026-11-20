@@ -11,9 +11,8 @@ import {
   holderForSessionKind,
   lockSessions,
 } from '../../governance/capability/index.js';
-import { findSuspectedSecrets } from '../../governance/redaction/index.js';
+import { refuseCredentialText } from '../../governance/redaction/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
-import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { isInternalPrincipalDisplayName } from './members-handlers.js';
 
 /**
@@ -62,19 +61,15 @@ export class HandleRevokeError extends Error {
  * (`HANDLE_NOTE_MAX_LENGTH`). Never a credential: the note is shown to the workspace's owners and
  * kept after the session ends, so a note holding anything the audit copy of the call would redact
  * (`findSuspectedSecrets` — a token, a platform API key, a `password: …`, a URL's password;
- * review #501 on #1549) is refused with 400 before anything is written, and what is kept and
- * listed is always what the audit row says. The refusal names the field, never the value.
+ * review #501 on #1549) is refused before anything is written, and what is kept and listed is
+ * always what the audit row says. The refusal is the one every free text carrying a credential
+ * gets (`refuseCredentialText`: 400 `credentials_in_text`, `details.field = 'note'`), so a client
+ * tells it apart from a malformed call; it names the field, never the value.
  */
-export function handleNoteFrom(capability: string, raw: string | undefined): string | null {
+export function handleNoteFrom(raw: string | undefined): string | null {
   const note = raw?.trim() ?? '';
   if (note === '') return null;
-  if (findSuspectedSecrets({ note }).count > 0) {
-    throw new InvalidCapabilityParamsError(
-      capability,
-      [{ path: ['note'], message: 'looks like a credential' }],
-      'note looks like a credential (a token, a key or a password) — a note is shown to the workspace owners and kept after the Handle ends; describe what the client is for instead',
-    );
-  }
+  refuseCredentialText('note', note);
   return note;
 }
 

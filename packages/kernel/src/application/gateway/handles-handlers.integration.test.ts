@@ -15,6 +15,7 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { HANDLE_SIGNING_ALG, HandleRevoked } from '../../governance/capability/index.js';
+import { TextCarriesCredentialsError } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { configureTaskRuntime } from '../task/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -699,7 +700,7 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       }
     });
 
-    it('a note that looks like a credential, or is over 200, is refused (invalid params) before anything is written — the refusal never echoes it', async () => {
+    it('a note that looks like a credential is refused (credentials_in_text), one over 200 (invalid params), before anything is written — the refusal never echoes it', async () => {
       // Pasted into the note, each would be handed to every owner reading the list: a Handle; the
       // platform API key a person or service account signs in with (review #501 on #1549 — no
       // prefix to know it by); and a `password: …` the audit copy of the call would redact.
@@ -716,8 +717,13 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
       ] as const) {
         for (const [note, secret] of pasted) {
           const refused = await issue(capability, { ...params, note }).catch((err: unknown) => err);
-          expect(refused).toBeInstanceOf(InvalidCapabilityParamsError);
-          expect((refused as Error).message).toContain('note looks like a credential');
+          // The refusal every free text carrying a credential gets (400 credentials_in_text), so
+          // the console tells it apart from a malformed call (console owner's ask).
+          expect(refused).toBeInstanceOf(TextCarriesCredentialsError);
+          expect(refused).toMatchObject({
+            code: 'credentials_in_text',
+            details: { field: 'note', suspectedSecretValues: 1 },
+          });
           expect((refused as Error).message).not.toContain(secret);
         }
         await expect(issue(capability, { ...params, note: 'x'.repeat(201) })).rejects.toThrow(

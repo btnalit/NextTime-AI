@@ -87,7 +87,7 @@ export const issueServiceHandleHandler: CapabilityHandler = async (
     note?: string;
   };
   // Legacy 168: refused before anything is written when it looks like a credential.
-  const note = handleNoteFrom('issue_service_handle', input.note);
+  const note = handleNoteFrom(input.note);
   // Legacy 702 (governance 0043): the authority locks before the service Principal is read, and
   // before the session row below references it; `issueHandle` re-checks the role under them.
   await lockIssuingAuthority(client, workspaceId, input.principalId);

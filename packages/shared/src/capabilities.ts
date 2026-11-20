@@ -1223,7 +1223,7 @@ const connectionCapabilities = [
         /** Default one year; the CLI’s `issue-service-handle` default, now on the page. */
         ttlSeconds: z.number().int().positive().max(SERVICE_HANDLE_MAX_TTL_SECONDS).optional(),
         /** Legacy 168: what this client is for, shown beside its session in `list_handles`
-         *  (`sessionNote`). Trimmed; blank means none. Never a credential (refused). */
+         *  (`sessionNote`). Trimmed; blank means none. Never a credential (400 credentials_in_text). */
         note: z.string().max(HANDLE_NOTE_MAX_LENGTH).optional(),
       })
       .strict(),
@@ -2422,7 +2422,7 @@ const governanceCapabilities = [
           .strict()
           .optional(),
         /** Legacy 168: what this client is for, shown beside its session in `list_handles`
-         *  (`sessionNote`). Trimmed; blank means none. Never a credential (refused). */
+         *  (`sessionNote`). Trimmed; blank means none. Never a credential (400 credentials_in_text). */
         note: z.string().max(HANDLE_NOTE_MAX_LENGTH).optional(),
       })
       .strict(),
