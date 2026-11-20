@@ -290,6 +290,7 @@ import {
   startEvalCaseTrialHandler,
   syncEvalFixtureGateHandler,
   withPublishEvidence,
+  withSkillPublishRecord,
 } from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
 // one-capability(-family)-per-file convention `export-prov-handler.ts`/`operation-manifest-
@@ -3149,7 +3150,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_skill', withPublishEvidence(publishSkillHandler)],
   ['deprecate_skill', deprecateSkillHandler],
   ['list_skills', listSkillsHandler],
-  ['get_skill', getSkillHandler],
+  ['get_skill', withSkillPublishRecord(getSkillHandler)],
   // S11 W1a E2-1 — read-time Skill statistics (application/task/skill-stats.ts).
   ['get_skill_stats', getSkillStatsHandler],
   // S10 E3-3 — the dev verdicts of the caller's own drafts (application/worker/draft-verdicts.ts).

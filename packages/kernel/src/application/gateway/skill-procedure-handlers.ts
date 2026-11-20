@@ -25,7 +25,6 @@ import {
 } from '../../application/worker/index.js';
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import { readSkillPublishRecord } from '../eval/index.js';
 import { procedureTemplateProblems } from '../goal/index.js';
 import { readProcedureStats, readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
@@ -191,16 +190,6 @@ const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, c
       publishedBy: row.publishedBy,
       createdAt: row.createdAt.toISOString(),
       publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
-      // Legacy 539: what this version was published on — to people only; a Handle is told
-      // nothing of an evaluation's cases or reasons (§3.3 I-E4), so the field is left out.
-      ...(ctx?.channel === 'human'
-        ? {
-            publishEvidence:
-              row.status === 'draft'
-                ? null
-                : await readSkillPublishRecord(client, workspaceId, row.id, row.version),
-          }
-        : {}),
     },
     resourceType: 'skill',
     resourceId: skillId,
