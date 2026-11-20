@@ -73,6 +73,7 @@ import {
   findSelfConnection,
   landGatekeeper,
   operationPlatformStatus,
+  readAwaitingWorkspaces,
   readGatekeeperPlatformPolicy,
   recordGateInstanceCheck,
   recordMintedConnectionSecret,
@@ -4087,6 +4088,31 @@ describe.runIf(DATABASE_URL !== undefined)(
           'operations',
         ]);
         expect((await instance()).awaitingWorkspaces).toEqual(awaitingHere);
+        // The read enters the workspace and comes back (#501 T1): after it, the same platform
+        // transaction is on the platform plane again and reads none of the workspace's objects.
+        const afterRead = await withPlatform(pool, { userId: admin.id }, async (client) => {
+          const read = await readAwaitingWorkspaces(client, [PENDING_GATE]);
+          const context = await client.query<{
+            workspace: string;
+            principal: string;
+            platform: string;
+          }>(
+            `select current_setting('app.workspace_id', true) as workspace,
+                    current_setting('app.principal_id', true) as principal,
+                    current_setting('app.platform', true) as platform`,
+          );
+          const objects = await client.query<{ n: string }>(
+            'select count(*)::text as n from objects',
+          );
+          return {
+            count: read.get(PENDING_GATE)?.count,
+            context: context.rows[0],
+            objects: objects.rows[0]?.n,
+          };
+        });
+        expect(afterRead.count).toBe(1); // it did read inside the workspace
+        expect(afterRead.context).toEqual({ workspace: '', principal: '', platform: 'on' });
+        expect(afterRead.objects).toBe('0');
         const listedInstances = await callAsAdmin<ListEnvelope<GateInstanceWire>>(
           'list_gate_instances',
           {},
