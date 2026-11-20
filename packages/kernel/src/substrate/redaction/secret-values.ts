@@ -217,6 +217,11 @@ const VENDOR_KEY: ValuePattern = {
  * person or service account on every `/api` route (legacy 168: a key pasted into a Handle's note
  * would have been kept and listed as written). Starts only where a run starts, so a longer run is
  * passed over in linear time.
+ *
+ * Hidden, never refused: any other 32 bytes in base64url (a SHA-256 digest, an Ed25519 public
+ * key's JWK `x`, a random id) has the same shape, so this is in `SECRET_VALUE_PATTERNS` only — such
+ * a value is masked wherever values are scrubbed (the accepted over-redaction), and not in
+ * `HIGH_CONFIDENCE_SECRET_PATTERNS`, where it would refuse a call outright.
  */
 const MINTED_PLATFORM_KEY: ValuePattern = {
   pattern: /(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])/g,
@@ -297,7 +302,6 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
- * a platform API key standing alone,
  * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
  * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
  * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
@@ -306,8 +310,10 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
  * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
  * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
- * `Bearer` value. For refusing content outright (an observe-class Operation's params, legacy
- * 175), where every other pattern is only recorded.
+ * `Bearer` value; nor a platform API key standing alone (`MINTED_PLATFORM_KEY`): its shape is any 32
+ * random bytes in base64url — a SHA-256 digest, an Ed25519 public key's JWK `x` — so a call that
+ * names one by its digest would be refused (legacy 168 review). For refusing content outright (an
+ * observe-class Operation's params, legacy 175), where every other pattern is only recorded.
  */
 export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
   PEM_PRIVATE_KEY,
@@ -331,7 +337,6 @@ export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
       value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
   VENDOR_KEY,
-  MINTED_PLATFORM_KEY,
   {
     pattern: URL_PASSWORD,
     redact: (_match, [prefix, password]) =>

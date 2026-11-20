@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { namesASecretField } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -126,10 +126,13 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ['with - and _ only', `${PLATFORM_KEY.slice(0, 41)}-_`, REDACTED],
     ['in a JSON string', `{"k":"${PLATFORM_KEY}"}`, `{"k":"${REDACTED}"}`],
     ['in parentheses, before a comma', `(${PLATFORM_KEY}),`, `(${REDACTED}),`],
-  ])('is replaced %s — by both pattern sets', (_label, text, expected) => {
-    expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
-    expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
-  });
+  ])(
+    'is replaced %s — hidden, never refused by the high-confidence set',
+    (_label, text, expected) => {
+      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+    },
+  );
 
   it('a minted key always has the shape, bar about one in 7,500 that lacks a digit, - and _', () => {
     // generateApiKey's own recipe: 32 random bytes, base64url.
@@ -169,6 +172,27 @@ describe('a platform API key standing alone (legacy 168)', () => {
       expect(value).toHaveLength(44);
       for (const text of [value, `PublicKey = ${value}`, `Digest: SHA-256=${value}, sent`]) {
         expect(scrubSecretValues(text).redactedValues).toBe(0);
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
+  });
+
+  it('any 32 bytes in base64url (a SHA-256 digest, a JWK public key) is hidden but never refused', () => {
+    // The same shape as a key, so the full set hides it (the accepted over-redaction) …
+    expect(scrubSecretValues(`{"kty":"OKP","crv":"Ed25519","x":"${PLATFORM_KEY}"}`)).toEqual({
+      value: `{"kty":"OKP","crv":"Ed25519","x":"${REDACTED}"}`,
+      redactedValues: 1,
+    });
+    // … and the high-confidence set, which refuses a call outright, never matches it.
+    for (let i = 0; i < 2_000; i += 1) {
+      const digest = createHash('sha256').update(randomBytes(16)).digest('base64url');
+      const x = randomBytes(32).toString('base64url');
+      for (const text of [
+        digest,
+        `eventId ${digest}`,
+        `sha256-${digest}`,
+        `{"kty":"OKP","crv":"Ed25519","x":"${x}"}`,
+      ]) {
         expect(certain(text).redactedValues).toBe(0);
       }
     }

@@ -3612,16 +3612,17 @@ select 'reconcile', count(*) from action_requests r
 - **约束**：`note` 为空，或是 1–200 个字符、首尾没有空格的文本。内核写入前已经去掉首尾空白、空白当作没有备注，长度上限和线上契约一致（`HANDLE_NOTE_MAX_LENGTH`，200），所以内核接受的备注总能写进去。
 - **行为变化**：
   - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。审计参数副本会删减的内容（Handle、平台 API key、厂商密钥、`Bearer` 值、`password: …`、URL 里的密码等，`findSuspectedSecrets`）出现在备注里时返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容；所以存下和列出的备注总和审计行一致。
-  - 密钥识别多一种形态：单独出现的平台 API key（恰好 43 个 base64url 字符，大小写混合且含数字、`-` 或 `_`，即 `generateApiKey` 生成的格式）。它在所有脱敏处（对话实时流与工具调用记录、落库的回复、能力调用的审计参数副本、Worker 报告等）换成 `[redacted]`，在拒收凭据处（观察类调用的参数、管理员提案等）被拒。以前这种 key 没有前缀可认，会以原文留下。
-    - 「单独」指前后都不紧接任何一种 base64 的字符：base64url 的字母表、标准 base64 的 `+` 和 `/`，后面也不能是 `=`。所以标准 base64 编码的 32 字节值（WireGuard 公钥、`Digest: SHA-256=…`、S3 校验和，都是 43 个字符加 `=`），以及证书正文、data URI 这类大块 base64 里的任何片段，都不算 key，不会被遮住或拒收。
-    - 接受的过度脱敏只剩一种：单独出现、恰好 43 个字符、同时含大写、小写和数字（或 `-`、`_`）的普通文本，比如很长的驼峰标识符。
+  - 密钥识别多一种形态：单独出现的平台 API key（恰好 43 个 base64url 字符，大小写混合且含数字、`-` 或 `_`，即 `generateApiKey` 生成的格式）。它在所有脱敏处（对话实时流与工具调用记录、落库的回复、能力调用的审计参数副本、Worker 报告等）换成 `[redacted]`。以前这种 key 没有前缀可认，会以原文留下。
+    - 只遮不拒：任何 32 字节值的 base64url 编码都是这个形状（base64url 的 SHA-256 摘要、JWK 里 Ed25519 公钥的 `x`、随机 id），所以它不在高置信规则里。观察类调用的参数和管理员提案里出现这种值照常放行，只在审计副本里遮住并计数，不会因此返回 400。签发备注用的是完整规则，贴进 key 仍然拒收。
+    - 「单独」指前后都不紧接任何一种 base64 的字符：base64url 的字母表、标准 base64 的 `+` 和 `/`，后面也不能是 `=`。所以标准 base64 编码的 32 字节值（WireGuard 公钥、`Digest: SHA-256=…`、S3 校验和，都是 43 个字符加 `=`），以及证书正文、data URI 这类大块 base64 里的任何片段，都不算 key，不会被遮住。
+    - 接受的过度脱敏：单独出现、恰好 43 个字符、同时含大写、小写和数字（或 `-`、`_`）的 base64url 串都会被遮住。除了平台 key，主要是 base64url 编码的 32 字节值（SHA-256 摘要、JWK 公钥），偶尔是很长的驼峰标识符。Worker 报告、图谱写入这类存脱敏副本的地方，存下的也是遮住后的值。
     - 接受的漏检只有一种：紧跟在 `/` 或 `+` 后面的 key，比如写进 URL 路径里的。平台 key 只通过 `Authorization: Bearer` 传，不会出现在路径里。
   - 两个签发结果和 `list_handles` 的每一行多两个字段：`sessionShortId`（会话 id 的前 8 位十六进制，小写；由 id 算出，不是 token 的片段，不唯一）和 `sessionNote`（没有备注时为 `null`）。入口、Worker、管理员智能体等平台持有的会话没有备注，但有短编号。
   - `revoke_handle` 的审计行多一个 `sessionShortId`，和列表里看到的一致。撤销仍按完整的 Handle id 走，短编号只给人看。
   - 主机命令 `issue-service-handle` 还不能写备注；`list_external_runtimes` 还不显示备注和短编号。控制台的显示由控制台一半接着做。
 - **升级影响**：加列只改元数据；加约束要扫一遍 `sessions`（所有行的 `note` 都为空，校验只是读一遍），期间这张表被短暂锁住，签发 Handle、开新对话、启动 Worker 排队，其他功能不受影响。没有需要手工执行的步骤。
 - **这次升级的存量清洗也认平台 key**：`--pull` 在 `BACKUP_NOW` 之后照常自动跑 `scrub-raw-secrets --yes`（`STEP raw-secret-scrub`，见 §3 开头的「存量清洗」一段），这一版起它用的规则里多了上面这种形态。
-  - **改写**（单向，回退代码不会恢复原文，只能从这次的 `BACKUP_NOW` 恢复）：历史 agent Turn 的摘要和决定（`turnReports`）、agent 记录的 Decision 摘要（`decisions`）、工具调用记录的结果预览（`toolCallRecords`）里单独出现的平台 key，换成 `[redacted]`。改写的是 key 本身，不会再碰标准 base64。
+  - **改写**（单向，回退代码不会恢复原文，只能从这次的 `BACKUP_NOW` 恢复）：历史 agent Turn 的摘要和决定（`turnReports`）、agent 记录的 Decision 摘要（`decisions`）、工具调用记录的结果预览（`toolCallRecords`）里单独出现的平台 key，换成 `[redacted]`。同形状的 base64url 32 字节值（上面接受的过度脱敏）也会一起改写；标准 base64 不受影响。
   - **只计数、不改写**：Fact 和 Object 的属性（`factProperties` / `objectProperties`）、任务输入（`taskInputs`）、`action_request.complete` / `.fail` 审计行的结果和理由（`auditResults`）、门调用的观察（`gateCallObservations`）。日志按 `counted <类别> <工作区>/<id>` 逐行列出，不含值。
   - 其他审计行（能力调用的参数副本等）里存着的平台 key 不在这次清洗范围内，由审计存量那一项另行处理。
   - 预检 SQL（`scrub-raw-secrets.preflight.sql`）按关键字匹配，认不出没有前缀的 key，所以它给的上界不含这种形态。精确计数看这一步的日志和 `cli.raw_secrets_scrubbed` 审计行；把各类计数记 `docs/private/`。
