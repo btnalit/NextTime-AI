@@ -1,4 +1,4 @@
-import { type Role, getCapability } from '@nexttime/shared';
+import { type Role, getCapability, sessionShortId } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   issueHandle,
@@ -8,6 +8,7 @@ import {
 import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
+import { handleNoteFrom } from './handles-handlers.js';
 import {
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -79,7 +80,14 @@ export const issueServiceHandleHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { privateKey } = getConfiguredTaskRuntime();
-  const input = params as { principalId: string; scope: string[]; ttlSeconds?: number };
+  const input = params as {
+    principalId: string;
+    scope: string[];
+    ttlSeconds?: number;
+    note?: string;
+  };
+  // Legacy 168: refused before anything is written when it looks like a credential.
+  const note = handleNoteFrom('issue_service_handle', input.note);
   // Legacy 702 (governance 0043): the authority locks before the service Principal is read, and
   // before the session row below references it; `issueHandle` re-checks the role under them.
   await lockIssuingAuthority(client, workspaceId, input.principalId);
@@ -102,10 +110,10 @@ export const issueServiceHandleHandler: CapabilityHandler = async (
   });
 
   const sessionResult = await client.query<{ id: string }>(
-    `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-     values ($1, $2, 'service', $2, 'active')
+    `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status, note)
+     values ($1, $2, 'service', $2, 'active', $3)
      returning id`,
-    [workspaceId, input.principalId],
+    [workspaceId, input.principalId, note],
   );
   const sessionId = sessionResult.rows[0]?.id;
   if (!sessionId)
@@ -140,6 +148,9 @@ export const issueServiceHandleHandler: CapabilityHandler = async (
       handle: issued.token,
       principalId: input.principalId,
       sessionId: issued.sessionId,
+      // Legacy 168: how `list_handles` names this session, and the note given it.
+      sessionShortId: sessionShortId(issued.sessionId),
+      sessionNote: note,
       expiresAt: issued.expiresAt.toISOString(),
       scope: issued.scope,
     },

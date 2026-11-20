@@ -1,4 +1,4 @@
-import type { CapabilityScope } from '@nexttime/shared';
+import { type CapabilityScope, sessionShortId } from '@nexttime/shared';
 import {
   entryScope,
   issueHandle,
@@ -7,6 +7,7 @@ import {
 import { entryGatekeeperIds, readExecuteAccess } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import { type CapabilityHandler, requirePresentedCredential } from './capability-handler.js';
+import { handleNoteFrom } from './handles-handlers.js';
 
 /**
  * application/gateway/issue-handle-handler: `issue_handle` (design doc §5.1.4, §9.2 "mcp_session
@@ -48,6 +49,7 @@ interface IssueHandleParams {
   readonly sessionKind: 'interactive';
   readonly ttlSeconds?: number;
   readonly scope?: RequestedScope;
+  readonly note?: string;
 }
 
 /**
@@ -90,6 +92,8 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
   const { privateKey } = getConfiguredTaskRuntime();
 
   const input = params as IssueHandleParams;
+  // Legacy 168: refused before anything is written when it looks like a credential.
+  const note = handleNoteFrom('issue_handle', input.note);
   const principal = ctx?.principal;
   if (!principal) {
     throw new Error('issue_handle: no resolved human principal in context (channel:"human"-only)');
@@ -116,10 +120,10 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
   const scope = intersectScope(ceiling, input.scope);
 
   const sessionResult = await client.query<{ id: string }>(
-    `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-     values ($1, $2, 'mcp_session', $3, 'active')
+    `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status, note)
+     values ($1, $2, 'mcp_session', $3, 'active', $4)
      returning id`,
-    [workspaceId, onBehalfOf, onBehalfOf],
+    [workspaceId, onBehalfOf, onBehalfOf, note],
   );
   const sessionId = sessionResult.rows[0]?.id;
   if (!sessionId) {
@@ -151,6 +155,9 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
     result: {
       handle: issued.token,
       sessionId: issued.sessionId,
+      // Legacy 168: how `list_handles` names this session, and the note given it.
+      sessionShortId: sessionShortId(issued.sessionId),
+      sessionNote: note,
       onBehalfOf: issued.onBehalfOf,
       expiresAt: issued.expiresAt.toISOString(),
       scope: issued.scope,

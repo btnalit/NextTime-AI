@@ -497,10 +497,12 @@ fi
 # the agent-written copies people read (a Turn's report, an agent's Decision, a tool-call record's
 # result) with those values masked; count — never touch — Task inputs, connection addresses and
 # audit rows (packages/kernel/src/application/platform/scrub-raw-secrets.ts); the log lists every
-# counted row by id ("counted <category> <workspace>/<id>") for the operator to go through. Only on
-# top of the BACKUP_NOW above: that dump is the recovery point. Idempotent. Never fatal, but skipped
-# or failed it leaves raw values in place, so the RESULT is "degraded" and the log says how to
-# finish it.
+# counted row by id ("counted <category> <workspace>/<id>") for the operator to go through, and,
+# read before anything is rewritten, every row of the database holding a platform API key still
+# issued ("live-api-key <table> <row> principal …", ids only): the keys to rotate, release.md
+# §3.208. Only on top of the BACKUP_NOW above: that dump is the recovery point. Idempotent. Never
+# fatal, but skipped or failed it leaves raw values in place, so the RESULT is "degraded" and the
+# log says how to finish it.
 if [ -f packages/kernel/src/cli/scrub-raw-secrets.ts ]; then
   scrub_rerun="docker compose run --rm -e BACKUP_NOW=1 backup && docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js --yes"
   if [ "$backup_rc" -ne 0 ]; then

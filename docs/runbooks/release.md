@@ -1093,7 +1093,11 @@ SQL 列出的自连门清单就是要逐个确认的范围。
   Worker 门调用观察记录（`observations.content`）。没有读口返回这一列，原文只在库里和备份里。遗留 237（#1396）之后新写入的行带
   `payloadRedacted: true`，不计；这个标记只在与 #1396 同一版发出时成立，两者必须进同一个 release。整段存的行判定精确；切成文本的旧行按文本判，
   是上界：字段名像秘密时，`null`、`""`、`true` / `false`、`[]`、不含秘密值的对象，以及 `"credentials":{` 这类标点也会被计入，不会漏计
-  （注释措辞见遗留 839）。
+  （注释措辞见遗留 839）。#1549（遗留 168 补充）之后的下一版起只计数 11 类：加 `turnReportKeyShapes`、`decisionKeyShapes`、
+  `toolCallRecordKeyShapes`，即改写的前 3 类里仍留着平台 API key 形状（单独出现的 43 个 base64url 字符）的行。改写不碰这种形状：任何 32 字节值的
+  base64url 编码（摘要、公钥）都长这样，而改写是单向的。这 3 类不改写，所以每次运行都会再计，见 §3.207。§3.208 起只计数 12 类：
+  加 `auditPayloads`，即 payload 里有值规则会删减内容的审计行（任何 action），审计只增不减，所以这个计数不会归零；同时在改写之前读全库，
+  比对仍有效的平台 API key（`liveApiKeys`），见 §3.208。
 - 只列、不改 1 类（v0.50.0 起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
   运行）；报告里这一类的标签是 `listed, nothing to fix`，与只计数的类别分开看。dry run 只列以往运行留下的：剪后是否撞名，要等前面的名字改写之后才知道。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
@@ -1142,6 +1146,8 @@ SQL
   启用到新的工作区。由平台管理员用不带凭据的地址重建实例（凭据经门宿主的凭据录入），旧实例的停用或删除是写操作，victor 决定。
 - `connectedSystemDuplicates` > 0 不需要处置，记数到 `docs/private/` 即可。
 - `gateCallObservations` > 0 不需要处置，记数到 `docs/private/` 即可；要删掉原文属破坏性操作，另行决定。
+- `turnReportKeyShapes`、`decisionKeyShapes`、`toolCallRecordKeyShapes`、`auditPayloads` > 0：记数到 `docs/private/` 即可，这几类本身
+  不需要处置（形状不等于 key，审计行改不了）。要处置的是汇总行的 `liveApiKeys` > 0，按 §3.208 逐个轮换（victor 决定）。
 - apply 日志最后一行是 `RESULT degraded=…raw-secret-scrub…`，且 `-raw-secret-scrub.log` 末行含 `objects_identity_key_uidx`：清洗期间有门以同样的
   显示名落地，按上面「补跑」先备份、再跑 `--yes`，那一行会被写成重复件。
 - 其余只计数的类别不需要处置；要真正删掉库里与备份里的原文，属破坏性操作，另行决定。
@@ -3605,6 +3611,101 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §6 一行）：只需回退代码，上一版从不读写这张表。还在用新运行时镜像的 Worker 遇到上一版内核时，Handle 里没有 `report_tool_calls`，不会去报。要连 schema 一起撤：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失，它们只在这张表里）。
 - 下一次主机升级的提示要带上本节。
 
+### 3.207 签发 Handle 时可写备注，列表带会话短编号（#1549，遗留 168 补充，governance 0049，0.69.2 之后的下一版）
+
+**迁移 governance 0049**：`sessions` 加一列 `note`（可空）和约束 `sessions_note_bounded`，随 `--pull` 自动执行，不回填。
+
+- **约束**：`note` 为空，或是 1–200 个字符、首尾没有空格的文本。内核写入前已经去掉首尾空白、空白当作没有备注，长度上限和线上契约一致（`HANDLE_NOTE_MAX_LENGTH`，200），所以内核接受的备注总能写进去。
+- **行为变化**：
+  - `issue_handle`、`issue_service_handle` 多一个可选参数 `note`：说明这个客户端拿来做什么（如「备份采集器」）。去掉首尾空白；空白等于没有；超过 200 个字符返回 400。审计参数副本会删减的内容（Handle、平台 API key、厂商密钥、`Bearer` 值、`password: …`、URL 里的密码等，`findSuspectedSecrets`）出现在备注里时返回 400 `invalid_params`，什么也不写，报错只说是 `note`，不回显内容；所以存下和列出的备注总和审计行一致。
+  - 密钥识别多一种形态：单独出现的平台 API key（恰好 43 个 base64url 字符，大小写混合且含数字、`-` 或 `_`，即 `generateApiKey` 生成的格式）。它在所有脱敏处（对话实时流与工具调用记录、落库的回复、能力调用的审计参数副本、Worker 报告等）换成 `[redacted]`。以前这种 key 没有前缀可认，会以原文留下。
+    - 只遮不拒：任何 32 字节值的 base64url 编码都是这个形状（base64url 的 SHA-256 摘要、JWK 里 Ed25519 公钥的 `x`、随机 id），所以它不在高置信规则里。观察类调用的参数和管理员提案里出现这种值照常放行，只在审计副本里遮住并计数，不会因此返回 400。签发备注用的是完整规则，贴进 key 仍然拒收。
+    - 门地址例外：门的 `target`、`manifestSource` 按地址规则判断（遗留 186：地址里不能带凭据）。这种形状单独出现在查询串、片段或 `@` 之后等位置时，处理如下；路径段里的不算，因为前面紧挨着 `/`：
+      - **写入**：建连接申请、注册门、建门实例都返回 400 `credentials_in_connection_params`，其余写门地址的入口同理（门公告只在地址变了时拒；`enable_gate_instance` 对已存的这种实例也拒，见 §3.25）。base64url 的 32 字节摘要和 key 同形，也会被拒。
+      - **升级清洗**：这类地址计入 `connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`，只计数。门实际调用的地址不改。
+      - **展示副本**：4 类（`selfConnectionAddresses`、`gatekeeperNames`、`connectedSystems`、`connectionActivities`）按读侧的显示规则单向剪掉 userinfo、查询串和片段，剩下的形状换成 `[redacted]`。只能从 `BACKUP_NOW` 恢复。
+    - 「单独」指前后都不紧接任何一种 base64 的字符：base64url 的字母表、标准 base64 的 `+` 和 `/`，后面也不能是 `=`。所以标准 base64 编码的 32 字节值（WireGuard 公钥、`Digest: SHA-256=…`、S3 校验和，都是 43 个字符加 `=`），以及证书正文、data URI 这类大块 base64 里的任何片段，都不算 key，不会被遮住。
+    - 接受的过度脱敏：单独出现、恰好 43 个字符、同时含大写、小写和数字（或 `-`、`_`）的 base64url 串都会被遮住。除了平台 key，主要是 base64url 编码的 32 字节值（SHA-256 摘要、JWK 公钥），偶尔是很长的驼峰标识符。Worker 报告、图谱写入这类存脱敏副本的地方，存下的也是遮住后的值。
+    - 接受的漏检只有一种：紧跟在 `/` 或 `+` 后面的 key，比如写进 URL 路径里的。平台 key 只通过 `Authorization: Bearer` 传，不会出现在路径里。
+  - 两个签发结果和 `list_handles` 的每一行多两个字段：`sessionShortId`（会话 id 的前 8 位十六进制，小写；由 id 算出，不是 token 的片段，不唯一）和 `sessionNote`（没有备注时为 `null`）。入口、Worker、管理员智能体等平台持有的会话没有备注，但有短编号。
+  - `revoke_handle` 的审计行多一个 `sessionShortId`，和列表里看到的一致。撤销仍按完整的 Handle id 走，短编号只给人看。
+  - 主机命令 `issue-service-handle` 还不能写备注；`list_external_runtimes` 还不显示备注和短编号。控制台的显示由控制台一半接着做。
+- **升级影响**：加列只改元数据；加约束要扫一遍 `sessions`（所有行的 `note` 都为空，校验只是读一遍），期间这张表被短暂锁住，签发 Handle、开新对话、启动 Worker 排队，其他功能不受影响。没有需要手工执行的步骤。
+- **这次升级的存量清洗：平台 key 形状只计数，不改写**。`--pull` 在 `BACKUP_NOW` 之后照常自动跑 `scrub-raw-secrets --yes`（`STEP raw-secret-scrub`，见 §3 开头的「存量清洗」一段）。
+  - **改写的 3 类不认这种形状**：历史 agent Turn 的摘要和决定（`turnReports`）、agent 记录的 Decision 摘要（`decisions`）、工具调用记录的结果预览（`toolCallRecords`）照旧按其他规则改写（单向，只能从这次的 `BACKUP_NOW` 恢复），但不改写单独出现的 43 个 base64url 字符。任何 32 字节值的 base64url 编码（摘要、公钥）都是这个形状，改了就再也恢复不了。新写入的内容照上面的规则遮住。
+  - **新增 3 个只计数类别**：`turnReportKeyShapes`、`decisionKeyShapes`、`toolCallRecordKeyShapes`，列出这 3 张表里仍留着这种形状的行。日志按 `counted <类别> <工作区>/<id>` 逐行列出，不含值；不改写，所以每次运行都会再计。
+  - **原有的只计数类别**（Fact 和 Object 的属性、任务输入、`auditResults`、`gateCallObservations`）用完整规则判断，含这种形状的行也会被计入，同样只计数。
+  - 其他审计行（能力调用的参数副本等）里存着的平台 key 不在这次清洗范围内，由审计存量那一项另行处理（§3.208：`auditPayloads`）。
+  - 预检 SQL（`scrub-raw-secrets.preflight.sql`）按关键字匹配，认不出没有前缀的 key，所以它给的上界不含这种形态。精确计数看这一步的日志和 `cli.raw_secrets_scrubbed` 审计行；把各类计数记 `docs/private/`。
+  - **处置**（victor 在主机上决定和执行）：按 §3.208。清洗在改写之前把全库每一行里的形状与仍有效的 key 比对（`liveApiKeys`），只输出表名和行的主键、API key 的 id 和账号 id；按清单逐个轮换，再复跑确认「仍有效」归零。不要手工改这些行。
+- **升级前只读预检**（以表的属主运行，和前面几节一样；结果记 `docs/private/`）：`select count(*) from sessions;` 记下行数，估计加约束时锁表多久（本地 100 万行、数据在缓存里时约 0.2 s；主机磁盘慢、数据不在缓存里时会更久）。
+- **升级后只读核对**：
+  - `select version from schema_migrations where module = 'governance' and version = 49;` 返回一行。
+  - `select column_name from information_schema.columns where table_name = 'sessions' and column_name = 'note';` 返回一行。
+  - 在还没有人带备注签发之前，`select count(*) from sessions where note is not null;` 为 0。
+- **回滚**（见 §6 一行）：只需回退代码。上一版按列名插入 `sessions`，从不读写 `note`，新约束对空值总成立；新版本写下的备注留在表里，上一版看不到。要连 schema 一起撤：`alter table sessions drop column note`（约束随列删除，备注随之丢失），再删 `schema_migrations` 里 governance 49 那一行。
+- 下一次主机升级的提示要带上本节。
+
+### 3.208 存量里的平台 API key：审计行计数，全库比对仍有效的 key，按清单轮换（#1553，遗留 168 补充的审计存量，0.69.2 之后的下一版）
+
+没有迁移。改的是 `scrub-raw-secrets`，也就是 `--pull` 在 `BACKUP_NOW` 之后自动跑的 `STEP raw-secret-scrub`（§3.25）。新写入的内容自 §3.207
+起在写入时就遮住平台 key（能力调用的参数副本、批准与拒绝的原因、门结果的审计副本、Worker 报告等），这一节只处理之前存下的。
+
+- **行为变化**：
+  - **只计数的类别多 1 类，共 12 类**：`auditPayloads`，即 payload 里有值规则会删减内容的审计行，不分 action。日志照旧逐行打印
+    `counted auditPayloads <工作区>/<id>`（平台级行只有 `<id>`），不含值。
+    - 只按值判断，不看字段名：审计 payload 自己的字段（`credentialReview`、`suspectedSecretValues`）名字就像秘密，按字段名判会全部计入。
+    - 会计入的有三种：遗留 180 之前写下的参数副本原文；§3.207 之前写下的平台 key；只是长得像 key 的值（base64url 编码的 32 字节摘要、公钥）。
+    - 审计只增不减（I11），这个计数不会归零，也不需要处置。`action_request.complete` / `.fail` 的行可能同时计入 `auditResults`。
+  - **全库比对仍有效的 key（`liveApiKeys`）**：清洗在改写任何东西之前，先把全库读一遍，再与现有的 key 比对。对上的就是仍然签发着的 key。
+    - **读哪些**：`public` schema 的每张表、每一行，每个文本、JSON 和文本数组列。表和列从系统目录读，以后迁移新加的表也自动在内。只跳过
+      两列凭据自己的哈希：`principals.api_key_hash` 和 `users.password_hash`。所以人发的对话消息、agent 的回复、能力调用的
+      `action_requests.params`、Worker 的报告、备注、提案等，凡是 key 可能被贴进或回显的地方都在内，不只是上面各类别读的那些列。
+    - **怎么比**：每个平台 key 形状（单独出现的 43 个 base64url 字符，§3.207）按 `principals.api_key_hash` 的算法算 sha256，到 `principals`
+      里查。在 JSON 的值、对象键和数组里都找。
+    - **日志**：每对上一处打印一行 `live-api-key <表> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
+      - `<行>` 是这一行的主键，多列时用 `/` 连接：大多数表是 `<工作区>/<id>`，`audit_records` 只有 `<id>`，没有主键的表给 `ctid`。
+        主键里某一列的值会被值规则删减，或含 43 个以上连续的 base64url 字符（有人把 key 或 Handle 用作或嵌进了连接器名之类的文本主键），
+        这一列整个换成 `[redacted]`，日志和审计行都不出现它。uuid 只有 36 个字符，不受影响。
+      - 同一行里有两把 key 就打两行。
+      - Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。
+      - 不输出 key 的任何片段，不输出哈希，也不输出是哪一列。
+    - **报告和审计行**：报告多一行 `liveApiKeys (still issued, rotate each): tables=<表数> rows=<行数> keys=<数> found=<处> principals=…`，
+      `tables` 和 `rows` 是这次比对读了多少。最后的汇总行多一项 `liveApiKeys=<数>`，数的是要轮换的 key（按 Principal 去重）。
+      `cli.raw_secrets_scrubbed` 审计行多一个 `liveApiKeys`，含计数和前 20 处，同样只有 id。
+    - **`liveApiKeys=0` 说明什么**：库里存着的每一行都没有单独出现的、仍有效的 key。它不覆盖库以外的副本（`BACKUP_NOW` 的备份文件、
+      日志），也认不出不是单独出现的 key（比如被编码进更长的 base64 串里）。
+    - 所在工作区或用户被停用的 key 也算仍有效：重新启用后它又能用。Principal 被停用后 key 已清除（core 0059），不会再对上。
+- **处置**（victor 在主机上决定和执行，结果记 `docs/private/`；只读，或只动清单上的账号）：
+  1. **取清单**：在这次升级的清洗日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log` 里找 `live-api-key` 开头的行，就是清单；汇总行的
+     `liveApiKeys=` 是要轮换的 key 数，为 0 就到此为止。**以这一次的清单为准**：改写类别里的 key 如果写成了 `Bearer <key>`，或在名字像秘密的
+     JSON 字段里，这次改写会把它遮住，之后的运行再也看不到它，但 key 本身仍然有效。清单与各类计数一起记
+     `docs/private/`。
+  2. **按清单逐个轮换**，每个 Principal 一次，与它出现了几处无关：
+     - `service`：工作区 owner 在控制台「治理 → 成员与授权」打开这个服务凭证，点 Rotate API key，把新 key 换到在用它的自动化里
+       （`key-rotation.md` §5）。确定不再用的，可以停用（`disable_principal`）。
+     - `human`：运维 CLI 早年签发给人的遗留 key（`key-rotation.md` §5.1）。由该用户在控制台改一次密码，或平台管理员重置其密码；这会清掉此人
+       所有成员身份的 key，不再补发（D-25）。还在用这把 key 的脚本或验收，改用服务凭证。
+     - 清单里的行不用改，审计行也改不了（审计只增）。key 失效之后，那串字符就没有用了，备份文件和日志里的副本也一样。
+  3. **复跑确认归零**（dry run，什么都不写，也不写审计行；经 SSH 时用 `ssh -n`）：
+
+     ```sh
+     docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js </dev/null \
+       | grep -E '^(live-api-key |scrub-raw-secrets: dry-run )'
+     ```
+
+     期望只打印一行汇总，其中 `liveApiKeys=0`；多出来的 `live-api-key` 行就是还没轮换的。复跑只能看到库里还存着的副本，所以第 1 步清单上的
+     每个 Principal 都轮换过，才算完成。
+- **升级影响**：`STEP raw-secret-scrub` 会更久。比对要把全库再读一遍，每张表按主键分批，读的量和 `BACKUP_NOW` 的备份相当；`auditPayloads`
+  还要按 id 分批读一遍 `audit_records`。可参考这次 `BACKUP_NOW` 的耗时，或用 `select pg_size_pretty(pg_database_size(current_database()));`
+  估计。比对时，每批最多按哈希查一次 `principals`（走 `api_key_hash` 的唯一索引）。
+  - **内存**：比对每批 200 行，一批的行同时在清洗进程的内存里，峰值随行的大小涨。本地实测 dry run 的峰值 RSS：空库约 140 MB；
+    加一张 1,000 行、每行一条落库上限大小（256 Ki 个中文字符）回复的表后约 400 MB，耗时约 7 秒。
+  - 改写与写入的行为都没变。
+- **预检 SQL**：认不出没有前缀的 key（§3.207），这次不加列。精确计数看清洗日志。
+- **回滚**（见 §6，没有迁移）：只回退代码。上一版的清洗没有 `auditPayloads` 和比对，其他照旧。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3805,6 +3906,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | governance `0047_connection_request_gate_instance`（#1521，遗留 254）：`connection_requests` 加 `gate_instance_id`、`cancel_reason`、`cancelled_at` 三列，`target` 可为空，加四个约束、部分唯一索引 `connection_requests_one_open_gate_enable`、索引 `connection_requests_gate_instance_idx` 和平台平面的两条策略；不回填 | 有条件可逆 | 上一版只认自接申请。它插入的行总带 `target`，取消时不写原因，这在新约束下都合法；但它把 `target` 当字符串读，有门实例申请（`gate_instance_id is not null`）时，它的所有者队列会出错。只有这类申请为 0 条时才能只回退代码；#1521 的 CI rehearsal 与可逆性探针通过 | 回退代码前按 §3.205 先删门实例申请，之后只回退代码。要撤 schema：先撤 0048，再删两条策略、两个索引、四个约束和三列，`target` 设回 `not null`，再删 `schema_migrations` 里 governance 47 那一行 |
 | 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
 | 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#1531，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
+| 0.69.2 之后的下一版 | governance `0049_session_note`（#1549，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

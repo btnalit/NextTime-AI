@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { namesASecretField } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -5,7 +6,11 @@ import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
+  PLATFORM_KEY_SHAPE_PATTERNS,
   REDACTED,
+  SECRET_VALUE_PATTERNS,
+  STORED_REWRITE_SECRET_PATTERNS,
+  platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
   scrubSecretLiterals,
@@ -19,6 +24,12 @@ import {
  *  every other fixture here spells out `abcdefghijklmnopqrstuvwxyz`, which it allows too. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+/** A platform API key's shape (`generateApiKey`: 43 base64url characters). Synthetic — spells out
+ *  `abcdefghijklmnopqrstuvwxyz` too. */
+const PLATFORM_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+/** 32 bytes in standard base64 — 43 characters, the last one's low bits zero, then `=` — the
+ *  shape of a WireGuard public key. Synthetic. */
+const WIREGUARD_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYQ=';
 
 describe('scrubSecretValues — the common ways a secret is written down', () => {
   it.each([
@@ -107,6 +118,144 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
   });
 });
 
+describe('a platform API key standing alone (legacy 168)', () => {
+  const certain = (text: string) =>
+    redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+
+  it.each([
+    ['in a sentence', `my key is ${PLATFORM_KEY}, keep it`, `my key is ${REDACTED}, keep it`],
+    ['alone', PLATFORM_KEY, REDACTED],
+    ['in quotes', `"${PLATFORM_KEY}"`, `"${REDACTED}"`],
+    ['after a colon in CJK text', `密钥：${PLATFORM_KEY}。`, `密钥：${REDACTED}。`],
+    ['with - and _ only', `${PLATFORM_KEY.slice(0, 41)}-_`, REDACTED],
+    ['in a JSON string', `{"k":"${PLATFORM_KEY}"}`, `{"k":"${REDACTED}"}`],
+    ['in parentheses, before a comma', `(${PLATFORM_KEY}),`, `(${REDACTED}),`],
+  ])(
+    'is replaced %s — hidden, never refused by the high-confidence set',
+    (_label, text, expected) => {
+      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+    },
+  );
+
+  it('a minted key always has the shape, bar about one in 7,500 that lacks a digit, - and _', () => {
+    // generateApiKey's own recipe: 32 random bytes, base64url.
+    let missed = 0;
+    for (let i = 0; i < 2_000; i += 1) {
+      const key = randomBytes(32).toString('base64url');
+      expect(key).toHaveLength(43);
+      if (scrubSecretValues(`key ${key}`).value !== `key ${REDACTED}`) missed += 1;
+    }
+    // Expected about 0.27 misses in 2,000; more than 5 has odds of about 4 in 10 million.
+    expect(missed).toBeLessThanOrEqual(5);
+  });
+
+  it.each([
+    ['one character short', PLATFORM_KEY.slice(0, 42)],
+    ['one character long', `${PLATFORM_KEY}x`],
+    ['inside a longer run', `a-${PLATFORM_KEY}`],
+    ['all lower case (a word run, a hex digest)', 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq'],
+    ['letters only, no digit, - or _', 'AbcdefghijklmnopqrstuvwxyzAbcdefghijklmnopq'],
+    ['a sha-256 hex digest', `sha256:${'0123456789abcdef'.repeat(4)}`],
+    ['lower case and digits, no upper case', 'abcdefghijklmnopqrstuvwxyz0123456789abcdefg'],
+    // 32 bytes in standard base64 are 43 characters and `=`: the next character is the padding.
+    ['a WireGuard public key in a config line', `PublicKey = ${WIREGUARD_KEY}`],
+    ['a SHA-256 digest header', `Digest: SHA-256=${WIREGUARD_KEY}`],
+    ['a 32-byte value in standard base64, alone', WIREGUARD_KEY],
+    ['between a + and a / in a longer base64 run', `QUJD+${PLATFORM_KEY}/REVG`],
+    ['after a / in a base64 run', `QUJD/${PLATFORM_KEY}`],
+    ['before a + in a base64 run', `${PLATFORM_KEY}+REVG`],
+  ])('is not matched %s', (_label, text) => {
+    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+
+  it('a 32-byte value in standard base64 (a WireGuard key, a SHA-256= digest) is never one', () => {
+    for (let i = 0; i < 2_000; i += 1) {
+      const value = randomBytes(32).toString('base64');
+      expect(value).toHaveLength(44);
+      for (const text of [value, `PublicKey = ${value}`, `Digest: SHA-256=${value}, sent`]) {
+        expect(scrubSecretValues(text).redactedValues).toBe(0);
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
+  });
+
+  it('any 32 bytes in base64url (a SHA-256 digest, a JWK public key) is hidden but never refused', () => {
+    // The same shape as a key, so the full set hides it (the accepted over-redaction) …
+    expect(scrubSecretValues(`{"kty":"OKP","crv":"Ed25519","x":"${PLATFORM_KEY}"}`)).toEqual({
+      value: `{"kty":"OKP","crv":"Ed25519","x":"${REDACTED}"}`,
+      redactedValues: 1,
+    });
+    // … and the high-confidence set, which refuses a call outright, never matches it.
+    for (let i = 0; i < 2_000; i += 1) {
+      const digest = createHash('sha256').update(randomBytes(16)).digest('base64url');
+      const x = randomBytes(32).toString('base64url');
+      for (const text of [
+        digest,
+        `eventId ${digest}`,
+        `sha256-${digest}`,
+        `{"kty":"OKP","crv":"Ed25519","x":"${x}"}`,
+      ]) {
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
+  });
+
+  it('a rewrite of stored rows leaves the shape and counts it instead (legacy 168 review)', () => {
+    const stored = `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${HANDLE}`;
+    expect(scrubSecretValues(stored, { patterns: STORED_REWRITE_SECRET_PATTERNS })).toEqual({
+      value: `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${REDACTED}`,
+      redactedValues: 1,
+    });
+    expect(
+      scrubSecretValues(stored, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
+    ).toBe(1);
+    // Every other pattern is kept, in order.
+    expect(STORED_REWRITE_SECRET_PATTERNS).toHaveLength(SECRET_VALUE_PATTERNS.length - 1);
+    expect(
+      SECRET_VALUE_PATTERNS.filter((p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p)),
+    ).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
+  });
+
+  it('platformKeyShapes gives the values the shape-only scrub replaces, as written and in order', () => {
+    const other = `${PLATFORM_KEY.slice(0, 40)}-_Q`;
+    const text = `first ${PLATFORM_KEY}, then {"x":"${other}"}; not ${WIREGUARD_KEY} nor a-${PLATFORM_KEY}`;
+    expect(platformKeyShapes(text)).toEqual([PLATFORM_KEY, other]);
+    expect(scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues).toBe(
+      2,
+    );
+    expect(platformKeyShapes(`Bearer ${PLATFORM_KEY}`)).toEqual([PLATFORM_KEY]);
+    expect(platformKeyShapes(WIREGUARD_KEY)).toEqual([]);
+    // Minted keys, alone and in text: as many as the scrub counts, each the key itself.
+    for (let i = 0; i < 500; i += 1) {
+      const key = randomBytes(32).toString('base64url');
+      const sample = `k=${key} ${randomBytes(32).toString('base64')} (${key})`;
+      const found = platformKeyShapes(sample);
+      expect(found).toHaveLength(
+        scrubSecretValues(sample, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
+      );
+      for (const shape of found) expect(shape).toBe(key);
+    }
+  });
+
+  it('no stretch of a 4 KB standard base64 block is one — on one line or folded as PEM', () => {
+    for (let i = 0; i < 300; i += 1) {
+      const block = randomBytes(3_072).toString('base64');
+      expect(block).toHaveLength(4_096);
+      const pem = [
+        '-----BEGIN CERTIFICATE-----',
+        ...(block.match(/.{1,64}/g) ?? []),
+        '-----END CERTIFICATE-----',
+      ].join('\n');
+      for (const text of [block, `data:application/octet-stream;base64,${block}`, pem]) {
+        expect(scrubSecretValues(text).redactedValues).toBe(0);
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
+  });
+});
+
 describe('scrubSecretValues — linear time on adversarial input', () => {
   /** 200 KB of `unit` repeated. Each shape below took the previous patterns seconds (the review's
    *  probes: `a.` 26 s at 200 KB); a linear pattern does any of them in a few milliseconds. */
@@ -136,6 +285,8 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'Bearer aaaaaaa ',
     'authorization ',
     '-----BEGIN RSA PRIVATE KEY-----',
+    'Ab1',
+    `${'Ab1'.repeat(14)}A `,
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));

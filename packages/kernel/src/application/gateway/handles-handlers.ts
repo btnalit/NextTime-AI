@@ -1,8 +1,9 @@
-import type {
-  HandleWire,
-  PrincipalKind,
-  RevokeHandleResultWire,
-  SessionKind,
+import {
+  type HandleWire,
+  type PrincipalKind,
+  type RevokeHandleResultWire,
+  type SessionKind,
+  sessionShortId,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
@@ -10,7 +11,9 @@ import {
   holderForSessionKind,
   lockSessions,
 } from '../../governance/capability/index.js';
+import { findSuspectedSecrets } from '../../governance/redaction/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { InvalidCapabilityParamsError } from './invalid-params.js';
 import { isInternalPrincipalDisplayName } from './members-handlers.js';
 
 /**
@@ -50,6 +53,31 @@ export class HandleRevokeError extends Error {
   }
 }
 
+/**
+ * The note a person gives a session when issuing its Handle (`issue_handle`,
+ * `issue_service_handle`; legacy 168): what the client is for ("备份采集器"), stored on the session
+ * (governance 0049) and shown beside it in `list_handles`, so two rows that read alike — two
+ * clients of the same person, two service accounts of the same name — can be told apart before
+ * one is revoked. Trimmed; blank is no note (`null`). The registered schema caps its length
+ * (`HANDLE_NOTE_MAX_LENGTH`). Never a credential: the note is shown to the workspace's owners and
+ * kept after the session ends, so a note holding anything the audit copy of the call would redact
+ * (`findSuspectedSecrets` — a token, a platform API key, a `password: …`, a URL's password;
+ * review #501 on #1549) is refused with 400 before anything is written, and what is kept and
+ * listed is always what the audit row says. The refusal names the field, never the value.
+ */
+export function handleNoteFrom(capability: string, raw: string | undefined): string | null {
+  const note = raw?.trim() ?? '';
+  if (note === '') return null;
+  if (findSuspectedSecrets({ note }).count > 0) {
+    throw new InvalidCapabilityParamsError(
+      capability,
+      [{ path: ['note'], message: 'looks like a credential' }],
+      'note looks like a credential (a token, a key or a password) — a note is shown to the workspace owners and kept after the Handle ends; describe what the client is for instead',
+    );
+  }
+  return note;
+}
+
 export const DEFAULT_LIST_HANDLES_LIMIT = 100;
 export const MAX_LIST_HANDLES_LIMIT = 500;
 
@@ -84,6 +112,7 @@ interface HandleRow {
   created_at: Date;
   expires_at: Date;
   scope: { capabilities?: unknown };
+  note: string | null;
 }
 
 /** The visibility rule above, as SQL over `capability_handles h` / `sessions s` / `principals p`:
@@ -127,6 +156,8 @@ function toWireHandle(row: HandleRow): HandleWire {
   return {
     jti: row.jti,
     sessionId: row.session_id,
+    sessionShortId: sessionShortId(row.session_id),
+    sessionNote: row.note,
     sessionKind: row.session_kind,
     holder,
     onBehalfOf: row.on_behalf_of,
@@ -160,7 +191,7 @@ export const listHandlesHandler: CapabilityHandler = async (client, workspaceId,
   const internal = await internalServicePrincipalIds(client, workspaceId, owner);
   const result = await client.query<HandleRow>(
     `select h.jti, h.session_id, s.kind as session_kind, h.on_behalf_of,
-            p.kind as principal_kind, p.display_name, h.created_at, h.expires_at, h.scope
+            p.kind as principal_kind, p.display_name, h.created_at, h.expires_at, h.scope, s.note
      ${HANDLE_FROM}
      where ${VISIBLE_HANDLE}
        and ($5::timestamptz is null
@@ -249,6 +280,9 @@ export const revokeHandleHandler: CapabilityHandler = async (client, workspaceId
     resourceType: 'session',
     resourceId: handle.session_id,
     auditPayload: {
+      // The short id the person saw beside the session in `list_handles`: the audit row of a
+      // revocation names the session the way its list did.
+      sessionShortId: sessionShortId(handle.session_id),
       sessionKind: handle.session_kind,
       onBehalfOf: handle.on_behalf_of,
       revokedHandleCount,

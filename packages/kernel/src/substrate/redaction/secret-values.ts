@@ -32,7 +32,7 @@ import {
  * What is replaced inside any string:
  *   - a PEM private key; an `Authorization` / `Cookie` header's value (the rest of the line);
  *   - a compact JWT (a Handle is one); a `Bearer`/`Basic` credential;
- *   - a vendor key with a well-known prefix;
+ *   - a vendor key with a well-known prefix; a platform API key (43 base64url characters alone);
  *   - the value of an upper-case env assignment whose name names a secret anywhere (`PGPASSWORD=`,
  *     `CAPABILITY_HANDLE=`, quoted or not);
  *   - the value of a `name: value` / `name=value` whose name's last word names a secret (YAML,
@@ -203,6 +203,32 @@ const VENDOR_KEY: ValuePattern = {
   redact: () => REDACTED,
 };
 
+/**
+ * A platform API key as the kernel mints it (`generateApiKey`, application/gateway/auth.ts: 32
+ * random bytes, base64url without padding — exactly 43 characters), standing alone: a run of
+ * exactly 43 base64url characters, mixing upper and lower case with a digit, `-` or `_` (a random
+ * key lacks one of those only about once in 7,500; a word or a lower-case hex digest never has
+ * them all). Nothing of either base64 alphabet on either side — not base64url's, and not standard
+ * base64's `+` and `/`, nor its `=` padding after — so a 32-byte value in standard base64 (a
+ * WireGuard public key, a `SHA-256=` digest: 43 characters and `=`) and a 43-character stretch of
+ * a larger block (a certificate, a data URI) between two `+` or `/` are not one. The price is a key
+ * right after `/` or `+`, as in a URL path, which a key never travels in (it is sent only as
+ * `Authorization: Bearer`). It has no prefix to find it by, and whoever holds it acts as that
+ * person or service account on every `/api` route (legacy 168: a key pasted into a Handle's note
+ * would have been kept and listed as written). Starts only where a run starts, so a longer run is
+ * passed over in linear time.
+ *
+ * Hidden, never refused: any other 32 bytes in base64url (a SHA-256 digest, an Ed25519 public
+ * key's JWK `x`, a random id) has the same shape, so this is in `SECRET_VALUE_PATTERNS` only — such
+ * a value is masked wherever values are scrubbed (the accepted over-redaction), and not in
+ * `HIGH_CONFIDENCE_SECRET_PATTERNS`, where it would refuse a call outright.
+ */
+const MINTED_PLATFORM_KEY: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])/g,
+  redact: (match) =>
+    /[A-Z]/.test(match) && /[a-z]/.test(match) && /[0-9_-]/.test(match) ? REDACTED : undefined,
+};
+
 /** `scheme://user:password@host`, the password captured. */
 const URL_PASSWORD =
   /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}):(?!\[redacted\]@)([^\s/@]{1,256})@/g;
@@ -232,6 +258,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
         : undefined,
   },
   VENDOR_KEY,
+  MINTED_PLATFORM_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
   {
@@ -272,6 +299,37 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 ];
 
 /**
+ * `SECRET_VALUE_PATTERNS` but a platform API key standing alone (`MINTED_PLATFORM_KEY`): what a
+ * one-way rewrite of rows already stored hides (application/platform/scrub-raw-secrets — historical
+ * Turn reports, agent Decisions, tool-call records; legacy 168 review). The key's shape is any 32
+ * bytes in base64url, so masking it there would lose every digest and public key in that history for
+ * good: such a value is counted by row id instead (`PLATFORM_KEY_SHAPE_PATTERNS`), for the keys
+ * still valid among them to be found and rotated. What is written from now on is masked by the full
+ * set.
+ */
+export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VALUE_PATTERNS.filter(
+  (valuePattern) => valuePattern !== MINTED_PLATFORM_KEY,
+);
+
+/** Only a platform API key standing alone — what a rewrite of stored rows leaves and counts. */
+export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
+
+/**
+ * Each value of a platform API key's shape `text` holds, as written: exactly what
+ * `scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS })` replaces, in order. Only
+ * for comparing stored copies against the keys issued, by their hash (application/platform/
+ * scrub-raw-secrets.ts's `issuedKeyHashes`): hash each one and drop it, never store, log or show
+ * it.
+ */
+export function platformKeyShapes(text: string): string[] {
+  const found: string[] = [];
+  for (const { start, end, replacement } of secretMatches(MINTED_PLATFORM_KEY, text)) {
+    if (replacement !== undefined) found.push(text.slice(start, end));
+  }
+  return found;
+}
+
+/**
  * The patterns that match only what is almost certainly a credential itself, never text that
  * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
  * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
@@ -283,8 +341,10 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
  * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
  * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
- * `Bearer` value. For refusing content outright (an observe-class Operation's params, legacy
- * 175), where every other pattern is only recorded.
+ * `Bearer` value; nor a platform API key standing alone (`MINTED_PLATFORM_KEY`): its shape is any 32
+ * random bytes in base64url — a SHA-256 digest, an Ed25519 public key's JWK `x` — so a call that
+ * names one by its digest would be refused (legacy 168 review). For refusing content outright (an
+ * observe-class Operation's params, legacy 175), where every other pattern is only recorded.
  */
 export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
   PEM_PRIVATE_KEY,
@@ -418,9 +478,13 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
 }
 
 /** `text` with every secret-looking value replaced. Linear in `text`; a caller holding text of
- *  unbounded size bounds it first. */
-export function scrubSecretValues(text: string): Scrubbed<string> {
-  const state = freshState();
+ *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`; a rewrite of rows
+ *  already stored passes `STORED_REWRITE_SECRET_PATTERNS`. */
+export function scrubSecretValues(
+  text: string,
+  options: { readonly patterns?: readonly ValuePattern[] } = {},
+): Scrubbed<string> {
+  const state = freshState({ patterns: options.patterns ?? SECRET_VALUE_PATTERNS });
   return { value: scrubInto(text, state), redactedValues: state.count };
 }
 

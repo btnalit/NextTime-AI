@@ -41,3 +41,8 @@ export const CHAT_TITLE_MAX_LENGTH = 200;
 /** A WorkerDefinition's `name`: `propose_worker_definition` and
  *  `propose_definition_from_combination`. */
 export const WORKER_DEFINITION_NAME_MAX_LENGTH = 200;
+
+/** Legacy 168: the note a person may give a Handle's session when issuing it (`issue_handle`,
+ *  `issue_service_handle`) — what the client is for ("备份采集器"), shown beside the session in
+ *  `list_handles`. */
+export const HANDLE_NOTE_MAX_LENGTH = 200;

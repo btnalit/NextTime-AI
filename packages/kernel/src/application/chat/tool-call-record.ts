@@ -8,6 +8,7 @@ import {
 } from '@nexttime/shared';
 import {
   type RedactedValue,
+  STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
   redactSecretFieldsInJsonText,
   redactSecrets,
@@ -135,9 +136,11 @@ export function redactToolResult(
 /**
  * A tool-call record stored before legacy 185 (`chat_messages.content`, kind `tool_call`) with its
  * result preview scrubbed the way `buildToolCallRecord` scrubs one now: the key rule over JSON text
- * (its tool's declared keys, or a secret-naming key), then every secret-looking value. What the
- * record cannot give back is the values its arguments hid (its `args` copy is masked), so a result
- * that quoted one in prose keeps it. `redactedValues` is added to the record's own count.
+ * (its tool's declared keys, or a secret-naming key), then every secret-looking value but a platform
+ * API key standing alone (`STORED_REWRITE_SECRET_PATTERNS`: the rewrite is one-way and that shape is
+ * any 32 bytes in base64url, so `cli/scrub-raw-secrets.ts` counts it instead — legacy 168 review).
+ * What the record cannot give back is the values its arguments hid (its `args` copy is masked), so a
+ * result that quoted one in prose keeps it. `redactedValues` is added to the record's own count.
  * `cli/scrub-raw-secrets.ts` rewrites stored records with it.
  */
 export function rescrubStoredToolCallResult(
@@ -149,7 +152,7 @@ export function rescrubStoredToolCallResult(
   }
   const name = typeof content.name === 'string' ? content.name : null;
   const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name));
-  const values = scrubSecretValues(fields.value);
+  const values = scrubSecretValues(fields.value, { patterns: STORED_REWRITE_SECRET_PATTERNS });
   const redactedValues = fields.redactedValues + values.redactedValues;
   if (values.value === result.text) return { value: content, redactedValues: 0 };
   const previous = typeof content.redactedValues === 'number' ? content.redactedValues : 0;
