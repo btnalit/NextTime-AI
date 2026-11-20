@@ -216,6 +216,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
       cancelConnectionRequest(client, workspaceId, {
         connectionRequestId: row.id,
         cancelledBy: memberId,
+        reason: 'withdrawn',
       }),
     );
     const audit = await inTx((client) =>
@@ -252,6 +253,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         cancelConnectionRequest(client, workspaceId, {
           connectionRequestId: row.id,
           cancelledBy: memberId,
+          reason: 'withdrawn',
         }),
       );
       const audit = await inTx((client) =>
@@ -324,12 +326,17 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
       cancelConnectionRequest(client, workspaceId, {
         connectionRequestId: row.id,
         cancelledBy: memberId,
+        reason: 'withdrawn',
       }),
     );
     expect(cancelled.status).toBe('cancelled');
     expect(cancelled.gatekeeperId).toBeNull();
     expect(cancelled.completedAt).toBeNull();
     expect(cancelled.completedBy).toBeNull();
+    // Legacy 254 (governance 0047): why and when.
+    expect(cancelled.cancelReason).toBe('withdrawn');
+    expect(cancelled.cancelledAt).toBeInstanceOf(Date);
+    expect(cancelled.gateInstanceId).toBeNull();
 
     const reread = await inTx((client) => getConnectionRequest(client, workspaceId, row.id));
     expect(reread?.status).toBe('cancelled');
@@ -350,6 +357,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
     expect(audit.rows[0]?.actor_principal_id).toBe(memberId);
     expect(audit.rows[0]?.payload).toMatchObject({
       resultingStatus: 'cancelled',
+      cancelReason: 'withdrawn',
       kind: 'http',
       target: 'to-be-cancelled',
       requestedBy: memberId,
@@ -361,6 +369,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         cancelConnectionRequest(client, workspaceId, {
           connectionRequestId: row.id,
           cancelledBy: ownerId,
+          reason: 'declined',
         }),
       ),
     ).rejects.toBeInstanceOf(IllegalTransition);
@@ -376,6 +385,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         cancelConnectionRequest(client, workspaceId, {
           connectionRequestId: completedId as string,
           cancelledBy: ownerId,
+          reason: 'declined',
         }),
       ),
     ).rejects.toBeInstanceOf(IllegalTransition);
@@ -387,6 +397,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         cancelConnectionRequest(client, workspaceId, {
           connectionRequestId: randomUUID(),
           cancelledBy: ownerId,
+          reason: 'declined',
         }),
       ),
     ).rejects.toBeInstanceOf(ConnectionRequestNotFoundError);

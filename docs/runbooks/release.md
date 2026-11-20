@@ -3527,6 +3527,65 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**：回退代码即可，没有迁移，存着的数据没有改写。回滚后，按新版重建、且声明乱序的自接门会和回滚后的内核对不上，情形同上；按从小到大写的声明在任何版本组合下都对得上。
 - 下一次主机升级的提示要带上本节。
 
+### 3.205 成员申请所有者启用平台门实例（#1521，遗留 254，governance 0047 + 0048，0.69.2 之后的下一版）
+
+**迁移 governance 0047 与 0048**：都只改 `connection_requests`，随 `--pull` 自动执行，不改写已有的行。
+
+- **0047**：
+  - 加三列 `gate_instance_id`、`cancel_reason`、`cancelled_at`，都可空，不回填；`target` 去掉 `not null`。
+  - 加四个约束：`connection_requests_one_subject`（`target` 和 `gate_instance_id` 恰好一个有值）、`connection_requests_gate_enable_not_admin_agent`、`connection_requests_cancel_reason`、`connection_requests_cancel_fields`（只有 `cancelled` 的行带取消原因和时间）。
+  - 加部分唯一索引 `connection_requests_one_open_gate_enable`（同一个人对同一个门实例只有一条未完成的申请）和索引 `connection_requests_gate_instance_idx`。
+  - 加平台平面的两条策略：`connection_requests_platform_read`、`connection_requests_platform_cancel`。平台只能把未完成的门实例申请取消为 `gate_unavailable`。
+- **0048**：加一个 `BEFORE UPDATE` 触发器 `connection_requests_fixed_columns_guard`，不管哪个平面、哪个角色更新都生效，违反时报 23514：
+  - 申请本身的列写下后不能改：工作区、id、类型、地址、门实例、申请人、申请时间。
+  - `completed_by` 只在申请完成的那次更新里写。
+  - 已经完成或取消的申请不能再改：不能改回 `requested`，也不能改完成人、完成时间、取消原因。
+
+- **行为变化**：
+  - 不能启用平台门实例的成员可以申请启用（`request_gate_instance_enable`）。申请进所有者在「系统与授权」的连接申请队列；所有者启用后申请完成；申请人可以撤回，所有者可以拒绝。
+  - 以下情况会在同一个平台事务里，把这些门实例的未完成申请取消为 `gate_unavailable`：
+    - 平台停用或删除门实例；
+    - 把连接器移出平台预置模式；
+    - 平台变更回滚停用门实例。
+  - 平台审计行列出被取消的申请。工作区审计不加行，原因记在申请行上，工作区读得到。
+  - 以前取消的申请没有取消原因（不回填）；谁取消的，写在它的 `connection.request_cancelled` 审计行里。
+- **升级影响**：存量行都满足新约束：`target` 都有值，`gate_instance_id` 为空，以前取消的行两个取消字段都为空。加约束时 PostgreSQL 会校验存量行，`connection_requests` 是小表，很快。加约束、索引和策略期间这张表被短暂锁住，连接申请的读写排队，其他功能不受影响。没有需要手工执行的步骤。
+- **升级前只读预检**（以表的属主运行，和前面几节一样；结果记 `docs/private/`）：
+
+  ```sql
+  select status, count(*) from connection_requests group by status order by status;
+  select tgname from pg_trigger
+   where tgrelid = 'connection_requests'::regclass and not tgisinternal order by tgname;
+  ```
+
+  - 第一条：记下各状态的条数，升级后对照。
+  - 第二条：只应有 `connection_requests_admin_agent_session_guard`（governance 0037）。
+- **升级后只读核对**：
+  - `select version from schema_migrations where module = 'governance' and version in (47, 48) order by version;` 返回两行。
+  - 上面查触发器的语句多出 `connection_requests_fixed_columns_guard`。
+  - 各状态的条数和升级前一样，迁移不改写行。
+  - 在还没有人申请或撤回之前，`select count(*) from connection_requests where gate_instance_id is not null or cancel_reason is not null or cancelled_at is not null;` 为 0。
+- **回滚**（见 §6 两行）：
+  1. 回退代码之前，先只读看有没有门实例申请：
+
+     ```sql
+     select status, count(*) from connection_requests where gate_instance_id is not null group by status;
+     ```
+
+  2. 有的话，在维护窗口里以表的属主把它们删掉。上一版把 `target` 当字符串读，留着这类申请，它的所有者队列会出错。这是写操作：只删门实例申请，没有别的表引用它们；它们的工作区审计行和平台审计行都留着。
+
+     ```sql
+     begin;
+     delete from connection_requests where gate_instance_id is not null;
+     commit;
+     ```
+
+  3. 回退代码。0047 和 0048 的 schema 可以留着：上一版只更新未完成申请的状态和完成列，0048 不拦它；它取消申请时不写取消原因，0047 的约束允许。
+  4. 要连 schema 一起撤，先撤 0048，再撤 0047：
+     - 0048：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行。
+     - 0047：删两条平台策略、两个索引、四个约束和三列，把 `target` 设回 `not null`（第 2 步之后所有行都有 `target`），再删 governance 47 那一行。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -3724,6 +3783,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | goal `0020_absence_version_confirmed`（#1289，遗留 496）：新函数 `goal_absence_version_confirmed`，两张验收检查表各加一个触发器，确认不存在的检查通过时回查 Operation 版本记着的确认；不动数据 | 可逆 | 上一版内核照常写同样的 Observation，直接跑在新 schema 上；上一版在探针里失败的用例已在 `reversibility-deltas.json` 声明；#1289 的 CI rehearsal 与可逆性探针通过 | 只需回退代码，不需要删触发器。要撤 schema：删两个触发器与三个函数，再删 `schema_migrations` 里 goal 20 那一行 |
 | 0.69.2 之后的下一版 | governance `0046_reconcile_absence_version_confirmed`（#1289，遗留 496）：reconcile 在「不存在」回答上记 `effect_seen` 前同样回查 Operation 版本的确认；只建函数与触发器，不动数据 | 可逆 | 同上一行 | 只需回退代码。要撤 schema：删该触发器与函数，再删 `schema_migrations` 里 governance 46 那一行 |
 | 0.69.2 之后的下一版 | core `0063_links_active_read_indexes`（#1471，遗留 146）：`links` 加两个只含活跃 Fact 的部分索引 `links_workspace_type_active_idx`（类型 + UTC 毫秒键 + id，降序）与 `links_workspace_recorded_active_idx`（`recorded_at` + id，降序），不改数据 | 可逆 | 只加索引，上一版的代码从不引用它们，照常运行（`list_facts` 照旧排序）；#1471 的 CI rehearsal 与可逆性探针通过 | 只需回退代码。要撤 schema：`drop index links_workspace_type_active_idx; drop index links_workspace_recorded_active_idx;`，再删 `schema_migrations` 里 core 63 那一行 |
+| 0.69.2 之后的下一版 | governance `0047_connection_request_gate_instance`（#1521，遗留 254）：`connection_requests` 加 `gate_instance_id`、`cancel_reason`、`cancelled_at` 三列，`target` 可为空，加四个约束、部分唯一索引 `connection_requests_one_open_gate_enable`、索引 `connection_requests_gate_instance_idx` 和平台平面的两条策略；不回填 | 有条件可逆 | 上一版只认自接申请。它插入的行总带 `target`，取消时不写原因，这在新约束下都合法；但它把 `target` 当字符串读，有门实例申请（`gate_instance_id is not null`）时，它的所有者队列会出错。只有这类申请为 0 条时才能只回退代码；#1521 的 CI rehearsal 与可逆性探针通过 | 回退代码前按 §3.205 先删门实例申请，之后只回退代码。要撤 schema：先撤 0048，再删两条策略、两个索引、四个约束和三列，`target` 设回 `not null`，再删 `schema_migrations` 里 governance 47 那一行 |
+| 0.69.2 之后的下一版 | governance `0048_connection_request_fixed_columns`（#1521，遗留 254）：`connection_requests` 加 `BEFORE UPDATE` 触发器。申请本身的列写下后不能改，`completed_by` 只在完成时写，已完成或取消的申请不能再改；不动数据 | 可逆 | 上一版只更新未完成申请（`where status = 'requested'`）的状态和完成列，触发器不拦它；#1521 的可逆性探针通过 | 只需回退代码。要撤 schema：`drop trigger connection_requests_fixed_columns_guard on connection_requests; drop function connection_requests_fixed_columns_guard();`，再删 `schema_migrations` 里 governance 48 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

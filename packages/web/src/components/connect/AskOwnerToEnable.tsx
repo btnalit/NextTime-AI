@@ -44,12 +44,12 @@ export function AskOwnerToEnable({
         <span>
           {gateName
             ? t(
-                `在本工作区启用「${gateName}」由工作区所有者完成。把下面这句发给工作区所有者；启用并授权给你之后，它会出现在你的「系统与授权」里。`,
-                `The workspace owner enables “${gateName}” in this workspace. Send them the request below; once it is enabled and granted to you, it shows up under Systems & access.`,
+                `在本工作区启用「${gateName}」由工作区所有者完成。把下面这句发给工作区所有者；所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。`,
+                `The workspace owner enables “${gateName}” in this workspace. Send them the request below; once the owner enables it, it shows up under Systems & access, and its write operations also need the owner to grant them to you.`,
               )
             : t(
-                '从平台目录启用由工作区所有者完成。把下面这句发给工作区所有者；启用并授权给你之后，它会出现在你的「系统与授权」里。',
-                'The workspace owner enables instances from the platform catalog. Send them the request below; once one is enabled and granted to you, it shows up under Systems & access.',
+                '从平台目录启用由工作区所有者完成。把下面这句发给工作区所有者；所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。',
+                'The workspace owner enables instances from the platform catalog. Send them the request below; once the owner enables one, it shows up under Systems & access, and its write operations also need the owner to grant them to you.',
               )}
         </span>
         <span className="row" style={{ alignItems: 'center' }}>

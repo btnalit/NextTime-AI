@@ -1,4 +1,4 @@
-import type { ConnectionRequestStatus } from '@nexttime/shared';
+import type { ConnectionRequestCancelReason, ConnectionRequestStatus } from '@nexttime/shared';
 
 /**
  * governance/connections/types: the `ConnectionRequestRow` shape (migrations/governance/
@@ -17,7 +17,12 @@ export interface ConnectionRequestRow {
   readonly id: string;
   readonly status: ConnectionRequestStatus;
   readonly kind: ConnectionRequestKind;
-  readonly target: string;
+  /** The system a self connection (`request_connection`) names; `null` on a gate instance enable
+   *  request (legacy 254, governance 0047 — exactly one of `target` and `gateInstanceId`). */
+  readonly target: string | null;
+  /** Legacy 254 (governance 0047): the platform gate instance (`gate_instances.gate_id`) a
+   *  `request_gate_instance_enable` request asks the owner to enable; `null` on a self connection. */
+  readonly gateInstanceId: string | null;
   readonly requestedBy: string;
   readonly gatekeeperId: string | null;
   readonly completedBy: string | null;
@@ -26,6 +31,10 @@ export interface ConnectionRequestRow {
   /** S11 AA5a-1 (governance 0037): the admin agent session that made the request, when an admin
    *  agent did (in its trial workspace); `null` for every other request. */
   readonly adminAgentSessionId: string | null;
+  /** Legacy 254 (governance 0047): why and when a `cancelled` request ended — `null` on every other
+   *  status, and on a request cancelled before 0047 (no backfill). */
+  readonly cancelReason: ConnectionRequestCancelReason | null;
+  readonly cancelledAt: Date | null;
 }
 
 interface ConnectionRequestDbRow {
@@ -33,13 +42,16 @@ interface ConnectionRequestDbRow {
   id: string;
   status: ConnectionRequestStatus;
   kind: ConnectionRequestKind;
-  target: string;
+  target: string | null;
+  gate_instance_id: string | null;
   requested_by: string;
   gatekeeper_id: string | null;
   completed_by: string | null;
   requested_at: Date;
   completed_at: Date | null;
   admin_agent_session_id: string | null;
+  cancel_reason: ConnectionRequestCancelReason | null;
+  cancelled_at: Date | null;
 }
 
 export function mapConnectionRequestRow(row: ConnectionRequestDbRow): ConnectionRequestRow {
@@ -49,22 +61,39 @@ export function mapConnectionRequestRow(row: ConnectionRequestDbRow): Connection
     status: row.status,
     kind: row.kind,
     target: row.target,
+    gateInstanceId: row.gate_instance_id,
     requestedBy: row.requested_by,
     gatekeeperId: row.gatekeeper_id,
     completedBy: row.completed_by,
     requestedAt: row.requested_at,
     completedAt: row.completed_at,
     adminAgentSessionId: row.admin_agent_session_id,
+    cancelReason: row.cancel_reason,
+    cancelledAt: row.cancelled_at,
   };
 }
 
 export const CONNECTION_REQUEST_ROW_COLUMNS =
-  'workspace_id, id, status, kind, target, requested_by, gatekeeper_id, completed_by, ' +
-  'requested_at, completed_at, admin_agent_session_id';
+  'workspace_id, id, status, kind, target, gate_instance_id, requested_by, gatekeeper_id, ' +
+  'completed_by, requested_at, completed_at, admin_agent_session_id, cancel_reason, cancelled_at';
 
 export class ConnectionRequestNotFoundError extends Error {
   constructor(workspaceId: string, connectionRequestId: string) {
     super(`ConnectionRequest not found: workspace ${workspaceId}, id ${connectionRequestId}`);
     this.name = 'ConnectionRequestNotFoundError';
+  }
+}
+
+/** Legacy 254: `create_connection` was given a gate instance enable request — it names a platform
+ *  gate instance, not a system, and only `enable_gate_instance` completes it (409
+ *  `connection_request_is_gate_enable`). */
+export class ConnectionRequestIsGateEnableError extends Error {
+  readonly gateId: string;
+  constructor(connectionRequestId: string, gateId: string) {
+    super(
+      `ConnectionRequest ${connectionRequestId} asks for platform gate instance ${gateId} to be enabled — complete it with enable_gate_instance, not create_connection`,
+    );
+    this.name = 'ConnectionRequestIsGateEnableError';
+    this.gateId = gateId;
   }
 }

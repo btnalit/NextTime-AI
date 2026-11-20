@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ChatMessageWire, TurnToolCallsWire } from '@nexttime/shared';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -169,14 +169,29 @@ describe('TurnToolCalls', () => {
     }
   });
 
-  it('turn_not_found: says the Turn’s chat cannot be read, with a retry', async () => {
+  it('turn_not_found: says the Turn’s chat cannot be read, with no retry (the kernel answers it the same every time)', async () => {
     const { http } = httpAnswering(() =>
       Promise.reject(new HttpError('capability_error', 'no such turn', 'turn_not_found')),
     );
     renderCalls(http);
     const banner = await screen.findByTestId('explain-turn-tool-calls-error');
     expect(banner.textContent).toContain('读不到这一轮所在的对话');
-    expect(within(banner).getByRole('button')).toBeTruthy();
+    expect(within(banner).queryByRole('button')).toBeNull();
+  });
+
+  it('any other failure offers a retry, which reads again', async () => {
+    let answers = 0;
+    const { http, calls } = httpAnswering(() => {
+      answers += 1;
+      return answers === 1
+        ? Promise.reject(new HttpError('network', 'offline'))
+        : { chatId: 'chat-1', items: [toolRow(1, 'call-1')] };
+    });
+    renderCalls(http);
+    const banner = await screen.findByTestId('explain-turn-tool-calls-error');
+    fireEvent.click(within(banner).getByRole('button'));
+    await screen.findByTestId('explain-turn-tool-calls-list');
+    expect(calls).toHaveLength(2);
   });
 
   it('a role refused the read shows nothing', async () => {
@@ -200,6 +215,31 @@ describe('TurnToolCalls', () => {
     const section = screen.getByTestId('explain-turn-tool-calls');
     expect(section.textContent).toContain('Tool calls in this turn');
     expect(section.textContent).toContain('1 call(s), in the order they were made');
+    expect(screen.getByTestId('explain-turn-tool-calls-unreadable').textContent).toContain(
+      '1 more this console cannot read',
+    );
     expect(section.textContent).not.toMatch(/[一-鿿]/);
+  });
+
+  it('every call unreadable: says how many and where to see them, never that the Turn called none (console review on #1517)', async () => {
+    const odd = (sequence: number): ChatMessageWire => ({
+      ...toolRow(sequence, `call-${sequence}`),
+      content: { kind: 'something_else' },
+    });
+    const { http } = httpAnswering(() => ({ chatId: 'chat-1', items: [odd(1), odd(2)] }));
+    renderCalls(http);
+    const empty = await screen.findByTestId('explain-turn-tool-calls-empty');
+    expect(empty.textContent).toContain('这一轮有 2 个工具调用，这个控制台读不了');
+    expect(empty.textContent).not.toContain('没有调用工具');
+    expect(within(empty).getByTestId('explain-turn-tool-calls-chat').getAttribute('href')).toBe(
+      '#/work/chats/chat-1',
+    );
+  });
+
+  it('every call read: no unreadable line', async () => {
+    const { http } = httpAnswering(() => ({ chatId: 'chat-1', items: [toolRow(1, 'call-1')] }));
+    renderCalls(http);
+    await screen.findByTestId('explain-turn-tool-calls-list');
+    expect(screen.queryByTestId('explain-turn-tool-calls-unreadable')).toBeNull();
   });
 });

@@ -1,4 +1,6 @@
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { goToByLabel } from './journeys/helpers.js';
+import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 import { type Page, expect, test } from './lib/test.js';
 
 /**
@@ -26,6 +28,10 @@ import { type Page, expect, test } from './lib/test.js';
  * passes exactly the same way a fresh run does. Test 3 additionally restores the deny list to empty
  * before it ends, so a later retry (or a human poking at the same stack afterwards) starts clean.
  *
+ * Legacy 254 adds two tests after test 2, each its own API-key session: the `ci-e2e` workspace's
+ * operator asks its owner to enable the instance (`request_gate_instance_enable`), and the owner
+ * declines it from 连接申请. They need `WEB_E2E_API_KEY` and `WEB_E2E_API_KEY_B` too.
+ *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_ADMIN_LOGIN`/`WEB_E2E_ADMIN_INITIAL_PASSWORD` — the same
  * pre-created platform administrator `workspaces.spec.ts` uses (see that file's own doc comment).
  * The admin is assumed to be the owner of the platform default workspace (true on a fresh stack:
@@ -36,6 +42,8 @@ import { type Page, expect, test } from './lib/test.js';
 
 const ADMIN_LOGIN = process.env.WEB_E2E_ADMIN_LOGIN;
 const ADMIN_INITIAL_PASSWORD = process.env.WEB_E2E_ADMIN_INITIAL_PASSWORD;
+/** The `ci-e2e` workspace's operator (`.github/workflows/e2e.yml` "Add a second principal"). */
+const OPERATOR_API_KEY = process.env.WEB_E2E_API_KEY_B;
 
 const BAD_CREDENTIALS_MESSAGE = '登录名或密码不正确';
 const GATE_ID = 'ci-fixture-mcp';
@@ -256,6 +264,70 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     );
 
     await signOut(page);
+  });
+
+  // Legacy 254: someone in a workspace who may not enable the instance asks the owner to. Test 1
+  // made it available to every workspace; `ci-e2e` has not enabled it yet at this point of the run
+  // (journeys ⑫ ⑮ ⑰ enable it there later, outside the page). The second principal is that
+  // workspace's operator, its owner the API-key owner. Each side is its own test, its own session.
+  test('operator: asks the owner to enable the instance; 「已申请」 survives a reload; 撤回 asks first', async ({
+    page,
+  }) => {
+    test.skip(!OPERATOR_API_KEY || !OWNER_API_KEY, 'set WEB_E2E_API_KEY and WEB_E2E_API_KEY_B');
+    await loginAsOwner(page, OPERATOR_API_KEY as string);
+    await goToByLabel(page, '系统与授权');
+    const request = page.getByTestId(`available-gate-request-${GATE_ID}`);
+    await expect(request).toBeVisible({ timeout: 15_000 });
+    const state = request.getByTestId(`available-gate-request-${GATE_ID}-state`);
+    const withdraw = async () => {
+      await request.getByRole('button', { name: '撤回', exact: true }).click();
+      const confirm = page.getByRole('dialog', { name: '撤回启用申请' });
+      await expect(confirm).toContainText(DISPLAY_NAME);
+      await confirm.getByRole('button', { name: '撤回申请', exact: true }).click();
+      await expect(state).toHaveText('由工作区所有者启用', { timeout: 15_000 });
+    };
+    // A retry may find the request an earlier attempt left open.
+    if ((await state.textContent())?.includes('已申请')) await withdraw();
+
+    const ask = request.getByRole('button', { name: '申请启用', exact: true });
+    await ask.click();
+    await expect(state).toHaveText('已申请，等所有者启用', { timeout: 15_000 });
+    // Read back from the server, not kept by the page.
+    await page.reload();
+    await expect(state).toHaveText('已申请，等所有者启用', { timeout: 15_000 });
+    await withdraw();
+    // Asked again: the owner's test below answers it.
+    await ask.click();
+    await expect(state).toHaveText('已申请，等所有者启用', { timeout: 15_000 });
+  });
+
+  test('owner: the request names the instance in 连接申请, and declining it records why', async ({
+    page,
+  }) => {
+    test.skip(!OPERATOR_API_KEY || !OWNER_API_KEY, 'set WEB_E2E_API_KEY and WEB_E2E_API_KEY_B');
+    await loginAsOwner(page);
+    await goToByLabel(page, '系统与授权');
+    const row = page
+      .getByTestId('request-row')
+      .filter({ has: page.getByTestId('request-gate-instance') })
+      .filter({ hasText: DISPLAY_NAME });
+    await expect(row).toHaveCount(1, { timeout: 15_000 });
+    await expect(row.getByTestId('request-gate-instance')).toHaveText(
+      `启用平台实例「${DISPLAY_NAME}」`,
+    );
+    await row.getByRole('button', { name: '拒绝' }).click();
+    const confirm = page.getByRole('dialog', { name: '拒绝启用申请' });
+    await expect(confirm).toContainText(DISPLAY_NAME);
+    await confirm.getByRole('button', { name: '拒绝申请', exact: true }).click();
+    await expect(row).toHaveCount(0, { timeout: 15_000 });
+    await page.getByRole('tab', { name: '全部' }).click();
+    await expect(
+      page
+        .getByTestId('request-row')
+        .filter({ hasText: DISPLAY_NAME })
+        .getByTestId('request-cancel-reason')
+        .first(),
+    ).toHaveText('所有者拒绝');
   });
 
   test('admin: connector deny list hides an Operation from the catalog, then restores it', async ({

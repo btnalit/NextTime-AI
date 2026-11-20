@@ -25,7 +25,11 @@ import {
   type PlatformSegmentPreviewWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  cancelGateInstanceEnableRequests,
+  cancelledGateInstanceEnableRequestsAuditPayload,
+} from '../../governance/connections/index.js';
 import {
   type SuspectedSecrets,
   assertCredentialsReviewed,
@@ -37,6 +41,7 @@ import {
   type GateTransportKind,
   createHostedGateInstance,
   loadConnectorPresets,
+  lockGateInstancesAvailabilityExclusive,
   planHostedGateInstance,
   resolveHostedDefinition,
 } from '../gates/index.js';
@@ -952,9 +957,11 @@ export interface RolledBackPlatformChangeSegment {
  * order: the proposal's dependency lock, exclusive (`lockProposalDependency`, AA3c-2: no workspace
  * segment of it applies until this commits), the record's row lock and status (409), the workspace
  * segments' row locks and any applied — by what their applies recorded, so after the trial
- * workspace is purged too (409) — each instance's row lock and its drift (409); then the record's
- * `rolled_back` edge, each instance disabled, the platform segment's `rolled_back` edge (while its
- * trial workspace exists) and the workspace segments still proposed withdrawn. Any refusal leaves
+ * workspace is purged too (409) — the instances' availability lock, exclusive (legacy 254), each
+ * instance's row lock and its drift (409); then the record's `rolled_back` edge, each instance
+ * disabled with its open enable requests `cancelled` / `gate_unavailable` (listed on its
+ * `gate_instance.disabled` audit row), the platform segment's `rolled_back` edge (while its trial
+ * workspace exists) and the workspace segments still proposed withdrawn. Any refusal leaves
  * everything as it was.
  */
 export async function rollBackPlatformChangeSegment(
@@ -973,6 +980,14 @@ export async function rollBackPlatformChangeSegment(
     throw new DependentSegmentsAppliedError(row.id, dependentsApplied);
   }
   const items = (await itemsOf(client, [row.id])).get(row.id) ?? [];
+  // Legacy 254 (#501 on #1521, S2): a rollback that disables an instance leaves it enableable by
+  // no workspace, as `update_gate_instance`'s disable does — so the same availability lock,
+  // exclusive and before the instances' row locks below, the order every platform call takes it
+  // in (`application/gates/availability.ts`).
+  await lockGateInstancesAvailabilityExclusive(
+    client,
+    items.map((item) => item.gate_id),
+  );
   const planned = await planRollback(client, items, { forUpdate: true });
   const drifted = planned
     .filter((entry) => entry.wire.drift.length > 0)
@@ -1002,6 +1017,10 @@ export async function rollBackPlatformChangeSegment(
         : `update gate_instances set status = 'disabled', updated_at = now() where gate_id = $1`,
       [entry.wire.gateId],
     );
+    // Legacy 254: its open enable requests end `cancelled` / `gate_unavailable` here, as on every
+    // platform disable — a lost one's too, since disabling it is the administrator's decision (the
+    // loss alone keeps them open).
+    const cancelledRequests = await cancelGateInstanceEnableRequests(client, [entry.wire.gateId]);
     await writeAudit(client, {
       workspaceId: null,
       actorPrincipalId: null,
@@ -1016,6 +1035,7 @@ export async function rollBackPlatformChangeSegment(
         platformChangeSegmentId: row.id,
         adminProposalId: row.admin_proposal_id,
         ordinal: entry.wire.ordinal,
+        ...cancelledGateInstanceEnableRequestsAuditPayload(cancelledRequests),
       },
     });
   }

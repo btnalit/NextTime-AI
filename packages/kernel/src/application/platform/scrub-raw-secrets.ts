@@ -488,7 +488,12 @@ const SCANS: readonly Scan[] = [
   },
   {
     category: 'connectionTargets',
-    window: workspaceKeyset('connection_requests', 'workspace_id, id, target', 'true'),
+    // Legacy 254 (governance 0047): a gate instance enable request names no address.
+    window: workspaceKeyset(
+      'connection_requests',
+      'workspace_id, id, target',
+      'target is not null',
+    ),
     inspect: (row) =>
       findConnectionParamsCredential({ target: (row as ScannedRow & { target: string }).target })
         ? { values: 1 }

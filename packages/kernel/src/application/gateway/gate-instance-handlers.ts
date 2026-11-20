@@ -3,7 +3,10 @@ import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   assertConnectionParamsCarryNoCredentials,
+  completeGateInstanceEnableRequests,
+  listOpenGateInstanceEnableRequests,
   redactConnectionAddress,
+  requestGateInstanceEnable,
 } from '../../governance/connections/index.js';
 import {
   type GatekeeperByEndpointEntry,
@@ -26,6 +29,7 @@ import {
   getGateInstance,
   landGatekeeper,
   listAvailableGateInstances,
+  lockGateInstanceAvailabilityShared,
   manifestDigest,
   operationsOf,
   readGateDefinitions,
@@ -36,6 +40,7 @@ import type { CapabilityHandler } from './capability-handler.js';
 import { connectionGatekeeperClient } from './connection-handlers.js';
 import { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
 import { gateHostCredentialUrl } from './platform-gates-handlers.js';
+import { toWireConnectionRequest } from './resource-wire.js';
 
 /**
  * application/gateway/gate-instance-handlers: the workspace half of P-B1 (docs/platform-admin-
@@ -108,7 +113,10 @@ export class GateInstanceNotAvailableError extends Error {
     // linked to a *different* platform gate instance (the same endpoint redeployed under a new
     // GATE_ID) — a second link would leave trust and the disabled-Operation list undetermined
     // (core 0042 makes it impossible; this refuses it with a reason first).
-    | 'gatekeeper_already_linked';
+    | 'gatekeeper_already_linked'
+    // Legacy 254: `request_gate_instance_enable` for a gate this workspace already enabled — there
+    // is nothing left for the owner to do.
+    | 'gate_already_enabled';
   constructor(code: GateInstanceNotAvailableError['code'], message: string) {
     super(message);
     this.name = 'GateInstanceNotAvailableError';
@@ -205,9 +213,93 @@ function computeGateLinkDrift(
   return drift;
 }
 
-export const listAvailableGateInstancesHandler: CapabilityHandler = async (client, workspaceId) => {
-  return { result: { items: await listAvailableGateInstances(client, workspaceId) } };
+export const listAvailableGateInstancesHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  _params,
+  ctx,
+) => {
+  const items = await listAvailableGateInstances(client, workspaceId);
+  // Legacy 254: the caller's own open request that the owner enable each — read back from the
+  // request, so 「已申请」 survives a reload.
+  const requesterId = ctx?.principal?.id ?? ctx?.principalId;
+  const mine =
+    requesterId !== undefined
+      ? await listOpenGateInstanceEnableRequests(client, workspaceId, requesterId)
+      : new Map();
+  return {
+    result: {
+      items: items.map((item) => {
+        const request = mine.get(item.gateId);
+        return request !== undefined && item.gatekeeperId === null
+          ? {
+              ...item,
+              myEnableRequest: { id: request.id, requestedAt: request.requestedAt.toISOString() },
+            }
+          : item;
+      }),
+    },
+  };
 };
+
+/**
+ * `request_gate_instance_enable` (legacy 254, coordinator decision 2026-11-19, choice A): a member
+ * asks the workspace owner to enable a platform gate instance. The ask is a ConnectionRequest
+ * naming the instance (governance/0047) — the owner's queue, lifecycle and audit are the ones
+ * `request_connection` already has; `enable_gate_instance` below completes it.
+ *
+ * Refused as `enable_gate_instance` would be (`requireAvailable`: 404 `gate_not_found`, 409
+ * `connector_not_preset` / `gate_not_enabled` / `gate_not_ready`) — an owner could not act on it —
+ * and 409 `gate_already_enabled` once this workspace enabled it. The caller's open request for the
+ * gate, if there is one, comes back unchanged (one per person per gate, held by the database).
+ *
+ * Locks, in `enable_gate_instance`'s order: the (workspace, gate) enable lock, so a request and an
+ * enable never interleave (an enable completes every request that committed before it, and a
+ * request after it is refused `gate_already_enabled`); then the instance's availability lock,
+ * shared, so the platform making the instance unavailable either waits for this request and then
+ * cancels it, or commits first and this reads the change (`application/gates/availability.ts`).
+ */
+export const requestGateInstanceEnableHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  if (!ctx?.principal) {
+    throw new Error('request_gate_instance_enable: no resolved human principal in context');
+  }
+  const { gateId } = params as { gateId: string };
+  await lockEnableGate(client, workspaceId, gateId);
+  await lockGateInstanceAvailabilityShared(client, gateId);
+  if (await findGateLinkByGate(client, workspaceId, gateId)) {
+    throw new GateInstanceNotAvailableError(
+      'gate_already_enabled',
+      `gate instance "${gateId}" is already enabled in this workspace`,
+    );
+  }
+  const instance = await requireAvailable(client, gateId);
+  const { request, created } = await requestGateInstanceEnable(client, workspaceId, {
+    gateId,
+    kind: instance.transportKind,
+    requestedBy: ctx.principal.id,
+  });
+  return {
+    result: toWireConnectionRequest(request, new Map([[gateId, instance.displayName]])),
+    resourceType: 'connection_request',
+    resourceId: request.id,
+    // `created: false`: the caller's open request, returned as it was — nothing written.
+    auditPayload: { gateId, created },
+  };
+};
+
+/** Serializes everything that decides on one gate being enabled in one workspace —
+ *  `enable_gate_instance` and `request_gate_instance_enable` — the same advisory-lock shape
+ *  `application/task/invoke.ts` uses. */
+async function lockEnableGate(client: PoolClient, workspaceId: string, gateId: string) {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `enable_gate:${workspaceId}:${gateId}`,
+  ]);
+}
 
 /** R-18 (D-18): the manifest in effect and its digest, read once — the caller applies exactly
  *  these operations after checking `expectedDigest` (when given) against this digest, so what it
@@ -323,11 +415,23 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   };
   // Serialize concurrent enables of the same (workspace, gate) so the idempotency check below is
   // exact — the same advisory-lock shape `application/task/invoke.ts` uses (review finding).
-  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-    `enable_gate:${workspaceId}:${gateId}`,
-  ]);
+  // Legacy 254: `request_gate_instance_enable` takes it too, so a request never lands between the
+  // enable completing the open ones and committing.
+  await lockEnableGate(client, workspaceId, gateId);
+  // Legacy 254: and the instance's availability lock, shared — a platform disable, delete or
+  // connector-mode change in flight either commits first (and `requireAvailable` refuses) or
+  // waits for this enable (`application/gates/availability.ts`).
+  await lockGateInstanceAvailabilityShared(client, gateId);
   const existing = await findGateLinkByGate(client, workspaceId, gateId);
   if (existing) {
+    // Legacy 254: a request cannot be open while the link exists (the request refuses
+    // `gate_already_enabled` under the same lock) — completed here all the same, so none is ever
+    // left open beside a link. Normally no row matches and nothing is written.
+    const completed = await completeGateInstanceEnableRequests(client, workspaceId, {
+      gateId,
+      gatekeeperId: existing.gatekeeperObjectId,
+      completedBy: ctx.principal.id,
+    });
     return {
       result: {
         gateId,
@@ -339,9 +443,11 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
         credentialDrafts: [],
         // This call made no link/create decision at all — it just returned the prior outcome.
         linkedExisting: false,
+        ...completedRequestIds(completed),
       },
       resourceType: 'gatekeeper',
       resourceId: existing.gatekeeperObjectId,
+      ...completedRequestsAuditPayload(completed),
     };
   }
   const instance = await requireAvailable(client, gateId);
@@ -378,6 +484,15 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   );
   const drift =
     resolution.kind === 'link' ? computeGateLinkDrift(resolution.existing, instance) : undefined;
+  // Legacy 254 (the coordinator's requirement 2): every open request in this workspace that the
+  // owner enable this gate is now done — completed with this Gatekeeper and this enabler, one
+  // `connection.request_completed` audit row each naming the requester; this call's own audit row
+  // lists them too.
+  const completed = await completeGateInstanceEnableRequests(client, workspaceId, {
+    gateId,
+    gatekeeperId: landed.gatekeeperId,
+    completedBy: ctx.principal.id,
+  });
   return {
     result: {
       gateId,
@@ -389,11 +504,34 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
       credentialDrafts: landed.credentialDrafts,
       linkedExisting: landed.linkedExisting,
       ...(drift !== undefined ? { drift } : {}),
+      ...completedRequestIds(completed),
     },
     resourceType: 'gatekeeper',
     resourceId: landed.gatekeeperId,
+    ...completedRequestsAuditPayload(completed),
   };
 };
+
+function completedRequestIds(completed: readonly { readonly id: string }[]) {
+  return completed.length > 0
+    ? { completedConnectionRequestIds: completed.map((request) => request.id) }
+    : {};
+}
+
+function completedRequestsAuditPayload(
+  completed: readonly { readonly id: string; readonly requestedBy: string }[],
+) {
+  return completed.length > 0
+    ? {
+        auditPayload: {
+          completedConnectionRequests: completed.map((request) => ({
+            id: request.id,
+            requestedBy: request.requestedBy,
+          })),
+        },
+      }
+    : {};
+}
 
 /**
  * `preview_gate_instance_enable` (S8 W2-K2, audit J3): the console ConfirmTier's read model for

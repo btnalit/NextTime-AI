@@ -3023,6 +3023,22 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  request_gate_instance_enable: {
+    // Legacy 254: one open request per person per gate — the same ask again returns the caller's
+    // open request as it was (governance 0047's partial unique index), nothing written.
+    'an instance enabled platform-wide that this workspace has not enabled': {
+      first: expect.objectContaining({
+        status: 'requested',
+        gateInstance: expect.objectContaining({ gateId: expect.any(String) }),
+      }),
+      setUp: async (ctx) => {
+        const gateId = await announcedGate(ctx);
+        await decideGate(ctx, gateId);
+        return { gateId };
+      },
+      entity: (result) => (result as { id?: string }).id,
+    },
+  },
   enable_gate_instance: {
     // An instance enabled here already returns its link whatever the digest: the same call again
     // writes nothing but its own audit row.
@@ -3340,6 +3356,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'set_active_runtime_image',
   'rollback_runtime_image',
   'roll_entry_containers',
+  'request_gate_instance_enable',
   'enable_gate_instance',
   'test_gate_instance',
   'confirm_gate_manifest',

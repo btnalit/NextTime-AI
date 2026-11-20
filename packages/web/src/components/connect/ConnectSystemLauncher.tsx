@@ -63,6 +63,7 @@ import { CredentialDraftsNotice } from './CredentialDrafts.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { GateOwnedParamsMark, HeldDraftsNotice } from './GateOwnedParams.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
+import { type MyEnableRequest, RequestGateEnable } from './RequestGateEnable.js';
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
 
@@ -113,6 +114,9 @@ interface TrackedGate {
   readonly announced: boolean;
   /** The full platform row when the reader is an administrator; `null` from the workspace catalog. */
   readonly platform: GateInstanceWire | null;
+  /** Legacy 254: the reader's open request to enable it, from the workspace catalog
+   *  (`myEnableRequest`); unknown from a platform row (asking again returns the open one). */
+  readonly myEnableRequest?: MyEnableRequest;
 }
 
 function fromPlatformRow(row: GateInstanceWire): TrackedGate {
@@ -140,6 +144,7 @@ function fromAvailableRow(row: AvailableGateInstanceWire): TrackedGate {
     operationCount: row.operationCount,
     announced: row.operationCount > 0,
     platform: null,
+    ...(row.myEnableRequest !== undefined ? { myEnableRequest: row.myEnableRequest } : {}),
   };
 }
 
@@ -1260,6 +1265,15 @@ function WorkspaceEnableSection({
               testId="launcher-workspace-enable-button"
             />
           </div>
+        ) : can('request_gate_instance_enable') !== false ? (
+          // Legacy 254: ask the owner here; the request reaches their queue.
+          <RequestGateEnable
+            http={http}
+            gateId={gate.gateId}
+            gateName={gate.displayName}
+            myEnableRequest={gate.myEnableRequest}
+            testId="launcher-workspace-enable-request"
+          />
         ) : (
           <AskOwnerToEnable
             gateName={gate.displayName}

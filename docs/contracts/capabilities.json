@@ -7088,6 +7088,17 @@
         "adminAgentSessionId": {
           "type": "string"
         },
+        "cancelReason": {
+          "enum": [
+            "withdrawn",
+            "declined",
+            "gate_unavailable"
+          ],
+          "type": "string"
+        },
+        "cancelledAt": {
+          "type": "string"
+        },
         "completedAt": {
           "type": [
             "string",
@@ -7099,6 +7110,25 @@
             "string",
             "null"
           ]
+        },
+        "gateInstance": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gateId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "gateId",
+            "displayName"
+          ],
+          "type": "object"
         },
         "gatekeeperId": {
           "type": [
@@ -7144,7 +7174,6 @@
         "id",
         "status",
         "kind",
-        "target",
         "requestedBy",
         "gatekeeperId",
         "completedBy",
@@ -14642,6 +14671,12 @@
               "absentAnswers"
             ],
             "type": "object"
+          },
+          "type": "array"
+        },
+        "completedConnectionRequestIds": {
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },
@@ -41336,6 +41371,22 @@
                 ],
                 "type": "string"
               },
+              "myEnableRequest": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "requestedAt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "requestedAt"
+                ],
+                "type": "object"
+              },
               "operationCount": {
                 "minimum": 0,
                 "type": "integer"
@@ -42182,6 +42233,17 @@
               "adminAgentSessionId": {
                 "type": "string"
               },
+              "cancelReason": {
+                "enum": [
+                  "withdrawn",
+                  "declined",
+                  "gate_unavailable"
+                ],
+                "type": "string"
+              },
+              "cancelledAt": {
+                "type": "string"
+              },
               "completedAt": {
                 "type": [
                   "string",
@@ -42193,6 +42255,25 @@
                   "string",
                   "null"
                 ]
+              },
+              "gateInstance": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "gateId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "gateId",
+                  "displayName"
+                ],
+                "type": "object"
               },
               "gatekeeperId": {
                 "type": [
@@ -42238,7 +42319,6 @@
               "id",
               "status",
               "kind",
-              "target",
               "requestedBy",
               "gatekeeperId",
               "completedBy",
@@ -73240,9 +73320,132 @@
         "id",
         "status",
         "kind",
-        "target",
         "requestedBy",
-        "requestedAt"
+        "requestedAt",
+        "target"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "member",
+    "mode": "propose",
+    "name": "request_gate_instance_enable",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "adminAgentSessionId": {
+          "type": "string"
+        },
+        "cancelReason": {
+          "enum": [
+            "withdrawn",
+            "declined",
+            "gate_unavailable"
+          ],
+          "type": "string"
+        },
+        "cancelledAt": {
+          "type": "string"
+        },
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gateInstance": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gateId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "gateId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "gatekeeperId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "requestedBy": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "completed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "targetRedacted": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "kind",
+        "requestedBy",
+        "gatekeeperId",
+        "completedBy",
+        "requestedAt",
+        "completedAt"
       ],
       "type": "object"
     },

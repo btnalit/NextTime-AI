@@ -3493,7 +3493,10 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(shown).not.toContain('[redacted]');
             expect(
               requests.items
-                .map(({ target, targetRedacted }) => ({ target, marked: targetRedacted ?? null }))
+                .map(({ target, targetRedacted }) => ({
+                  target: target ?? '',
+                  marked: targetRedacted ?? null,
+                }))
                 .sort((a, b) => a.target.localeCompare(b.target)),
             ).toEqual([
               { target: shown, marked: true },

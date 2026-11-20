@@ -587,8 +587,30 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
   });
 
-  it('a workspace member who is not an owner sees the owner-only notice instead of the enable button', async () => {
+  it('a workspace member who is not an owner asks the owner instead of an enable button (legacy 254), and sees an open request as asked', async () => {
+    const asked = availableRow({
+      myEnableRequest: { id: 'cr-4', requestedAt: '2026-11-19T08:00:00.000Z' },
+    });
     const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-1', role: 'member' } }),
+      list_available_gate_instances: () => ({ items: [asked] }),
+    });
+    renderLauncher({ http, origin: 'workspace', canEnable: false, available: [asked] });
+    fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
+    next();
+    fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+    next();
+    expect(
+      (await screen.findByTestId('launcher-workspace-enable-request-state')).textContent,
+    ).toContain('你已申请在本工作区启用「Docker prod」');
+    expect(screen.getByTestId('launcher-workspace-enable-request-withdraw')).toBeTruthy();
+    expect(screen.queryByTestId('launcher-workspace-enable-owner-only')).toBeNull();
+    expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
+  });
+
+  it('an auditor, who may not ask, still gets the sentence to send the owner', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-1', role: 'auditor' } }),
       list_available_gate_instances: () => ({ items: [availableRow()] }),
     });
     renderLauncher({ http, origin: 'workspace', canEnable: false, available: [availableRow()] });
@@ -596,7 +618,12 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     next();
     fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
     next();
-    expect(screen.getByTestId('launcher-workspace-enable-owner-only')).toBeTruthy();
+    const ownerOnly = await screen.findByTestId('launcher-workspace-enable-owner-only');
+    // #1521 UX acceptance: it shows up once enabled (reads need no grant); writes need one.
+    expect(ownerOnly.textContent).toContain(
+      '所有者启用后，它会出现在你的「系统与授权」里，写操作还要所有者授权给你。',
+    );
+    expect(screen.queryByTestId('launcher-workspace-enable-request')).toBeNull();
     expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
   });
 

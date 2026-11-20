@@ -15,6 +15,7 @@ import {
 } from './credentials.js';
 import {
   CONNECTION_REQUEST_ROW_COLUMNS,
+  ConnectionRequestIsGateEnableError,
   type ConnectionRequestKind,
   ConnectionRequestNotFoundError,
   type ConnectionRequestRow,
@@ -94,11 +95,216 @@ export async function requestConnection(
     workspaceId,
     connectionRequestId: mapped.id,
     kind: mapped.kind,
-    target: mapped.target,
+    target: input.target,
     requestedBy: mapped.requestedBy,
   });
 
   return mapped;
+}
+
+// -------------------------------------------------------------------------------------------
+// Legacy 254 (coordinator decision 2026-11-19, choice A; governance/0047): a gate instance enable
+// request — a member asks the workspace owner to enable a platform gate instance
+// (`request_gate_instance_enable`), and the ask is a ConnectionRequest naming the instance
+// (`gate_instance_id`) instead of a system (`target`). Its terminal states:
+//
+//   * `completed` — the owner enabled the gate (`enable_gate_instance`):
+//     `completeGateInstanceEnableRequests`, every open request for that gate in the workspace,
+//     `gatekeeper_id` the Gatekeeper the enable registered or linked, `completed_by` the enabler,
+//     one `connection.request_completed` audit row per request naming requester and enabler;
+//   * `cancelled` / `withdrawn` or `declined` — `cancelConnectionRequest` (its requester, or the
+//     owner turning down someone else's);
+//   * `cancelled` / `gate_unavailable` — the platform deleted or disabled the instance (a platform
+//     change rolled back included), or took its connector out of platform-preset mode:
+//     `cancelGateInstanceEnableRequests`, in the platform's own transaction (governance/0047's `connection_requests_platform_cancel` allows that edge and
+//     no other).
+//
+// No outbox event: `ConnectionRequested` (packages/shared/src/events.ts) carries a `target`, and
+// nothing consumes either kind yet — the request row and the call's own audit row are the record.
+// -------------------------------------------------------------------------------------------
+
+export interface RequestGateInstanceEnableInput {
+  readonly gateId: string;
+  /** The instance's transport kind when it was asked for (`gate_instances.transport_kind`). */
+  readonly kind: ConnectionRequestKind;
+  readonly requestedBy: string;
+}
+
+/**
+ * One open request per person per gate instance (governance/0047's partial unique index): a second
+ * ask while the first is still `requested` inserts nothing and returns the first (`created: false`)
+ * — under a concurrent ask the insert waits for the other transaction and then finds its row. The
+ * caller has already checked the instance can be enabled and is not enabled here.
+ */
+export async function requestGateInstanceEnable(
+  client: PoolClient,
+  workspaceId: string,
+  input: RequestGateInstanceEnableInput,
+): Promise<{ readonly request: ConnectionRequestRow; readonly created: boolean }> {
+  const inserted = await client.query(
+    `insert into connection_requests (workspace_id, kind, gate_instance_id, requested_by)
+     values ($1, $2, $3, $4)
+     on conflict (workspace_id, requested_by, gate_instance_id)
+       where status = 'requested' and gate_instance_id is not null
+       do nothing
+     returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
+    [workspaceId, input.kind, input.gateId, input.requestedBy],
+  );
+  if (inserted.rows[0]) {
+    return { request: mapConnectionRequestRow(inserted.rows[0]), created: true };
+  }
+  const open = await openGateInstanceEnableRequest(client, workspaceId, {
+    gateId: input.gateId,
+    requestedBy: input.requestedBy,
+  });
+  // Unreachable: the conflict above is exactly this row, committed before the insert returned.
+  if (!open) {
+    throw new Error('requestGateInstanceEnable: no row inserted and no open request found');
+  }
+  return { request: open, created: false };
+}
+
+/** `requestedBy`'s own open request for this gate instance, if any — what
+ *  `list_available_gate_instances` shows as `myEnableRequest`. */
+export async function openGateInstanceEnableRequest(
+  client: PoolClient,
+  workspaceId: string,
+  input: { readonly gateId: string; readonly requestedBy: string },
+): Promise<ConnectionRequestRow | null> {
+  const result = await client.query(
+    `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
+     where workspace_id = $1 and gate_instance_id = $2 and requested_by = $3
+       and status = 'requested'`,
+    [workspaceId, input.gateId, input.requestedBy],
+  );
+  const row = result.rows[0];
+  return row ? mapConnectionRequestRow(row) : null;
+}
+
+/** Every open request of `requestedBy` for a gate instance in this workspace, by gate id. */
+export async function listOpenGateInstanceEnableRequests(
+  client: PoolClient,
+  workspaceId: string,
+  requestedBy: string,
+): Promise<ReadonlyMap<string, ConnectionRequestRow>> {
+  const result = await client.query(
+    `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
+     where workspace_id = $1 and requested_by = $2 and status = 'requested'
+       and gate_instance_id is not null`,
+    [workspaceId, requestedBy],
+  );
+  const byGate = new Map<string, ConnectionRequestRow>();
+  for (const row of result.rows.map(mapConnectionRequestRow)) {
+    if (row.gateInstanceId !== null) byGate.set(row.gateInstanceId, row);
+  }
+  return byGate;
+}
+
+/**
+ * `enable_gate_instance`'s half (legacy 254, the coordinator's requirement 2): every open request
+ * in this workspace to enable `gateId` becomes `completed`, naming the Gatekeeper the enable
+ * registered or linked and the person who enabled it, and each gets a
+ * `connection.request_completed` audit row whose actor is the enabler and whose payload names the
+ * requester — so the audit says whose ask it was and who acted on it. Called in the enable's own
+ * transaction, after the Gatekeeper exists, on both its paths (a new link, or the gate already
+ * linked). A request its requester withdraws at the same moment is decided by the row lock: the
+ * UPDATE below re-reads `status` once a concurrent cancel commits, and skips the row.
+ */
+export async function completeGateInstanceEnableRequests(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly gateId: string;
+    readonly gatekeeperId: string;
+    readonly completedBy: string;
+  },
+): Promise<readonly ConnectionRequestRow[]> {
+  // I6: the edge every row below takes (`requested → completed`).
+  const nextStatus = transition(CONNECTION_REQUEST_TRANSITIONS, 'requested', 'complete');
+  const result = await client.query(
+    `update connection_requests
+     set status = $5, gatekeeper_id = $3, completed_by = $4, completed_at = now()
+     where workspace_id = $1 and gate_instance_id = $2 and status = 'requested'
+     returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
+    [workspaceId, input.gateId, input.gatekeeperId, input.completedBy, nextStatus],
+  );
+  const completed = result.rows
+    .map(mapConnectionRequestRow)
+    .sort((a, b) => a.requestedAt.getTime() - b.requestedAt.getTime() || (a.id < b.id ? -1 : 1));
+  for (const request of completed) {
+    await writeAudit(client, {
+      workspaceId,
+      actorPrincipalId: input.completedBy,
+      action: 'connection.request_completed',
+      resourceType: 'connection_request',
+      resourceId: request.id,
+      payload: {
+        resultingStatus: request.status,
+        kind: request.kind,
+        gateId: input.gateId,
+        gatekeeperId: input.gatekeeperId,
+        requestedBy: request.requestedBy,
+        requestedAt: request.requestedAt.toISOString(),
+        completedBy: input.completedBy,
+      },
+    });
+  }
+  return completed;
+}
+
+/**
+ * The platform's half (legacy 254, the coordinator's requirement 3): `update_gate_instance`
+ * (→ disabled), `delete_gate_instance`, `set_connector_mode` (out of platform-preset) and
+ * `roll_back_platform_change_segment` (an instance it disables) end every open request, in any
+ * workspace, to enable a gate no workspace can enable any more — `cancelled`
+ * with `cancel_reason = 'gate_unavailable'` — in the platform's own transaction (`app_platform()`;
+ * governance/0047's `connection_requests_platform_read` / `_platform_cancel` are what let it read
+ * those rows and take that one edge). The platform audit row of the call lists them (the handlers'
+ * `auditPayload`); a platform transaction writes no workspace audit row (core 0019), so each
+ * requester reads why on the request itself.
+ */
+export async function cancelGateInstanceEnableRequests(
+  client: PoolClient,
+  gateIds: readonly string[],
+): Promise<readonly ConnectionRequestRow[]> {
+  if (gateIds.length === 0) return [];
+  // I6: the edge every row below takes (`requested → cancelled`).
+  const nextStatus = transition(CONNECTION_REQUEST_TRANSITIONS, 'requested', 'cancel');
+  const result = await client.query(
+    `update connection_requests
+     set status = $2, cancel_reason = 'gate_unavailable', cancelled_at = now()
+     where gate_instance_id = any($1::text[]) and status = 'requested'
+     returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
+    [gateIds, nextStatus],
+  );
+  return result.rows
+    .map(mapConnectionRequestRow)
+    .sort(
+      (a, b) =>
+        (a.gateInstanceId ?? '').localeCompare(b.gateInstanceId ?? '') ||
+        a.workspaceId.localeCompare(b.workspaceId) ||
+        a.id.localeCompare(b.id),
+    );
+}
+
+/**
+ * What a platform audit row lists of the requests `cancelGateInstanceEnableRequests` ended
+ * (`cancelledConnectionRequests`: workspace, request id, gate, requester) — one shape for every
+ * platform call that makes an instance unenableable. Nothing when none were open.
+ */
+export function cancelledGateInstanceEnableRequestsAuditPayload(
+  cancelled: readonly ConnectionRequestRow[],
+): { readonly cancelledConnectionRequests?: readonly Record<string, string | null>[] } {
+  return cancelled.length > 0
+    ? {
+        cancelledConnectionRequests: cancelled.map((request) => ({
+          workspaceId: request.workspaceId,
+          id: request.id,
+          gateId: request.gateInstanceId,
+          requestedBy: request.requestedBy,
+        })),
+      }
+    : {};
 }
 
 export async function getConnectionRequest(
@@ -165,6 +371,11 @@ export async function claimConnectionRequest(
   if (!existing) {
     throw new ConnectionRequestNotFoundError(workspaceId, connectionRequestId);
   }
+  // Legacy 254: a gate instance enable request is completed by `enable_gate_instance`, never by
+  // landing a self connection — it names no system to connect.
+  if (existing.gateInstanceId !== null) {
+    throw new ConnectionRequestIsGateEnableError(existing.id, existing.gateInstanceId);
+  }
   transition(CONNECTION_REQUEST_TRANSITIONS, existing.status, 'complete');
   return existing;
 }
@@ -213,6 +424,10 @@ export async function markConnectionRequestCompleted(
 export interface CancelConnectionRequestInput {
   readonly connectionRequestId: string;
   readonly cancelledBy: string;
+  /** Legacy 254 (governance 0047): `withdrawn` when the requester cancels their own request,
+   *  `declined` when the workspace owner cancels someone else's — the handler decides, on the row
+   *  it read. */
+  readonly reason: 'withdrawn' | 'declined';
 }
 
 /**
@@ -243,10 +458,10 @@ export async function cancelConnectionRequest(
 
   const result = await client.query(
     `update connection_requests
-     set status = $3
+     set status = $3, cancel_reason = $4, cancelled_at = now()
      where workspace_id = $1 and id = $2 and status = 'requested'
      returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
-    [workspaceId, existing.id, nextStatus],
+    [workspaceId, existing.id, nextStatus, input.reason],
   );
   const row = result.rows[0];
   // Unreachable while the row lock above is held — the conditional-UPDATE belt to the lock's
@@ -264,12 +479,17 @@ export async function cancelConnectionRequest(
     resourceId: cancelled.id,
     payload: {
       resultingStatus: cancelled.status,
+      cancelReason: input.reason,
       kind: cancelled.kind,
       // The audit copy of an owner-supplied URL, like the dispatch row's `params`: a request from
       // before legacy 186 can carry a credential, which the value patterns alone can leave (a
       // `?sig=`), so the address is first cut by the rule every read shows it by (legacy 247,
-      // review #501 on #1444) — an audit row is never rewritten.
-      ...redactedForAudit({ target: redactConnectionAddress('target', cancelled.target) }),
+      // review #501 on #1444) — an audit row is never rewritten. Legacy 254: a gate instance
+      // enable request names the platform's gate instance instead, an id no one supplied a
+      // credential in.
+      ...(cancelled.target !== null
+        ? redactedForAudit({ target: redactConnectionAddress('target', cancelled.target) })
+        : { gateId: cancelled.gateInstanceId }),
       requestedBy: cancelled.requestedBy,
     },
   });

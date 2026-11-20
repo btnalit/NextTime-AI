@@ -20,7 +20,9 @@ import {
   addressMasked,
   addressText,
   cancelConnectionRequestOverrides,
+  cancelReasonText,
   draftsAsRead,
+  gateEnableRequestText,
   manifestPublishPlan,
   requestTargetText,
   targetCutNote,
@@ -45,6 +47,7 @@ import { OnboardingWizard } from '../OnboardingWizard.js';
 import { RequestConnectionForm } from '../RequestConnectionForm.js';
 import { AdminAgentActingMark } from '../audit/AdminAgentActingChip.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
+import { EnableGateConfirm } from '../connect/EnableGateConfirm.js';
 import { type FirstPublish, firstPublishNeedsConfirm } from '../connect/GovernanceChange.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -567,6 +570,54 @@ export function SystemsPage({
   }
 
   const cancelOverrides = cancelConnectionRequestOverrides(t);
+  /** Legacy 254: a request to enable a platform instance is withdrawn by its requester and
+   *  declined by the owner (the kernel records which); a connection request keeps its wording. */
+  function cancelCopy(row: ConnectionRequestRow): {
+    readonly button: string;
+    readonly title: string;
+    readonly description: string;
+    readonly confirm: string;
+  } {
+    if (row.gateInstance === undefined) {
+      return {
+        button: t('取消', 'Cancel'),
+        title: t('取消连接申请', 'Cancel this connection request'),
+        description: t(
+          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
+          'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
+        ),
+        confirm: t('取消申请', 'Cancel request'),
+      };
+    }
+    if (row.requestedBy === selfPrincipalId) {
+      return {
+        button: t('撤回', 'Withdraw'),
+        title: t('撤回启用申请', 'Withdraw the enable request'),
+        description: t(
+          '申请标为「申请人撤回」，这个门实例在本工作区仍未启用。',
+          'The request is marked withdrawn by the requester; the instance stays not enabled here.',
+        ),
+        confirm: t('撤回申请', 'Withdraw request'),
+      };
+    }
+    return {
+      button: t('拒绝', 'Decline'),
+      title: t('拒绝启用申请', 'Decline the enable request'),
+      description: t(
+        '申请标为「所有者拒绝」，这个门实例在本工作区不启用；申请人以后可以再申请。申请人那里只会重新显示「申请启用」，看不到被拒；需要的话另外告诉对方。',
+        'The request is marked declined by the owner and the instance is not enabled here; the requester can ask again later. The requester only sees “Ask to enable” again, not that it was declined; tell them separately if they should know.',
+      ),
+      confirm: t('拒绝申请', 'Decline request'),
+    };
+  }
+
+  /** Legacy 254: enabling from a request completes it (and any other open one for that instance);
+   *  the queue, the catalog and the system cards read it back. */
+  function handleEnabledFromRequest(): void {
+    void requests.reload();
+    void available.reload();
+    reloadRegistry();
+  }
   const createsConnections = can('create_connection');
   const canCreate = createsConnections !== false;
   const canRequest = can('request_connection') !== false;
@@ -591,6 +642,13 @@ export function SystemsPage({
     if (requests.state.status !== 'ready' || createsConnections === null) return;
     const row = requests.state.data.find((item) => item.id === linkedRequestId);
     setLinkedRequestId(null);
+    if (row?.status === 'requested' && row.gateInstance !== undefined) {
+      // Legacy 254: answered by enabling the instance in its row below, not by completing a
+      // connection (the kernel refuses `create_connection` on it).
+      setLinkedRequestNote(null);
+      document.getElementById('connection-requests-title')?.scrollIntoView?.({ block: 'start' });
+      return;
+    }
     if (row?.status === 'requested' && createsConnections) {
       setLinkedRequestNote(null);
       setDrawer({ kind: 'complete', request: row });
@@ -849,25 +907,17 @@ export function SystemsPage({
               {requestRows.map((row) => (
                 <div className="row-wrap" key={row.id} data-testid="request-row">
                   <StatusChip machine="connectionRequest" status={row.status} size="s" />
-                  <span className="tag" data-testid="request-kind">
-                    {transportKindLabel(row.kind, t)}
-                  </span>
-                  {/* Legacy 247 ①: an old request's address can carry a credential; the kernel
-                   *  masks it (whole, or in place inside a path), and the row says so rather than
-                   *  showing `[redacted]` as part of an address. */}
-                  {addressMasked(row.target) ? (
-                    <span className="text-small text-warn" data-testid="request-target-masked">
-                      {addressText(row.target, t)}
+                  {/* Legacy 254: a request to enable a platform instance asks for the instance,
+                   *  not for a kind of connection — its transport says nothing to the owner. */}
+                  {row.gateInstance === undefined ? (
+                    <span className="tag" data-testid="request-kind">
+                      {transportKindLabel(row.kind, t)}
                     </span>
-                  ) : (
-                    <span className="mono truncate">{row.target}</span>
-                  )}
-                  {/* Legacy 247: the kernel cut a credential out of an old request's address
-                   *  (user info, query, fragment) and left no mask behind — the row says the
-                   *  address shown is not the whole one that was asked for. */}
-                  {row.targetRedacted === true && !addressMasked(row.target) ? (
-                    <span className="text-small text-warn" data-testid="request-target-cut">
-                      {targetCutNote(t)}
+                  ) : null}
+                  <RequestSubject row={row} />
+                  {row.status === 'cancelled' && row.cancelReason !== undefined ? (
+                    <span className="text-3 text-small" data-testid="request-cancel-reason">
+                      {cancelReasonText(row.cancelReason, t)}
                     </span>
                   ) : null}
                   {/* Legacy 247 ②: the requester by name (the page already reads the members). */}
@@ -891,6 +941,7 @@ export function SystemsPage({
                     </span>
                   ) : null}
                   {row.status === 'requested' &&
+                  row.gateInstance === undefined &&
                   !platformAdmin &&
                   trialSelfConnectApplies(trialWorkspace, row.kind) ? (
                     <span className="text-3 text-small" data-testid="request-trial-note">
@@ -899,7 +950,24 @@ export function SystemsPage({
                   ) : null}
                   {row.status === 'requested' ? (
                     <span className="row-wrap">
-                      {canCreate ? (
+                      {row.gateInstance !== undefined ? (
+                        // Legacy 254: the owner answers by enabling the instance — the same
+                        // preview and confirm as 「待启用的平台实例」; the enable completes it. An
+                        // instance the platform deleted (no name left to read) cannot be
+                        // enabled: only 拒绝 is offered.
+                        canEnable && row.gateInstance.displayName !== null ? (
+                          <EnableGateConfirm
+                            key={row.id}
+                            http={http}
+                            gateId={row.gateInstance.gateId}
+                            gateDisplayName={row.gateInstance.displayName}
+                            label={t('启用', 'Enable')}
+                            platformAdmin={platformAdmin}
+                            onEnabled={handleEnabledFromRequest}
+                            testId={`enable-request-${row.id}`}
+                          />
+                        ) : null
+                      ) : canCreate ? (
                         <Button
                           variant="secondary"
                           size="s"
@@ -919,16 +987,17 @@ export function SystemsPage({
                             onClick={() => setCancelling(row)}
                             data-testid={`cancel-request-${row.id}`}
                           >
-                            {t('取消', 'Cancel')}
+                            {cancelCopy(row).button}
                           </Button>
                         }
-                        title={t('取消连接申请', 'Cancel this connection request')}
-                        description={t(
-                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
-                          'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
-                        )}
-                        target={`${transportKindLabel(row.kind, t)} · ${requestTargetText(row, t)}`}
-                        confirmLabel={t('取消申请', 'Cancel request')}
+                        title={cancelCopy(row).title}
+                        description={cancelCopy(row).description}
+                        target={
+                          row.gateInstance === undefined
+                            ? `${transportKindLabel(row.kind, t)} · ${requestTargetText(row, t)}`
+                            : requestTargetText(row, t)
+                        }
+                        confirmLabel={cancelCopy(row).confirm}
                         cancelLabel={t('保留', 'Keep')}
                         danger
                         onConfirm={() => cancelRequest(row)}
@@ -949,8 +1018,13 @@ export function SystemsPage({
         <AvailableGateInstancesSection
           http={http}
           available={available}
-          onEnabled={reloadRegistry}
+          onEnabled={() => {
+            reloadRegistry();
+            // Legacy 254: the enable completed any open request for that instance.
+            void requests.reload();
+          }}
           canEnable={canEnable}
+          canRequestEnable={can('request_gate_instance_enable') !== false}
           canEnterCredential={can('issue_gate_credential_token') !== false}
           platformAdmin={platformAdmin}
           focusCredentialFor={credentialGatekeeperId}
@@ -1126,6 +1200,43 @@ export function SystemsPage({
 
 /** S11 AA5b: 系统与授权 was opened on one connection request (the admin chat's link) and its
  *  完成连接 drawer could not open — why, and what is left to do. */
+/** What a request in the owner queue asks for: the address of a system to connect (legacy 247:
+ *  masked or cut when it carried a credential), or — legacy 254 — the platform instance to enable,
+ *  by name; never an empty address. */
+function RequestSubject({ row }: { readonly row: ConnectionRequestRow }) {
+  const t = useT();
+  const target = row.target;
+  if (target === undefined) {
+    return row.gateInstance !== undefined ? (
+      <span data-testid="request-gate-instance" title={row.gateInstance.gateId}>
+        {gateEnableRequestText(row.gateInstance, t)}
+      </span>
+    ) : null;
+  }
+  return (
+    <>
+      {/* Legacy 247 ①: an old request's address can carry a credential; the kernel masks it
+       *  (whole, or in place inside a path), and the row says so rather than showing
+       *  `[redacted]` as part of an address. */}
+      {addressMasked(target) ? (
+        <span className="text-small text-warn" data-testid="request-target-masked">
+          {addressText(target, t)}
+        </span>
+      ) : (
+        <span className="mono truncate">{target}</span>
+      )}
+      {/* Legacy 247: the kernel cut a credential out of an old request's address (user info,
+       *  query, fragment) and left no mask behind — the row says the address shown is not the
+       *  whole one that was asked for. */}
+      {row.targetRedacted === true && !addressMasked(target) ? (
+        <span className="text-small text-warn" data-testid="request-target-cut">
+          {targetCutNote(t)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function LinkedRequestNotice({ note }: { readonly note: LinkedRequestNote }) {
   const t = useT();
   if (note.kind === 'missing') {
