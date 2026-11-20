@@ -26,7 +26,7 @@ import {
  * key the last row of the first window and, as an object's key, the last row past it, and in a
  * table keyed by text a text array and the primary key itself — plus a retired key's shape and a
  * clean audit row; then: the rows are listed by table and primary key only, each once, never a key
- * (a key that is the primary key is masked) or its hash; an executing run lists the Turn before it
+ * or its hash (a primary key holding a key or a Handle is masked); an executing run lists the Turn before it
  * hides the key, and a later run no longer can; once both keys are rotated, no seeded row is
  * listed.
  *
@@ -36,6 +36,8 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
+/** A Handle-shaped compact JWT. Synthetic — `.gitleaks.toml` allows this signature segment. */
+const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
@@ -82,6 +84,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       hashApiKey(serviceKey),
       hashApiKey(memberKey),
       hashApiKey(retiredKey),
+      HANDLE,
     ];
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -147,11 +150,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         LIVE_API_KEY_COMPARE_WINDOW + 50,
         JSON.stringify({ headers: { [memberKey]: true } }),
       ]);
-      // A key in a text array, and a key that is the row's primary key: listed masked.
+      // A key in a text array; a key, and a Handle, that are the row's primary key: listed masked.
       await pool.query(`create table ${named} (name text primary key, tags text[])`);
       await pool.query(
-        `insert into ${named} values ('tagged', $1::text[]), ($2, '{}'), ('plain', '{collector}')`,
-        [['collector', serviceKey], memberKey],
+        `insert into ${named} values ('tagged', $1::text[]), ($2, '{}'), ($3, $4::text[]), ('plain', '{collector}')`,
+        [['collector', serviceKey], memberKey, HANDLE, [serviceKey]],
       );
       await admin(async (client) => {
         await client.query('insert into workspaces (id, name) values ($1, $2)', [
@@ -297,6 +300,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       `chat_messages ${ids.toolMessage} ${ids.member}`,
       `chat_messages ${ids.userMessage} ${ids.member}`,
       `named [redacted] ${ids.member}`,
+      `named [redacted] ${ids.service}`,
       `named tagged ${ids.service}`,
       `tasks ${ids.task} ${ids.member}`,
       `tasks ${ids.task} ${ids.service}`,
@@ -326,7 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(
         ours.find((row) => row.table === named && row.principalId === ids.member)?.row,
       ).toEqual(['[redacted]']);
-      // Two Principals, twelve copies: the keys to rotate are counted once each.
+      // Two Principals, thirteen copies: the keys to rotate are counted once each.
       expect(new Set(ours.map((row) => row.principalId)).size).toBe(2);
       expect(result.liveApiKeys.keys).toBeGreaterThanOrEqual(2);
       expect(result.liveApiKeys.keys).toBeLessThan(result.liveApiKeys.found);

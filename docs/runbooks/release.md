@@ -3665,7 +3665,7 @@ select 'reconcile', count(*) from action_requests r
       里查。在 JSON 的值、对象键和数组里都找。
     - **日志**：每对上一处打印一行 `live-api-key <表> <行> principal <工作区>/<Principal id> <human|service>[ user <用户 id>]`。
       - `<行>` 是这一行的主键，多列时用 `/` 连接：大多数表是 `<工作区>/<id>`，`audit_records` 只有 `<id>`，没有主键的表给 `ctid`。
-        主键里某一列的值带 key 形状（有人把 key 用作了连接器名之类的文本主键），这一列整个换成 `[redacted]`，日志和审计行都不出现 key。
+        主键里某一列的值会被值规则删减（有人把 key 或 Handle 用作了连接器名之类的文本主键），这一列整个换成 `[redacted]`，日志和审计行都不出现它。
       - 同一行里有两把 key 就打两行。
       - Principal id 就是这把 key 的 id，一个 Principal 只有一把；`user` 是人的账号 id，服务凭证没有。
       - 不输出 key 的任何片段，不输出哈希，也不输出是哪一列。
@@ -3698,7 +3698,9 @@ select 'reconcile', count(*) from action_requests r
 - **升级影响**：`STEP raw-secret-scrub` 会更久。比对要把全库再读一遍，每张表按主键分批，读的量和 `BACKUP_NOW` 的备份相当；`auditPayloads`
   还要按 id 分批读一遍 `audit_records`。可参考这次 `BACKUP_NOW` 的耗时，或用 `select pg_size_pretty(pg_database_size(current_database()));`
   估计。比对时，每批最多按哈希查一次 `principals`（走 `api_key_hash` 的唯一索引）。
-  改写与写入的行为都没变。
+  - **内存**：比对每批 200 行，一批的行同时在清洗进程的内存里，峰值随行的大小涨。本地实测 dry run 的峰值 RSS：空库约 140 MB；
+    加一张 1,000 行、每行一条落库上限大小（256 Ki 个中文字符）回复的表后约 400 MB，耗时约 7 秒。
+  - 改写与写入的行为都没变。
 - **预检 SQL**：认不出没有前缀的 key（§3.207），这次不加列。精确计数看清洗日志。
 - **回滚**（见 §6，没有迁移）：只回退代码。上一版的清洗没有 `auditPayloads` 和比对，其他照旧。
 - 下一次主机升级的提示要带上本节。
