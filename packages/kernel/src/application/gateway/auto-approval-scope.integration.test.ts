@@ -19,6 +19,7 @@ import {
   GatekeeperNotFoundError,
   OperationNotFoundError,
   deprecateOperation,
+  getOperation,
   getPublishedOperation,
   importManifest,
   operationRecordDigest,
@@ -568,7 +569,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       }
 
-      async function publishRevision(overrides: Partial<Operation>): Promise<void> {
+      async function publishRevision(
+        overrides: Partial<Operation>,
+        name = REV_OP.name,
+      ): Promise<void> {
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
           const activity = await startActivity(client, workspaceId, {
             kind: 'test.revision',
@@ -576,13 +580,26 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           await proposeOperation(client, workspaceId, {
             gatekeeperId: gateId,
-            operation: operation({ name: REV_OP.name, ...overrides }),
+            operation: operation({ name, ...overrides }),
             proposedBy: { id: ownerId, kind: 'human' },
             activityId: activity.id,
           });
-          await publishOperation(client, workspaceId, { gatekeeperId: gateId, name: REV_OP.name });
+          await publishOperation(client, workspaceId, { gatekeeperId: gateId, name });
         });
       }
+
+      type PublishedDefinitionRead = {
+        version: number | null;
+        requestIsCurrent: boolean;
+        requestDigest?: string | null;
+        requestVersion?: number | null;
+      };
+      const readPublishedDefinition = async (id: string) =>
+        (
+          (await dispatchCapability({ pool }, owner(), 'get_action', {
+            actionRequestId: id,
+          })) as { publishedDefinition?: PublishedDefinitionRead }
+        ).publishedDefinition;
 
       async function ruleFor(actionKind = REV_OP.name): Promise<PolicyWire | undefined> {
         const { items } = (await dispatchCapability({ pool }, owner(), 'list_policies', {})) as {
@@ -612,27 +629,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
 
         // The approval page is told before anyone ticks (UX acceptance of #592 P2-1).
+        // Legacy 216: and which definition each request was made under — its digest and version.
         const onV2 = await request();
-        const read = (id: string) =>
-          dispatchCapability({ pool }, owner(), 'get_action', { actionRequestId: id }) as Promise<{
-            publishedDefinition?: { version: number; requestIsCurrent: boolean };
-          }>;
-        expect((await read(onV2.id)).publishedDefinition).toEqual({
+        expect(onV2.operationDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+        expect(ticked.operationDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+        expect(onV2.operationDigest).not.toBe(ticked.operationDigest);
+        expect(await readPublishedDefinition(onV2.id)).toEqual({
           version: 2,
           requestIsCurrent: true,
+          requestDigest: onV2.operationDigest,
+          requestVersion: 2,
         });
         // `ticked` is still pending, and was made against v1.
-        expect((await read(ticked.id)).publishedDefinition).toEqual({
+        const onV1Definition = {
           version: 2,
           requestIsCurrent: false,
-        });
+          requestDigest: ticked.operationDigest,
+          requestVersion: 1,
+        };
+        expect(await readPublishedDefinition(ticked.id)).toEqual(onV1Definition);
         const listed = (await dispatchCapability({ pool }, owner(), 'list_pending', {})) as {
           items: readonly { id: string; publishedDefinition?: unknown }[];
         };
-        expect(listed.items.find((row) => row.id === ticked.id)?.publishedDefinition).toEqual({
-          version: 2,
-          requestIsCurrent: false,
-        });
+        expect(listed.items.find((row) => row.id === ticked.id)?.publishedDefinition).toEqual(
+          onV1Definition,
+        );
 
         // The request it was ticked on was made against v1: allowing "the latest" from it is refused.
         await expect(
@@ -673,6 +694,104 @@ describe.runIf(DATABASE_URL !== undefined)(
         )) as PolicyWire;
         expect(allowed).toMatchObject({ operationVersion: 3, autoApproveConsent: 'current' });
         expect((await request()).status).toBe('auto_approved');
+      });
+
+      it('legacy 216: a request names the newest version published with its definition, never a draft', async () => {
+        const NAMED = operation({ name: `rev.named.${randomUUID().slice(0, 8)}` });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.named',
+            principalId: ownerId,
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: gateId,
+            operations: [NAMED],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId: gateId, name: NAMED.name });
+        });
+        const onV1 = await request(NAMED.name);
+        expect(onV1.status).toBe('pending_approval');
+        expect(onV1.operationDigest).toMatch(/^sha256:/);
+
+        // v2 changes only its description: the same definition, so the request is current on it.
+        await publishRevision({ description: 'Same call, other words.' }, NAMED.name);
+        expect(await readPublishedDefinition(onV1.id)).toEqual({
+          version: 2,
+          requestIsCurrent: true,
+          requestDigest: onV1.operationDigest,
+          requestVersion: 2,
+        });
+        // v3 calls another path: v2 is the newest version published with the request's definition.
+        await publishRevision(
+          { binding: { kind: 'http', method: 'POST', path: '/named-v3' } },
+          NAMED.name,
+        );
+        expect(await readPublishedDefinition(onV1.id)).toEqual({
+          version: 3,
+          requestIsCurrent: false,
+          requestDigest: onV1.operationDigest,
+          requestVersion: 2,
+        });
+
+        // A request made against a draft names its digest, and no version: the draft (v4) was
+        // never published, and a draft is private to its proposer and the reviewers (D-26).
+        const draftDigest = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.named.draft',
+              principalId: ownerId,
+            });
+            await proposeOperation(client, workspaceId, {
+              gatekeeperId: gateId,
+              operation: operation({
+                name: NAMED.name,
+                binding: { kind: 'http', method: 'POST', path: '/named-draft' },
+              }),
+              proposedBy: { id: ownerId, kind: 'human' },
+              activityId: activity.id,
+            });
+            const draft = await getOperation(client, workspaceId, gateId, NAMED.name);
+            expect(draft).toMatchObject({ status: 'draft', version: 4 });
+            return operationRecordDigest(draft as NonNullable<typeof draft>);
+          },
+        );
+        const requestWith = (operationDigest: string | undefined) =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            requestAction(client, workspaceId, {
+              gatekeeperId: gateId,
+              actionKind: NAMED.name,
+              blastRadius: 'medium',
+              operationAutoApprovable: true,
+              awaitDecision: false,
+              onBehalfOf: ownerId,
+              actorRuntime: 'pi',
+              requesterScope: scopeCovering(gateId),
+              idempotencyKey: randomUUID(),
+              ...(operationDigest !== undefined ? { operationDigest } : {}),
+            }),
+          );
+        const onDraft = await requestWith(draftDigest);
+        expect(await readPublishedDefinition(onDraft.id)).toEqual({
+          version: 3,
+          requestIsCurrent: false,
+          requestDigest: draftDigest,
+          requestVersion: null,
+        });
+        // A request that named no definition, and one from before digests were recorded.
+        for (const operationDigest of ['none', undefined]) {
+          const named = await requestWith(operationDigest);
+          expect(named.operationDigest).toBe(operationDigest ?? null);
+          expect(await readPublishedDefinition(named.id)).toEqual({
+            version: 3,
+            requestIsCurrent: false,
+            requestDigest: null,
+            requestVersion: null,
+          });
+        }
       });
 
       it('an opt-out needs no definition; a rule naming no real Operation is refused', async () => {
@@ -733,11 +852,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           deprecateOperation(client, workspaceId, { gatekeeperId: gateId, name: GONE.name }),
         );
-        // The approval page is told nothing is published to allow (coordinator on #592).
-        const pendingRead = (await dispatchCapability({ pool }, owner(), 'get_action', {
-          actionRequestId: pendingOnGone.id,
-        })) as { publishedDefinition?: unknown };
-        expect(pendingRead.publishedDefinition).toEqual({ version: null, requestIsCurrent: false });
+        // The approval page is told nothing is published to allow (coordinator on #592), and
+        // (legacy 216) that the request was made under v1, deprecated since.
+        expect(pendingOnGone.operationDigest).toMatch(/^sha256:/);
+        expect(await readPublishedDefinition(pendingOnGone.id)).toEqual({
+          version: null,
+          requestIsCurrent: false,
+          requestDigest: pendingOnGone.operationDigest,
+          requestVersion: 1,
+        });
         expect(await ruleFor(GONE.name)).toMatchObject({
           autoApprove: true,
           publishedOperationVersion: null,

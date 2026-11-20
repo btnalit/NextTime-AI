@@ -6154,8 +6154,25 @@
         "publishedDefinition": {
           "additionalProperties": false,
           "properties": {
+            "requestDigest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "requestIsCurrent": {
               "type": "boolean"
+            },
+            "requestVersion": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "version": {
               "anyOf": [
@@ -18947,8 +18964,25 @@
         "publishedDefinition": {
           "additionalProperties": false,
           "properties": {
+            "requestDigest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "requestIsCurrent": {
               "type": "boolean"
+            },
+            "requestVersion": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "version": {
               "anyOf": [
@@ -40658,8 +40692,25 @@
               "publishedDefinition": {
                 "additionalProperties": false,
                 "properties": {
+                  "requestDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "requestIsCurrent": {
                     "type": "boolean"
+                  },
+                  "requestVersion": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "version": {
                     "anyOf": [
@@ -48264,8 +48315,25 @@
               "publishedDefinition": {
                 "additionalProperties": false,
                 "properties": {
+                  "requestDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "requestIsCurrent": {
                     "type": "boolean"
+                  },
+                  "requestVersion": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "version": {
                     "anyOf": [
@@ -69014,8 +69082,25 @@
         "publishedDefinition": {
           "additionalProperties": false,
           "properties": {
+            "requestDigest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "requestIsCurrent": {
               "type": "boolean"
+            },
+            "requestVersion": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "version": {
               "anyOf": [
@@ -73694,8 +73779,25 @@
             "publishedDefinition": {
               "additionalProperties": false,
               "properties": {
+                "requestDigest": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "requestIsCurrent": {
                   "type": "boolean"
+                },
+                "requestVersion": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "version": {
                   "anyOf": [
