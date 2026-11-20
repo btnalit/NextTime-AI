@@ -77,6 +77,9 @@ export interface IssueServiceHandleSectionProps {
   /** Fires once the reader has acknowledged the one-time Handle (`CreatePrincipalForm`'s own
    *  `onDone` precedent) — `MembersPage` closes the drawer this renders inside. */
   readonly onDone: () => void;
+  /** Legacy 902 (#1558 UX): a Handle was issued — the page's service Handle list reads again
+   *  now, not only when the reader presses 我已保存 (Esc or × close the drawer too). */
+  readonly onIssued?: () => void;
   /** Opens the "create a service account" flow — offered right in the notice when there is no
    *  service account yet, instead of pointing at a menu elsewhere on the page (#559 acceptance). */
   readonly onCreateServiceAccount?: () => void;
@@ -116,6 +119,7 @@ export function IssueServiceHandleSection({
   http,
   principals,
   onDone,
+  onIssued,
   onCreateServiceAccount,
 }: IssueServiceHandleSectionProps) {
   const t = useT();
@@ -224,6 +228,7 @@ export function IssueServiceHandleSection({
           ...(note.trim() !== '' ? { note: note.trim() } : {}),
         }),
       );
+      onIssued?.();
     } catch (err) {
       setError(err);
     } finally {

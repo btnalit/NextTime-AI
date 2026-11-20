@@ -1,4 +1,5 @@
 import { HANDLE_NOTE_MAX_LENGTH } from '@nexttime/shared';
+import { useEffect, useRef } from 'react';
 import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Field, describedBy } from '../kit/field.js';
@@ -37,13 +38,18 @@ export function HandleNoteField({
 }) {
   const t = useT();
   const refused = isNoteRefused(error);
+  // The refusal is said on this field, so the reader lands here to change it.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (isNoteRefused(error)) inputRef.current?.focus();
+  }, [error]);
   return (
     <Field
       id={id}
       label={t('备注（可选）', 'Note (optional)')}
       hint={t(
-        '写这个凭证给谁用、做什么，比如「笔记本上的 Claude Code」「备份采集器」。会显示在「会话凭证」列表里，工作区所有者都能看到，凭证结束后也会保留；不要写凭证本身。',
-        'Who uses this Handle and for what, such as "Claude Code on my laptop" or "backup collector". It is shown in the Handles list, every workspace owner can see it, and it is kept after the Handle ends; never put the credential itself here.',
+        '写这个凭证给谁用、做什么，比如「笔记本上的 Claude Code」「备份采集器」。会显示在「会话凭证」列表里，也会写进审计记录：能看本工作区审计的人（所有者、审计员）和平台管理员都看得到，凭证结束后也不会删除。不要写凭证，也不要写不想让他们看到的内容。',
+        'Who uses this Handle and for what, such as "Claude Code on my laptop" or "backup collector". It is shown in the Handles list and written to the audit log: whoever can read this workspace’s audit (owners, auditors) and platform administrators can see it, and it is not deleted when the Handle ends. Never put a credential here, or anything you would not want them to read.',
       )}
       error={
         refused
@@ -55,6 +61,7 @@ export function HandleNoteField({
       }
     >
       <input
+        ref={inputRef}
         id={id}
         className="input"
         value={value}

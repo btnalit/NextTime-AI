@@ -347,7 +347,11 @@ function SessionRow({
             {kind}
             {service ? ` · ${serviceName}` : null}
           </strong>
-          <span className="text-3 text-small" data-testid={`handle-session-short-${rowId}`}>
+          <span
+            className="text-3 text-small"
+            style={{ whiteSpace: 'nowrap' }}
+            data-testid={`handle-session-short-${rowId}`}
+          >
             {t('会话 ', 'Session ')}
             {/* Derived from the session id, so it differs run to run (masked in screenshots). */}
             <span className="mono" data-volatile="">
@@ -380,7 +384,9 @@ function SessionRow({
           <summary>
             {t(
               `能调用 ${capabilities.length} 项能力`,
-              `May call ${capabilities.length} capabilities`,
+              capabilities.length === 1
+                ? 'May call 1 capability'
+                : `May call ${capabilities.length} capabilities`,
             )}
           </summary>
           <p className="disclosure-body text-small" style={{ margin: 0 }}>
@@ -424,8 +430,8 @@ function SessionRow({
                       `Revoke ${serviceName}'s session ${shortId}`,
                     )
                   : t(
-                      `撤销这个${kind}（会话 ${shortId}）`,
-                      `Revoke this ${lowerFirst(kind)} (session ${shortId})`,
+                      `撤销${kind}的会话 ${shortId}`,
+                      `Revoke session ${shortId}: ${lowerFirst(kind)}`,
                     )
               }
               description={

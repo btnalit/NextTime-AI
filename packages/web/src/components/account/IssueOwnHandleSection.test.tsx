@@ -75,6 +75,8 @@ describe('IssueOwnHandleSection', () => {
     fireEvent.click(screen.getByTestId('ioh-submit'));
     await waitFor(() => expect(note.getAttribute('aria-invalid')).toBe('true'));
     expect(document.getElementById('ioh-note-error')?.textContent).toContain('看起来带了凭证');
+    // The refusal is on this field, so focus returns to it.
+    expect(document.activeElement).toBe(note);
     fireEvent.change(note, { target: { value: '  laptop  ' } });
     fireEvent.click(screen.getByTestId('ioh-submit'));
     await waitFor(() =>

@@ -275,7 +275,7 @@ describe('HandlesList', () => {
     expect(screen.queryByTestId('handle-session-note-session-entry')).toBeNull();
     fireEvent.click(within(row).getByRole('button', { name: '撤销' }));
     const confirm = await screen.findByTestId(`handle-session-revoke-confirm-${rowId}`);
-    expect(confirm.textContent).toContain('（会话 0f3a9c21）');
+    expect(confirm.textContent).toContain('撤销平台外客户端（MCP）的会话 0f3a9c21');
     expect(confirm.textContent).toContain('备注：笔记本上的客户端');
   });
 
@@ -326,7 +326,7 @@ describe('HandlesList', () => {
     fireEvent.click(within(mcp).getByRole('button', { name: 'Revoke' }));
     expect(
       (await screen.findByTestId('handle-session-revoke-confirm-session-mcp')).textContent,
-    ).toContain('Revoke this client outside the platform (MCP)');
+    ).toContain('Revoke session sessionm: client outside the platform (MCP)');
     expect(screen.getByTestId('handle-session-ends-session-entry').textContent).toContain(
       'ends with its chat or Task',
     );
