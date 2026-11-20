@@ -602,9 +602,14 @@ export function ApprovalDetail({
                   </span>
                 </label>
               ) : null}
-              {alwaysAllowBlock === 'stale' && publishedVersion !== null ? (
+              {alwaysAllowBlock === 'stale' &&
+              publishedVersion !== null &&
+              row.publishedDefinition !== undefined ? (
                 <p className="field-hint" data-testid="approval-always-allow-stale">
-                  {alwaysAllowStaleRequestText(t, publishedVersion)}
+                  {alwaysAllowStaleRequestText(t, {
+                    ...row.publishedDefinition,
+                    version: publishedVersion,
+                  })}
                 </p>
               ) : null}
               {alwaysAllowBlock === 'unpublished' ? (
