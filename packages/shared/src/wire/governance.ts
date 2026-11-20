@@ -6,7 +6,10 @@ import {
   BlastRadiusSchema,
   GrantStatusSchema,
   PolicyDecisionSchema,
+  PrincipalKindSchema,
+  SessionKindSchema,
 } from '../enums.js';
+import { HANDLE_HOLDERS } from '../handle-token.js';
 
 /**
  * wire/governance: ActionRequest / CapabilityGrant / Policy / Quota wire shapes
@@ -242,3 +245,45 @@ export const QuotaListEntryWireSchema = z
   })
   .strict();
 export type QuotaListEntryWire = z.infer<typeof QuotaListEntryWireSchema>;
+
+/**
+ * Legacy 168: one live Capability Handle as `list_handles` shows it — the caller's own (every
+ * session kind), and for a workspace owner also those of the workspace's service Principals
+ * (`issue_service_handle`) — not the platform's internal ones (`__…__`), so `onBehalfOfName` is
+ * never an internal name. Never the token: the kernel keeps no copy of it, only this record
+ * (`capability_handles`). `holder` follows from the session kind as everywhere
+ * (`holderForSessionKind`): `container` for an entry agent's, a WorkerRun's or an admin agent's
+ * Handle, which the platform holds and which ends with its conversation or Task; `bearer` for one
+ * a client holds itself (`issue_handle`, `issue_service_handle`). `revocable`: whether this caller
+ * may end it with `revoke_handle` — every bearer Handle listed here, never a container one.
+ * `expiresAt` is the Handle's own expiry (a service session has none of its own).
+ * `capabilities`: what it may call.
+ */
+export const HandleWireSchema = z
+  .object({
+    jti: z.string(),
+    sessionId: z.string(),
+    sessionKind: SessionKindSchema,
+    holder: z.enum(HANDLE_HOLDERS),
+    onBehalfOf: z.string(),
+    onBehalfOfKind: PrincipalKindSchema,
+    onBehalfOfName: z.string().nullable(),
+    issuedAt: z.string(),
+    expiresAt: z.string(),
+    capabilities: z.array(z.string()),
+    revocable: z.boolean(),
+  })
+  .strict();
+export type HandleWire = z.infer<typeof HandleWireSchema>;
+
+/** Legacy 168: `revoke_handle` — the Handle's session ended, and with it every Handle issued
+ *  under it (`revokedHandleCount`, this one included). */
+export const RevokeHandleResultWireSchema = z
+  .object({
+    jti: z.string(),
+    sessionId: z.string(),
+    sessionKind: SessionKindSchema,
+    revokedHandleCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type RevokeHandleResultWire = z.infer<typeof RevokeHandleResultWireSchema>;

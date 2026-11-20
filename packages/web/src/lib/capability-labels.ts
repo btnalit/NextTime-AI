@@ -652,6 +652,22 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '为外部交互式客户端签发受限的 Handle 凭证。',
     enHint: 'Issues a scoped Handle for an external interactive client.',
   },
+  list_handles: {
+    zh: '查看我的会话凭证',
+    en: 'List my Handles',
+    zhHint:
+      '列出代表你的会话凭证（所有者还能看到服务账号的），含持有方式与到期时间，不含凭证本身。',
+    enHint:
+      'Lists the Handles acting for you (an owner also sees service accounts’), with how each is held and when it expires — never the token.',
+  },
+  revoke_handle: {
+    zh: '撤销会话凭证',
+    en: 'Revoke Handle',
+    zhHint:
+      '结束客户端持有的凭证所在的会话，会话下的凭证一起失效；平台为智能体持有的不能在这里撤销。',
+    enHint:
+      "Ends the session of a Handle a client holds, and every Handle under it; one the platform holds for an agent can't be revoked here.",
+  },
   list_grants: {
     zh: '查看授权',
     en: 'List grants',
