@@ -23,6 +23,9 @@ const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 /** A platform API key's shape (`generateApiKey`: 43 base64url characters). Synthetic — spells out
  *  `abcdefghijklmnopqrstuvwxyz` too. */
 const PLATFORM_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+/** 32 bytes in standard base64 — 43 characters, the last one's low bits zero, then `=` — the
+ *  shape of a WireGuard public key. Synthetic. */
+const WIREGUARD_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYQ=';
 
 describe('scrubSecretValues — the common ways a secret is written down', () => {
   it.each([
@@ -121,6 +124,8 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ['in quotes', `"${PLATFORM_KEY}"`, `"${REDACTED}"`],
     ['after a colon in CJK text', `密钥：${PLATFORM_KEY}。`, `密钥：${REDACTED}。`],
     ['with - and _ only', `${PLATFORM_KEY.slice(0, 41)}-_`, REDACTED],
+    ['in a JSON string', `{"k":"${PLATFORM_KEY}"}`, `{"k":"${REDACTED}"}`],
+    ['in parentheses, before a comma', `(${PLATFORM_KEY}),`, `(${REDACTED}),`],
   ])('is replaced %s — by both pattern sets', (_label, text, expected) => {
     expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
     expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
@@ -145,9 +150,44 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ['all lower case (a word run, a hex digest)', 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq'],
     ['letters only, no digit, - or _', 'AbcdefghijklmnopqrstuvwxyzAbcdefghijklmnopq'],
     ['a sha-256 hex digest', `sha256:${'0123456789abcdef'.repeat(4)}`],
+    ['lower case and digits, no upper case', 'abcdefghijklmnopqrstuvwxyz0123456789abcdefg'],
+    // 32 bytes in standard base64 are 43 characters and `=`: the next character is the padding.
+    ['a WireGuard public key in a config line', `PublicKey = ${WIREGUARD_KEY}`],
+    ['a SHA-256 digest header', `Digest: SHA-256=${WIREGUARD_KEY}`],
+    ['a 32-byte value in standard base64, alone', WIREGUARD_KEY],
+    ['between a + and a / in a longer base64 run', `QUJD+${PLATFORM_KEY}/REVG`],
+    ['after a / in a base64 run', `QUJD/${PLATFORM_KEY}`],
+    ['before a + in a base64 run', `${PLATFORM_KEY}+REVG`],
   ])('is not matched %s', (_label, text) => {
     expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
     expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+
+  it('a 32-byte value in standard base64 (a WireGuard key, a SHA-256= digest) is never one', () => {
+    for (let i = 0; i < 2_000; i += 1) {
+      const value = randomBytes(32).toString('base64');
+      expect(value).toHaveLength(44);
+      for (const text of [value, `PublicKey = ${value}`, `Digest: SHA-256=${value}, sent`]) {
+        expect(scrubSecretValues(text).redactedValues).toBe(0);
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
+  });
+
+  it('no stretch of a 4 KB standard base64 block is one — on one line or folded as PEM', () => {
+    for (let i = 0; i < 300; i += 1) {
+      const block = randomBytes(3_072).toString('base64');
+      expect(block).toHaveLength(4_096);
+      const pem = [
+        '-----BEGIN CERTIFICATE-----',
+        ...(block.match(/.{1,64}/g) ?? []),
+        '-----END CERTIFICATE-----',
+      ].join('\n');
+      for (const text of [block, `data:application/octet-stream;base64,${block}`, pem]) {
+        expect(scrubSecretValues(text).redactedValues).toBe(0);
+        expect(certain(text).redactedValues).toBe(0);
+      }
+    }
   });
 });
 

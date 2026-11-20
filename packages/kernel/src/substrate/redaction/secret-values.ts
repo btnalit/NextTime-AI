@@ -206,15 +206,20 @@ const VENDOR_KEY: ValuePattern = {
 /**
  * A platform API key as the kernel mints it (`generateApiKey`, application/gateway/auth.ts: 32
  * random bytes, base64url without padding — exactly 43 characters), standing alone: a run of
- * exactly 43 base64url characters, nothing of the alphabet on either side, mixing upper and lower
- * case with a digit, `-` or `_` (a random key lacks one of those only about once in 7,500; a word
- * or a lower-case hex digest never has them all). It has no prefix to find it by, and whoever
- * holds it acts as that person or service account on every `/api` route (legacy 168: a key pasted
- * into a Handle's note would have been kept and listed as written). Starts only where a run
- * starts, so a longer run is passed over in linear time.
+ * exactly 43 base64url characters, mixing upper and lower case with a digit, `-` or `_` (a random
+ * key lacks one of those only about once in 7,500; a word or a lower-case hex digest never has
+ * them all). Nothing of either base64 alphabet on either side — not base64url's, and not standard
+ * base64's `+` and `/`, nor its `=` padding after — so a 32-byte value in standard base64 (a
+ * WireGuard public key, a `SHA-256=` digest: 43 characters and `=`) and a 43-character stretch of
+ * a larger block (a certificate, a data URI) between two `+` or `/` are not one. The price is a key
+ * right after `/` or `+`, as in a URL path, which a key never travels in (it is sent only as
+ * `Authorization: Bearer`). It has no prefix to find it by, and whoever holds it acts as that
+ * person or service account on every `/api` route (legacy 168: a key pasted into a Handle's note
+ * would have been kept and listed as written). Starts only where a run starts, so a longer run is
+ * passed over in linear time.
  */
 const MINTED_PLATFORM_KEY: ValuePattern = {
-  pattern: /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
+  pattern: /(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_+/=-])/g,
   redact: (match) =>
     /[A-Z]/.test(match) && /[a-z]/.test(match) && /[0-9_-]/.test(match) ? REDACTED : undefined,
 };
