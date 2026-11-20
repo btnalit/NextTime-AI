@@ -39,10 +39,16 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
+/** A caller on the human channel: a person, or a service account by its API key (`kind`). */
+function humanCaller(
+  workspaceId: string,
+  principalId: string,
+  role: Role,
+  kind: 'human' | 'service' = 'human',
+): ResolvedCaller {
   return {
     channel: 'human',
-    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+    principal: { workspaceId, id: principalId, kind, role, displayName: null },
     session: {
       workspaceId,
       id: randomUUID(),
@@ -692,12 +698,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       // Never named: a disabled owner, a service Principal with the owner role, an operator.
       await insertPrincipal('human', 'owner', 'disabled owner', { disabled: true });
-      await insertPrincipal('service', 'owner', 'service owner');
-      await insertPrincipal('human', 'operator', 'an operator');
+      const serviceOwnerId = await insertPrincipal('service', 'owner', 'service owner');
+      const operatorId = await insertPrincipal('human', 'operator', 'an operator');
       const readerId = await insertPrincipal('human', 'member', 'a member');
 
       const reader = humanCaller(fresh.workspaceId, readerId, 'member');
       const owner = humanCaller(fresh.workspaceId, fresh.ownerId, 'owner');
+      const operator = humanCaller(fresh.workspaceId, operatorId, 'operator');
+      // A service account's API key authenticates on the human channel too.
+      const serviceOwner = humanCaller(fresh.workspaceId, serviceOwnerId, 'owner', 'service');
       const read = async (caller: ResolvedCaller, params: Record<string, unknown> = {}) =>
         (await dispatchCapability({ pool }, caller, 'execution_readiness', params)) as {
           readonly agentsPaused?: boolean;
@@ -725,6 +734,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await read(reader)).agentsPaused).toBe(true);
       expect((await read(owner, { principalId: readerId })).agentsPaused).toBe(true);
       expect((await read(owner)).agentsPaused).toBe(false);
+      // Another member's pause only to a person who is an owner, as `list_eval_seal_holds` (#501 on
+      // #1567): an operator and a service owner read the rest of it, not that; each has its own.
+      for (const other of [operator, serviceOwner]) {
+        const theirs = await read(other, { principalId: readerId });
+        expect(theirs).not.toHaveProperty('agentsPaused');
+        expect(theirs.owners).toEqual(before.owners);
+        expect((await read(other)).agentsPaused).toBe(false);
+      }
 
       // Released: read live, so at once.
       await admin((client) =>
