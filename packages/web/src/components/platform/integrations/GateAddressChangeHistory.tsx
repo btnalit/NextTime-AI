@@ -1,5 +1,5 @@
 import type { GateAddressChangeStatusWire, PlatformGateAddressChangeWire } from '@nexttime/shared';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { type CapabilityListResult, useCapabilityList } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../../lib/format.js';
@@ -7,7 +7,6 @@ import { type Translate, useT } from '../../../lib/i18n.js';
 import { transportKindLabel } from '../../../lib/labels.js';
 import { Button } from '../../kit/button.js';
 import { ErrorBanner } from '../../kit/error-banner.js';
-import { KeyValue } from '../../kit/key-value.js';
 import { SkeletonRows } from '../../kit/skeleton.js';
 
 /** A page of the history: a platform has few of these, and the list is opened to look back. */
@@ -24,40 +23,45 @@ export interface GateAddressChangeHistoryProps {
 /**
  * components/platform/integrations/GateAddressChangeHistory (legacy 717): 集成 → 自己接入的门, at
  * the end — the moves that ended (`list_gate_address_changes {ended: true}`, newest first):
- * applied, rejected with the reason, withdrawn by the workspace, or expired undecided. Collapsed
- * and read only once opened; 加载更多 pages it. The platform audit keeps the same decisions, one row
- * per act; this is the list by proposal, with both addresses and how it ended.
+ * applied, rejected with the reason, withdrawn by the workspace, or expired undecided. Collapsed,
+ * its header naming the latest one's outcome and when (UX of #1191, legacy 668 — so the first page
+ * is read up front); 加载更多 pages it. The platform audit keeps the same decisions, one row per
+ * act; this is the list by proposal, with both addresses and how it ended — three short lines a
+ * row (four with a rejection's reason), so a page stays short at phone width.
  *
  * Addresses show their scheme, host and port only, as the rest of the page does.
  */
 export function GateAddressChangeHistory({ http, revision }: GateAddressChangeHistoryProps) {
   const t = useT();
-  const [opened, setOpened] = useState(false);
   const history = useCapabilityList<PlatformGateAddressChangeWire>(
     http,
     'list_gate_address_changes',
     ENDED_CHANGES,
-    { enabled: opened },
   );
-  // A decision above ends a proposal: an opened history reads again (the first page and every
-  // page the reader had loaded), so the move just decided is on top.
+  // A decision above ends a proposal: the history reads again (the first page and every page the
+  // reader had loaded), so the move just decided is on top, and in the header.
   const reload = history.reload;
   const seen = useRef(revision);
   useEffect(() => {
     if (seen.current === revision) return;
     seen.current = revision;
-    if (opened) void reload();
-  }, [revision, opened, reload]);
+    void reload();
+  }, [revision, reload]);
+  const latest = history.state.status === 'ready' ? history.state.data.items[0] : undefined;
 
   return (
-    <details
-      className="disclosure"
-      data-testid="gate-address-change-history"
-      onToggle={(event) => {
-        if ((event.currentTarget as HTMLDetailsElement).open) setOpened(true);
-      }}
-    >
-      <summary>{t('已结束的换地址申请', 'Ended moves to a new address')}</summary>
+    <details className="disclosure" data-testid="gate-address-change-history">
+      <summary>
+        {t('已结束的换地址申请', 'Ended moves to a new address')}
+        {latest !== undefined ? (
+          <span className="text-3" data-testid="gate-address-change-history-latest">
+            {t('（最近一条：', ' (latest: ')}
+            {`${latest.workspaceName} · ${outcomeChip(latest.status, t).label} · `}
+            <When at={endedAt(latest)} />
+            {t('）', ')')}
+          </span>
+        ) : null}
+      </summary>
       <div className="disclosure-body stack-s">
         <p className="text-3 text-small" style={{ margin: 0 }}>
           {t(
@@ -78,7 +82,6 @@ function HistoryBody({
   readonly history: CapabilityListResult<PlatformGateAddressChangeWire>;
   readonly t: Translate;
 }) {
-  // Also the state of a history not opened yet (`enabled: false` holds the read).
   if (history.state.status === 'loading') {
     return (
       <SkeletonRows
@@ -172,6 +175,12 @@ function When({ at }: { readonly at: string }) {
   );
 }
 
+/** When a move ended: its decision or withdrawal; an expired one at its expiry, whenever a later
+ *  act recorded it so (`decidedAt`). */
+function endedAt(change: PlatformGateAddressChangeWire): string {
+  return change.status === 'expired' ? change.expiresAt : (change.decidedAt ?? change.expiresAt);
+}
+
 function HistoryRow({
   change,
   t,
@@ -181,45 +190,20 @@ function HistoryRow({
 }) {
   const rowId = change.id;
   const chip = outcomeChip(change.status, t);
-  const ended: { label: string; value: ReactNode }[] = [];
-  if (change.status === 'applied' || change.status === 'rejected') {
-    ended.push({
-      label: change.status === 'applied' ? t('批准', 'Approved by') : t('驳回', 'Rejected by'),
-      value: (
-        <>
-          {change.decidedByLogin ?? t('平台管理员', 'A platform administrator')}
-          {change.decidedAt ? (
-            <>
-              {' · '}
-              <When at={change.decidedAt} />
-            </>
-          ) : null}
-        </>
-      ),
-    });
-  }
-  if (change.status === 'rejected') {
-    ended.push({
-      label: t('原因', 'Reason'),
-      value: change.rejectionReason ?? t('没有写原因', 'None given'),
-    });
-  }
-  if (change.status === 'withdrawn' && change.decidedAt) {
-    ended.push({
-      label: t('撤回', 'Withdrawn'),
-      value: (
-        <>
-          {t('工作区所有者', 'A workspace owner')}
-          {' · '}
-          <When at={change.decidedAt} />
-        </>
-      ),
-    });
-  }
-  if (change.status === 'expired') {
-    // It ended at its expiry, whenever a later act recorded it so (`decidedAt`).
-    ended.push({ label: t('过期于', 'Expired'), value: <When at={change.expiresAt} /> });
-  }
+  const proposer = change.proposedByName ?? t('工作区所有者', 'a workspace owner');
+  const decider = change.decidedByLogin ?? t('平台管理员', 'a platform administrator');
+  // UX of #1191 (legacy 668): who proposed it and how it ended, on one line.
+  const how =
+    change.status === 'applied'
+      ? t(`${decider} 批准`, `approved by ${decider}`)
+      : change.status === 'rejected'
+        ? t(`${decider} 驳回`, `rejected by ${decider}`)
+        : change.status === 'withdrawn'
+          ? t('工作区所有者撤回', 'withdrawn by a workspace owner')
+          : change.status === 'expired'
+            ? t('没人审批，过期', 'expired undecided')
+            : null;
+  const showEnd = change.status === 'expired' || change.decidedAt !== null;
 
   return (
     <li className="data-row" data-testid={`gate-address-change-history-row-${rowId}`}>
@@ -234,23 +218,43 @@ function HistoryRow({
             {chip.label}
           </span>
         </div>
-        <KeyValue
-          items={[
-            { label: t('原地址', 'From'), value: change.fromEndpoint, mono: true },
-            { label: t('新地址', 'To'), value: change.toEndpoint, mono: true },
-            {
-              label: t('申请人', 'Proposed by'),
-              value: (
-                <>
-                  {change.proposedByName ?? t('工作区所有者', 'A workspace owner')}
-                  {' · '}
-                  <When at={change.createdAt} />
-                </>
-              ),
-            },
-            ...ended,
-          ]}
-        />
+        <span
+          className="mono text-small wrap-anywhere"
+          aria-label={t(
+            `原地址 ${change.fromEndpoint}，新地址 ${change.toEndpoint}`,
+            `From ${change.fromEndpoint} to ${change.toEndpoint}`,
+          )}
+          data-testid={`gate-address-change-history-addresses-${rowId}`}
+        >
+          {`${change.fromEndpoint} → ${change.toEndpoint}`}
+        </span>
+        <span
+          className="text-3 text-small"
+          data-testid={`gate-address-change-history-who-${rowId}`}
+        >
+          {t(`${proposer} 申请 · `, `Proposed by ${proposer} · `)}
+          <When at={change.createdAt} />
+          {how !== null && showEnd ? (
+            <>
+              {t('；', '; ')}
+              {how}
+              {' · '}
+              <When at={endedAt(change)} />
+            </>
+          ) : how !== null ? (
+            <>
+              {t('；', '; ')}
+              {how}
+            </>
+          ) : null}
+        </span>
+        {change.status === 'rejected' ? (
+          <span className="text-small wrap-anywhere">
+            {change.rejectionReason
+              ? t(`原因：${change.rejectionReason}`, `Reason: ${change.rejectionReason}`)
+              : t('没有写原因', 'No reason given')}
+          </span>
+        ) : null}
       </div>
     </li>
   );

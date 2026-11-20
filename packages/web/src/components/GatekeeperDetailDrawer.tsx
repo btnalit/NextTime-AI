@@ -147,7 +147,7 @@ export function GatekeeperDetailDrawer({
       {/* Legacy 715: how the last proposal ended, while none is open (a proposal just withdrawn
           here is still in this read, so nothing older shows in its place). */}
       {!gate.pendingAddressChange && gate.lastAddressChangeOutcome ? (
-        <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} />
+        <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} health={gate.health} />
       ) : null}
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>

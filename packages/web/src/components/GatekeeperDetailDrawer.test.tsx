@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -306,6 +306,58 @@ describe('GatekeeperDetailDrawer', () => {
       '原来地址上的门如果还留着这些账号凭证，请到那台主机上清除',
     );
     expect(notice.textContent).not.toContain('重新申请');
+  });
+
+  it('legacy 668 (UX of #1168): the outcome folds to one line once the gate answers at its address or a week on', async () => {
+    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    // A recent rejection while the gate does not answer: open, as it is what to act on.
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          health: 'unreachable',
+          lastAddressChangeOutcome: outcome({ status: 'rejected', endedAt: recent }),
+        }),
+      ),
+    );
+    await screen.findByTestId('gate-address-change-outcome');
+    expect(screen.queryByTestId('gate-address-change-outcome-folded')).toBeNull();
+    cleanup();
+
+    // The gate answers at its current address: the headline and when, the rest a click away.
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          health: 'ok',
+          lastAddressChangeOutcome: outcome({ status: 'rejected', endedAt: recent }),
+        }),
+      ),
+    );
+    let folded = (await screen.findByTestId(
+      'gate-address-change-outcome-folded',
+    )) as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.querySelector('summary')?.textContent).toMatch(
+      /^换地址的申请被平台管理员驳回了 · /,
+    );
+    expect(within(folded).getByTestId('gate-address-change-outcome')).toBeTruthy();
+    cleanup();
+
+    // More than a week on, also while the gate does not answer.
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          health: 'unreachable',
+          lastAddressChangeOutcome: outcome({
+            status: 'applied',
+            endedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+          }),
+        }),
+      ),
+    );
+    folded = (await screen.findByTestId(
+      'gate-address-change-outcome-folded',
+    )) as HTMLDetailsElement;
+    expect(folded.querySelector('summary')?.textContent).toMatch(/^门已换到新地址 · /);
   });
 
   it('legacy 715: a withdrawn move shows nothing, and no outcome shows while a move is open', async () => {

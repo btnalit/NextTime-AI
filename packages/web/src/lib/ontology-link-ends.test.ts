@@ -47,7 +47,7 @@ describe('ontologyLinkEndText', () => {
       '关系类型 served_by 的 range 是 UxHost。',
     );
     expect(ontologyLinkEndText(end, en)).toBe(
-      'ontology uxlink-services’s link type served_by: range is UxHost',
+      'ontology uxlink-services’s link type served_by, whose range is UxHost',
     );
   });
 });
@@ -142,7 +142,7 @@ describe('ontology_link_endpoint_outside_requires', () => {
       '关系类型 ticket_on_host 的 range 是 Host，由另一个本体声明',
     );
     expect(ontologyLinkEndOutsideRequiresText(end, en)).toBe(
-      'link type ticket_on_host: range is Host, declared by ontology ops-hosts of pack ops-hosts-pack',
+      'link type ticket_on_host, whose range Host is declared by ontology ops-hosts of pack ops-hosts-pack',
     );
   });
 

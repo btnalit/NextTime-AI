@@ -35,7 +35,9 @@ export function ontologyLinkEndText(
       : 'another ontology’s ';
   return t(
     `${zhOwner}关系类型 ${end.linkType} 的 ${end.end} 是 ${end.objectType}`,
-    `${enOwner}link type ${end.linkType}: ${end.end} is ${end.objectType}`,
+    // UX acceptance of #1141 (legacy 668): no colon inside, as the sentences that list these
+    // ends already put one before them.
+    `${enOwner}link type ${end.linkType}, whose ${end.end} is ${end.objectType}`,
   );
 }
 
@@ -185,7 +187,7 @@ export function ontologyLinkEndOutsideRequiresText(
         : `declared by ontology ${end.family} (not installed from a pack)`;
   return t(
     `关系类型 ${end.linkType} 的 ${end.end} 是 ${end.objectType}，${zhWhere}`,
-    `link type ${end.linkType}: ${end.end} is ${end.objectType}, ${enWhere}`,
+    `link type ${end.linkType}, whose ${end.end} ${end.objectType} is ${enWhere}`,
   );
 }
 

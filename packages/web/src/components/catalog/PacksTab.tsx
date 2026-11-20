@@ -989,28 +989,48 @@ function packLinkEndpointText(error: unknown, t: Translate): string {
   }
   const { undeclared, orphaned } = refusal;
   const own = undeclared[0]?.ontologyId;
+  // UX acceptance of #1141 (legacy 668): what is wrong, then that nothing was installed, then
+  // what to do — one remedy per case, and 「都」 only where there is a choice of two.
   const zh: string[] = [];
   const en: string[] = [];
   if (undeclared.length > 0) {
     zh.push(
-      `这个能力包的本体里有关系类型指向工作区里没有任何本体声明的对象类型：${ontologyLinkEndsText(undeclared, t, own)}。多半是它依赖的能力包还没装，先装好提供这些类型的能力包。`,
+      `这个能力包的本体里有关系类型指向工作区里没有任何本体声明的对象类型：${ontologyLinkEndsText(undeclared, t, own)}。多半是它依赖的能力包还没装。`,
     );
     en.push(
-      `A link type in this pack’s ontology points at an object type no ontology in the workspace declares: ${ontologyLinkEndsText(undeclared, t, own)}. Usually a pack it builds on is not installed yet; install the pack that provides those types first.`,
+      `A link type in this pack’s ontology points at an object type no ontology in the workspace declares: ${ontologyLinkEndsText(undeclared, t, own)}. Usually a pack it builds on is not installed yet.`,
     );
   }
   if (orphaned.length > 0) {
     zh.push(
-      `装上它会去掉别的本体的关系类型还在用的对象类型：${ontologyLinkEndsText(orphaned, t)}。先在「安装历史」里撤销装上那个本体的记录，或改动那个本体。`,
+      `装上它会去掉别的本体的关系类型还在用的对象类型：${ontologyLinkEndsText(orphaned, t)}。`,
     );
     en.push(
-      `Installing it would drop an object type another ontology’s link type still uses: ${ontologyLinkEndsText(orphaned, t)}. Roll back the record that installed that ontology under Install history, or change that ontology, first.`,
+      `Installing it would drop an object type another ontology’s link type still uses: ${ontologyLinkEndsText(orphaned, t)}.`,
     );
   }
-  zh.push('所以现在装不上，什么也没有改；都做不到时请平台管理员处理。');
-  en.push(
-    'So it cannot be installed now and nothing changed; if neither is possible, ask a platform administrator.',
-  );
+  zh.push('所以现在装不上，什么也没有改。');
+  en.push('So it cannot be installed now and nothing changed.');
+  if (undeclared.length > 0 && orphaned.length > 0) {
+    zh.push(
+      '先装好提供这些类型的能力包，再在「安装历史」里撤销装上那个本体的记录或改动那个本体；做不到时请平台管理员处理。',
+    );
+    en.push(
+      'Install the pack that provides those types, and roll back the record that installed that other ontology under Install history or change that ontology, first; if that is not possible, ask a platform administrator.',
+    );
+  } else if (undeclared.length > 0) {
+    zh.push('先装好提供这些类型的能力包；做不到时请平台管理员处理。');
+    en.push(
+      'Install the pack that provides those types first; if that is not possible, ask a platform administrator.',
+    );
+  } else {
+    zh.push(
+      '先在「安装历史」里撤销装上那个本体的记录，或改动那个本体；都做不到时请平台管理员处理。',
+    );
+    en.push(
+      'Roll back the record that installed that ontology under Install history, or change that ontology, first; if neither is possible, ask a platform administrator.',
+    );
+  }
   return t(zh.join(''), en.join(' '));
 }
 

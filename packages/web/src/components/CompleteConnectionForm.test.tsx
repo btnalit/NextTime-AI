@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { type OutboundTargetRefusalReason, describeOutboundTargetRefusal } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { ConnectionRequestRow } from '../lib/connections.js';
 import { HttpError } from '../lib/http-client.js';
@@ -12,6 +12,15 @@ import {
 } from './CompleteConnectionForm.js';
 
 afterEach(cleanup);
+
+/** What the form scrolled into view (jsdom has no `scrollIntoView`). */
+const scrolled: Element[] = [];
+beforeEach(() => {
+  scrolled.length = 0;
+  Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+    scrolled.push(this);
+  };
+});
 
 const request: ConnectionRequestRow = {
   id: 'cr-1234-5678',
@@ -688,8 +697,27 @@ describe('CompleteConnectionForm', () => {
       expect(document.getElementById('cc-credentials-error')).toBeNull();
       // On the field, not (also) above the buttons.
       expect(document.querySelector('.error-banner')).toBeNull();
+      // Legacy 668 (P3 846): focus moves to the field the refusal names, and (P3 845) the field —
+      // its error line included — is scrolled into view, not left behind the pinned buttons.
+      const control = document.getElementById(field === 'endpoint' ? 'cc-endpoint' : 'cc-manifest');
+      await waitFor(() => expect(document.activeElement).toBe(control));
+      expect(scrolled).toContain(control?.closest('.field'));
     },
   );
+
+  it('legacy 668: a check before sending focuses the first field it names', async () => {
+    const http = httpWith(async () => ({}));
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/清单来源/), { target: { value: 'not a url' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    // The endpoint (empty) comes before the manifest source in the form.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.getElementById('cc-endpoint')),
+    );
+    expect(document.getElementById('cc-manifest-error')).not.toBeNull();
+  });
 
   // From a kernel that sends no `details.field`: the field the message opens with, not a word
   // further in it.
