@@ -189,8 +189,10 @@ export interface ValuePattern {
  *  read as `UNCLOSED`, to the first `"`. */
 const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escapes>"`;
 /** What follows the quote that closes a `QUOTED` value: whitespace, or what ends a JSON value, a
- *  shell word or a query parameter. */
-const AFTER_A_QUOTED_VALUE = String.raw`[\s,;:})\]&|]`;
+ *  shell word, a query parameter, an attribute or a sentence. Not `:`, which follows a JSON key's
+ *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
+ *  which opens the next value as often (`token="\n…"`). */
+const AFTER_A_QUOTED_VALUE = String.raw`[\s,;)}\]&.'|<>]`;
 const AFTER_A_QUOTED_VALUE_RE = new RegExp(`^${AFTER_A_QUOTED_VALUE}$`);
 /** Whether the character `next` lets the `"` before it close a `QUOTED` value. Exported for
  *  `secret-stream.ts`: text cut right after a quote reads as if it ended there, where any quote

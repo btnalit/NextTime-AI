@@ -823,7 +823,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     expect(scrubSecretValues('password="a\\"b\nc" d').value).toBe(`password="${REDACTED}"b\nc" d`);
   });
 
-  it.each([' ', '\t', '\n', ',', ';', ':', '}', ')', ']', '&', '|', ''])(
+  it.each([' ', '\t', '\n', ',', ';', '}', ')', ']', '&', '.', "'", '|', '<', '>', ''])(
     'is closed by a quote what ends a value follows: %j',
     (after) => {
       expect(scrubSecretValues(`password="a\\"b ${FAKE}"${after}`).value).toBe(
@@ -834,6 +834,10 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
 
   it('closes at the first quote, as before, when no such quote follows', () => {
     expect(scrubSecretValues('password="a\\"b"c').value).toBe(`password="${REDACTED}"b"c`);
+  });
+
+  it('is not closed by the quote of a JSON key, its colon after it (#501 on #1579)', () => {
+    expect(scrubSecretValues(`API_TOKEN="a \\"b \\"password":${FAKE}`).value).not.toContain(FAKE);
   });
 
   it.each([
@@ -856,6 +860,24 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     'hides the next pair after a value that ends with a backslash before its quote (#493 on #1579): %s',
     (_label, text, hidden) => {
       expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+    },
+  );
+
+  it.each([
+    `password="C:\\dir\\" token="${FAKE}"`,
+    `run --password "C:\\k\\" --token "${FAKE}"`,
+    `$env:GOOGLE_APPLICATION_CREDENTIALS="C:\\keys\\"; $env:API_TOKEN="${FAKE}"`,
+    `export DB_PASSWORD="ab\\" API_TOKEN="${FAKE}"`,
+    `password: "a\\" token: "${FAKE}"`,
+    `<x password="C:\\d\\" token="${FAKE}">`,
+    `user=bob password="p\\" api_key="${FAKE}" ok`,
+    `API_TOKEN="a \\"b \\"password":${FAKE}`,
+    // Not closed by a quote a backslash follows: the next value opens with one (`\n`, `\\host`).
+    `password="C:\\dir\\" token="\\n${FAKE}"`,
+  ])(
+    'hides the next value, as main does, after one read on to its quote (#501 on #1579): %s',
+    (text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
     },
   );
 

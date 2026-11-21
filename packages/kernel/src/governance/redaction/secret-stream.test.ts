@@ -228,6 +228,14 @@ const SHAPES = [
   `password="a\\"b"token=${FAKE}`,
   `password="a\\"b"--token ${FAKE}`,
   'password="a\\"b"c d',
+  // The same, in the writings review #501 on #1579 found.
+  `run --password "C:\\k\\" --token "${FAKE}"`,
+  `$env:GOOGLE_APPLICATION_CREDENTIALS="C:\\keys\\"; $env:API_TOKEN="${FAKE}"`,
+  `export DB_PASSWORD="ab\\" API_TOKEN="${FAKE}"`,
+  `password: "a\\" token: "${FAKE}"`,
+  `<x password="C:\\d\\" token="${FAKE}">`,
+  `user=bob password="p\\" api_key="${FAKE}" ok`,
+  `API_TOKEN="a \\"b \\"password":${FAKE}`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
