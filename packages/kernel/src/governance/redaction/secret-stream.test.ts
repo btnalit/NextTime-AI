@@ -343,6 +343,12 @@ const SHAPES = [
   `token: \\"password" = '${FAKE} x'`,
   `api_key = a}.--token '${FAKE} x'`,
   `password=|API_TOKEN=\\"${FAKE}\\" x`,
+  // A next pair's name against a bare value; a pattern that reads on from where a match ended
+  // before one crossed it, or before the last one did (review #493 on #1586).
+  `--password=${FAKE}--api-key="abc"`,
+  `token=;${FAKE}clientSecret--token : "x"`,
+  `--token TOKEN='token':${FAKE}`,
+  `token=--password="I_TOKEN="apikey:\\"${FAKE}`,
   // Read after what was emitted: a cut after the `.` before a pair reads the pair as the whole
   // text does, here and when the text ends.
   `.API_TOKEN="a}api_key = \\"${FAKE} : `,
@@ -550,4 +556,17 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     const out = scrubber.push(`first words ${'B'.repeat(STREAM_HOLD_MAX_CHARS * 5)}`);
     expect(out).toEqual({ value: `first words ${REDACTED}`, redactedValues: 1, paused: true });
   });
+
+  it.each(['token=', 'TOKEN=', '--token ', 'password: '])(
+    'after a flush reads the text as a new one, nothing before it to look back into: %s (review #501 on #1586)',
+    (name) => {
+      // The `" ` held back is emitted by the flush; what was emitted before it ends in `a`, a
+      // letter a name may not be written against.
+      const scrubber = createSecretStreamScrubber();
+      expect(scrubber.push('x a" ').value).toBe('x a');
+      expect(scrubber.flush().value).toBe('" ');
+      const out = scrubber.push(`${name}${FAKE}`).value + scrubber.flush().value;
+      expect(out).toBe(`${name}${REDACTED}`);
+    },
+  );
 });

@@ -279,12 +279,16 @@ const UNCLOSED = String.raw`\\(?:\\\\)*"(?!${SECRET_KEY_AND_QUOTE})(?:(?!(?=(?<u
  *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
  *  upgrade (review #501 on #1575). Before a `\\"` the pair is the value's own and the quote not
  *  escaped: it stays a quote that closes a string (`"cmd":"PASSWORD=…\\","x":1`). Never read past
- *  the next pair's name and the quote its value opens with (`NEXT_SECRET_PAIR`), as a quoted value
- *  is not: a bare run that took them in kept that value (`token=x,api_key="…"`, since v0.69.2 and
- *  before), and where the next pair's rule ran first, it no longer comes first
- *  (`token=A_TOKEN="…"`, `--token PASSWORD="…"`; `NAMED_VALUES`). */
-const bareValue = (notInIt: string): string =>
-  String.raw`(?:(?!${NEXT_SECRET_PAIR})(?:[^\s'"${notInIt}\\]|\\\\|\\(?!")))+`;
+ *  the next pair's name and the quote its value opens with (`NEXT_SECRET_PAIR`) after a `,`, `;`,
+ *  `&` or `|` in it, as a quoted value is not: a bare run that took them in kept that value
+ *  (`token=x,api_key="…"`, since v0.69.2 and before). Only there: a name takes in what is written
+ *  against it, so the next pair's name could start where the value does and the value was kept
+ *  (`--password=…--api-key="…"`, review #493 on #1586); and never before its first character, nor
+ *  its second where the first is one of them (`token=;…`). */
+const bareValue = (notInIt: string): string => {
+  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
+  return String.raw`${char}(?:(?<=[,;&|])${char})?(?:(?!(?<=[,;&|])${NEXT_SECRET_PAIR})${char})*`;
+};
 const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('')})`;
 const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
@@ -752,6 +756,8 @@ interface TakenMatch {
   /** What replaces it ends with `[redacted]`. */
   masked: boolean;
   values: number;
+  /** Where it ended before it last went on to where a match that crossed it ends. */
+  crossedAt: number;
 }
 
 function append(match: TakenMatch, part: string): void {
@@ -766,10 +772,12 @@ function append(match: TakenMatch, part: string): void {
  *  hides it. One that goes on past it crosses it, and the match taken goes on to where it ends,
  *  the rest of its value hidden after what it replaced — one mask where that ends with one — and
  *  its pattern reads on from where the match it crossed ended, so a pair inside the rest of its
- *  value is read as it would be after that match. One match, so that text cut inside it is never
- *  read apart from the pair it crosses (`secret-stream.ts`). Linear in `text`: a pattern reads text
- *  again only after a match of its crosses, from where the match it crossed ended, and no later
- *  crossing reads behind where that match now ends. */
+ *  value is read as it would be after that match; so does one left out that goes on past there,
+ *  so at one place the pattern read first decides nothing (review #493 on #1586). One match, so
+ *  that text cut inside it is never read apart from the pair it crosses (`secret-stream.ts`).
+ *  Linear in `text`: a pattern reads text again only from where a match taken ended before the
+ *  last match crossed it, at most once for each crossing (what it then reads starts there), and no
+ *  later crossing reads behind where that match now ends. */
 function readTogether(
   patterns: readonly ValuePattern[],
   text: string,
@@ -796,8 +804,13 @@ function readTogether(
     }
     const last = taken.at(-1);
     let readOn = first.end;
-    if (first.replacement === undefined || (last !== undefined && first.end <= last.end)) {
-      // Kept, or hidden by the match before it.
+    const inside = last !== undefined && first.end <= last.end;
+    if (first.replacement === undefined || inside) {
+      // Kept, or hidden by the match before it. One that goes on past where that match ended
+      // before the last match crossed it reads on from there, as the one that crossed it did.
+      if (inside && first.start < last.crossedAt && last.crossedAt < first.end) {
+        readOn = last.crossedAt;
+      }
     } else if (last === undefined || first.start >= last.end) {
       const { start, end, replacement } = first;
       taken.push({
@@ -806,6 +819,7 @@ function readTogether(
         parts: [replacement],
         masked: replacement.endsWith(REDACTED),
         values: 1,
+        crossedAt: end,
       });
     } else {
       const rest = restOfValue(first, last.end, text);
@@ -818,6 +832,7 @@ function readTogether(
         last.values += 1;
       }
       readOn = last.end;
+      last.crossedAt = last.end;
       last.end = first.end;
     }
     next[index] = readMatchFrom(valuePattern, text, readOn);
