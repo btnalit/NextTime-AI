@@ -898,6 +898,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     ['a single-quoted value, a quote first', `password="C:\\dir\\" token='" ${FAKE}'`],
     ['an escaped quote that opens the value', `"token": "\\"a && password: " ${FAKE}"`],
     ['a pair with a bare value between', `api_key = "a\\" API_TOKEN = b client_secret: " ${FAKE}"`],
+    ['spaces around the separator', `password = "C:\\dir\\" token = " ${FAKE}"`],
     ['spaces before the colon (#501 on #1579)', `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`],
     ['a tab before the colon', `API_TOKEN="a \\"b \\"api_key"\t:\t"${FAKE}"`],
   ])(
