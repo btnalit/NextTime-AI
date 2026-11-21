@@ -221,6 +221,13 @@ const SHAPES = [
   `PASSWORD="a\\"b ${FAKE}" next`,
   'password="C:\\dir\\" x',
   'password: "a \\\\" b "c"',
+  // One that ends with `\` before its quote, then the next pair: the first `"` closes it (#493 on
+  // #1579). Then a quote no value can close at, a name right after it: never cut there.
+  `--password "C:\\dir\\" --token "${FAKE}"`,
+  `PASSWORD="C:\\dir\\" API_TOKEN="${FAKE}" x`,
+  `password="a\\"b"token=${FAKE}`,
+  `password="a\\"b"--token ${FAKE}`,
+  'password="a\\"b"c d',
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

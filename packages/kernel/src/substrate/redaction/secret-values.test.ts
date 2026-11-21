@@ -802,6 +802,11 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
       `{"user":"bob","password":"a\\\\\\"b ${FAKE}\\\\","x":1}`,
       `{"user":"bob","password":"${REDACTED}","x":1}`,
     ],
+    [
+      'a line break escaped before it (#493 on #1579)',
+      `{"password": "a\\nb \\"c ${FAKE}"}`,
+      `{"password": "${REDACTED}"}`,
+    ],
   ])('hides it to the quote no backslash escapes: %s', (_label, text, hidden) => {
     expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
     expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
@@ -817,6 +822,42 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     expect(scrubSecretValues('password="C:\\dir\\" x').value).toBe(`password="${REDACTED}" x`);
     expect(scrubSecretValues('password="a\\"b\nc" d').value).toBe(`password="${REDACTED}"b\nc" d`);
   });
+
+  it.each([' ', '\t', '\n', ',', ';', ':', '}', ')', ']', '&', '|', ''])(
+    'is closed by a quote what ends a value follows: %j',
+    (after) => {
+      expect(scrubSecretValues(`password="a\\"b ${FAKE}"${after}`).value).toBe(
+        `password="${REDACTED}"${after}`,
+      );
+    },
+  );
+
+  it('closes at the first quote, as before, when no such quote follows', () => {
+    expect(scrubSecretValues('password="a\\"b"c').value).toBe(`password="${REDACTED}"b"c`);
+  });
+
+  it.each([
+    [
+      'a name',
+      `password="C:\\dir\\" token="${FAKE}"`,
+      `password="${REDACTED}" token="${REDACTED}"`,
+    ],
+    [
+      'a --password flag',
+      `--password "C:\\dir\\" --token "${FAKE}"`,
+      `--password "${REDACTED}" --token "${REDACTED}"`,
+    ],
+    [
+      'an env line',
+      `PASSWORD="C:\\dir\\" API_TOKEN="${FAKE}" x`,
+      `PASSWORD="${REDACTED}" API_TOKEN="${REDACTED}" x`,
+    ],
+  ])(
+    'hides the next pair after a value that ends with a backslash before its quote (#493 on #1579): %s',
+    (_label, text, hidden) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+    },
+  );
 
   /** Pins the next line only: a plain quote with no close on its line is no value (main). */
   it.each([
