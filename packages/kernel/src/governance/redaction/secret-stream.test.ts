@@ -96,6 +96,24 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     expect(emitted).toBe(`我的 Handle 是 ${REDACTED} 。`);
   });
 
+  it.each([
+    `say "hi".--password "${FAKE} x" y`,
+    `say "hi"_--password "${FAKE} x" y`,
+    `say "hi".--password="a ${FAKE}" y`,
+    `say "hi".--api-key  "a ${FAKE}" y`,
+    `say "hi".API_TOKEN="a b ${FAKE}" y`,
+    `say "hi"-API_TOKEN="a ${FAKE}" y`,
+    `${'A'.repeat(90)}_TOKEN="a b ${FAKE}" y`,
+  ])(
+    'never emits the value of a flag or env name after a quote, a dot or a dash, cut anywhere (legacy 925): %s',
+    (text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+      for (let at = 1; at < text.length; at += 1) {
+        expect(stream([text.slice(0, at), text.slice(at)]).text).not.toContain(FAKE);
+      }
+    },
+  );
+
   it('holds a secret JSON value back until it is closed, spaces and all', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('{"password": "correct horse').value).toBe('{');
@@ -239,6 +257,43 @@ const SHAPES = [
   // A bare value that ends with an escaped quote: the character read on after a cut there is part
   // of the value, so the text before is read on its own (#493 on #1579).
   '"password":\\\\\\""token: "\\\\\\"x',
+  // A quote with spaces, then a colon, after it closes no value: it is a JSON key's (#501 on
+  // #1579). Streamed apart from the whole text before, when the whole read on to it (#493).
+  String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
+  `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`,
+  // Never cut in the blanks after a quote, whose `:` decides whether it closes a value; held
+  // while only blanks have come after it (#493 on #1581).
+  String.raw`run token="\"" :'"x"}`,
+  String.raw`run token="\""${'\t'}:'"x"}`,
+  String.raw`{password="x y\"| " :"}`,
+  String.raw`API_TOKEN: "x y\""  :\"x`,
+  String.raw`"password": "a\"b"  : x`,
+  `password="a\\"b"\t\t:${FAKE} y`,
+  // Four blanks before the colon, and a key's closing quote before `=` (#501 on 05f9be71).
+  String.raw`run token="\""    :'"x"}`,
+  `API_TOKEN="a \\"b \\"api_key" = " ${FAKE}"`,
+  `API_TOKEN="a \\"b \\"api_key"\t=\t" ${FAKE}"`,
+  String.raw`run token="\"" ='"x"}`,
+  // The names the value rules take before the next pair's opening quote, which ends the value
+  // before them (legacy 924, #501 on 05f9be71): held from the name, as the whole text hides it.
+  `PASSWORD="C:\\dir\\".API_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\" ${'A'.repeat(59)}_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\" ${'A'.repeat(122)}_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\".--token " ${FAKE}"`,
+  `password="C:\\dir\\"_--token " ${FAKE}"`,
+  `password="C:\\dir\\".--token=" ${FAKE}"`,
+  // A flag or env name right after a quote, a dot, `_` or `-`, which the flag and env rules take
+  // for one and the name rule does not (legacy 925): held from the name, as the whole text hides
+  // the value.
+  `say "hi".--password "${FAKE} x" y`,
+  `say "hi"_--password "${FAKE} x" y`,
+  `say "hi".--password="a ${FAKE}" y`,
+  `say "hi".--api-key  "a ${FAKE}" y`,
+  `say "hi".API_TOKEN="a b ${FAKE}" y`,
+  `say "hi"-API_TOKEN="a ${FAKE}" y`,
+  `${'A'.repeat(90)}_TOKEN="a b ${FAKE}" y`,
+  // The name rule does not take a name after a dot, whole or streamed.
+  `say "hi".password: "a ${FAKE}" y`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -354,11 +409,6 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
       String.raw`run password='\\" , API_TOKEN="[redacted]""api_key": "[redacted]`,
     ],
     [
-      String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
-      String.raw`{password="[redacted]"${'\t'}:${'\t'}"\"\""`,
-      String.raw`{password="[redacted]"\"\" API_TOKEN=\"[redacted]\"\"api_key"${'\t'}:${'\t'}"[redacted]"`,
-    ],
-    [
       String.raw`echo "--password="\n\"password: '"\\'\"}"}`,
       String.raw`echo "--password="[redacted]"}`,
       String.raw`echo "--password="[redacted]"password: '[redacted]'\"}"}`,
@@ -383,6 +433,21 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     expect(scrubber.push('hello wor').value).toBe('hello ');
     expect(scrubber.push('ld and').value).toBe('world ');
     expect(scrubber.flush().value).toBe('and');
+  });
+
+  it('of a run of quotes and blanks holds back only the last, however many came (#493 on e301108f)', () => {
+    expect(createSecretStreamScrubber().push('" '.repeat(100)).value).toBe('" '.repeat(99));
+    for (const unit of ['" ', '"\t', `"${' '.repeat(8)}`]) {
+      const text = unit.repeat(Math.ceil((2 * STREAM_HOLD_MAX_CHARS) / unit.length));
+      const scrubber = createSecretStreamScrubber();
+      let out = '';
+      for (let at = 0; at < text.length; at += 7) {
+        const piece = scrubber.push(text.slice(at, at + 7));
+        expect(piece.paused).toBeUndefined();
+        out += piece.value;
+      }
+      expect(out + scrubber.flush().value).toBe(scrubSecretValues(text).value);
+    }
   });
 
   it('past its bound it drops what it held and emits nothing more until flushed', () => {

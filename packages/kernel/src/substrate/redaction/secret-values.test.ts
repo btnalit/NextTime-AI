@@ -12,6 +12,7 @@ import {
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
+  endsAQuotedValue,
   platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
@@ -513,6 +514,9 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'A="a\\',
     '"password":"a\\\\',
     'password: "a\\" ',
+    'password="a\\" token=" ',
+    'API_TOKEN="\\" "k" : "',
+    'password="\\" a, --b ',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));
@@ -880,6 +884,68 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
       expect(scrubSecretValues(text).value).not.toContain(FAKE);
     },
   );
+
+  it.each([
+    ['a name', `password="C:\\dir\\" token=" ${FAKE}"`],
+    ['a --password flag', `--password "C:\\dir\\" --token " ${FAKE}"`],
+    ['an env line', `PASSWORD="C:\\dir\\" API_TOKEN=" ${FAKE}" x`],
+    ['a JSON key', `{"password": "C:\\dir\\", "api_key": " ${FAKE}"}`],
+    ['a & first', `password="C:\\dir\\"&token=" ${FAKE}"`],
+    ['a ; first', `password="C:\\dir\\";token=" ${FAKE}"`],
+    ['a single-quoted key', `{'password': "C:\\dir\\", 'token': " ${FAKE}"}`],
+    ['PowerShell', `$env:PASSWORD="C:\\k\\"; $env:API_TOKEN=" ${FAKE}"`],
+    ['a YAML key, a comma first', `password: "a\\" token: ",${FAKE}"`],
+    ['an attribute, a > first', `<x password="C:\\d\\" token=">${FAKE}">`],
+    ['a single-quoted value, a quote first', `password="C:\\dir\\" token='" ${FAKE}'`],
+    ['an escaped quote that opens the value', `"token": "\\"a && password: " ${FAKE}"`],
+    ['a pair with a bare value between', `api_key = "a\\" API_TOKEN = b client_secret: " ${FAKE}"`],
+    ['spaces around the separator', `password = "C:\\dir\\" token = " ${FAKE}"`],
+    ['a quoted key after a dot (#493 on #1581)', `password="a\\".'token' = " ${FAKE}"`],
+    ['a name right after a quote', `password="a\\"API_TOKEN = " ${FAKE}"`],
+    ['a flag right after a dot', `password="a\\".--token " ${FAKE}"`],
+    ['a flag right after an apostrophe', `password="a\\" x'--token " ${FAKE}"`],
+    ['a --flag= (#501 on #1581)', `run --password="C:\\k\\" --token=" ${FAKE}"`],
+    ['a name with a dot in it', `password="C:\\dir\\" my.token=" ${FAKE}"`],
+    ['an env name right after a dot', `PASSWORD="C:\\dir\\".API_TOKEN=" ${FAKE}"`],
+    ['an env name longer than a name', `PASSWORD="C:\\dir\\" ${'A'.repeat(100)}_TOKEN=" ${FAKE}"`],
+    ['two spaces before the colon', `API_TOKEN="a \\"b \\"api_key"  : "${FAKE}"`],
+    ['a key and `=` (#501 on 05f9be71)', `API_TOKEN="a \\"b \\"api_key" = " ${FAKE}"`],
+    ['a key, a tab and `=`', `API_TOKEN="a \\"b \\"api_key"\t=\t" ${FAKE}"`],
+    ['spaces before the colon (#501 on #1579)', `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`],
+    ['a tab before the colon', `API_TOKEN="a \\"b \\"api_key"\t:\t"${FAKE}"`],
+  ])(
+    'never closes at the opening quote of the next pair, its value opening with a space or what ends one (legacy 924): %s',
+    (_label, text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+    },
+  );
+
+  it('a quote that blanks and a colon follow closes no value, read where the stream cuts (#501, #493 on #1581)', () => {
+    expect(endsAQuotedValue('  : 1')).toBe(false);
+    expect(endsAQuotedValue('\t:')).toBe(false);
+    expect(endsAQuotedValue(':')).toBe(false);
+    expect(endsAQuotedValue('  = 1')).toBe(false);
+    expect(endsAQuotedValue('  x')).toBe(true);
+    expect(endsAQuotedValue('')).toBe(false);
+  });
+
+  it.each([
+    ['a word no name rule takes', 'password="a\\"b _k: " x'],
+    ['a flag after a letter', 'password="a\\"b x--k " x'],
+    ['an env name after `_`', 'password="a\\"b _API=" x'],
+    ['a name after a dot', 'password="a\\"b _.k: " x'],
+  ])(
+    'a quote after what no value rule takes for a name still closes the value: %s',
+    (_label, text) => {
+      expect(scrubSecretValues(text).value).toBe(`password="${REDACTED}" x`);
+    },
+  );
+
+  it('reads a value whose last word is a name and its separator to its first quote, as v0.69.2 does', () => {
+    expect(scrubSecretValues('password="a \\"b note: " x').value).toBe(
+      `password="${REDACTED}"b note: " x`,
+    );
+  });
 
   /** Pins the next line only: a plain quote with no close on its line is no value (main). */
   it.each([

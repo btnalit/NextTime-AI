@@ -63,6 +63,14 @@ const SCHEME_WORD_BEFORE = /(?:^|[^A-Za-z0-9_])(bearer|basic)$/i;
  *  come), or ` = `. */
 const NAME_AND_SEPARATOR_AT_END =
   /(?<![A-Za-z0-9_.-])(--)?([A-Za-z][A-Za-z0-9_.-]{0,63})(["']?)([ \t]{0,8}[:=][ \t]{0,8}|[ \t]{1,8})$/;
+/** What the `--flag` and env-line rules of `secret-values.ts` take for a name where the one above
+ *  does not, with what they read as its separator: a flag after `.`, `_` or a quote
+ *  (`say "hi".--password …`), and an env name of up to 128 characters, after `.` or `-` too
+ *  (`"hi".API_TOKEN=…`). Each as the rule's own boundary has it — or the value it hides streamed
+ *  out before it was whole (legacy 925). */
+const FLAG_AND_SEPARATOR_AT_END =
+  /(?<![A-Za-z0-9-])--([A-Za-z][A-Za-z0-9-]{0,63})(?:=|[ \t]{1,8})$/;
+const ENV_NAME_AND_EQUALS_AT_END = /(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=$/;
 /** A quoted JSON key at the end of a short slice, with as much of its colon as has arrived:
  *  `"api key"`, `"api key" `, `"api key": `. */
 const JSON_KEY_AND_COLON_AT_END = /"([^"\\\r\n]{1,128})"[ \t]{0,8}(?::[ \t]{0,8})?$/;
@@ -85,11 +93,17 @@ function secretNameStart(before: string): number | undefined {
   }
   const named = NAME_AND_SEPARATOR_AT_END.exec(slice);
   const name = named?.[2];
-  if (named === null || name === undefined) return undefined;
-  const quotedKey = named[3] !== '';
-  return namesASecretValue(name) || (quotedKey && namesASecretField(name))
-    ? offset + named.index
-    : undefined;
+  if (named !== null && name !== undefined) {
+    const quotedKey = named[3] !== '';
+    if (namesASecretValue(name) || (quotedKey && namesASecretField(name))) {
+      return offset + named.index;
+    }
+  }
+  for (const pattern of [FLAG_AND_SEPARATOR_AT_END, ENV_NAME_AND_EQUALS_AT_END]) {
+    const at = pattern.exec(slice);
+    if (at?.[1] !== undefined && namesASecretValue(at[1])) return offset + at.index;
+  }
+  return undefined;
 }
 
 /** Whether `text` — what follows the last `"` on the last line — can still turn out to be a JSON
@@ -142,6 +156,9 @@ function backslashesBefore(text: string, index: number): number {
   return backslashes;
 }
 
+/** A `"` and the blanks after it, as far as `NOT_A_KEYS_QUOTE` looks for a `:` or `=`. */
+const BLANKS_AFTER_A_QUOTE = /"[ \t]{1,8}$/;
+
 /** Where the text that is safe to emit ends — everything from here on is held back. */
 function safeCut(raw: string): number {
   let cut = raw.length;
@@ -185,6 +202,19 @@ function safeCut(raw: string): number {
       cut -= backslashes;
       moved = true;
     }
+    // Nor in the blanks right after a `"`: whether it closes a value may turn on a `:` or `=` after
+    // them (`"api_key" : `, `"api_key" = `), which the text before the cut would not see, and which
+    // may not have come yet (#493 on #1581, #501 on 05f9be71). The quote is held with them — only
+    // while what comes right after the cut is that `:` or `=` or nothing yet (no cut falls inside
+    // a run of blanks): once something else has come, the quote's reading is settled, and of a
+    // run of `" " "` only the last is held, not each in turn back to the start (#493 on
+    // e301108f).
+    const blanks = BLANKS_AFTER_A_QUOTE.exec(raw.slice(Math.max(0, cut - 9), cut));
+    const next = raw.charAt(cut);
+    if (blanks !== null && (next === ':' || next === '=' || next === '')) {
+      cut -= blanks[0].length;
+      moved = true;
+    }
     for (const valuePattern of SECRET_VALUE_PATTERNS) {
       for (const { start, end } of secretMatches(valuePattern, raw)) {
         if (start < cut && (end > cut || end === raw.length)) {
@@ -199,12 +229,13 @@ function safeCut(raw: string): number {
 
 /** `text` up to `cut`, scrubbed as the whole text scrubs it. Cut right after a `"`, the text
  *  before reads as if it ended at that quote, where any `"` closes a `"…"` value with escaped
- *  quotes in it; in the whole text the character after it may keep it from closing one
- *  (`password="a\"b"` of `password="a\"b"c`; #493 on #1579). So it is read with a character that
- *  keeps the quote from closing one, as that one does, and the character is taken off again —
- *  unless a value took it in (one opened by that quote), when the text is read on its own. */
+ *  quotes in it; in the whole text what follows may keep it from closing one (`password="a\"b"` of
+ *  `password="a\"b"c`, of `… "api_key" : …`; #493, #501 on #1579). So it is read with a character
+ *  that keeps the quote from closing one, as what follows does, and the character is taken off
+ *  again — unless a value took it in (one opened by that quote, or a bare one that ends with an
+ *  escaped quote), when the text is read on its own. */
 function scrubbedBefore(text: string, cut: number): Scrubbed<string> {
-  if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.charAt(cut))) {
+  if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.slice(cut, cut + 10))) {
     return scrubSecretValues(text.slice(0, cut));
   }
   const read = scrubSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`);
