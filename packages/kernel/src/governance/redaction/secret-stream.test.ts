@@ -236,6 +236,9 @@ const SHAPES = [
   `<x password="C:\\d\\" token="${FAKE}">`,
   `user=bob password="p\\" api_key="${FAKE}" ok`,
   `API_TOKEN="a \\"b \\"password":${FAKE}`,
+  // A bare value that ends with an escaped quote: the character read on after a cut there is part
+  // of the value, so the text before is read on its own (#493 on #1579).
+  '"password":\\\\\\""token: "\\\\\\"x',
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -339,6 +342,34 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     }
     expect(mismatches).toEqual([]);
   });
+
+  // Known limit, as legacy 920: where one rule's mask changes how a later rule reads the text
+  // (quotes three or four deep on a line), the cut is found on the text as it came and can fall
+  // inside a value only the whole text reads. Pinned so that a change to either shows (#493 on
+  // #1579; release.md §3.214).
+  it.each([
+    [
+      String.raw`run password='\\" , API_TOKEN="\a'""api_key": "' `,
+      String.raw`run password='[redacted]' `,
+      String.raw`run password='\\" , API_TOKEN="[redacted]""api_key": "[redacted]`,
+    ],
+    [
+      String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
+      String.raw`{password="[redacted]"${'\t'}:${'\t'}"\"\""`,
+      String.raw`{password="[redacted]"\"\" API_TOKEN=\"[redacted]\"\"api_key"${'\t'}:${'\t'}"[redacted]"`,
+    ],
+    [
+      String.raw`echo "--password="\n\"password: '"\\'\"}"}`,
+      String.raw`echo "--password="[redacted]"}`,
+      String.raw`echo "--password="[redacted]"password: '[redacted]'\"}"}`,
+    ],
+  ])(
+    'quotes many deep on a line can still stream apart from the whole: %s',
+    (text, whole, streamed) => {
+      expect(scrubSecretValues(text).value).toBe(whole);
+      expect(stream([text]).text).toBe(streamed);
+    },
+  );
 });
 
 describe('createSecretStreamScrubber — the stream stays live', () => {
