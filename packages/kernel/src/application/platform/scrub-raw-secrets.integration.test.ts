@@ -97,6 +97,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         `pin ${KEY_SHAPE}`,
         // A quoted value written with \" as releases before legacy 918 split it.
         `ran sh -c "export API_TOKEN=[redacted]"${PLAIN}\\""`,
+        // Review #501 on #1575: a JSON body inside a string, and a value inside one twice over.
+        `posted payload={\\"password\\":\\"${PLAIN}\\"}`,
+        `logged "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\\\\\""`,
+        // Legacy 921: tool output cut short inside a quoted value, which no rule read as one.
+        `read {"user":"bob","password": "${PLAIN} and the rest`,
       ],
       model: 'm',
     };
@@ -651,6 +656,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           'keep the plain one',
           `pin ${KEY_SHAPE}`,
           'ran sh -c "export API_TOKEN=\\"[redacted]\\""',
+          'posted payload={\\"password\\":\\"[redacted]\\"}',
+          'logged "cmd": "export API_TOKEN=\\\\\\"[redacted]\\\\\\""',
+          'read {"user":"bob","password": "[redacted]',
         ],
         model: 'm',
       });

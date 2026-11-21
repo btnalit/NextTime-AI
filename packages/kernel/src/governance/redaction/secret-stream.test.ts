@@ -122,10 +122,20 @@ const PAIR_NAMES = [
   '"token"',
   "'password'",
   '"client secret"',
+  // JSON text written inside one more string (review #501 on #1575).
+  '\\"api_key\\"',
+  '\\"client secret\\"',
 ];
 /** Every separator the patterns take, with spaces on either side, before and after. */
 const SEPARATORS = ['=', ':', ' = ', ' : ', ' =', ': ', '\t:\t', '  =  ', ' :'];
-const PAIR_VALUES = [FAKE, `"${FAKE} two"`, `'${FAKE} two'`, HANDLE, `\\"${FAKE} two\\"`];
+const PAIR_VALUES = [
+  FAKE,
+  `"${FAKE} two"`,
+  `'${FAKE} two'`,
+  HANDLE,
+  `\\"${FAKE} two\\"`,
+  `\\\\\\"${FAKE} two\\\\\\"`,
+];
 
 /** Every other shape a secret is written in. */
 const SHAPES = [
@@ -160,6 +170,18 @@ const SHAPES = [
   `--password \\"${FAKE} x\\"`,
   'API_KEY=\\"a b',
   'echo \\"hi\\" TOKEN=\\"a \\" b\\"',
+  // Written inside a string twice over, and JSON text inside a string (review #501 on #1575).
+  '"cmd": "export API_TOKEN=\\\\\\"a b\\\\\\" && run"',
+  `--password \\\\\\"${FAKE} x\\\\\\"`,
+  'password: \\\\\\"a b',
+  // Longer than any JSON key: only the name before the run holds it back.
+  `password: \\\\\\"${'x '.repeat(70)}\\\\\\" ok`,
+  `payload={\\"password\\":\\"${FAKE}\\",\\"x\\":\\"y\\"}`,
+  '{\\"client secret\\" : \\"a b\\\\\\"c d\\"}',
+  '{\\"note\\": \\"say \\\\\\"hi\\\\\\"\\", \\"token\\": \\"x y\\"}',
+  '{\\"password\\": \\"a \\\\\\\\ b\\"} tail',
+  '{\\"password\\": \\"[redacted]\\"}',
+  '"password":\\\\\\\\\\"[redacted]} and password: \\"x y\\"',
   "export PGPASSWORD='x y'",
   `X=PGPASSWORD=${FAKE}`,
   `note: password=${FAKE}`,
@@ -176,6 +198,23 @@ const SHAPES = [
   `密码是 password: ${FAKE}。`,
   `值 token = "${FAKE} 中文"`,
   `我的 Handle 是${HANDLE}。`,
+  // A quoted value whose closing quote is not on its line (legacy 921).
+  `export API_TOKEN="${FAKE} cut`,
+  "password: 'a b",
+  'API_TOKEN=\\"a b\nnext\\" x',
+  'API_TOKEN=\\"a\r\\" b',
+  'password="a b\r\n" c',
+  '{"cmd":"PASSWORD=\\"a b","x":1}',
+  '{"user":"bob","password": "a b',
+  '{"session cookie": "a b\\',
+  'payload={\\"session cookie\\":\\"a b',
+  'log "{\\"session cookie\\":\\"a" x',
+  `-e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\"`,
+  `{"cmd":"PASSWORD=${FAKE}\\\\","x":1}`,
+  'password="',
+  // A space, then a backslash: a JSON string's value read so far ends before it, short of the end.
+  '{"session cookie": "a \\"b \\\\ c"}',
+  '{\\"password\\": \\"a \\\\\\"b \\\\\\\\ c\\"}',
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -257,7 +296,10 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     };
     const texts = [
       ...PAIR_NAMES.flatMap((name) =>
-        SEPARATORS.map((separator, index) => `see ${name}${separator}${PAIR_VALUES[index % 4]} ok`),
+        SEPARATORS.map(
+          (separator, index) =>
+            `see ${name}${separator}${PAIR_VALUES[index % PAIR_VALUES.length]} ok`,
+        ),
       ),
       ...SHAPES.flatMap((shape) => CONTEXTS.map(([before, after]) => `${before}${shape}${after}`)),
     ];

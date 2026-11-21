@@ -1,4 +1,5 @@
 import {
+  ESCAPED_JSON_SECRET_PAIR,
   JSON_SECRET_PAIR,
   REDACTED,
   SECRET_VALUE_PATTERNS,
@@ -64,6 +65,9 @@ const NAME_AND_SEPARATOR_AT_END =
 /** A quoted JSON key at the end of a short slice, with as much of its colon as has arrived:
  *  `"api key"`, `"api key" `, `"api key": `. */
 const JSON_KEY_AND_COLON_AT_END = /"([^"\\\r\n]{1,128})"[ \t]{0,8}(?::[ \t]{0,8})?$/;
+/** The same, of JSON text written inside one more string (`ESCAPED_JSON_SECRET_PAIR`):
+ *  `\"api key\"`, `\"api key\": `. */
+const ESCAPED_JSON_KEY_AND_COLON_AT_END = /\\"([^"\\\r\n]{1,128})\\"[ \t]{0,8}(?::[ \t]{0,8})?$/;
 /** The longest JSON key the JSON pattern matches (`[^"\\\r\n]{1,128}`). */
 const JSON_KEY_MAX_CHARS = 128;
 
@@ -73,7 +77,8 @@ const JSON_KEY_MAX_CHARS = 128;
 function secretNameStart(before: string): number | undefined {
   const slice = before.slice(-160);
   const offset = before.length - slice.length;
-  const jsonKey = JSON_KEY_AND_COLON_AT_END.exec(slice);
+  const jsonKey =
+    JSON_KEY_AND_COLON_AT_END.exec(slice) ?? ESCAPED_JSON_KEY_AND_COLON_AT_END.exec(slice);
   if (jsonKey?.[1] !== undefined && namesASecretField(jsonKey[1])) {
     return offset + jsonKey.index;
   }
@@ -89,31 +94,51 @@ function secretNameStart(before: string): number | undefined {
 /** Whether `text` — what follows the last `"` on the last line — can still turn out to be a JSON
  *  key (`"client secret": …` names a secret only once the key is closed, and its words may arrive
  *  in separate deltas). Any `"` can open one — quote parity is no guide in prose — except the `"`
- *  that closes a secret's JSON pair, which that pair has taken. */
+ *  that closes a secret's JSON pair, which that pair has taken. No backslash in it, but at its
+ *  end: the `\` of the `\"` that closes a key of JSON text written inside a string
+ *  (`\"client secret\"`) may arrive before its quote. */
 function couldBeJsonKey(text: string): boolean {
-  return text.length <= JSON_KEY_MAX_CHARS && !/[\\\r]/.test(text);
-}
-
-/** Where on `line` a value whose closing quote has not arrived could start: after the last `"`
- *  (a quoted value in `name="…"`, `--flag "…"`, which knows no escapes), the last `"` no backslash
- *  escapes (a JSON string), the last `'`, or the last `\"` (a quoted value written inside a
- *  string, `API_TOKEN=\"…\"`, which the next `\"` closes). No quote parity: which quote opens a
- *  value is up to the separator before it, so a stray quote in prose earlier on the line must not
- *  hide one. */
-function openValueStarts(line: string): number[] {
-  let unescaped = line.lastIndexOf('"');
-  while (unescaped > 0 && escapedAt(line, unescaped))
-    unescaped = line.lastIndexOf('"', unescaped - 1);
-  return [line.lastIndexOf('"'), unescaped, line.lastIndexOf("'"), line.lastIndexOf('\\"')].filter(
-    (at) => at !== -1,
+  return (
+    text.length <= JSON_KEY_MAX_CHARS &&
+    !/[\\\r]/.test(text.slice(0, text.length - backslashesBefore(text, text.length)))
   );
 }
 
-/** Whether the character at `index` follows an odd run of backslashes. */
-function escapedAt(text: string, index: number): boolean {
+/** Where on `line` a value whose closing quote has not arrived could start:
+ *   - after the last `"` (a quoted value in `name="…"`, `--flag "…"`, which knows no escapes);
+ *   - the last `"` no backslash escapes (a JSON string);
+ *   - the last `'`;
+ *   - the backslashes before the last `"` they escape: a quoted value written inside a string,
+ *     `API_TOKEN=\"…\"` or `API_TOKEN=\\\"…\\\"`, which the same run closes;
+ *   - the last `\"` that opens a string of JSON text written inside one more, `\"api_key\": \"…`
+ *     (a quote of that string's own text is written `\\\"`; review #501 on #1575);
+ *   - the backslashes that end the line, the quote of such a value still to come.
+ *  No quote parity: which quote opens a value is up to the separator before it, so a stray quote
+ *  in prose earlier on the line must not hide one. */
+function openValueStarts(line: string): number[] {
+  let unescaped = line.lastIndexOf('"');
+  while (unescaped > 0 && backslashesBefore(line, unescaped) % 2 === 1)
+    unescaped = line.lastIndexOf('"', unescaped - 1);
+  let escapedString = line.lastIndexOf('"');
+  while (escapedString > 0 && backslashesBefore(line, escapedString) % 4 !== 1)
+    escapedString = line.lastIndexOf('"', escapedString - 1);
+  const escaped = line.lastIndexOf('\\"') + 1;
+  const trailing = backslashesBefore(line, line.length);
+  return [
+    line.lastIndexOf('"'),
+    unescaped,
+    line.lastIndexOf("'"),
+    escaped > 0 ? escaped - backslashesBefore(line, escaped) : -1,
+    escapedString > 0 ? escapedString - 1 : -1,
+    trailing > 0 ? line.length - trailing : -1,
+  ].filter((at) => at !== -1);
+}
+
+/** How many backslashes stand right before `index`. */
+function backslashesBefore(text: string, index: number): number {
   let backslashes = 0;
   while (index - backslashes > 0 && text.charAt(index - backslashes - 1) === '\\') backslashes += 1;
-  return backslashes % 2 === 1;
+  return backslashes;
 }
 
 /** Where the text that is safe to emit ends — everything from here on is held back. */
@@ -140,7 +165,9 @@ function safeCut(raw: string): number {
   if (
     lastQuote !== -1 &&
     couldBeJsonKey(line.slice(lastQuote + 1)) &&
-    !secretMatches(JSON_SECRET_PAIR, line).some(({ end }) => end === lastQuote + 1)
+    ![JSON_SECRET_PAIR, ESCAPED_JSON_SECRET_PAIR].some((pair) =>
+      secretMatches(pair, line).some(({ end }) => end === lastQuote + 1),
+    )
   ) {
     cut = Math.min(cut, lineFrom + lastQuote);
   }
@@ -150,6 +177,13 @@ function safeCut(raw: string): number {
 
   for (let moved = true; moved; ) {
     moved = false;
+    // Never right after a backslash: what it escapes would be read apart from it (`\\\\\"[redacted]`
+    // cut after two of its backslashes reads as a bare value of two; review #501 on #1575).
+    const backslashes = backslashesBefore(raw, cut);
+    if (backslashes > 0) {
+      cut -= backslashes;
+      moved = true;
+    }
     for (const valuePattern of SECRET_VALUE_PATTERNS) {
       for (const { start, end } of secretMatches(valuePattern, raw)) {
         if (start < cut && (end > cut || end === raw.length)) {
