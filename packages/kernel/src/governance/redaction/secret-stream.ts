@@ -4,6 +4,7 @@ import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
   type Scrubbed,
+  endsAQuotedValue,
   namesASecretField,
   namesASecretValue,
   scrubSecretValues,
@@ -196,6 +197,24 @@ function safeCut(raw: string): number {
   return cut;
 }
 
+/** `text` up to `cut`, scrubbed as the whole text scrubs it. Cut right after a `"`, the text
+ *  before reads as if it ended at that quote, where any `"` closes a `"…"` value with escaped
+ *  quotes in it; in the whole text the character after it may keep it from closing one
+ *  (`password="a\"b"` of `password="a\"b"c`; #493 on #1579). So it is read with a character that
+ *  keeps the quote from closing one, as that one does, and the character is taken off again —
+ *  unless a value took it in (one opened by that quote), when the text is read on its own. */
+function scrubbedBefore(text: string, cut: number): Scrubbed<string> {
+  if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.charAt(cut))) {
+    return scrubSecretValues(text.slice(0, cut));
+  }
+  const read = scrubSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`);
+  return read.value.endsWith(KEEPS_A_QUOTE_OPEN)
+    ? { value: read.value.slice(0, -1), redactedValues: read.redactedValues }
+    : scrubSecretValues(text.slice(0, cut));
+}
+/** A character no value ends with once hidden, and that `endsAQuotedValue` refuses. */
+const KEEPS_A_QUOTE_OPEN = 'x';
+
 /** What `push` emits: scrubbed text, and whether the stream paused with it. */
 export interface StreamPiece extends Scrubbed<string> {
   /** Legacy 162: this piece took the scrubber past its bound — it ends with the one `[redacted]`
@@ -219,13 +238,13 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
     held += slice;
     const cut = safeCut(held);
     if (held.length - cut > STREAM_HOLD_MAX_CHARS) {
-      const before = scrubSecretValues(held.slice(0, cut));
+      const before = scrubbedBefore(held, cut);
       held = '';
       dropping = true;
       return { value: before.value + REDACTED, redactedValues: before.redactedValues + 1 };
     }
     if (cut === 0) return { value: '', redactedValues: 0 };
-    const out = scrubSecretValues(held.slice(0, cut));
+    const out = scrubbedBefore(held, cut);
     held = held.slice(cut);
     return out;
   }

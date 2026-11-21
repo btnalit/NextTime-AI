@@ -188,6 +188,29 @@ export interface ValuePattern {
  *  backslashes cost its length squared (review #501 on #1577: 42 s at 1 MiB). A longer run is
  *  read as `UNCLOSED`, to the first `"`. */
 const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escapes>"`;
+/** What follows the quote that closes a `QUOTED` value: whitespace, or what ends a JSON value, a
+ *  shell word, a query parameter, an attribute or a sentence. Not `:`, which follows a JSON key's
+ *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
+ *  which opens the next value as often (`token="\n…"`). */
+const AFTER_A_QUOTED_VALUE = String.raw`[\s,;)}\]&.'|<>]`;
+const AFTER_A_QUOTED_VALUE_RE = new RegExp(`^${AFTER_A_QUOTED_VALUE}$`);
+/** Whether the character `next` lets the `"` before it close a `QUOTED` value. Exported for
+ *  `secret-stream.ts`: text cut right after a quote reads as if it ended there, where any quote
+ *  closes one. */
+export function endsAQuotedValue(next: string): boolean {
+  return AFTER_A_QUOTED_VALUE_RE.test(next);
+}
+/** A `"…"` value with quotes inside it escaped — JSON text, a shell or YAML string
+ *  (`{"password": "a \"b c"}`, `PASSWORD="a\"b"`): to the first `"` no backslash escapes. Read to
+ *  the first `"`, the value ended at the `\"` inside it and the rest was kept (#501 on #1577,
+ *  main before it). Closed only by a quote that `AFTER_A_QUOTED_VALUE` or the end of the text
+ *  follows, as a string's closing quote is. Closed by any, a value that ends with `\` before its
+ *  quote (a Windows path, cmd.exe) read on to the next pair's opening quote and the next value was
+ *  kept (`--password "C:\dir\" --token "…"`; #493 on #1579); it still is when that value opens
+ *  with a space. Before the plain `"…"`, which still closes a value that no such quote does on
+ *  its line (`password="C:\dir\" x`), as it did. Linear: each step reads one character or one
+ *  escape. */
+const QUOTED = String.raw`"(?:[^"\\\r\n]|\\[^\r\n])*"(?=${AFTER_A_QUOTED_VALUE}|$)`;
 /** A value opened with `\"` (or more backslashes) whose closing run is not on its line — tool
  *  output cut short, a string that goes on to the next line, one closed after a `\r` (legacy 921):
  *  to the end of the line or the first `"` on it, so a value written inside a string ends with
@@ -205,8 +228,8 @@ const UNCLOSED = String.raw`\\(?:\\\\)*"(?:[^"\\\r\n]|\\\\|\\(?!"))+`;
  *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
  *  upgrade (review #501 on #1575). Before a `\\"` the pair is the value's own and the quote not
  *  escaped: it stays a quote that closes a string (`"cmd":"PASSWORD=…\\","x":1`). */
-const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"\\]|\\\\|\\(?!"))+)`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"&\\]|\\\\|\\(?!"))+)`;
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"\\]|\\\\|\\(?!"))+)`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"&\\]|\\\\|\\(?!"))+)`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;

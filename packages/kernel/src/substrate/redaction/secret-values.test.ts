@@ -509,6 +509,10 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'A=a\\\\\\',
     'A=\\\\"a ',
     'password: \\\\\\"a\\',
+    'password: "\\"',
+    'A="a\\',
+    '"password":"a\\\\',
+    'password: "a\\" ',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));
@@ -771,6 +775,119 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     }
+  });
+});
+
+describe('a quoted value with escaped quotes inside it (review #501 on #1577)', () => {
+  it.each([
+    ['JSON text', `{"password": "a \\"b ${FAKE}"}`, `{"password": "${REDACTED}"}`],
+    [
+      'a JSON key the name rule reads, more pairs after it',
+      `{"api_key":"x\\"${FAKE}","user":"bob"}`,
+      `{"api_key":"${REDACTED}","user":"bob"}`,
+    ],
+    ['a YAML key', `password: "a \\"b ${FAKE}"`, `password: "${REDACTED}"`],
+    [
+      'a shell string',
+      `export PASSWORD="a\\"${FAKE}" && run`,
+      `export PASSWORD="${REDACTED}" && run`,
+    ],
+    [
+      'a --password flag',
+      `run --password "a \\"b ${FAKE}" now`,
+      `run --password "${REDACTED}" now`,
+    ],
+    [
+      'escaped backslashes and a quote escaped once more',
+      `{"user":"bob","password":"a\\\\\\"b ${FAKE}\\\\","x":1}`,
+      `{"user":"bob","password":"${REDACTED}","x":1}`,
+    ],
+    [
+      'a line break escaped before it (#493 on #1579)',
+      `{"password": "a\\nb \\"c ${FAKE}"}`,
+      `{"password": "${REDACTED}"}`,
+    ],
+  ])('hides it to the quote no backslash escapes: %s', (_label, text, hidden) => {
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
+
+  it('ends at an escaped backslash before its quote, and leaves what follows', () => {
+    expect(scrubSecretValues(`{"password": "a \\\\", "x": "${FAKE}"}`).value).toBe(
+      `{"password": "${REDACTED}", "x": "${FAKE}"}`,
+    );
+  });
+
+  it('closes at the first quote, as before, when no quote no backslash escapes is on its line', () => {
+    expect(scrubSecretValues('password="C:\\dir\\" x').value).toBe(`password="${REDACTED}" x`);
+    expect(scrubSecretValues('password="a\\"b\nc" d').value).toBe(`password="${REDACTED}"b\nc" d`);
+  });
+
+  it.each([' ', '\t', '\n', ',', ';', '}', ')', ']', '&', '.', "'", '|', '<', '>', ''])(
+    'is closed by a quote what ends a value follows: %j',
+    (after) => {
+      expect(scrubSecretValues(`password="a\\"b ${FAKE}"${after}`).value).toBe(
+        `password="${REDACTED}"${after}`,
+      );
+    },
+  );
+
+  it('closes at the first quote, as before, when no such quote follows', () => {
+    expect(scrubSecretValues('password="a\\"b"c').value).toBe(`password="${REDACTED}"b"c`);
+  });
+
+  it('is not closed by the quote of a JSON key, its colon after it (#501 on #1579)', () => {
+    expect(scrubSecretValues(`API_TOKEN="a \\"b \\"password":${FAKE}`).value).not.toContain(FAKE);
+  });
+
+  it.each([
+    [
+      'a name',
+      `password="C:\\dir\\" token="${FAKE}"`,
+      `password="${REDACTED}" token="${REDACTED}"`,
+    ],
+    [
+      'a --password flag',
+      `--password "C:\\dir\\" --token "${FAKE}"`,
+      `--password "${REDACTED}" --token "${REDACTED}"`,
+    ],
+    [
+      'an env line',
+      `PASSWORD="C:\\dir\\" API_TOKEN="${FAKE}" x`,
+      `PASSWORD="${REDACTED}" API_TOKEN="${REDACTED}" x`,
+    ],
+  ])(
+    'hides the next pair after a value that ends with a backslash before its quote (#493 on #1579): %s',
+    (_label, text, hidden) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+    },
+  );
+
+  it.each([
+    `password="C:\\dir\\" token="${FAKE}"`,
+    `run --password "C:\\k\\" --token "${FAKE}"`,
+    `$env:GOOGLE_APPLICATION_CREDENTIALS="C:\\keys\\"; $env:API_TOKEN="${FAKE}"`,
+    `export DB_PASSWORD="ab\\" API_TOKEN="${FAKE}"`,
+    `password: "a\\" token: "${FAKE}"`,
+    `<x password="C:\\d\\" token="${FAKE}">`,
+    `user=bob password="p\\" api_key="${FAKE}" ok`,
+    `API_TOKEN="a \\"b \\"password":${FAKE}`,
+    // Not closed by a quote a backslash follows: the next value opens with one (`\n`, `\\host`).
+    `password="C:\\dir\\" token="\\n${FAKE}"`,
+  ])(
+    'hides the next value, as main does, after one read on to its quote (#501 on #1579): %s',
+    (text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+    },
+  );
+
+  /** Pins the next line only: a plain quote with no close on its line is no value (main). */
+  it.each([
+    ['a name', 'password="a\\\nb" c', '\nb" c'],
+    ['an env line', 'PASSWORD="a\\\r\nb" c', '\r\nb" c'],
+    ['a JSON pair', '{"password": "a\\\nb", "x": "y"}', '\nb", "x": "y"}'],
+  ])('reads no escape past the end of its line: %s', (_label, text, nextLine) => {
+    expect(scrubSecretValues(text).value).toContain(nextLine);
   });
 });
 
@@ -1541,6 +1658,24 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
       expect(scrubAll(hidden.value)).toEqual({ value: hidden.value, redactedValues: 0 });
     }
   });
+
+  // Review #501 on #1577: JSON text a tool printed is a string here, decoded and read as plain
+  // text, and its value ended at the escaped quote inside it.
+  it.each([
+    ['a JSON value', `{"password": "a \\"b ${FAKE}"}`, `{"password": "${REDACTED}"}`],
+    [
+      'a JSON key the name rule reads, more pairs after it',
+      `{"api_key":"x\\"${FAKE}","user":"bob"}`,
+      `{"api_key":"${REDACTED}","user":"bob"}`,
+    ],
+  ])(
+    'hides %s with an escaped quote in it, written inside a string, to its end',
+    (_label, stdout, expected) => {
+      const hidden = scrubAll(result(stdout));
+      expect(hidden).toEqual({ value: result(expected), redactedValues: 1 });
+      expect(scrubAll(hidden.value)).toEqual({ value: hidden.value, redactedValues: 0 });
+    },
+  );
 
   it('skips what it read, rewritten or kept, in a pass over the text: the spans', () => {
     // `\r` after the separator: no value decoded, the line breaks there.

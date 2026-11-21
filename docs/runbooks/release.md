@@ -3868,6 +3868,60 @@ select 'reconcile', count(*) from action_requests r
 - **回滚**（见 §5，没有迁移）：只回退代码。存量清洗的改写是单向的，只有这次 `BACKUP_NOW` 的备份能带回原文（同 §3.25）。回滚后，新写入的这几种值又会原样留下。
 - 下一次主机升级的提示要带上本节。
 
+### 3.214 双引号里带转义引号的值整体遮住（#501 复看 #1577，0.69.2 之后的下一版）
+
+没有迁移，不需要主机步骤。
+
+- **以前漏在哪**（#501 复看 #1577 时实测，main 上就有）：
+  - 按名字认的规则排在 JSON 键值规则前面，带双引号的值读到下一个 `"` 为止，不认 `\"` 转义。
+  - 所以值里有转义引号时只遮到那个引号，后面的字留下：`{"password": "a \"b <密钥>"}` 写成 `{"password": "[redacted]"b <密钥>"}`。`{"api_key":"x\"<密钥>"}`、`password: "a \"b <密钥>"`、`PASSWORD="a\"<密钥>"` 也一样。
+  - 名字规则不认的键（`"session cookie"`）走 JSON 键值规则，本来就整体遮住。
+  - 工具结果本身是 JSON 对象时，解码后照样按这条规则读；JSON 写在字符串里时（`{"stdout":"{\"password\": \"a \\\"b …\"}"}`），工具调用记录里也露。
+- **现在怎么读**：
+  - 双引号里的值认 `\` 转义，读到第一个没被反斜杠转义、后面跟着空白、`,;)}]&.'|<>` 之一或文本结尾的 `"`，整体换成 `"[redacted]"`。JSON、shell、YAML 的双引号字符串都这样转义，收尾引号后面也都是这些字。不含 `:`：跟着 `:` 的是 JSON 键的收尾引号，读到那里就把下一对的名字读进来了（#501 复看 #1579）。也不含 `\`：后一个值以 `\` 开头时（`"\n…"`、`"\\host…"`）同样会读进下一对。
+  - 没有这样的引号时，照旧读到第一个 `"`：`password="C:\dir\" x` 写成 `password="[redacted]" x`，`password="a\"b"c` 写成 `password="[redacted]"b"c`。
+  - 收尾引号后面要跟这些字，是因为值以 `\` 结尾再加收尾引号（Windows 路径、cmd.exe）时，`\"` 不是转义：不加这一条，`--password "C:\dir\" --token "<密钥>"` 会一直读到 `--token` 那个值开头的 `"`，后一个值露出来（#493、#501 复看 #1579）。
+  - 截断在值中间、值里又有转义引号的 JSON（`{"password": "a \"b <密钥>`，同一行没收尾）仍只遮到那个引号：名字规则先读到它，§3.213 的没收尾读法只给 JSON 键值规则。
+  - 前一个值以 `\` 结尾、同一行后一个带引号的值又以空白或上面那些字开头时（`password="C:\dir\" token=" <密钥>"`），前一个值仍读到后一个值开头的 `"`，后一个值露出来，main 上遮得住。值以空白开头很少见，算已知限制。
+  - 实时 `chat.stream`：放出的那段若在 `"` 后面切开，按"后面还有字"读，和整段读法一致；其余分段扣留不变。
+  - 一行里混用三四层引号、前一条规则遮住的值改变了后一条规则怎么读时，实时流放出的文本可能和整段脱敏不逐字相同（遗留 920 同一类，main 上也有；#493 复看 #1579 的三条例子固定在 `secret-stream.test.ts` 里）。落库的消息按整段脱敏。
+- **这次升级的存量清洗**：`STEP raw-secret-scrub`（§3.25）的存量规则同样改了，但历史行里已经写成 `"[redacted]"b <密钥>"` 的不改写，后半段留在历史行里。
+  - 这串字和"带引号的值收尾之后紧跟着字"写出来一样（`password="x"y "z"` 存下来是 `password="[redacted]"y "z"`），按它改写会吃掉后面的字。
+  - 需要时按下面的只读 SQL 数一次（#501 复看 #1579），执行方式同 §3.15 A：在主机检出目录下执行，经 SSH 时把 heredoc 通过管道交给 ssh。位置列表与 §3.15 A 相同，只按位置输出行数，不打印值。
+  - 它找的是 `"[redacted]"` 后面紧跟着不能结束值的字（字母、中文等），引号前可以有任意层反斜杠：jsonb 列 `::text` 之后引号写成 `\"`，stdout 里又是 JSON 文本的再多一层，所以按"引号后面紧跟字母或数字"直接写的正则在这些行上查不到。
+  - 命中的里面也有 `password="x"y` 这样本来不是密钥的。由人按位置查看行、判断留下的是不是密钥的后半段、要不要轮换，结果记 `docs/private/`。
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+with src(location, t) as (
+            select 'chat_messages', content::text from chat_messages
+  union all select 'audit_records', payload::text from audit_records
+  union all select 'tasks', input::text || ' ' || coalesce(result::text, '') from tasks
+  union all select 'activities', metadata::text from activities
+  union all select 'objects', properties::text from objects
+  union all select 'links', properties::text from links
+  union all select 'evidence', content::text from evidence
+  union all select 'decisions', coalesce(summary, '') || ' ' || coalesce(rationale::text, '') from decisions
+  union all select 'observations', content::text from observations
+  union all select 'skills', description || ' ' || markdown from skills
+  union all select 'procedures', description || ' ' || steps::text from procedures
+  union all select 'action_requests', params::text from action_requests
+  union all select 'pending_context_items', payload::text from pending_context_items
+)
+select src.location, count(*) as rows
+from src
+where src.t ~ '\\*"\[redacted\]\\*"[^[:space:],;:)}\]"''\\&]'
+group by src.location
+order by src.location;
+rollback;
+SQL
+```
+
+- **升级影响**：没有需要手工执行的步骤。
+- **回滚**（见 §5，没有迁移）：只回退代码。回滚后，新写入的这种值又只遮到转义引号为止。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
