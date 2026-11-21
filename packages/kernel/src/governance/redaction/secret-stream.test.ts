@@ -24,6 +24,8 @@ const TEXTS: readonly string[] = [
   'run PGPASSWORD=hunter2 psql and /login?user=a&password=hunter2&x=1',
   'nothing secret here: max_tokens=1024, the depends_on edge, tokenCount 3 — 普通的中文句子。',
   'export API_TOKEN="abcdefghijklmnopqrstuvwxyz 0123" && password: \'two words\' --password  x y',
+  // A quoted value written inside a string (legacy 918): `\"…\"`.
+  'sh -c "export API_TOKEN=\\"abcdefghijklmnopqrstuvwxyz 0123\\" && run" --password \\"a b\\" x',
   'I don\'t know; password: "correct horse battery" said the note. Cookie: a=1; b=2\nnext',
   'POSTGRES_PASSWORD: abcdefghijklmnopqrstuvwxyz\nX-Api-Key: abcdefghijklmnopqrstuvwxyz0123 end',
   // A platform API key's shape (legacy 168), and one character too long to be one.
@@ -123,7 +125,7 @@ const PAIR_NAMES = [
 ];
 /** Every separator the patterns take, with spaces on either side, before and after. */
 const SEPARATORS = ['=', ':', ' = ', ' : ', ' =', ': ', '\t:\t', '  =  ', ' :'];
-const PAIR_VALUES = [FAKE, `"${FAKE} two"`, `'${FAKE} two'`, HANDLE];
+const PAIR_VALUES = [FAKE, `"${FAKE} two"`, `'${FAKE} two'`, HANDLE, `\\"${FAKE} two\\"`];
 
 /** Every other shape a secret is written in. */
 const SHAPES = [
@@ -152,6 +154,12 @@ const SHAPES = [
   `--token\t${FAKE}`,
   `--user --password ${FAKE}`,
   'API_TOKEN="a b c"',
+  'sh -c "export API_TOKEN=\\"a b\\" && run"',
+  'command: "PGPASSWORD=\\"a b\\" psql"',
+  'const s = "password: \\"x y\\"";',
+  `--password \\"${FAKE} x\\"`,
+  'API_KEY=\\"a b',
+  'echo \\"hi\\" TOKEN=\\"a \\" b\\"',
   "export PGPASSWORD='x y'",
   `X=PGPASSWORD=${FAKE}`,
   `note: password=${FAKE}`,
@@ -217,7 +225,10 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     (name) => {
       const mismatches = SEPARATORS.flatMap((separator, index) =>
         PAIR_VALUES.map((value, valueIndex) =>
-          firstMismatch(`see ${name}${separator}${value} ok`, valueIndex === index % 4),
+          firstMismatch(
+            `see ${name}${separator}${value} ok`,
+            valueIndex === index % PAIR_VALUES.length,
+          ),
         ),
       );
       expect(mismatches.filter((found) => found !== undefined)).toEqual([]);

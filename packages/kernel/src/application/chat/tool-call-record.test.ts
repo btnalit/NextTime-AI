@@ -440,7 +440,8 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
   });
 
   describe('a quoted value the text pass split before legacy 916, stored (coordinator, #1573)', () => {
-    /** As the value patterns over the text as written left it: `\` taken for the value. */
+    /** As the value patterns over the text as written left it before legacy 916: `\` taken for
+     *  the value. */
     const split = (stdout: string) =>
       JSON.stringify({ stdout }).replace(`\\"${SECRET}\\"`, `${REDACTED}"${SECRET}\\"`);
     const stored = (text: string) => ({
@@ -460,10 +461,10 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
       const stdout = `a ${name}"${SECRET}" b\nok`;
       const text = split(stdout);
       expect(text).toBe(`{"stdout":"a ${name}${REDACTED}"${SECRET}\\" b\\nok"}`);
-      // What the value patterns over the text as written make of it.
-      expect(scrubSecretValues(JSON.stringify({ stdout })).value).toBe(text);
       const once = rescrubStoredToolCallResult(stored(text));
       const fixed = JSON.stringify({ stdout: `a ${name}"${REDACTED}" b\nok` });
+      // What the value patterns over the text as written make of it now (legacy 918).
+      expect(scrubSecretValues(JSON.stringify({ stdout })).value).toBe(fixed);
       expect(once).toMatchObject({ value: { result: { text: fixed }, redactedValues: 2 } });
       expect(once.redactedValues).toBe(1);
       expect(JSON.parse(fixed)).toEqual({ stdout: `a ${name}"${REDACTED}" b\nok` });
@@ -488,6 +489,23 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
           redactedValues: 0,
         });
       }
+    });
+
+    it('repairs plain text too, as it is written now (legacy 918)', () => {
+      const plain = `sh -c "export API_TOKEN=\\"${SECRET} x\\" && run"`;
+      const now = `sh -c "export API_TOKEN=\\"${REDACTED}\\" && run"`;
+      const live = record({ result: textResult(plain), hasResult: true });
+      expect(live.result?.text).toBe(now);
+      const text = `sh -c "export API_TOKEN=${REDACTED}"${SECRET} x\\" && run"`;
+      const once = rescrubStoredToolCallResult(stored(text));
+      expect(once).toEqual({
+        value: { ...stored(text), result: { text: now }, redactedValues: 2 },
+        redactedValues: 1,
+      });
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
     });
 
     it('reads JSON text after leading white space (review #493)', () => {

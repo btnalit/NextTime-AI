@@ -147,8 +147,9 @@ function decodesToUserPass(value: string): boolean {
   return true;
 }
 
-/** `value` replaced, its quotes kept. */
+/** `value` replaced, its quotes kept — `\"…\"` (a quoted value written inside a string) too. */
 function redactedValue(value: string): string {
+  if (value.startsWith('\\"') && value.length >= 4) return `\\"${REDACTED}\\"`;
   const quote = value.charAt(0);
   return (quote === '"' || quote === "'") && value.length >= 2
     ? `${quote}${REDACTED}${quote}`
@@ -171,10 +172,15 @@ export interface ValuePattern {
 }
 
 /** A value after `=`/`:` — quoted to its closing quote on the same line, or a bare run (to the
- *  next space or quote; in a `name: value` also to the next `&`, a query string's separator). */
-const ENV_VALUE = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)`;
-const VALUE = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s'"&]+)`;
-const NOT_ALREADY_REDACTED = String.raw`(?!["']?\[redacted\])`;
+ *  next space or quote; in a `name: value` also to the next `&`, a query string's separator).
+ *  Quoted with `\"` too, to the next `\"` on the line: a quoted value written inside a string —
+ *  `sh -c "export API_TOKEN=\"…\""`, a compose `command:`, source code. Read as it is written,
+ *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). First: the
+ *  bare run starts with `\` too. Linear: the run inside stops at the first `"`. */
+const ESCAPED_QUOTED = String.raw`\\"[^"\r\n]*\\"`;
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"&]+)`;
+const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\"|["'])?\[redacted\])`;
 
 /** `"api_key": "…"` inside a string that is itself JSON text (a capability tool's result text).
  *  Exported for `secret-stream.ts`: the `"` that closes such a pair opens no JSON key. */
@@ -377,6 +383,44 @@ export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VA
 /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
  *  counts. */
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
+
+/** `[redacted]"…\"`: a quoted value written with `\"` that the value patterns split before they
+ *  read `\"…\"` as one (legacy 916 for JSON text; legacy 918 for plain text) —
+ *  `API_TOKEN=\"…\"` became `API_TOKEN=[redacted]"…\"`, the `\` taken for the value and the value
+ *  itself kept. The mask stands right after a name pattern's separator (`=`, `:`, a space or a
+ *  tab); the mask written whole, `"[redacted]"`, stands after its own quote (review #501 on #1573:
+ *  `[INFO] password="[redacted]" msg=\"x\"`). Between `[redacted]"` and the next `\"` there is no
+ *  quote that is not escaped, and no line break or other control character: the value was
+ *  quoted to the next `\"` on its line. In JSON that is valid, a string's closing quote is
+ *  followed, before any `\"`, by the opening quote of the next string, or by nothing. What it
+ *  cannot tell from a split value is a bare value cut by a closing quote with a `\"` later on its
+ *  line (`-e "PW_TOKEN=[redacted]" img \"x\"`), whose text up to that `\"` it takes for the value. */
+const SPLIT_QUOTED_MASK = /(?<=[=: \t])\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
+
+/** Whether `text` holds a C0 control character — a char-code loop, not a regex class (biome's
+ *  `noControlCharactersInRegex`). */
+function holdsControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) <= 0x1f) return true;
+  }
+  return false;
+}
+
+/** Stored text with each `SPLIT_QUOTED_MASK` written as the value patterns write that value now —
+ *  `\"[redacted]\"` — counted: for a one-way rewrite of rows already stored, before the stored set
+ *  (`STORED_REWRITE_SECRET_PATTERNS`) runs over it (application/platform/scrub-raw-secrets;
+ *  application/chat's `rescrubStoredToolCallResult`). Linear: the run inside stops at a quote. */
+export function repairSplitQuotedMasks(text: string): Scrubbed<string> {
+  // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
+  if (!text.includes(`${REDACTED}"`)) return { value: text, redactedValues: 0 };
+  let redactedValues = 0;
+  const value = text.replace(SPLIT_QUOTED_MASK, (match) => {
+    if (holdsControlCharacter(match)) return match;
+    redactedValues += 1;
+    return `\\"${REDACTED}\\"`;
+  });
+  return { value, redactedValues };
+}
 
 /**
  * Each value of a platform API key's shape `text` holds, as written: exactly what

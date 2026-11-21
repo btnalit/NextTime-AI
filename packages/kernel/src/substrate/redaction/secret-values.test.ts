@@ -16,6 +16,7 @@ import {
   platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
+  repairSplitQuotedMasks,
   scrubOutsideSpans,
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
@@ -485,11 +486,112 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     '%20eyJaaaaaa.',
     '\\nsk-',
     '%2Fsk_live_',
+    'A=\\"',
+    'A=\\"a',
+    'A=\\"a\\"',
+    'password: \\"x\\" ',
+    '--password \\"',
+    'password=\\"a b ',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));
     const started = performance.now();
     scrubSecretValues(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('a quoted value written inside a string: \\"…\\" (legacy 918)', () => {
+  it.each([
+    ['a shell command', `sh -c "export API_TOKEN=\\"${FAKE}\\" && run"`],
+    ['a compose command', `command: "PGPASSWORD=\\"${FAKE} x\\" psql"`],
+    ['source code', `const s = "password: \\"${FAKE} x\\"";`],
+    ['a --password flag', `run --password \\"${FAKE} x\\" now`],
+    ['a --api-key= flag', `run --api-key=\\"${FAKE}\\" now`],
+    ['a Makefile line', `\tAPI_KEY=\\"${FAKE}\\" ./build`],
+    ['a header', `-H "X-Api-Key: \\"${FAKE}\\""`],
+  ])('hides the value whole, its quotes kept: %s', (_label, text) => {
+    const once = scrubSecretValues(text);
+    expect(once.redactedValues).toBe(1);
+    expect(once.value).not.toContain(FAKE);
+    expect(once.value).toBe(text.replace(/\\"[^"]*\\"/, `\\"${REDACTED}\\"`));
+    expect(scrubSecretValues(once.value)).toEqual({ value: once.value, redactedValues: 0 });
+  });
+
+  it('takes the value to the next \\" on its line, as "…" to the next "', () => {
+    expect(scrubSecretValues(`API_TOKEN=\\"${FAKE}\\" and \\"note\\"`).value).toBe(
+      `API_TOKEN=\\"${REDACTED}\\" and \\"note\\"`,
+    );
+    expect(scrubSecretValues('note=\\"a b\\" API_TOKEN=\\"\\"')).toEqual({
+      value: `note=\\"a b\\" API_TOKEN=\\"${REDACTED}\\"`,
+      redactedValues: 1,
+    });
+  });
+
+  it('leaves a name that is not a secret, and a value already hidden, as it is', () => {
+    for (const text of [
+      'note=\\"a b\\" max_tokens: \\"1024\\"',
+      `API_TOKEN=\\"${REDACTED}\\" --password \\"${REDACTED}\\"`,
+    ]) {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+});
+
+describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
+  /** What the value patterns wrote before they read `\\"…\\"` as one value: the `\\` alone hidden. */
+  const split = (text: string) => text.replace(/\\"([^"]*)\\"/, `${REDACTED}"$1\\"`);
+
+  it.each([
+    ['an env line', `export API_TOKEN=\\"${FAKE} x\\" && run`],
+    ['a YAML key', `command: "password: \\"${FAKE}\\""`],
+    ['a header, no space', `-H X-Api-Key:\\"${FAKE}\\"`],
+    ['a --password flag', `run --password \\"${FAKE}\\" now`],
+    ['a tab', `password:\t\\"${FAKE}\\"`],
+    ['in JSON text', JSON.stringify({ stdout: `a\nAPI_TOKEN="${FAKE}" b` })],
+  ])('writes it as the value patterns write it now, once: %s', (_label, text) => {
+    const stored = split(text);
+    expect(stored).toContain(`${REDACTED}"${FAKE}`);
+    const now = scrubSecretValues(text).value;
+    expect(repairSplitQuotedMasks(stored)).toEqual({ value: now, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(now)).toEqual({ value: now, redactedValues: 0 });
+  });
+
+  it('leaves the mask written whole alone, a quote before it (review #493, #501 on #1573)', () => {
+    for (const text of [
+      `TOKEN="${REDACTED}" and later \\"x\\"`,
+      `[INFO] password="${REDACTED}" msg=\\"x\\"`,
+      `{"a":"${REDACTED}","note":"say \\"hi\\""}`,
+      `["${REDACTED}",1,"a\\"b"]`,
+      // A line break between: the value was quoted to the next \" on its line.
+      `export TOKEN=${REDACTED}"\nrun \\"done\\"`,
+      // A separator before the mask, and then (review #501 on #1573): a quote that is not
+      // escaped; the end of the text; a line break before the \".
+      `{"a":"password: ${REDACTED}","note":"say \\"hi\\""}`,
+      `{"a":"password: ${REDACTED}"}`,
+      `{"a":"password: ${REDACTED}"}\nlog \\"x\\"`,
+      `password: ${REDACTED}" and "later" \\"x\\"`,
+    ]) {
+      expect(repairSplitQuotedMasks(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  it('cannot tell a bare value cut by a quote, a \\" later on its line, from a split one', () => {
+    // As written: `-e "PW_TOKEN=…" img \"x\"`. The text up to that \" is taken for the value.
+    expect(repairSplitQuotedMasks(`-e "PW_TOKEN=${REDACTED}" img \\"x\\"`)).toEqual({
+      value: `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`,
+      redactedValues: 1,
+    });
+  });
+
+  it.each([
+    ['masks and quotes', `${`=${REDACTED}"x`.repeat(15_000)}`],
+    ['a mask, then text', `=${REDACTED}"${'x'.repeat(200_000)}`],
+    ['split masks', `${`=${REDACTED}"x\\" `.repeat(12_000)}`],
+  ])('%s × 200 KB within 1 s', (_name, text) => {
+    repairSplitQuotedMasks(text.slice(0, 1_000));
+    const started = performance.now();
+    repairSplitQuotedMasks(text);
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
@@ -1176,7 +1278,8 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
   });
 
   it('skips what it read, rewritten or kept, in a pass over the text: the spans', () => {
-    const kept = '"\\u4e2d\\nAPI_TOKEN=\\"[redacted]\\""';
+    // `\r` after the separator: no value decoded, the line breaks there.
+    const kept = '"\\u4e2d\\nAPI_TOKEN=\\rx"';
     const text = `{"a":${kept},"b":"x\\nPGPASSWORD=${FAKE}","c":"plain","d":${kept}}`;
     const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
     const rewritten = JSON.stringify(`x\nPGPASSWORD=${REDACTED}`);
@@ -1188,7 +1291,7 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
       [at(rewritten), at(rewritten) + rewritten.length],
       [last, last + kept.length],
     ]);
-    // Read over as it is, the kept string's `\"` reads as a value `\`.
+    // Read over as it is, the kept string's `\r` reads as the start of a value.
     expect(scrubSecretValues(kept).redactedValues).toBe(1);
     expect(scrubAll(text)).toEqual({ value: fields.value, redactedValues: 1 });
   });
