@@ -89,8 +89,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       otherObservation: randomUUID(),
     };
     const turnMetadata = {
-      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}`,
-      decisions: [`use PGPASSWORD=${FAKE}`, 'keep the plain one', `pin ${KEY_SHAPE}`],
+      // `--password`: a quoted value written with \" as releases before legacy 918 split it.
+      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}; --password [redacted]"${PLAIN}\\"`,
+      decisions: [
+        `use PGPASSWORD=${FAKE}`,
+        'keep the plain one',
+        `pin ${KEY_SHAPE}`,
+        // A quoted value written with \" as releases before legacy 918 split it.
+        `ran sh -c "export API_TOKEN=[redacted]"${PLAIN}\\""`,
+      ],
       model: 'm',
     };
     const decisionsOnlyMetadata = { decisions: ['keep it', `pin ${KEY_SHAPE}`], model: 'm' };
@@ -316,7 +323,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             ids.agentDecision,
             ids.turn,
-            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE}`,
+            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE} and before that --password [redacted]"${PLAIN}\\"`,
             ids.approvalDecision,
             ids.approvalActivity,
             `approved; PGPASSWORD=${FAKE}`,
@@ -638,12 +645,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       const after = await snapshot();
 
       expect(after.turn).toEqual({
-        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}`,
-        decisions: ['use PGPASSWORD=[redacted]', 'keep the plain one', `pin ${KEY_SHAPE}`],
+        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}; --password \\"[redacted]\\"`,
+        decisions: [
+          'use PGPASSWORD=[redacted]',
+          'keep the plain one',
+          `pin ${KEY_SHAPE}`,
+          'ran sh -c "export API_TOKEN=\\"[redacted]\\""',
+        ],
         model: 'm',
       });
       expect(after.agentDecision).toBe(
-        `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=[redacted]`,
+        `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=[redacted] and before that --password \\"[redacted]\\"`,
       );
       // A person's Decision is not agent text: out of this scrub's scope.
       expect(after.approvalDecision).toBe(`approved; PGPASSWORD=${FAKE}`);

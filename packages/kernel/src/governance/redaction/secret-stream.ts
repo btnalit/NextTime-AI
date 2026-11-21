@@ -96,13 +96,17 @@ function couldBeJsonKey(text: string): boolean {
 
 /** Where on `line` a value whose closing quote has not arrived could start: after the last `"`
  *  (a quoted value in `name="…"`, `--flag "…"`, which knows no escapes), the last `"` no backslash
- *  escapes (a JSON string), or the last `'`. No quote parity: which quote opens a value is up to the
- *  separator before it, so a stray quote in prose earlier on the line must not hide one. */
+ *  escapes (a JSON string), the last `'`, or the last `\"` (a quoted value written inside a
+ *  string, `API_TOKEN=\"…\"`, which the next `\"` closes). No quote parity: which quote opens a
+ *  value is up to the separator before it, so a stray quote in prose earlier on the line must not
+ *  hide one. */
 function openValueStarts(line: string): number[] {
   let unescaped = line.lastIndexOf('"');
   while (unescaped > 0 && escapedAt(line, unescaped))
     unescaped = line.lastIndexOf('"', unescaped - 1);
-  return [line.lastIndexOf('"'), unescaped, line.lastIndexOf("'")].filter((at) => at !== -1);
+  return [line.lastIndexOf('"'), unescaped, line.lastIndexOf("'"), line.lastIndexOf('\\"')].filter(
+    (at) => at !== -1,
+  );
 }
 
 /** Whether the character at `index` follows an odd run of backslashes. */

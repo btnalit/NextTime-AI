@@ -7,12 +7,12 @@ import {
   toolCallSecretKeyRule,
 } from '@nexttime/shared';
 import {
-  REDACTED,
   type RedactedValue,
   STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
   redactSecretFieldsInJsonText,
   redactSecrets,
+  repairSplitQuotedMasks,
   safeStringify,
   scrubOutsideSpans,
   scrubSecretLiterals,
@@ -140,44 +140,6 @@ export function redactToolResult(
     literals: rule.literals,
     maxChars: RESULT_READ_CHARS,
   });
-}
-
-/** `[redacted]"…\"`: a quoted value the value patterns split when they read JSON text as it is
- *  written (before legacy 916) — `API_TOKEN=\"…\"` became `API_TOKEN=[redacted]"…\"`, the `\`
- *  taken for the value and the value itself kept. The mask stands right after a name pattern's
- *  separator (`=`, `:`, a space or a tab); the mask written whole, `"[redacted]"`, stands after
- *  its own quote (review #501 on #1573: `[INFO] password="[redacted]" msg=\"x\"`). Between
- *  `[redacted]"` and the next `\"` there is no quote that is not escaped, and no control
- *  character (JSON escapes those in a string): in JSON that is valid, a string's closing quote is
- *  followed, before any `\"`, by the opening quote of the next string, or by nothing. Only text
- *  that starts as JSON is read — in plain text `TOKEN="[redacted]"` is the mask written whole
- *  (review #493 on #1573). */
-const SPLIT_QUOTED_MASK = /(?<=[=: \t])\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
-const STARTS_AS_JSON = /^[ \t\n\r]*[[{]/;
-
-/** Whether `text` holds a C0 control character — a char-code loop, not a regex class (biome's
- *  `noControlCharactersInRegex`). */
-function holdsControlCharacter(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) <= 0x1f) return true;
-  }
-  return false;
-}
-
-/** A stored result's text with each `SPLIT_QUOTED_MASK` written as the value patterns write that
- *  value now — `\"[redacted]\"` — counted (legacy 916; one-way, like the rest of the rewrite). */
-function repairSplitQuotedMasks(text: string): Scrubbed<string> {
-  // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
-  if (!STARTS_AS_JSON.test(text) || !text.includes(`${REDACTED}"`)) {
-    return { value: text, redactedValues: 0 };
-  }
-  let redactedValues = 0;
-  const value = text.replace(SPLIT_QUOTED_MASK, (match) => {
-    if (holdsControlCharacter(match)) return match;
-    redactedValues += 1;
-    return `\\"${REDACTED}\\"`;
-  });
-  return { value, redactedValues };
 }
 
 /**
