@@ -392,6 +392,21 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     expect(scrubber.flush().value).toBe('and');
   });
 
+  it('of a run of quotes and blanks holds back only the last, however many came (#493 on e301108f)', () => {
+    expect(createSecretStreamScrubber().push('" '.repeat(100)).value).toBe('" '.repeat(99));
+    for (const unit of ['" ', '"\t', `"${' '.repeat(8)}`]) {
+      const text = unit.repeat(Math.ceil((2 * STREAM_HOLD_MAX_CHARS) / unit.length));
+      const scrubber = createSecretStreamScrubber();
+      let out = '';
+      for (let at = 0; at < text.length; at += 7) {
+        const piece = scrubber.push(text.slice(at, at + 7));
+        expect(piece.paused).toBeUndefined();
+        out += piece.value;
+      }
+      expect(out + scrubber.flush().value).toBe(scrubSecretValues(text).value);
+    }
+  });
+
   it('past its bound it drops what it held and emits nothing more until flushed', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push(`start ${'A'.repeat(STREAM_HOLD_MAX_CHARS + 1)}`)).toEqual({

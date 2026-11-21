@@ -190,9 +190,13 @@ function safeCut(raw: string): number {
     }
     // Nor in the blanks right after a `"`: whether it closes a value may turn on a `:` after them
     // (`"api_key" : `), which the text before the cut would not see, and which may not have come
-    // yet (#493 on #1581). The quote is held with them.
+    // yet (#493 on #1581). The quote is held with them — only while what comes right after the
+    // cut is that `:` or nothing yet (no cut falls inside a run of blanks): once something else
+    // has come, the quote's reading is settled, and of a run of `" " "` only the last is held,
+    // not each in turn back to the start (#493 on e301108f).
     const blanks = BLANKS_AFTER_A_QUOTE.exec(raw.slice(Math.max(0, cut - 9), cut));
-    if (blanks !== null) {
+    const next = raw.charAt(cut);
+    if (blanks !== null && (next === ':' || next === '')) {
       cut -= blanks[0].length;
       moved = true;
     }
