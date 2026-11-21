@@ -294,9 +294,10 @@ const bareValue = (notInIt: string): string => {
 };
 const NEXT_SECRET_PAIR_AFTER_A_STOP = new RegExp(String.raw`[,;&|]${NEXT_SECRET_PAIR}`, 'g');
 const SECRET_KEY_AND_QUOTE_HERE = new RegExp(SECRET_KEY_AND_QUOTE, 'y');
-/** What can still turn out to be a secret's key and its quote once more text comes: a key not yet
- *  closed, or closed with only blanks after it so far, to the end of the text. */
-const SECRET_KEY_AND_QUOTE_TO_COME = /(?:[A-Za-z][A-Za-z0-9_.-]{0,63}(?:"[ \t]{0,8})?)?$/y;
+/** What can still turn out to be a secret's key and its quote once more text comes, when the text
+ *  does not end at the quote: a key not yet closed, or closed with only blanks after it so far, to
+ *  the end of the text. */
+const SECRET_KEY_AND_QUOTE_TO_COME = /[A-Za-z][A-Za-z0-9_.-]{0,63}(?:"[ \t]{0,8})?$/y;
 /** Where in `text`, from `from` on, text cut there reads a bare value as ending at a `,`, `;`, `&`
  *  or `|` before the next pair that the whole text reads on past, as that pair's value opens with a
  *  secret's key and its quote (`bareValue`): from the quote to the end of the key. And while what
@@ -318,7 +319,7 @@ export function bareValueEndsToCome(text: string, from = 0): { start: number; en
     const key = SECRET_KEY_AND_QUOTE_HERE.exec(text);
     SECRET_KEY_AND_QUOTE_TO_COME.lastIndex = quoteEnd;
     if (key !== null) spans.push({ start: quoteEnd - 1, end: quoteEnd + key[0].length });
-    else if (SECRET_KEY_AND_QUOTE_TO_COME.test(text))
+    else if (quoteEnd === text.length || SECRET_KEY_AND_QUOTE_TO_COME.test(text))
       spans.push({ start: pair.index, end: text.length });
   }
   return spans;
