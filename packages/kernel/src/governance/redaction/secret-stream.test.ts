@@ -114,6 +114,28 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     },
   );
 
+  it.each([
+    `\\"password\\" = \\"${FAKE} x\\"`,
+    `pwsh -c "Invoke-X -Body @{\\"Password\\" = \\"${FAKE}\\"}"`,
+    `token: "a\\" --token 'x", ${FAKE}'`,
+    `API_TOKEN=\\"a --token 'b\\" ${FAKE}'`,
+  ])(
+    'never emits the value after an escaped JSON key and `=`, nor that of a next pair a value read with escapes ends before, cut anywhere (review #501 on #1581, legacy 926): %s',
+    (text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+      for (let at = 1; at < text.length; at += 1) {
+        expect(stream([text.slice(0, at), text.slice(at)]).text).not.toContain(FAKE);
+      }
+    },
+  );
+
+  it('holds an escaped JSON key and `=` back with its value (review #501 on #1581)', () => {
+    const scrubber = createSecretStreamScrubber();
+    expect(scrubber.push('x \\"password\\" = ').value).toBe('x ');
+    expect(scrubber.push(`\\"${FAKE}`).value).toBe('');
+    expect(scrubber.push('\\" y').value).toBe(`\\"password\\" = \\"${REDACTED}\\" `);
+  });
+
   it('holds a secret JSON value back until it is closed, spaces and all', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('{"password": "correct horse').value).toBe('{');
@@ -294,6 +316,19 @@ const SHAPES = [
   `${'A'.repeat(90)}_TOKEN="a b ${FAKE}" y`,
   // The name rule does not take a name after a dot, whole or streamed.
   `say "hi".password: "a ${FAKE}" y`,
+  // A value read with escapes ends before the next pair whose '…' value holds the quote it would
+  // have closed at, and reads on past one it covers (legacy 926, review #501 on #1581).
+  `token: "a\\" --token 'x", ${FAKE}'`,
+  `export PGPASSWORD="C:\\pg\\" API_TOKEN='x"; ${FAKE}'`,
+  `API_TOKEN=\\"a --token 'b\\" ${FAKE}'`,
+  `password=\\"abc --token 'x" ${FAKE}'`,
+  `password="a\\" token='b' ${FAKE}"`,
+  `password="C:\\dir\\" --PASSWORD 'x" ${FAKE}'`,
+  `password="C:\\dir\\" myToken='x" ${FAKE}'`,
+  `API_TOKEN=\\"a PGPASSWORD='x" ${FAKE}'`,
+  // An escaped JSON key and `=` (review #501 on #1581).
+  `\\"password\\" = \\"${FAKE} x\\"`,
+  `pwsh -c "Invoke-X -Body @{\\"Password\\" = \\"${FAKE}\\"}"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -368,10 +403,14 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
   );
 
   it('in up to nine uneven pieces, cut at random', () => {
+    // mulberry32: the product of the 31-bit generator used before passed 2^53, lost its low bits
+    // and fell into a short cycle, so most texts were cut the same few ways.
     let seed = 7;
     const random = (below: number) => {
-      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-      return Math.floor((seed / 2_147_483_648) * below);
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4_294_967_296) * below);
     };
     const texts = [
       ...PAIR_NAMES.flatMap((name) =>
@@ -426,6 +465,14 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
   it('emits Chinese prose as it arrives — no spaces does not mean held back', () => {
     const scrubber = createSecretStreamScrubber();
     for (const char of '图里没有这类关系。') expect(scrubber.push(char).value).toBe(char);
+  });
+
+  it('holds back a quote opened after a name no rule hides from the quote, not from the name (#493 on #1581)', () => {
+    expect(createSecretStreamScrubber().push('x --color "a b ').value).toBe('x --color ');
+    expect(createSecretStreamScrubber().push('x COLOR="a b ').value).toBe('x COLOR=');
+    // After a dot, where only the --flag and env-line rules take a name (legacy 926).
+    expect(createSecretStreamScrubber().push('x.--verbose "a b ').value).toBe('x.--verbose ');
+    expect(createSecretStreamScrubber().push('x.DEBUG=" a').value).toBe('x.DEBUG=');
   });
 
   it('holds back only the word being written', () => {

@@ -98,15 +98,21 @@ export function scrubbedCut(text: string, length: number, scrub: (read: string) 
  *  its suspected-credential count and the console's display mask share. */
 export { namesASecretField } from '@nexttime/shared';
 
+/** The words that make a name name a secret, as sources: in an upper-case env name anywhere
+ *  (`ENV_SECRET_NAME`); as a name's last word, in any case (`LAST_WORD_SECRET_NAME`) or camel-cased
+ *  (`CAMEL_CASE_SECRET_NAME`). Shared with `NEXT_SECRET_PAIR`, which must take for a secret's name
+ *  what these do. */
+const ENV_SECRET_WORDS = String.raw`TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIALS?|HANDLE`;
+const LAST_SECRET_WORDS = String.raw`password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|credentials?`;
+const CAMEL_CASE_SECRET_WORDS = String.raw`Password|Passwd|Secret|Token|ApiKey|AccessKey|SecretKey|PrivateKey|ClientSecret|Credentials?`;
+
 /** An upper-case env name with a secret word anywhere in it (`PGPASSWORD`, `CAPABILITY_HANDLE`). */
-const ENV_SECRET_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIALS?|HANDLE/;
+const ENV_SECRET_NAME = new RegExp(ENV_SECRET_WORDS);
 
 /** A name whose last word names a secret — for `name: value` in free text, where `max_tokens` and
  *  `tokenCount` must stay. Run on a name of at most 64 characters. */
-const LAST_WORD_SECRET_NAME =
-  /(?:^|[_.-])(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|credentials?)$/i;
-const CAMEL_CASE_SECRET_NAME =
-  /[a-z0-9](?:Password|Passwd|Secret|Token|ApiKey|AccessKey|SecretKey|PrivateKey|ClientSecret|Credentials?)$/;
+const LAST_WORD_SECRET_NAME = new RegExp(`(?:^|[_.-])(?:${LAST_SECRET_WORDS})$`, 'i');
+const CAMEL_CASE_SECRET_NAME = new RegExp(`[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS})$`);
 
 function namesASecret(name: string): boolean {
   return LAST_WORD_SECRET_NAME.test(name) || CAMEL_CASE_SECRET_NAME.test(name);
@@ -175,19 +181,6 @@ export interface ValuePattern {
   readonly redact: Redact;
 }
 
-/** A value after `=`/`:` — quoted to its closing quote on the same line, or a bare run (to the
- *  next space or quote; in a `name: value` also to the next `&`, a query string's separator).
- *  Quoted with `\"` too, to the next `\"` on the line: a quoted value written inside a string —
- *  `sh -c "export API_TOKEN=\"…\""`, a compose `command:`, source code. Read as it is written,
- *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). And with
- *  `\\\"`, to the next `\\\"`: such a string written inside one more (a JSON string printed in a
- *  log, `"cmd": "export API_TOKEN=\\\"…\\\""`) — any odd run of up to seven backslashes (three
- *  strings deep) before the quote, closed by the same run (review #501 on #1575). First: the bare
- *  run starts with `\` too. Linear because that run is bounded: the run inside stops at the first
- *  `"` and the closing run is read back from each place before it, so with no bound a line of
- *  backslashes cost its length squared (review #501 on #1577: 42 s at 1 MiB). A longer run is
- *  read as `UNCLOSED`, to the first `"`. */
-const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escapes>"`;
 /** What follows the quote that closes a `QUOTED` value: whitespace, or what ends a JSON value, a
  *  shell word, a query parameter, an attribute or a sentence. Not `:`, which follows a JSON key's
  *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
@@ -203,26 +196,51 @@ const CLOSES_A_QUOTED_VALUE = new RegExp(`^${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_V
 export function endsAQuotedValue(after: string): boolean {
   return CLOSES_A_QUOTED_VALUE.test(after);
 }
-/** What stands right before the quote that opens the next pair's value: what the name, `--flag`
- *  and env-line rules below take for a name and its separator, each with its own boundary
- *  (`token=`, `password: `, `'token': `, `--token `, `--token=`, `.--token `, `$env:API_TOKEN=`,
- *  `"API_TOKEN=`), and a `'` between them and the quote (`token='"`). With fewer, a value read on
- *  to such a quote where the rule took the next value (`\".'token' = "`; #493 on #1581). No JSON
- *  key's quotes: the value reads no `"` that no backslash escapes, and a key's closing one is
- *  refused after it (`NOT_A_KEYS_QUOTE`). */
-const A_PAIR_BEFORE = String.raw`(?:(?<![A-Za-z0-9_.-])[A-Za-z][A-Za-z0-9_.-]{0,63}["']?[ \t]{0,8}[:=][ \t]{0,8}|(?<![A-Za-z0-9-])--[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]{1,8})|(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{0,127}=)'?`;
+/** `source`, a pattern of lower-case words, matched in any case: for patterns built without the
+ *  `i` flag, which would also widen the upper-case env names in them. */
+function anyCase(source: string): string {
+  return source.replace(/[a-z]/g, (letter) => `[${letter.toUpperCase()}${letter}]`);
+}
+/** The next pair: a name, its separator, and the quote its value opens with — as the name,
+ *  `--flag` and env-line rules below take a name, each with its own boundary and length, and only
+ *  a name whose value that rule hides (`token=`, `password: `, `'token': `, `"api_key": `,
+ *  `my.token=`, `--token `, `--token=`, `.--token `, `$env:API_TOKEN=`, `"API_TOKEN = `), with a
+ *  `'` allowed before the quote (`token='"`). The quote is a `"`, or a `'` whose `'…'` holds a `"`
+ *  before its closing `'` — the quote a value read on would close at (`token='x" …'`); one that
+ *  holds none, or is not closed, is read on past and hidden with the value, as it was
+ *  (`password="a\" token='b' …"`). A value read with escapes never reads it in: where it did, the
+ *  rule could not take the next value and it was kept (`password="C:\dir\" token=" …"`,
+ *  `token: "a\" --token 'x", …'`, `API_TOKEN=\"abc password="…"`; legacy 924, and after v0.69.2
+ *  since #1577 and #1579: legacy 926). A name whose value no rule hides is read in as the value's
+ *  own text (`"a \"b note: " x`): stopping there kept the rest of the value for nothing. Bounded
+ *  and linear: a name is at most 64 characters (an env name 128) and is tried only where one can
+ *  start; the look into a `'…'` stops at its first `'`, and a `"` must come before it. */
+const NEXT_SECRET_PAIR = String.raw`(?:(?<![A-Za-z0-9_.-])(?=[A-Za-z][A-Za-z0-9_.-]{0,63}["']?[ \t]{0,8}[:=])(?:(?:[A-Za-z0-9_.-]*[_.-])?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9_.-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))["']?[ \t]{0,8}[:=][ \t]{0,8}|(?<![A-Za-z0-9-])--(?=[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]))(?:(?:[A-Za-z0-9-]*-)?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))(?:=|[ \t]{1,8})|(?<![A-Za-z0-9_])(?=[A-Z][A-Z0-9_]{0,127}=)[A-Z0-9_]*?(?:${ENV_SECRET_WORDS})[A-Z0-9_]*=)'?(?:"|'(?=[^'"\r\n]*"[^'\r\n]*'))`;
+/** A value after `=`/`:` — quoted to its closing quote on the same line, or a bare run (to the
+ *  next space or quote; in a `name: value` also to the next `&`, a query string's separator).
+ *  Quoted with `\"` too, to the next `\"` on the line: a quoted value written inside a string —
+ *  `sh -c "export API_TOKEN=\"…\""`, a compose `command:`, source code. Read as it is written,
+ *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). And with
+ *  `\\\"`, to the next `\\\"`: such a string written inside one more (a JSON string printed in a
+ *  log, `"cmd": "export API_TOKEN=\\\"…\\\""`) — any odd run of up to seven backslashes (three
+ *  strings deep) before the quote, closed by the same run (review #501 on #1575). First: the bare
+ *  run starts with `\` too. Linear because that run is bounded: the run inside stops at the first
+ *  `"` and the closing run is read back from each place before it, so with no bound a line of
+ *  backslashes cost its length squared (review #501 on #1577: 42 s at 1 MiB). A longer run is
+ *  read as `UNCLOSED`, to the first `"`. Never read past the next pair (`NEXT_SECRET_PAIR`): the
+ *  `\"…\"` that closed it took the next pair's name and quote in (`API_TOKEN=\"} --token '\\"x'`). */
+const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"(?:(?!${NEXT_SECRET_PAIR})[^"\r\n])*\k<escapes>"`;
 /** A `"…"` value with quotes inside it escaped — JSON text, a shell or YAML string
  *  (`{"password": "a \"b c"}`, `PASSWORD="a\"b"`): to the first `"` no backslash escapes. Read to
  *  the first `"`, the value ended at the `\"` inside it and the rest was kept (#501 on #1577,
  *  main before it). Closed only by a quote that `AFTER_A_QUOTED_VALUE` or the end of the text
- *  follows, as a string's closing quote is, and that is not the next pair's opening quote
- *  (`A_PAIR_BEFORE`). Closed by any, a value that ends with `\` before its quote (a Windows path,
- *  cmd.exe) read on to the next pair's opening quote and the next value was kept (`--password
- *  "C:\dir\" --token "…"`, `token=" …"`; #493, #501 on #1579). Before the plain `"…"`, which
- *  still closes a value that no such quote does on its line (`password="C:\dir\" x`), as it did
- *  — and one whose last word is a name and its separator (`"a \"b note: "`). Linear: each step
- *  reads one character or one escape, and the look back and ahead at a quote is bounded. */
-const QUOTED = String.raw`"(?:[^"\\\r\n]|\\[^\r\n])*(?<!${A_PAIR_BEFORE})"(?=${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_VALUE}|$)`;
+ *  follows, as a string's closing quote is; never read past the next pair (`NEXT_SECRET_PAIR`),
+ *  an escape read whole as the string's own reader reads it. Before the plain `"…"`, which still
+ *  closes a value that no such quote does on its line (`password="C:\dir\" x`), as it did, and one
+ *  that would read the next pair in. Linear: each step reads one character or one escape, the
+ *  look ahead for the next pair is tried only where a name can start, and the look ahead at a
+ *  quote is bounded. */
+const QUOTED = String.raw`"(?:(?!${NEXT_SECRET_PAIR})[^"\\\r\n]|\\[^\r\n])*"(?=${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_VALUE}|$)`;
 /** A value opened with `\"` (or more backslashes) whose closing run is not on its line — tool
  *  output cut short, a string that goes on to the next line, one closed after a `\r` (legacy 921):
  *  to the end of the line or the first `"` on it, so a value written inside a string ends with
@@ -233,8 +251,11 @@ const QUOTED = String.raw`"(?:[^"\\\r\n]|\\[^\r\n])*(?<!${A_PAIR_BEFORE})"(?=${N
  *  which has no value to hide. A `"` or `'` with no close on its line is still no value: as often
  *  as it opens a value cut short, it closes a prompt or a label that ends with a name
  *  (`input("Password:")`, `{"label":"Password:"}`), and the stored rewrite would cut those rows
- *  for good (review #501 on #1577). */
-const UNCLOSED = String.raw`\\(?:\\\\)*"(?:[^"\\\r\n]|\\\\|\\(?!"))+`;
+ *  for good (review #501 on #1577). Never read past the next pair (`NEXT_SECRET_PAIR`), nor the
+ *  blanks before it: it took the next pair's name and quote in and that value was kept
+ *  (`API_TOKEN=\"abc password="…"`; legacy 926). Nor the blanks before the end of its line, so a
+ *  value cut there reads as the whole line does. */
+const UNCLOSED = String.raw`\\(?:\\\\)*"(?:(?![ \t]{0,8}(?:'?${NEXT_SECRET_PAIR}|[\r\n]|$))(?:[^"\\\r\n]|\\\\|\\(?!")))+`;
 /** A bare run, its backslashes read two at a time: never the `\` of a `\"` that ends it, which
  *  closes a string the pair is written inside (`-e \"API_TOKEN=…\" -e \"DEBUG=1\"`). Taken with
  *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
@@ -268,10 +289,12 @@ function keepsJsonValue(value: string | undefined, close: string | undefined): b
  *  read as `JSON_SECRET_PAIR` reads it; in the value, every escape of the inner text is written
  *  with two backslashes (`\\\"`, `\\\\`, `\\n`), so the first `\"` that is not part of one
  *  closes it. Review #501 on #1575: neither the name rules (no separator right after the name) nor
- *  `JSON_SECRET_PAIR` (no `\` in a key) read it. Exported for `secret-stream.ts`, as that one is.
- *  Linear: each step of the value reads one fixed token. */
+ *  `JSON_SECRET_PAIR` (no `\` in a key) read it. With `=` too, as a PowerShell hash table or HCL
+ *  written inside a string has it (`pwsh -c "… @{\"Password\" = \"…\"}"`): kept since v0.69.2
+ *  (review #501 on #1581). Exported for `secret-stream.ts`, as that one is. Linear: each step of
+ *  the value reads one fixed token. */
 export const ESCAPED_JSON_SECRET_PAIR: ValuePattern = {
-  pattern: /\\"([^"\\\r\n]{1,128})\\"([ \t]{0,8}:[ \t]{0,8})/g,
+  pattern: /\\"([^"\\\r\n]{1,128})\\"([ \t]{0,8}[:=][ \t]{0,8})/g,
   value: {
     names: (key) => namesASecretField(key),
     pattern: /\\"((?:[^"\\\r\n]|\\\\(?:\\\\|\\"|[^"\\\r\n]))*)(\\")?/y,
