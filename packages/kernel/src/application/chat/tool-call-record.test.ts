@@ -453,6 +453,7 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
       ['an env line', 'API_TOKEN='],
       ['an export', 'export X_TOKEN='],
       ['a YAML key', 'password: '],
+      ['a header, no space', 'X-Api-Key:'],
       ['a --password flag', '--password '],
       ['a query string', 'api_key='],
     ])('is rewritten as the value patterns write it now, once, the JSON whole: %s', (_l, name) => {
@@ -478,14 +479,28 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
         `TOKEN="${REDACTED}" and later \\"x\\"`,
         // JSON, then a raw line break: a string never holds one, so the mask's quote closed one.
         `{"a":"${REDACTED}"}\nlog \\"x\\"`,
+        // A log line starts as JSON would; the mask stands after its own quote (review #501).
+        `[INFO] password="${REDACTED}" msg=\\"x\\"`,
+        `{worker} TOKEN="${REDACTED}" next \\"y\\"`,
       ]) {
-        expect(rescrubStoredToolCallResult(stored(text)).value).toMatchObject({ result: { text } });
+        expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+          value: stored(text),
+          redactedValues: 0,
+        });
       }
-      expect(rescrubStoredToolCallResult(stored(` \n${split('a API_TOKEN="x" b')}`))).toMatchObject(
-        {
-          redactedValues: 1,
+    });
+
+    it('reads JSON text after leading white space (review #493)', () => {
+      const text = ` \n${split(`a API_TOKEN="${SECRET}" b`)}`;
+      expect(text).toContain(`${REDACTED}"${SECRET}`);
+      expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+        value: {
+          ...stored(text),
+          result: { text: ` \n{"stdout":"a API_TOKEN=\\"${REDACTED}\\" b"}` },
+          redactedValues: 2,
         },
-      );
+        redactedValues: 1,
+      });
     });
 
     it('leaves JSON that is valid alone, where a closing quote follows a mask', () => {

@@ -102,7 +102,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       outcome: 'done',
       args: { text: '{"password":"[redacted]"}', totalChars: 30, truncated: false },
       result: {
-        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "x": "${KEY_SHAPE}"\n}`,
+        // `cmd`: a quoted value as releases before legacy 916 split it (`\` taken for the value).
+        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
         totalChars: 70,
         truncated: false,
       },
@@ -650,9 +651,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         ...toolContent,
         result: {
           ...toolContent.result,
-          text: `{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]",\n  "x": "${KEY_SHAPE}"\n}`,
+          text: `{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]",\n  "cmd": "export API_TOKEN=\\"[redacted]\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
         },
-        redactedValues: 3,
+        redactedValues: 4,
       });
       expect(after.cleanTool).toEqual(cleanToolContent);
       // The platform's copy loses what could carry a credential; the Gatekeeper keeps its own.
