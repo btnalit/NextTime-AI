@@ -239,6 +239,10 @@ const SHAPES = [
   // A bare value that ends with an escaped quote: the character read on after a cut there is part
   // of the value, so the text before is read on its own (#493 on #1579).
   '"password":\\\\\\""token: "\\\\\\"x',
+  // A quote with spaces, then a colon, after it closes no value: it is a JSON key's (#501 on
+  // #1579). Streamed apart from the whole text before, when the whole read on to it (#493).
+  String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
+  `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -352,11 +356,6 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
       String.raw`run password='\\" , API_TOKEN="\a'""api_key": "' `,
       String.raw`run password='[redacted]' `,
       String.raw`run password='\\" , API_TOKEN="[redacted]""api_key": "[redacted]`,
-    ],
-    [
-      String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
-      String.raw`{password="[redacted]"${'\t'}:${'\t'}"\"\""`,
-      String.raw`{password="[redacted]"\"\" API_TOKEN=\"[redacted]\"\"api_key"${'\t'}:${'\t'}"[redacted]"`,
     ],
     [
       String.raw`echo "--password="\n\"password: '"\\'\"}"}`,

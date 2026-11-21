@@ -193,24 +193,34 @@ const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escape
  *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
  *  which opens the next value as often (`token="\n…"`). */
 const AFTER_A_QUOTED_VALUE = String.raw`[\s,;)}\]&.'|<>]`;
-const AFTER_A_QUOTED_VALUE_RE = new RegExp(`^${AFTER_A_QUOTED_VALUE}$`);
-/** Whether the character `next` lets the `"` before it close a `QUOTED` value. Exported for
+/** Not a JSON key's quote either when spaces come before its colon (`"api_key" : `; #501 on
+ *  #1579). */
+const NOT_A_KEYS_QUOTE = String.raw`(?![ \t]{0,8}:)`;
+const CLOSES_A_QUOTED_VALUE = new RegExp(`^${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_VALUE}`);
+/** Whether what comes `after` a `"` lets it close a `QUOTED` value. Exported for
  *  `secret-stream.ts`: text cut right after a quote reads as if it ended there, where any quote
  *  closes one. */
-export function endsAQuotedValue(next: string): boolean {
-  return AFTER_A_QUOTED_VALUE_RE.test(next);
+export function endsAQuotedValue(after: string): boolean {
+  return CLOSES_A_QUOTED_VALUE.test(after);
 }
+/** What stands right before the quote that opens the next pair's value: whitespace or `,;&|`,
+ *  then a name and its separator or a `--flag` and its (`token=`, `password: `, `'token': `,
+ *  `$env:API_TOKEN=`, `--token `), and the `'` of a value that opens with a `"`. No JSON key's
+ *  quotes: the value reads no `"` that no backslash escapes, and a key's closing one is refused
+ *  after it (`NOT_A_KEYS_QUOTE`). */
+const A_PAIR_BEFORE = String.raw`[\s,;&|](?:(?:\$env:|')?[A-Za-z][A-Za-z0-9_.-]{0,63}'?[ \t]{0,8}[:=][ \t]{0,8}|--[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]{1,8}))'?`;
 /** A `"…"` value with quotes inside it escaped — JSON text, a shell or YAML string
  *  (`{"password": "a \"b c"}`, `PASSWORD="a\"b"`): to the first `"` no backslash escapes. Read to
  *  the first `"`, the value ended at the `\"` inside it and the rest was kept (#501 on #1577,
  *  main before it). Closed only by a quote that `AFTER_A_QUOTED_VALUE` or the end of the text
- *  follows, as a string's closing quote is. Closed by any, a value that ends with `\` before its
- *  quote (a Windows path, cmd.exe) read on to the next pair's opening quote and the next value was
- *  kept (`--password "C:\dir\" --token "…"`; #493 on #1579); it still is when that value opens
- *  with a space. Before the plain `"…"`, which still closes a value that no such quote does on
- *  its line (`password="C:\dir\" x`), as it did. Linear: each step reads one character or one
- *  escape. */
-const QUOTED = String.raw`"(?:[^"\\\r\n]|\\[^\r\n])*"(?=${AFTER_A_QUOTED_VALUE}|$)`;
+ *  follows, as a string's closing quote is, and that is not the next pair's opening quote
+ *  (`A_PAIR_BEFORE`). Closed by any, a value that ends with `\` before its quote (a Windows path,
+ *  cmd.exe) read on to the next pair's opening quote and the next value was kept (`--password
+ *  "C:\dir\" --token "…"`, `token=" …"`; #493, #501 on #1579). Before the plain `"…"`, which
+ *  still closes a value that no such quote does on its line (`password="C:\dir\" x`), as it did
+ *  — and one whose last word is a name and its separator (`"a \"b note: "`). Linear: each step
+ *  reads one character or one escape, and the look back and ahead at a quote is bounded. */
+const QUOTED = String.raw`"(?:[^"\\\r\n]|\\[^\r\n])*(?<!${A_PAIR_BEFORE})"(?=${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_VALUE}|$)`;
 /** A value opened with `\"` (or more backslashes) whose closing run is not on its line — tool
  *  output cut short, a string that goes on to the next line, one closed after a `\r` (legacy 921):
  *  to the end of the line or the first `"` on it, so a value written inside a string ends with
