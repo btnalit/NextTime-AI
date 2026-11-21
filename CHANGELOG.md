@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.70.1](https://github.com/btnalit/NextTime-AI/compare/v0.70.0...v0.70.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **kernel:** read the name, --flag and env rules together on the text as written (legacy 928, 929) ([#1586](https://github.com/btnalit/NextTime-AI/issues/1586)) ([7bbb27a](https://github.com/btnalit/NextTime-AI/commit/7bbb27a5c420957cbaa8a880a3445663215d26c4))
+
 ## [0.70.0](https://github.com/btnalit/NextTime-AI/compare/v0.69.2...v0.70.0) (2026-11-21)
 
 
