@@ -122,6 +122,7 @@ import { PublishReferenceProblem } from './catalog/PublishReferenceProblem.js';
 import { RejectedDrafts } from './catalog/RejectedDrafts.js';
 import { SkillDraftEvaluations } from './catalog/SkillDraftEvaluations.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
+import { SkillPublishRecord } from './catalog/SkillPublishRecord.js';
 import {
   PublishAcknowledgeSheet,
   type PublishOptions,
@@ -2502,6 +2503,14 @@ function SkillDetailView({
       />
 
       {reviewing ? <SkillPublishReview evidence={evidence} /> : null}
+
+      {/* Legacy 539: what a published version was published on, as its publish recorded it. */}
+      {(row.status === 'published' || row.status === 'deprecated') &&
+      skillDetail.state.status === 'ready' &&
+      skillDetail.state.data &&
+      skillDetail.state.data.publishEvidence !== undefined ? (
+        <SkillPublishRecord http={http} record={skillDetail.state.data.publishEvidence} />
+      ) : null}
 
       {/* While the acknowledgement sheet is open the credential question shows inside it. */}
       {canPublish && row.status === 'draft' && !acknowledging ? (
