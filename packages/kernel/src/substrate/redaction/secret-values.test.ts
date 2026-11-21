@@ -528,6 +528,14 @@ describe('a quoted value written inside a string: \\"…\\" (legacy 918)', () =>
     });
   });
 
+  it('stops at its line and at the first quote not escaped (review #493, #501 on #1575)', () => {
+    // No closing \" on its line: read as before, the next line kept.
+    expect(scrubSecretValues('API_TOKEN=\\"a b\nrun \\"x\\"').value).toContain('\nrun \\"x\\"');
+    expect(scrubSecretValues('export API_TOKEN=\\"a" b && echo \\"done\\"').value).toContain(
+      ' b && echo \\"done\\"',
+    );
+  });
+
   it('leaves a name that is not a secret, and a value already hidden, as it is', () => {
     for (const text of [
       'note=\\"a b\\" max_tokens: \\"1024\\"',
@@ -576,12 +584,26 @@ describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split,
     }
   });
 
-  it('cannot tell a bare value cut by a quote, a \\" later on its line, from a split one', () => {
-    // As written: `-e "PW_TOKEN=…" img \"x\"`. The text up to that \" is taken for the value.
-    expect(repairSplitQuotedMasks(`-e "PW_TOKEN=${REDACTED}" img \\"x\\"`)).toEqual({
-      value: `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`,
-      redactedValues: 1,
-    });
+  // The text up to the next \" is taken for the value. The value patterns still write both, and
+  // the stored rewrite runs at each upgrade: a row written from now on is rewritten once too.
+  it.each([
+    [
+      'a bare value cut by a quote, a \\" later on its line',
+      `-e "PW_TOKEN=${FAKE}" img \\"x\\"`,
+      `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`,
+      `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`,
+    ],
+    [
+      'a name and its bare value inside \\"…\\" (review #501 on #1575)',
+      `docker run -e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\" img`,
+      `docker run -e \\"API_TOKEN=${REDACTED}" -e \\"DEBUG=1\\" img`,
+      `docker run -e \\"API_TOKEN=\\"${REDACTED}\\"DEBUG=1\\" img`,
+    ],
+  ])('cannot tell %s from a split one: rewritten once', (_label, text, written, rewritten) => {
+    expect(scrubSecretValues(text)).toEqual({ value: written, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(written)).toEqual({ value: rewritten, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+    expect(scrubSecretValues(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
   });
 
   it.each([

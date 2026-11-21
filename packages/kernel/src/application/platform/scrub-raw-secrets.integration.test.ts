@@ -89,7 +89,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       otherObservation: randomUUID(),
     };
     const turnMetadata = {
-      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}`,
+      // `--password`: a quoted value written with \" as releases before legacy 918 split it.
+      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}; --password [redacted]"${PLAIN}\\"`,
       decisions: [
         `use PGPASSWORD=${FAKE}`,
         'keep the plain one',
@@ -644,7 +645,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const after = await snapshot();
 
       expect(after.turn).toEqual({
-        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}`,
+        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}; --password \\"[redacted]\\"`,
         decisions: [
           'use PGPASSWORD=[redacted]',
           'keep the plain one',

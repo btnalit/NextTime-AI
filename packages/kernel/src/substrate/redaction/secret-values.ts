@@ -393,8 +393,13 @@ export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLAT
  *  quote that is not escaped, and no line break or other control character: the value was
  *  quoted to the next `\"` on its line. In JSON that is valid, a string's closing quote is
  *  followed, before any `\"`, by the opening quote of the next string, or by nothing. What it
- *  cannot tell from a split value is a bare value cut by a closing quote with a `\"` later on its
- *  line (`-e "PW_TOKEN=[redacted]" img \"x\"`), whose text up to that `\"` it takes for the value. */
+ *  cannot tell from a split value, and takes the text up to that `\"` for the value of: a bare
+ *  value cut by a closing quote with a `\"` later on its line (`-e "PW_TOKEN=[redacted]" img
+ *  \"x\"`), and a name with its bare value written inside `\"…\"`, the `\` of the closing `\"`
+ *  taken with the value (`-e \"API_TOKEN=[redacted]" -e \"DEBUG=1\"`, review #501 on #1575). The
+ *  value patterns still write both, and the stored rewrite runs over every row at each upgrade: a
+ *  row written from now on is rewritten too, once, at the next upgrade — text lost, no value shown
+ *  — until this repair is dropped. */
 const SPLIT_QUOTED_MASK = /(?<=[=: \t])\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
 
 /** Whether `text` holds a C0 control character — a char-code loop, not a regex class (biome's
