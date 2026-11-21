@@ -226,7 +226,9 @@ function safeCut(raw: string, context: string): number {
     // Nor inside a match, nor where a bare value would end before the next pair that the whole
     // text reads on past, its value opening with a secret's key (`bareValueEndsToCome`). Nor after
     // a match whose quoted value is still open, blanks alone after it: what comes next may be a
-    // pair the whole text reads as inside that value (`open`; legacy 934).
+    // pair the whole text reads as inside that value (`open`; legacy 934). The name before that
+    // value holds it as well, where this file reads one (`secretNameStart`); this holds it as the
+    // value rules read it, whatever name they took (review #501 on #1591).
     const read = context + raw;
     const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open'>[] = [
       ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>

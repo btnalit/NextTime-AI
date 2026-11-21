@@ -399,6 +399,22 @@ const SHAPES = [
   `token='a password=\\"secret': "${FAKE}"`,
   `"password":\\"&token: "\\\\"\\\\\\" : \\"password\\": \\",${FAKE}\\"`,
   `--token "passwd='"'\\"secret"=""${FAKE}`,
+  // A value that stopped at a quote inside the value of the pair that crossed it, going on; a
+  // `"…"` value read on past a pair whose `'…'` value holds its quote; a pair at the first
+  // character of a value inside another; a `"…"` value that is a secret's key and its quote, and
+  // one inside another value; a value stopped where the value of the pair that crossed it opens;
+  // a JSON value that is a secret's key and its quote (review #501, #493 on #1591).
+  `password:\\"TOKEN='"'${FAKE}`,
+  `--token \\"TOKEN='"'${FAKE}\\"`,
+  `password:"\\"a TOKEN='"'${FAKE}"`,
+  `password:"\\"${FAKE} TOKEN='"'"`,
+  `--token='token: \\"api_key="'${FAKE}"`,
+  `token=x,password: "api_key": ${FAKE}`,
+  `token="abc${FAKE}Secret" = 1`,
+  `TOKEN=password:"TOKEN='"'${FAKE}`,
+  `--token='x,api_key="api_key":'${FAKE}' :`,
+  `apikey=\\"token=token='apikey="'\\"'${FAKE}`,
+  `"TOKEN'":"passwd":"${FAKE}`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -548,10 +564,11 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
   });
 
   it('holds a bare value back at a `,` only while the key after the next quote can still decide where it ends (review #501 on #1586)', () => {
-    // A secret's key, whole: held from its quote, the value before it read on past the `,`.
-    expect(createSecretStreamScrubber().push('token=x,password: "api_key": ').value).toBe(
-      `token=${REDACTED} `,
-    );
+    // A secret's key, whole: the value before it read on past the `,`, and the key's pair, whose
+    // value has not come, crossing both (review #493 on #1591) — held whole.
+    const scrubber = createSecretStreamScrubber();
+    expect(scrubber.push('token=x,password: "api_key": ').value).toBe('');
+    expect(scrubber.flush().value).toBe(`token=${REDACTED} "${REDACTED}": `);
     // A key no rule hides: the value before it ends at the `,`.
     expect(createSecretStreamScrubber().push('token=x,password: "note": ').value).toBe(
       `token=${REDACTED}`,
