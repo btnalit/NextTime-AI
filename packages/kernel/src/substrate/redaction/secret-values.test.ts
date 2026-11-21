@@ -1315,17 +1315,19 @@ describe('the name rules read together, each on the text as it is written (legac
   });
 
   it.each([
-    ['a --flag', `--password=${FAKE}--api-key="abc"`, `--password=${REDACTED}"${REDACTED}"`, 2],
-    ['an env name', `token=A_TOKEN="${FAKE} x"`, `token=${REDACTED}"${REDACTED}"`, 2],
-    ['an env line', `API_TOKEN=note${FAKE}API_TOKEN="x"`, `API_TOKEN=${REDACTED}"x"`, 1],
-    ['a `;` first', `token=;${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
-    ['a `,` first', `token=,${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
-    ['a `|` first', `token=|${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
-    ['an `=` first', `API_TOKEN==${FAKE}--token :"x"`, `API_TOKEN=${REDACTED} :"x"`, 1],
+    ['a --flag', `--password=${FAKE}--api-key="abc"`, `--password=${REDACTED}"${REDACTED}"`],
+    ['an env name', `token=A_TOKEN="${FAKE} x"`, `token=${REDACTED}"${REDACTED}"`],
+    ['an env line', `API_TOKEN=note${FAKE}API_TOKEN="x"`, `API_TOKEN=${REDACTED}"${REDACTED}"`],
+    ['a `;` first', `token=;${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "${REDACTED}"`],
+    ['a `,` first', `token=,${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "${REDACTED}"`],
+    ['a `|` first', `token=|${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "${REDACTED}"`],
+    ['an `=` first', `API_TOKEN==${FAKE}--token :"x"`, `API_TOKEN=${REDACTED} :"${REDACTED}"`],
   ])(
-    "hides a bare value a next pair's name is written against, as v0.69.2 and main do (review #493 on #1586): %s",
-    (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    "hides a bare value a next pair's name is written against, as v0.69.2 and main do, and that pair's value, which they kept (review #493 on #1586; legacy 934): %s",
+    (_label, text, hidden) => {
+      // The pair that starts inside the bare value and goes on past it is read from where that
+      // value starts, as its rule reads on there (`readTogether`).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1343,7 +1345,7 @@ describe('the name rules read together, each on the text as it is written (legac
     ],
     [
       'a "…" value',
-      `--token "TOKEN="apikey":${FAKE};`,
+      `--token "TOKEN="x apikey":${FAKE};`,
       `--token "${REDACTED}"${REDACTED}":${REDACTED}`,
     ],
     [
@@ -1472,6 +1474,219 @@ describe('a value read with escapes and the next pair (review #493, #501 on #158
       value: `password="${REDACTED}" ${name}='${REDACTED}'`,
       redactedValues: 2,
     });
+  });
+});
+
+describe('a pair that starts inside a value and goes on past it (legacy 934)', () => {
+  it.each([
+    [
+      'a name in a "…" value after a `,`',
+      `TOKEN=x,token="apikey:"${FAKE}"`,
+      `TOKEN=${REDACTED}token="${REDACTED}"${REDACTED}"`,
+      3,
+    ],
+    [
+      'a name and `=`',
+      `apikey=x,apikey="Secret="${FAKE}"`,
+      `apikey=${REDACTED}apikey="${REDACTED}"${REDACTED}"`,
+      3,
+    ],
+    [
+      'an escaped quote',
+      `TOKEN=x,I_TOKEN="password:\\"${FAKE}`,
+      `TOKEN=${REDACTED}I_TOKEN="${REDACTED}"${REDACTED}`,
+      3,
+    ],
+    // The quote that closed the first value is inside the value of the pair that crossed it: the
+    // first value goes on to its next quote (review #501 on #1589).
+    [
+      'a \'…\' value in a "…" value',
+      `password:"TOKEN='"'${FAKE}"`,
+      `password:"${REDACTED}"'${REDACTED}"`,
+      2,
+    ],
+    [
+      'a "…" value in a \'…\' value',
+      `token='TOKEN="'"${FAKE}'`,
+      `token='${REDACTED}'"${REDACTED}'`,
+      2,
+    ],
+    ['a --flag', `--apikey='password:"'"${FAKE}'`, `--apikey='${REDACTED}'"${REDACTED}'`, 2],
+    [
+      'to the end of the line',
+      `password:"TOKEN='"'${FAKE}\nx`,
+      `password:"${REDACTED}"'${REDACTED}\nx`,
+      2,
+    ],
+    // A value read as no value where the next pair starts at its first character, the pair took
+    // the quote after its own for its value; read in, the value goes on to its own quote.
+    [
+      'a pair at the first character of a `\\"…\\"` value',
+      `--token \\"TOKEN='\\"'${FAKE}\\"`,
+      `--token \\"${REDACTED}\\"'${REDACTED}\\"`,
+      2,
+    ],
+    [
+      'a pair at the first character of a `\\"…` value',
+      `api_key: \\"TOKEN='\\"'${FAKE} y;`,
+      `api_key: \\"${REDACTED}\\"'${REDACTED}`,
+      2,
+    ],
+    // A value that stopped, not closed, before the next pair, past blanks: the pair is inside it,
+    // and it goes on past the pair to its own quote, as v0.70.0 read it to the line's end.
+    [
+      'a pair after a `\\"…` value cut short',
+      `--token \\"xa TOKEN='\\"'${FAKE} y':`,
+      `--token \\"${REDACTED} TOKEN='${REDACTED}'${REDACTED}`,
+      3,
+    ],
+    [
+      'a pair whose value holds no `\\"`',
+      `apikey=\\"a TOKEN='"'${FAKE}`,
+      `apikey=\\"${REDACTED} TOKEN='${REDACTED}'${REDACTED}`,
+      3,
+    ],
+    [
+      'a tab before the pair',
+      `apikey:\\"'\tTOKEN='"'${FAKE}`,
+      `apikey:\\"${REDACTED}\tTOKEN='${REDACTED}'${REDACTED}`,
+      3,
+    ],
+  ])(
+    'hides the value of a pair that starts inside a value and goes on past it, which main kept and v0.70.0 hid: %s',
+    (_label, text, hidden, values) => {
+      // Its rule reads on from where the value it starts in starts (`readTogether`).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it.each([
+    [
+      'a pair after a `"…` value',
+      `api_key: "xa TOKEN='"'${FAKE} y';`,
+      `api_key: "${REDACTED}"'${REDACTED}`,
+      2,
+    ],
+    [
+      'a pair right after a `\\"` value cut short',
+      `TOKEN=\\";passwd=""${FAKE}`,
+      `TOKEN=\\"${REDACTED}passwd="${REDACTED}"${REDACTED}`,
+      3,
+    ],
+    [
+      "a pair at the first character of a `\\\"…` value in a '…' value",
+      `token='a password=\\"secret': "${FAKE}"`,
+      `token='${REDACTED}'${REDACTED}`,
+      2,
+    ],
+    [
+      "a secret's key whose opening quote is escaped",
+      `--token "passwd='"'\\"secret"=""${FAKE}`,
+      `--token "${REDACTED}"'${REDACTED}secret"="${REDACTED}"${REDACTED}`,
+      4,
+    ],
+  ])(
+    'hides the value of a pair that starts inside a value and goes on past it, which main and v0.70.0 kept: %s',
+    (_label, text, hidden, values) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it('writes one mask for a value that goes on from where it ends hidden', () => {
+    // `password`'s value goes on past the one that crossed it, which runs to the line's end.
+    expect(scrubSecretValues(`password:'a TOKEN=\\"x'${FAKE}  `)).toEqual({
+      value: `password:'${REDACTED}'${REDACTED}`,
+      redactedValues: 2,
+    });
+  });
+
+  it('reads no pair into a value cut short where other text stands between them, as main and v0.70.0 do', () => {
+    expect(scrubSecretValues(`api_key: \\"a"b TOKEN='\\"' c`)).toEqual({
+      value: `api_key: \\"${REDACTED}"b TOKEN='${REDACTED}' c`,
+      redactedValues: 2,
+    });
+  });
+
+  it.each([
+    ['a name', `token: "password": ${FAKE}`, `token: "password": ${REDACTED}`, 1],
+    [
+      'an escaped quote',
+      `token: \\"password\\": \\"${FAKE}\\"`,
+      `token: \\"password\\": \\"${REDACTED}\\"`,
+      1,
+    ],
+    ['`=`', `token=\\"secret\\" = \\"${FAKE}\\"`, `token=\\"secret\\" = \\"${REDACTED}\\"`, 1],
+    [
+      'a tab',
+      `my.token=\\"apiKey\\"\t:\\"${FAKE}\\"`,
+      `my.token=\\"apiKey\\"\t:\\"${REDACTED}\\"`,
+      1,
+    ],
+    [
+      'a --flag',
+      `--token \\"apiKey\\"\t:\\"${FAKE}\\"`,
+      `--token \\"apiKey\\"\t:\\"${REDACTED}\\"`,
+      1,
+    ],
+    ['a JSON key', `"token": "password": "${FAKE}"`, `"token": "password": "${REDACTED}"`, 1],
+    [
+      'an escaped JSON key',
+      `\\"token\\": \\"password\\": \\"${FAKE}\\"`,
+      `\\"token\\": \\"password\\": \\"${REDACTED}\\"`,
+      1,
+    ],
+    [
+      'after a crossed value',
+      `--token "TOKEN="apikey":${FAKE};`,
+      `--token "${REDACTED}"apikey":${REDACTED}`,
+      2,
+    ],
+  ])(
+    "reads no value that is a secret's key and its quote, whose value v0.70.0 kept: %s",
+    (_label, text, hidden, values) => {
+      // Read as the value of the name before it, the key's own value was kept (legacy 930).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it.each([
+    [
+      'an escaped JSON key',
+      `"password":\\"&token: "\\\\"\\\\\\" : \\"password\\": \\",${FAKE}\\"`,
+      `"password":\\"${REDACTED}token: "${REDACTED}"${REDACTED}\\"password\\": \\"${REDACTED}\\"`,
+      4,
+    ],
+    [
+      'a JSON key',
+      `--token '\\";"API_TOKEN = \\"'C:'\t:\t"password":"${FAKE}'x'|`,
+      `--token '${REDACTED}'${REDACTED}"password":"${REDACTED}`,
+      3,
+    ],
+  ])(
+    "goes on to a value's own quote no further than a secret's key, which its JSON rule reads, as main and v0.70.0 do: %s",
+    (_label, text, hidden, values) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    },
+  );
+
+  // Known failures, which legacy 930 closes before the next release: the JSON rules still read
+  // the text the name rules rewrote, and a key the name rules hid as a value is no key there.
+  // v0.70.0 hid these; v0.69.2 kept them. Once one is hidden, move it to the cases above.
+  it.fails.each([
+    `apikey=passwd:"apikeye":"${FAKE}`,
+    `apikey:passwd="\\"apiKey\\":\\"${FAKE}`,
+    `secret"=apikey='passwd":"'${FAKE}`,
+    `--token --token \\",passwd\\"=\\"${FAKE}`,
+    `--token "Secret":""apikey":"${FAKE}`,
+    `TOKEN=token="\\"TOKEN\\"=\\"${FAKE}`,
+    `apikey:passwd:'\\"Passwd\\"=\\"'${FAKE}`,
+    // Kept since #1586, as main does (review #501 on #1589).
+    `APIKEY=--apikey="passwordx":"${FAKE}"`,
+  ])('hides the value of a JSON key the name rules read as a value (legacy 930): %s', (text) => {
+    expect(scrubSecretValues(text).value).not.toContain(FAKE);
   });
 });
 

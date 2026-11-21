@@ -4,6 +4,7 @@ import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
   type Scrubbed,
+  type SecretMatch,
   bareValueEndsToCome,
   endsAQuotedValue,
   namesASecretField,
@@ -162,6 +163,8 @@ function backslashesBefore(text: string, index: number): number {
 
 /** A `"` and the blanks after it, as far as `NOT_A_KEYS_QUOTE` looks for a `:` or `=`. */
 const BLANKS_AFTER_A_QUOTE = /"[ \t]{1,8}$/;
+/** Blanks, or nothing: what may stand between a value still open and a pair read as inside it. */
+const BLANKS_ONLY = /^[ \t]*$/;
 
 /** Where the text that is safe to emit ends — everything from here on is held back. `context` is
  *  the end of what was emitted before `raw`, which the patterns look back into (`CONTEXT_CHARS`). */
@@ -221,16 +224,24 @@ function safeCut(raw: string, context: string): number {
       moved = true;
     }
     // Nor inside a match, nor where a bare value would end before the next pair that the whole
-    // text reads on past, its value opening with a secret's key (`bareValueEndsToCome`).
+    // text reads on past, its value opening with a secret's key (`bareValueEndsToCome`). Nor after
+    // a match whose quoted value is still open, blanks alone after it: what comes next may be a
+    // pair the whole text reads as inside that value (`open`; legacy 934).
     const read = context + raw;
-    for (const { start, end } of [
+    const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open'>[] = [
       ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
         secretMatches(valuePattern, read, context.length),
       ),
       ...bareValueEndsToCome(read, context.length),
-    ]) {
+    ];
+    for (const { start, end, open } of spans) {
       const at = start - context.length;
-      if (at < cut && (end - context.length > cut || end === read.length)) {
+      if (
+        at < cut &&
+        (end - context.length > cut ||
+          end === read.length ||
+          (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))))
+      ) {
         cut = at;
         moved = true;
       }
