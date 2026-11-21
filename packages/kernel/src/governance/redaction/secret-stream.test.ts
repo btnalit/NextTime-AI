@@ -96,6 +96,24 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     expect(emitted).toBe(`我的 Handle 是 ${REDACTED} 。`);
   });
 
+  it.each([
+    `say "hi".--password "${FAKE} x" y`,
+    `say "hi"_--password "${FAKE} x" y`,
+    `say "hi".--password="a ${FAKE}" y`,
+    `say "hi".--api-key  "a ${FAKE}" y`,
+    `say "hi".API_TOKEN="a b ${FAKE}" y`,
+    `say "hi"-API_TOKEN="a ${FAKE}" y`,
+    `${'A'.repeat(90)}_TOKEN="a b ${FAKE}" y`,
+  ])(
+    'never emits the value of a flag or env name after a quote, a dot or a dash, cut anywhere (legacy 925): %s',
+    (text) => {
+      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+      for (let at = 1; at < text.length; at += 1) {
+        expect(stream([text.slice(0, at), text.slice(at)]).text).not.toContain(FAKE);
+      }
+    },
+  );
+
   it('holds a secret JSON value back until it is closed, spaces and all', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('{"password": "correct horse').value).toBe('{');
@@ -251,6 +269,31 @@ const SHAPES = [
   String.raw`API_TOKEN: "x y\""  :\"x`,
   String.raw`"password": "a\"b"  : x`,
   `password="a\\"b"\t\t:${FAKE} y`,
+  // Four blanks before the colon, and a key's closing quote before `=` (#501 on 05f9be71).
+  String.raw`run token="\""    :'"x"}`,
+  `API_TOKEN="a \\"b \\"api_key" = " ${FAKE}"`,
+  `API_TOKEN="a \\"b \\"api_key"\t=\t" ${FAKE}"`,
+  String.raw`run token="\"" ='"x"}`,
+  // The names the value rules take before the next pair's opening quote, which ends the value
+  // before them (legacy 924, #501 on 05f9be71): held from the name, as the whole text hides it.
+  `PASSWORD="C:\\dir\\".API_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\" ${'A'.repeat(59)}_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\" ${'A'.repeat(122)}_TOKEN=" ${FAKE}"`,
+  `password="C:\\dir\\".--token " ${FAKE}"`,
+  `password="C:\\dir\\"_--token " ${FAKE}"`,
+  `password="C:\\dir\\".--token=" ${FAKE}"`,
+  // A flag or env name right after a quote, a dot, `_` or `-`, which the flag and env rules take
+  // for one and the name rule does not (legacy 925): held from the name, as the whole text hides
+  // the value.
+  `say "hi".--password "${FAKE} x" y`,
+  `say "hi"_--password "${FAKE} x" y`,
+  `say "hi".--password="a ${FAKE}" y`,
+  `say "hi".--api-key  "a ${FAKE}" y`,
+  `say "hi".API_TOKEN="a b ${FAKE}" y`,
+  `say "hi"-API_TOKEN="a ${FAKE}" y`,
+  `${'A'.repeat(90)}_TOKEN="a b ${FAKE}" y`,
+  // The name rule does not take a name after a dot, whole or streamed.
+  `say "hi".password: "a ${FAKE}" y`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

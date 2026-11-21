@@ -909,6 +909,8 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     ['an env name right after a dot', `PASSWORD="C:\\dir\\".API_TOKEN=" ${FAKE}"`],
     ['an env name longer than a name', `PASSWORD="C:\\dir\\" ${'A'.repeat(100)}_TOKEN=" ${FAKE}"`],
     ['two spaces before the colon', `API_TOKEN="a \\"b \\"api_key"  : "${FAKE}"`],
+    ['a key and `=` (#501 on 05f9be71)', `API_TOKEN="a \\"b \\"api_key" = " ${FAKE}"`],
+    ['a key, a tab and `=`', `API_TOKEN="a \\"b \\"api_key"\t=\t" ${FAKE}"`],
     ['spaces before the colon (#501 on #1579)', `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`],
     ['a tab before the colon', `API_TOKEN="a \\"b \\"api_key"\t:\t"${FAKE}"`],
   ])(
@@ -922,6 +924,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     expect(endsAQuotedValue('  : 1')).toBe(false);
     expect(endsAQuotedValue('\t:')).toBe(false);
     expect(endsAQuotedValue(':')).toBe(false);
+    expect(endsAQuotedValue('  = 1')).toBe(false);
     expect(endsAQuotedValue('  x')).toBe(true);
     expect(endsAQuotedValue('')).toBe(false);
   });

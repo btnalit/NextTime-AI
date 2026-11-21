@@ -193,9 +193,9 @@ const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escape
  *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
  *  which opens the next value as often (`token="\n…"`). */
 const AFTER_A_QUOTED_VALUE = String.raw`[\s,;)}\]&.'|<>]`;
-/** Not a JSON key's quote either when spaces come before its colon (`"api_key" : `; #501 on
- *  #1579). */
-const NOT_A_KEYS_QUOTE = String.raw`(?![ \t]{0,8}:)`;
+/** Not a key's quote either when spaces come before its colon or `=` (`"api_key" : `, and the
+ *  `"api_key" = ` of TOML or HCL; #501 on #1579 and on 05f9be71). */
+const NOT_A_KEYS_QUOTE = String.raw`(?![ \t]{0,8}[:=])`;
 const CLOSES_A_QUOTED_VALUE = new RegExp(`^${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_VALUE}`);
 /** Whether what comes `after` a `"` lets it close a `QUOTED` value. Exported for
  *  `secret-stream.ts`: text cut right after a quote reads as if it ended there, where any quote
