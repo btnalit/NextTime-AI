@@ -508,8 +508,25 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     '{\\"session cookie\\": \\"a ',
     'A=a\\\\\\',
     'A=\\\\"a ',
+    'password: \\\\\\"a\\',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
+    scrubSecretValues(text.slice(0, 1_000));
+    const started = performance.now();
+    scrubSecretValues(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  // One long run, not a short unit repeated: a closing run read back from each place in a line
+  // of backslashes, as long as the run that opened it (review #501 on #1577: 1.9 s at 200 KB).
+  const run = (length: number) => '\\'.repeat(length);
+  it.each([
+    ['a run, a quote and a run twice as long', `password: ${run(66_667)}"${run(133_334)}`],
+    ['an env line', `API_TOKEN=${run(66_667)}"${run(133_334)}`],
+    ['a --password flag', `--password ${run(66_667)}"${run(133_334)}`],
+    ['a closing run one short', `password: ${run(50_001)}"${run(50_000)}"${'x'.repeat(100_000)}`],
+    ['JSON text in a string', `{\\"password\\":\\"${run(199_970)}`],
+  ])('%s × 200 KB within 1 s', (_name, text) => {
     scrubSecretValues(text.slice(0, 1_000));
     const started = performance.now();
     scrubSecretValues(text);
@@ -628,10 +645,9 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
   it.each([
     [
       'tool output cut short',
-      `export API_TOKEN="${FAKE} and the rest`,
-      `export API_TOKEN="${REDACTED}`,
+      `export API_TOKEN=\\"${FAKE} and the rest`,
+      `export API_TOKEN=\\"${REDACTED}`,
     ],
-    ['an apostrophe', `password: '${FAKE} x`, `password: '${REDACTED}`],
     [
       'written inside a string',
       `sh -c "export API_TOKEN=\\\"${FAKE} x`,
@@ -644,7 +660,11 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       `API_TOKEN=\\"${FAKE}\r\\" b`,
       `API_TOKEN=\\"${REDACTED}\r\\" b`,
     ],
-    ['going on to the next line', `password="${FAKE} a\n b" c`, `password="${REDACTED}\n b" c`],
+    [
+      'going on to the next line',
+      `password=\\"${FAKE} a\n b\\" c`,
+      `password=\\"${REDACTED}\n b\\" c`,
+    ],
     [
       'inside a JSON string, to its quote',
       `{"cmd":"PASSWORD=\\"${FAKE}","x":1}`,
@@ -711,6 +731,45 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       '{\\"client secret\\": \\"\nb',
     ]) {
       expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  // A `"` or `'` with no close on its line is no value: here it closes a prompt or a label that
+  // ends with a name and its separator (review #501 on #1577), and the stored rewrite would cut
+  // the rows for good.
+  it('leaves a name quoted in code or a prompt, the quote after it one that closes', () => {
+    for (const text of [
+      'pw = input("Password:")',
+      'read -sp "Password:" PW',
+      'console.log("Password:", value);',
+      '  "loginPrompt": "Enter password: ",',
+      '{"label":"Password:"}',
+      'The field labeled "API token:" is required.',
+      "prompt('New secret: ');",
+      '<input placeholder="Password:">',
+      'msg="Password:" retry=3',
+      'echo "API_TOKEN=" >> .env',
+      "VALUES ('api_key=');",
+    ]) {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  it('ends a value opened with backslashes where its string does, that \\ of a \\" kept', () => {
+    for (const [text, hidden] of [
+      [
+        `{"cmd":"{\\"env\\":\\"password: \\\\\\"${FAKE}\\"}"}`,
+        `{"cmd":"{\\"env\\":\\"password: \\\\\\"${REDACTED}\\"}"}`,
+      ],
+      [`password: \\\\\\"${FAKE}\\" b\\\\\\" c`, `password: \\\\\\"${REDACTED}\\" b\\\\\\" c`],
+      [`password: \\\\\\"${FAKE}\\\\" b`, `password: \\\\\\"${REDACTED}" b`],
+      [
+        `password: ${'\\'.repeat(9)}"${FAKE}${'\\'.repeat(9)}" b`,
+        `password: ${'\\'.repeat(9)}"${REDACTED}\\" b`,
+      ],
+    ] as const) {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     }
   });
 });

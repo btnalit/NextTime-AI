@@ -181,17 +181,25 @@ export interface ValuePattern {
  *  `sh -c "export API_TOKEN=\"…\""`, a compose `command:`, source code. Read as it is written,
  *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). And with
  *  `\\\"`, to the next `\\\"`: such a string written inside one more (a JSON string printed in a
- *  log, `"cmd": "export API_TOKEN=\\\"…\\\""`) — any odd run of backslashes before the quote,
- *  closed by the same run (review #501 on #1575). First: the bare run starts with `\` too.
- *  Linear: the run inside stops at the first `"`, and the closing run is read back from there. */
-const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\)*)"[^"\r\n]*\k<escapes>"`;
-/** A quoted value whose closing quote is not on its line — tool output cut short, a string that
- *  goes on to the next line, one closed after a `\r` (legacy 921): to the end of the line, and one
- *  opened with backslashes also to the first `"` on it, so a value written inside a string ends
- *  with that string (`"cmd":"PASSWORD=\"…","x":1`). Read as it was, the `\` alone was the bare
- *  run and the value after it was kept; a `"` or `'` with no close was no value at all. Second to
- *  its closed form, which is tried first; never a quote alone, which has no value to hide. */
-const UNCLOSED = String.raw`\\(?:\\\\)*"[^"\r\n]+|"[^"\r\n]+|'[^'\r\n]+`;
+ *  log, `"cmd": "export API_TOKEN=\\\"…\\\""`) — any odd run of up to seven backslashes (three
+ *  strings deep) before the quote, closed by the same run (review #501 on #1575). First: the bare
+ *  run starts with `\` too. Linear because that run is bounded: the run inside stops at the first
+ *  `"` and the closing run is read back from each place before it, so with no bound a line of
+ *  backslashes cost its length squared (review #501 on #1577: 42 s at 1 MiB). A longer run is
+ *  read as `UNCLOSED`, to the first `"`. */
+const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escapes>"`;
+/** A value opened with `\"` (or more backslashes) whose closing run is not on its line — tool
+ *  output cut short, a string that goes on to the next line, one closed after a `\r` (legacy 921):
+ *  to the end of the line or the first `"` on it, so a value written inside a string ends with
+ *  that string (`"cmd":"PASSWORD=\"…","x":1`). Its backslashes are read two at a time, as a bare
+ *  run's: never the `\` of a `\"` that ends it, a string one level up closing, which it keeps
+ *  (`{\"env\":\"password: \\\"…\"}`). Read as it was, the `\` alone was the bare run and the
+ *  value after it was kept. Second to its closed form, which is tried first; never a quote alone,
+ *  which has no value to hide. A `"` or `'` with no close on its line is still no value: as often
+ *  as it opens a value cut short, it closes a prompt or a label that ends with a name
+ *  (`input("Password:")`, `{"label":"Password:"}`), and the stored rewrite would cut those rows
+ *  for good (review #501 on #1577). */
+const UNCLOSED = String.raw`\\(?:\\\\)*"(?:[^"\\\r\n]|\\\\|\\(?!"))+`;
 /** A bare run, its backslashes read two at a time: never the `\` of a `\"` that ends it, which
  *  closes a string the pair is written inside (`-e \"API_TOKEN=…\" -e \"DEBUG=1\"`). Taken with
  *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
