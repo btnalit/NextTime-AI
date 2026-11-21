@@ -1272,6 +1272,8 @@ describe('the name rules read together, each on the text as it is written (legac
     ['an env name', `token=A_TOKEN="${FAKE} x"`, `token=${REDACTED}"${REDACTED}"`, 2],
     ['an env line', `API_TOKEN=note${FAKE}API_TOKEN="x"`, `API_TOKEN=${REDACTED}"x"`, 1],
     ['a `;` first', `token=;${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
+    ['a `,` first', `token=,${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
+    ['a `|` first', `token=|${FAKE}clientSecret--token : "x"`, `token=${REDACTED} : "x"`, 1],
     ['an `=` first', `API_TOKEN==${FAKE}--token :"x"`, `API_TOKEN=${REDACTED} :"x"`, 1],
   ])(
     "hides a bare value a next pair's name is written against, as v0.69.2 and main do (review #493 on #1586): %s",
