@@ -159,8 +159,9 @@ function backslashesBefore(text: string, index: number): number {
 /** A `"` and the blanks after it, as far as `NOT_A_KEYS_QUOTE` looks for a `:` or `=`. */
 const BLANKS_AFTER_A_QUOTE = /"[ \t]{1,8}$/;
 
-/** Where the text that is safe to emit ends — everything from here on is held back. */
-function safeCut(raw: string): number {
+/** Where the text that is safe to emit ends — everything from here on is held back. `context` is
+ *  the end of what was emitted before `raw`, which the patterns look back into (`CONTEXT_CHARS`). */
+function safeCut(raw: string, context: string): number {
   let cut = raw.length;
   while (cut > 0 && !BREAKS_A_SECRET_RUN.test(raw.charAt(cut - 1))) cut -= 1;
 
@@ -215,10 +216,12 @@ function safeCut(raw: string): number {
       cut -= blanks[0].length;
       moved = true;
     }
+    const read = context + raw;
     for (const valuePattern of SECRET_VALUE_PATTERNS) {
-      for (const { start, end } of secretMatches(valuePattern, raw)) {
-        if (start < cut && (end > cut || end === raw.length)) {
-          cut = start;
+      for (const { start, end } of secretMatches(valuePattern, read, context.length)) {
+        const at = start - context.length;
+        if (at < cut && (end - context.length > cut || end === read.length)) {
+          cut = at;
           moved = true;
         }
       }
@@ -234,14 +237,15 @@ function safeCut(raw: string): number {
  *  that keeps the quote from closing one, as what follows does, and the character is taken off
  *  again — unless a value took it in (one opened by that quote, or a bare one that ends with an
  *  escaped quote), when the text is read on its own. */
-function scrubbedBefore(text: string, cut: number): Scrubbed<string> {
+function scrubbedBefore(text: string, cut: number, context: string): Scrubbed<string> {
+  const options = { readAfter: context };
   if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.slice(cut, cut + 10))) {
-    return scrubSecretValues(text.slice(0, cut));
+    return scrubSecretValues(text.slice(0, cut), options);
   }
-  const read = scrubSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`);
+  const read = scrubSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`, options);
   return read.value.endsWith(KEEPS_A_QUOTE_OPEN)
     ? { value: read.value.slice(0, -1), redactedValues: read.redactedValues }
-    : scrubSecretValues(text.slice(0, cut));
+    : scrubSecretValues(text.slice(0, cut), options);
 }
 /** A character no value ends with once hidden, and that `endsAQuotedValue` refuses. */
 const KEEPS_A_QUOTE_OPEN = 'x';
@@ -261,21 +265,29 @@ export interface SecretStreamScrubber {
   flush(): Scrubbed<string>;
 }
 
+/** How much of the text already emitted the patterns look back into before what is held — as far
+ *  as one looks behind where a match starts (`\u4e2d` before a key, `.` before a name) — so that
+ *  the held text reads as the whole text reads it there. No match starts in it: it was read. */
+const CONTEXT_CHARS = 8;
+
 export function createSecretStreamScrubber(): SecretStreamScrubber {
+  let context = '';
   let held = '';
   let dropping = false;
 
   function take(slice: string): Scrubbed<string> {
     held += slice;
-    const cut = safeCut(held);
+    const cut = safeCut(held, context);
     if (held.length - cut > STREAM_HOLD_MAX_CHARS) {
-      const before = scrubbedBefore(held, cut);
+      const before = scrubbedBefore(held, cut, context);
+      context = '';
       held = '';
       dropping = true;
       return { value: before.value + REDACTED, redactedValues: before.redactedValues + 1 };
     }
     if (cut === 0) return { value: '', redactedValues: 0 };
-    const out = scrubbedBefore(held, cut);
+    const out = scrubbedBefore(held, cut, context);
+    context = (context + held.slice(0, cut)).slice(-CONTEXT_CHARS);
     held = held.slice(cut);
     return out;
   }
@@ -295,7 +307,10 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
         : { value, redactedValues };
     },
     flush() {
-      const out = dropping ? { value: '', redactedValues: 0 } : scrubSecretValues(held);
+      const out = dropping
+        ? { value: '', redactedValues: 0 }
+        : scrubSecretValues(held, { readAfter: context });
+      context = '';
       held = '';
       dropping = false;
       return out;
