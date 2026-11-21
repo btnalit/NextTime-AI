@@ -203,12 +203,14 @@ const CLOSES_A_QUOTED_VALUE = new RegExp(`^${NOT_A_KEYS_QUOTE}${AFTER_A_QUOTED_V
 export function endsAQuotedValue(after: string): boolean {
   return CLOSES_A_QUOTED_VALUE.test(after);
 }
-/** What stands right before the quote that opens the next pair's value: whitespace or `,;&|`,
- *  then a name and its separator or a `--flag` and its (`token=`, `password: `, `'token': `,
- *  `$env:API_TOKEN=`, `--token `), and the `'` of a value that opens with a `"`. No JSON key's
- *  quotes: the value reads no `"` that no backslash escapes, and a key's closing one is refused
- *  after it (`NOT_A_KEYS_QUOTE`). */
-const A_PAIR_BEFORE = String.raw`[\s,;&|](?:(?:\$env:|')?[A-Za-z][A-Za-z0-9_.-]{0,63}'?[ \t]{0,8}[:=][ \t]{0,8}|--[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]{1,8}))'?`;
+/** What stands right before the quote that opens the next pair's value: what the name, `--flag`
+ *  and env-line rules below take for a name and its separator, each with its own boundary
+ *  (`token=`, `password: `, `'token': `, `--token `, `--token=`, `.--token `, `$env:API_TOKEN=`,
+ *  `"API_TOKEN=`), and a `'` between them and the quote (`token='"`). With fewer, a value read on
+ *  to such a quote where the rule took the next value (`\".'token' = "`; #493 on #1581). No JSON
+ *  key's quotes: the value reads no `"` that no backslash escapes, and a key's closing one is
+ *  refused after it (`NOT_A_KEYS_QUOTE`). */
+const A_PAIR_BEFORE = String.raw`(?:(?<![A-Za-z0-9_.-])[A-Za-z][A-Za-z0-9_.-]{0,63}["']?[ \t]{0,8}[:=][ \t]{0,8}|(?<![A-Za-z0-9-])--[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]{1,8})|(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{0,127}=)'?`;
 /** A `"…"` value with quotes inside it escaped — JSON text, a shell or YAML string
  *  (`{"password": "a \"b c"}`, `PASSWORD="a\"b"`): to the first `"` no backslash escapes. Read to
  *  the first `"`, the value ended at the `\"` inside it and the rest was kept (#501 on #1577,

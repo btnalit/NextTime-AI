@@ -12,6 +12,7 @@ import {
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
+  endsAQuotedValue,
   platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
@@ -899,6 +900,15 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     ['an escaped quote that opens the value', `"token": "\\"a && password: " ${FAKE}"`],
     ['a pair with a bare value between', `api_key = "a\\" API_TOKEN = b client_secret: " ${FAKE}"`],
     ['spaces around the separator', `password = "C:\\dir\\" token = " ${FAKE}"`],
+    ['a quoted key after a dot (#493 on #1581)', `password="a\\".'token' = " ${FAKE}"`],
+    ['a name right after a quote', `password="a\\"API_TOKEN = " ${FAKE}"`],
+    ['a flag right after a dot', `password="a\\".--token " ${FAKE}"`],
+    ['a flag right after an apostrophe', `password="a\\" x'--token " ${FAKE}"`],
+    ['a --flag= (#501 on #1581)', `run --password="C:\\k\\" --token=" ${FAKE}"`],
+    ['a name with a dot in it', `password="C:\\dir\\" my.token=" ${FAKE}"`],
+    ['an env name right after a dot', `PASSWORD="C:\\dir\\".API_TOKEN=" ${FAKE}"`],
+    ['an env name longer than a name', `PASSWORD="C:\\dir\\" ${'A'.repeat(100)}_TOKEN=" ${FAKE}"`],
+    ['two spaces before the colon', `API_TOKEN="a \\"b \\"api_key"  : "${FAKE}"`],
     ['spaces before the colon (#501 on #1579)', `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`],
     ['a tab before the colon', `API_TOKEN="a \\"b \\"api_key"\t:\t"${FAKE}"`],
   ])(
@@ -908,7 +918,27 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     },
   );
 
-  it('reads a value whose last word is a name and its separator to its first quote, as main does', () => {
+  it('a quote that blanks and a colon follow closes no value, read where the stream cuts (#501, #493 on #1581)', () => {
+    expect(endsAQuotedValue('  : 1')).toBe(false);
+    expect(endsAQuotedValue('\t:')).toBe(false);
+    expect(endsAQuotedValue(':')).toBe(false);
+    expect(endsAQuotedValue('  x')).toBe(true);
+    expect(endsAQuotedValue('')).toBe(false);
+  });
+
+  it.each([
+    ['a word no name rule takes', 'password="a\\"b _k: " x'],
+    ['a flag after a letter', 'password="a\\"b x--k " x'],
+    ['an env name after `_`', 'password="a\\"b _API=" x'],
+    ['a name after a dot', 'password="a\\"b _.k: " x'],
+  ])(
+    'a quote after what no value rule takes for a name still closes the value: %s',
+    (_label, text) => {
+      expect(scrubSecretValues(text).value).toBe(`password="${REDACTED}" x`);
+    },
+  );
+
+  it('reads a value whose last word is a name and its separator to its first quote, as v0.69.2 does', () => {
     expect(scrubSecretValues('password="a \\"b note: " x').value).toBe(
       `password="${REDACTED}"b note: " x`,
     );

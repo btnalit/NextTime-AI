@@ -142,6 +142,9 @@ function backslashesBefore(text: string, index: number): number {
   return backslashes;
 }
 
+/** A `"` and the blanks after it, as far as `NOT_A_KEYS_QUOTE` looks for a colon. */
+const BLANKS_AFTER_A_QUOTE = /"[ \t]{1,8}$/;
+
 /** Where the text that is safe to emit ends — everything from here on is held back. */
 function safeCut(raw: string): number {
   let cut = raw.length;
@@ -183,6 +186,14 @@ function safeCut(raw: string): number {
     const backslashes = backslashesBefore(raw, cut);
     if (backslashes > 0) {
       cut -= backslashes;
+      moved = true;
+    }
+    // Nor in the blanks right after a `"`: whether it closes a value may turn on a `:` after them
+    // (`"api_key" : `), which the text before the cut would not see, and which may not have come
+    // yet (#493 on #1581). The quote is held with them.
+    const blanks = BLANKS_AFTER_A_QUOTE.exec(raw.slice(Math.max(0, cut - 9), cut));
+    if (blanks !== null) {
+      cut -= blanks[0].length;
       moved = true;
     }
     for (const valuePattern of SECRET_VALUE_PATTERNS) {

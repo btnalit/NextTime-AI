@@ -243,6 +243,14 @@ const SHAPES = [
   // #1579). Streamed apart from the whole text before, when the whole read on to it (#493).
   String.raw`{password="\"\"\" API_TOKEN=\"\\"\"api_key"${'\t'}:${'\t'}"\"\""`,
   `API_TOKEN="a \\"b \\"api_key" : "${FAKE}"`,
+  // Never cut in the blanks after a quote, whose `:` decides whether it closes a value; held
+  // while only blanks have come after it (#493 on #1581).
+  String.raw`run token="\"" :'"x"}`,
+  String.raw`run token="\""${'\t'}:'"x"}`,
+  String.raw`{password="x y\"| " :"}`,
+  String.raw`API_TOKEN: "x y\""  :\"x`,
+  String.raw`"password": "a\"b"  : x`,
+  `password="a\\"b"\t\t:${FAKE} y`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
