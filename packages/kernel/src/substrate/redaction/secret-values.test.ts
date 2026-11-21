@@ -817,6 +817,15 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     expect(scrubSecretValues('password="C:\\dir\\" x').value).toBe(`password="${REDACTED}" x`);
     expect(scrubSecretValues('password="a\\"b\nc" d').value).toBe(`password="${REDACTED}"b\nc" d`);
   });
+
+  /** Pins the next line only: a plain quote with no close on its line is no value (main). */
+  it.each([
+    ['a name', 'password="a\\\nb" c', '\nb" c'],
+    ['an env line', 'PASSWORD="a\\\r\nb" c', '\r\nb" c'],
+    ['a JSON pair', '{"password": "a\\\nb", "x": "y"}', '\nb", "x": "y"}'],
+  ])('reads no escape past the end of its line: %s', (_label, text, nextLine) => {
+    expect(scrubSecretValues(text).value).toContain(nextLine);
+  });
 });
 
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
