@@ -215,6 +215,12 @@ const SHAPES = [
   // A space, then a backslash: a JSON string's value read so far ends before it, short of the end.
   '{"session cookie": "a \\"b \\\\ c"}',
   '{\\"password\\": \\"a \\\\\\"b \\\\\\\\ c\\"}',
+  // A `"…"` value with escaped quotes inside it, to the quote no backslash escapes.
+  `{"password": "a \\"b ${FAKE}"}`,
+  `{"api_key":"x\\"${FAKE}","user":"bob"}`,
+  `PASSWORD="a\\"b ${FAKE}" next`,
+  'password="C:\\dir\\" x',
+  'password: "a \\\\" b "c"',
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
