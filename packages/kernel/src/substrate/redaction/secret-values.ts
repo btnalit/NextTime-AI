@@ -520,30 +520,48 @@ interface WalkState {
   readonly patterns: readonly ValuePattern[];
 }
 
-function scrubInto(text: string, state: WalkState): string {
+/** `text` with the literals, then every value pattern, replaced. */
+function scrubPlain(
+  text: string,
+  literals: readonly string[],
+  patterns: readonly ValuePattern[],
+): Scrubbed<string> {
   let out = text;
-  if (state.jsonTextKey !== undefined) {
-    const fields = redactSecretFieldsInJsonText(out, state.jsonTextKey);
-    state.count += fields.redactedValues;
-    out = fields.value;
-  }
-  if (state.literals.length > 0) {
-    const literal = scrubSecretLiterals(out, state.literals);
-    state.count += literal.redactedValues;
+  let redactedValues = 0;
+  if (literals.length > 0) {
+    const literal = scrubSecretLiterals(out, literals);
+    redactedValues += literal.redactedValues;
     out = literal.value;
   }
-  for (const valuePattern of state.patterns) {
+  for (const valuePattern of patterns) {
     let scrubbed = '';
     let from = 0;
     for (const { start, end, replacement } of secretMatches(valuePattern, out)) {
       if (replacement === undefined) continue;
       scrubbed += out.slice(from, start) + replacement;
       from = end;
-      state.count += 1;
+      redactedValues += 1;
     }
     if (from > 0) out = scrubbed + out.slice(from);
   }
-  return out;
+  return { value: out, redactedValues };
+}
+
+function scrubInto(text: string, state: WalkState): string {
+  if (state.jsonTextKey !== undefined) {
+    // The strings of JSON text decoded too (legacy 916), then the rest of the text as it is.
+    const fields = redactSecretFieldsInJsonText(text, state.jsonTextKey, (value) =>
+      scrubPlain(value, state.literals, state.patterns),
+    );
+    const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, (part) =>
+      scrubPlain(part, state.literals, state.patterns),
+    );
+    state.count += fields.redactedValues + rest.redactedValues;
+    return rest.value;
+  }
+  const plain = scrubPlain(text, state.literals, state.patterns);
+  state.count += plain.redactedValues;
+  return plain.value;
 }
 
 function freshState(options: RedactSecretsOptions = {}): WalkState {
@@ -627,6 +645,67 @@ function decodedJsonKey(literal: string): string {
   }
 }
 
+/** A JSON string literal's value, or `undefined` when it does not decode. */
+function decodedJsonString(literal: string): string | undefined {
+  try {
+    const decoded: unknown = JSON.parse(literal);
+    return typeof decoded === 'string' ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether the `\` at `at` in `inner` starts an escape: an even run of `\` comes before it. */
+function startsEscape(inner: string, at: number): boolean {
+  let run = 0;
+  while (at - 1 - run >= 0 && inner.charCodeAt(at - 1 - run) === 0x5c) run += 1;
+  return run % 2 === 0;
+}
+
+/** How many characters at the end of an unterminated string's `inner` are an escape the cut
+ *  left unfinished — a lone `\`, or `\u` with fewer than four hex digits — or 0. */
+function partialEscapeLength(inner: string): number {
+  const tail = inner.slice(-5);
+  const unicode = /\\u[0-9A-Fa-f]{0,3}$/.exec(tail);
+  if (unicode !== null) {
+    const at = inner.length - tail.length + unicode.index;
+    if (startsEscape(inner, at)) return inner.length - at;
+  }
+  return inner.endsWith('\\') && startsEscape(inner, inner.length - 1) ? 1 : 0;
+}
+
+/** Where a string `redactSecretFieldsInJsonText`'s `scrubValue` read is, in its output: from its
+ *  opening quote to just past its closing one (or the text's end). */
+export type JsonTextSpan = readonly [start: number, end: number];
+
+export interface ScrubbedJsonText extends Scrubbed<string> {
+  /** The strings `scrubValue` read, in order, rewritten or kept: already scrubbed decoded, so a
+   *  pass over the text as it is skips them (`scrubOutsideSpans`). */
+  readonly decodedSpans: readonly JsonTextSpan[];
+}
+
+/** `scrub` over each run of `text` between `spans` (in order, disjoint); the spans as they are. */
+export function scrubOutsideSpans(
+  text: string,
+  spans: readonly JsonTextSpan[],
+  scrub: (part: string) => Scrubbed<string>,
+): Scrubbed<string> {
+  if (spans.length === 0) return scrub(text);
+  const parts: string[] = [];
+  let redactedValues = 0;
+  let from = 0;
+  for (const [start, end] of [...spans, [text.length, text.length] as const]) {
+    if (start > from) {
+      const scrubbed = scrub(text.slice(from, start));
+      parts.push(scrubbed.value);
+      redactedValues += scrubbed.redactedValues;
+    }
+    parts.push(text.slice(start, end));
+    from = end;
+  }
+  return { value: parts.join(''), redactedValues };
+}
+
 /**
  * `text` that is JSON — or the start of JSON, cut anywhere — with every secret value under a key
  * `isSecretKey` names replaced by `"[redacted]"`: the field rule of `redactSecrets`'s
@@ -640,27 +719,77 @@ function decodedJsonKey(literal: string): string {
  * returned as it is, and so is everything from the first character that cannot continue it (a
  * runtime's `[… more characters omitted]` note) — the value patterns still run over all of it.
  *
- * One pass, linear in `text`: each character is visited once (a key is decoded once more, by
- * `JSON.parse` of its own literal), and nesting is an explicit stack, never recursion.
+ * `scrubValue`, when given, also runs over every other string value that holds an escape, decoded
+ * (legacy 916): the value patterns read JSON text as it is written, so a line of output
+ * such as `PGPASSWORD=…` or `Bearer …` reaches them as `…\nPGPASSWORD=…`, where the `n` of the
+ * escape is taken for the end of another word and the value is passed over — and a quoted value
+ * (`API_TOKEN=\"…\"`) as one that starts with `\`, which the name rules take for the whole
+ * value. A string it changes is written back with `JSON.stringify` — its other escapes in their
+ * shortest form (`\u4e2d` as `中`) — and its count is added; one it leaves is kept byte for
+ * byte. A string the text ends inside (cut at a read bound) is decoded
+ * without the escape the cut left unfinished, and written back without a closing quote, that
+ * escape after it. Every string it read is in `decodedSpans`, and a pass over the text as it is
+ * skips them: it would read their escapes the same wrong way (`API_TOKEN=\"[redacted]\"` as a
+ * value `\`, the JSON broken). A string without an escape reads the same decoded, and one that
+ * does not decode is not read: the patterns over the text see them as they are. Keys are names,
+ * not values: they are not scrubbed.
+ *
+ * One pass, linear in `text`: each character is visited once (a key, and a string `scrubValue`
+ * reads, is decoded once more, by `JSON.parse` of its own literal), and nesting is an explicit
+ * stack, never recursion.
  */
 export function redactSecretFieldsInJsonText(
   text: string,
   isSecretKey: (key: string) => boolean,
-): Scrubbed<string> {
+  scrubValue?: (value: string) => Scrubbed<string>,
+): ScrubbedJsonText {
   const length = text.length;
   let index = 0;
   while (index < length && isJsonWhitespace(text.charCodeAt(index))) index += 1;
   const first = text.charCodeAt(index);
-  if (first !== 0x7b && first !== 0x5b) return { value: text, redactedValues: 0 };
+  if (first !== 0x7b && first !== 0x5b) return { value: text, redactedValues: 0, decodedSpans: [] };
 
   const stack: JsonFrame[] = [];
   const parts: string[] = [];
+  const decodedSpans: JsonTextSpan[] = [];
   let copiedTo = 0;
+  /** Characters of the output in `parts`. */
+  let written = 0;
   let redactedValues = 0;
+  const push = (...chunks: string[]): void => {
+    for (const chunk of chunks) {
+      parts.push(chunk);
+      written += chunk.length;
+    }
+  };
   const replace = (start: number, end: number): void => {
-    parts.push(text.slice(copiedTo, start), `"${REDACTED}"`);
+    push(text.slice(copiedTo, start), `"${REDACTED}"`);
     copiedTo = end;
     redactedValues += 1;
+  };
+  /** The string literal from `start` to its closing quote at `quote` (`length`: the text ends
+   *  inside it), decoded and scrubbed; written back when `scrubValue` changed it. */
+  const rewrite = (start: number, quote: number): void => {
+    const closed = quote < length;
+    const end = closed ? quote + 1 : length;
+    const inner = text.slice(start + 1, closed ? quote : length);
+    if (scrubValue === undefined || !inner.includes('\\')) return;
+    const partial = closed ? 0 : partialEscapeLength(inner);
+    const decoded = decodedJsonString(`"${inner.slice(0, inner.length - partial)}"`);
+    if (decoded === undefined) return;
+    const scrubbed = scrubValue(decoded);
+    if (scrubbed.value === decoded) {
+      // Kept as written — still read: the pass over the text skips it.
+      decodedSpans.push([written + start - copiedTo, written + end - copiedTo]);
+      return;
+    }
+    const encoded = JSON.stringify(scrubbed.value);
+    push(text.slice(copiedTo, start));
+    const spanStart = written;
+    push(closed ? encoded : `${encoded.slice(0, -1)}${inner.slice(inner.length - partial)}`);
+    decodedSpans.push([spanStart, written]);
+    copiedTo = end;
+    redactedValues += scrubbed.redactedValues;
   };
 
   scan: while (index < length) {
@@ -725,6 +854,8 @@ export function redactSecretFieldsInJsonText(
           const inner = text.slice(index + 1, end);
           if (valueIsSecret && inner.trim() !== '' && inner !== REDACTED) {
             replace(index, Math.min(end + 1, length));
+          } else if (!valueIsSecret) {
+            rewrite(index, end);
           }
           top.expecting = 'next';
         } else {
@@ -746,9 +877,9 @@ export function redactSecretFieldsInJsonText(
       }
     }
   }
-  if (redactedValues === 0) return { value: text, redactedValues: 0 };
-  parts.push(text.slice(copiedTo));
-  return { value: parts.join(''), redactedValues };
+  if (copiedTo === 0) return { value: text, redactedValues: 0, decodedSpans };
+  push(text.slice(copiedTo));
+  return { value: parts.join(''), redactedValues, decodedSpans };
 }
 
 // The literals a structured value's secret fields hold, and their bounds, are `@nexttime/shared`'s
