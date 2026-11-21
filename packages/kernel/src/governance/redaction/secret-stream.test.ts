@@ -329,6 +329,35 @@ const SHAPES = [
   // An escaped JSON key and `=` (review #501 on #1581).
   `\\"password\\" = \\"${FAKE} x\\"`,
   `pwsh -c "Invoke-X -Body @{\\"Password\\" = \\"${FAKE}\\"}"`,
+  // The name rules read together, each on the text as it is written (legacy 928): a pair whose
+  // closing quote the rule before it hid in a sequential read, pairs that cross — one match, never
+  // cut apart — a bare value that stops before the next pair, and a secret key after `\"` (929).
+  `--token='\\${FAKE}":api_key=\\"'\\"`,
+  `note: API_TOKEN: '${FAKE}} .API_TOKEN=\\"x'`,
+  `"api_key": "'.API_TOKEN="${FAKE}'"`,
+  `--token "a API_TOKEN="${FAKE} b"`,
+  `password='a API_TOKEN='${FAKE} b'`,
+  `token=x,api_key="${FAKE} y"`,
+  `--token x,--password "${FAKE} y"`,
+  `token: \\"password": ${FAKE}`,
+  `token: \\"password" = '${FAKE} x'`,
+  `api_key = a}.--token '${FAKE} x'`,
+  `password=|API_TOKEN=\\"${FAKE}\\" x`,
+  // A next pair's name against a bare value; a pattern that reads on from where a match ended
+  // before one crossed it, or before the last one did (review #493 on #1586).
+  `--password=${FAKE}--api-key="abc"`,
+  `token=;${FAKE}clientSecret--token : "x"`,
+  `--token TOKEN='token':${FAKE}`,
+  `token=--password="I_TOKEN="apikey:\\"${FAKE}`,
+  // Read after what was emitted: a cut after the `.` before a pair reads the pair as the whole
+  // text does, here and when the text ends.
+  `.API_TOKEN="a}api_key = \\"${FAKE} : `,
+  `.--token=  \\\\";password="${FAKE}\\".`,
+  `.API_TOKEN=" &api_key='\\\\" ${FAKE} "k"\t=\t'", `,
+  // Quotes many deep that streamed apart from the whole until the held text was read after the
+  // end of what was emitted (legacy 920, #493 on #1579).
+  String.raw`run password='\\" , API_TOKEN="\a'""api_key": "' `,
+  String.raw`echo "--password="\n\"password: '"\\'\"}"}`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -437,20 +466,22 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     expect(mismatches).toEqual([]);
   });
 
+  const TAB = '\t';
   // Known limit, as legacy 920: where one rule's mask changes how a later rule reads the text
   // (quotes three or four deep on a line), the cut is found on the text as it came and can fall
   // inside a value only the whole text reads. Pinned so that a change to either shows (#493 on
-  // #1579; release.md §3.214).
+  // #1579; release.md §3.214, §3.216): main streamed these two apart too, and the two it pinned
+  // before stream as the whole text now (`SHAPES`).
   it.each([
     [
-      String.raw`run password='\\" , API_TOKEN="\a'""api_key": "' `,
-      String.raw`run password='[redacted]' `,
-      String.raw`run password='\\" , API_TOKEN="[redacted]""api_key": "[redacted]`,
+      String.raw`run _--token '", \"Password\"=\",${FAKE}', \"password\": \" ${FAKE}\"\"'}`,
+      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}\"\"'}`,
+      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}${FAKE}\"\"'}`,
     ],
     [
-      String.raw`echo "--password="\n\"password: '"\\'\"}"}`,
-      String.raw`echo "--password="[redacted]"}`,
-      String.raw`echo "--password="[redacted]"password: '[redacted]'\"}"}`,
+      String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
+      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
+      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
     ],
   ])(
     'quotes many deep on a line can still stream apart from the whole: %s',
@@ -525,4 +556,17 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     const out = scrubber.push(`first words ${'B'.repeat(STREAM_HOLD_MAX_CHARS * 5)}`);
     expect(out).toEqual({ value: `first words ${REDACTED}`, redactedValues: 1, paused: true });
   });
+
+  it.each(['token=', 'TOKEN=', '--token ', 'password: '])(
+    'after a flush reads the text as a new one, nothing before it to look back into: %s (review #501 on #1586)',
+    (name) => {
+      // The `" ` held back is emitted by the flush; what was emitted before it ends in `a`, a
+      // letter a name may not be written against.
+      const scrubber = createSecretStreamScrubber();
+      expect(scrubber.push('x a" ').value).toBe('x a');
+      expect(scrubber.flush().value).toBe('" ');
+      const out = scrubber.push(`${name}${FAKE}`).value + scrubber.flush().value;
+      expect(out).toBe(`${name}${REDACTED}`);
+    },
+  );
 });

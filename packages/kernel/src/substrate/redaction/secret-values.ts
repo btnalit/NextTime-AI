@@ -181,6 +181,16 @@ export interface ValuePattern {
   readonly redact: Redact;
 }
 
+/** Name-then-value patterns read together, as one pattern (`NAMED_VALUES`): each reads the text
+ *  as it is written, and what any of them takes is hidden — where two cross, the first as it reads
+ *  and the rest of the other's value after it (`readTogether`). */
+export interface ValuePatternsReadTogether {
+  readonly together: readonly ValuePattern[];
+}
+
+/** What the scrub applies to every string, in order: one pattern, or several read together. */
+export type SecretPattern = ValuePattern | ValuePatternsReadTogether;
+
 /** What follows the quote that closes a `QUOTED` value: whitespace, or what ends a JSON value, a
  *  shell word, a query parameter, an attribute or a sentence. Not `:`, which follows a JSON key's
  *  quote: a value read on to `"password":` took in the next pair's name (#501 on #1579). Nor `\`,
@@ -204,18 +214,22 @@ function anyCase(source: string): string {
 /** The next pair: a name, its separator, and the quote its value opens with — as the name,
  *  `--flag` and env-line rules below take a name, each with its own boundary and length, and only
  *  a name whose value that rule hides (`token=`, `password: `, `'token': `, `"api_key": `,
- *  `my.token=`, `--token `, `--token=`, `.--token `, `$env:API_TOKEN=`, `"API_TOKEN = `), with a
- *  `'` allowed before the quote (`token='"`). The quote is a `"`, or a `'` whose `'…'` holds a `"`
- *  before its closing `'` — the quote a value read on would close at (`token='x" …'`); one that
- *  holds none, or is not closed, is read on past and hidden with the value, as it was
- *  (`password="a\" token='b' …"`). A value read with escapes never reads it in: where it did, the
+ *  `my.token=`, `--token `, `--token=`, `.--token `, `$env:API_TOKEN=`, `"API_TOKEN = `). The
+ *  quote is a `"`, or a `'` whose `'…'` holds a `"` before its closing `'` — the quote a value read
+ *  on would close at (`token='x" …'`); one that holds none, or is not closed, is read on past and
+ *  hidden with the value, as it was (`password="a\" token='b' …"`). So not a `"` after a `'` with
+ *  no closing `'` (`token='"…`): that pair's rule hides no value there, and stopping before it
+ *  kept the value read up to it (review #493 on #1583). A value read with escapes never reads it in: where it did, the
  *  rule could not take the next value and it was kept (`password="C:\dir\" token=" …"`,
  *  `token: "a\" --token 'x", …'`, `API_TOKEN=\"abc password="…"`; legacy 924, and after v0.69.2
  *  since #1577 and #1579: legacy 926). A name whose value no rule hides is read in as the value's
  *  own text (`"a \"b note: " x`): stopping there kept the rest of the value for nothing. Bounded
  *  and linear: a name is at most 64 characters (an env name 128) and is tried only where one can
  *  start; the look into a `'…'` stops at its first `'`, and a `"` must come before it. */
-const NEXT_SECRET_PAIR = String.raw`(?:(?<![A-Za-z0-9_.-])(?=[A-Za-z][A-Za-z0-9_.-]{0,63}["']?[ \t]{0,8}[:=])(?:(?:[A-Za-z0-9_.-]*[_.-])?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9_.-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))["']?[ \t]{0,8}[:=][ \t]{0,8}|(?<![A-Za-z0-9-])--(?=[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]))(?:(?:[A-Za-z0-9-]*-)?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))(?:=|[ \t]{1,8})|(?<![A-Za-z0-9_])(?=[A-Z][A-Z0-9_]{0,127}=)[A-Z0-9_]*?(?:${ENV_SECRET_WORDS})[A-Z0-9_]*=)'?(?:"|'(?=[^'"\r\n]*"[^'\r\n]*'))`;
+const NEXT_SECRET_PAIR = String.raw`(?:(?<![A-Za-z0-9_.-])(?=[A-Za-z][A-Za-z0-9_.-]{0,63}["']?[ \t]{0,8}[:=])(?:(?:[A-Za-z0-9_.-]*[_.-])?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9_.-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))["']?[ \t]{0,8}[:=][ \t]{0,8}|(?<![A-Za-z0-9-])--(?=[A-Za-z][A-Za-z0-9-]{0,63}(?:=|[ \t]))(?:(?:[A-Za-z0-9-]*-)?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))(?:=|[ \t]{1,8})|(?<![A-Za-z0-9_])(?=[A-Z][A-Z0-9_]{0,127}=)[A-Z0-9_]*?(?:${ENV_SECRET_WORDS})[A-Z0-9_]*=)(?:"|'(?=[^'"\r\n]*"[^'\r\n]*'))`;
+/** A key whose value the name rule hides, its closing quote, and the `:` or `=` after it
+ *  (`password":`, `api_key" = `): as `NEXT_SECRET_PAIR` takes a name. */
+const SECRET_KEY_AND_QUOTE = String.raw`(?=[A-Za-z][A-Za-z0-9_.-]{0,63}"[ \t]{0,8}[:=])(?:(?:[A-Za-z0-9_.-]*[_.-])?(?:${anyCase(LAST_SECRET_WORDS)})|[A-Za-z0-9_.-]*[a-z0-9](?:${CAMEL_CASE_SECRET_WORDS}))"[ \t]{0,8}[:=]`;
 /** A value after `=`/`:` — quoted to its closing quote on the same line, or a bare run (to the
  *  next space or quote; in a `name: value` also to the next `&`, a query string's separator).
  *  Quoted with `\"` too, to the next `\"` on the line: a quoted value written inside a string —
@@ -254,15 +268,29 @@ const QUOTED = String.raw`"(?:(?!${NEXT_SECRET_PAIR})[^"\\\r\n]|\\[^\r\n])*"(?=$
  *  for good (review #501 on #1577). Never read past the next pair (`NEXT_SECRET_PAIR`), nor the
  *  blanks before it: it took the next pair's name and quote in and that value was kept
  *  (`API_TOKEN=\"abc password="…"`; legacy 926). Nor the blanks before the end of its line, so a
- *  value cut there reads as the whole line does. */
-const UNCLOSED = String.raw`\\(?:\\\\)*"(?:(?![ \t]{0,8}(?:'?${NEXT_SECRET_PAIR}|[\r\n]|$))(?:[^"\\\r\n]|\\\\|\\(?!")))+`;
+ *  value cut there reads as the whole line does; the blanks are read all at once, never one fewer
+ *  in turn (review #501 on #1583). And never a secret's key and its quote, a JSON or TOML key
+ *  written with an escaped opening quote (`token: \"password":…`, `token: \"password" = …`):
+ *  hidden as the value of the name before it, the key's own value was kept (since #1577; legacy
+ *  929). Read as no value there, the key's rule reads the pair. */
+const UNCLOSED = String.raw`\\(?:\\\\)*"(?!${SECRET_KEY_AND_QUOTE})(?:(?!(?=(?<unclosedBlanks>[ \t]{0,8}))\k<unclosedBlanks>(?:'?${NEXT_SECRET_PAIR}|[\r\n]|$))(?:[^"\\\r\n]|\\\\|\\(?!")))+`;
 /** A bare run, its backslashes read two at a time: never the `\` of a `\"` that ends it, which
  *  closes a string the pair is written inside (`-e \"API_TOKEN=…\" -e \"DEBUG=1\"`). Taken with
  *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
  *  upgrade (review #501 on #1575). Before a `\\"` the pair is the value's own and the quote not
- *  escaped: it stays a quote that closes a string (`"cmd":"PASSWORD=…\\","x":1`). */
-const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"\\]|\\\\|\\(?!"))+)`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"&\\]|\\\\|\\(?!"))+)`;
+ *  escaped: it stays a quote that closes a string (`"cmd":"PASSWORD=…\\","x":1`). Never read past
+ *  the next pair's name and the quote its value opens with (`NEXT_SECRET_PAIR`) after a `,`, `;`,
+ *  `&` or `|` in it, as a quoted value is not: a bare run that took them in kept that value
+ *  (`token=x,api_key="…"`, since v0.69.2 and before). Only there: a name takes in what is written
+ *  against it, so the next pair's name could start where the value does and the value was kept
+ *  (`--password=…--api-key="…"`, review #493 on #1586); and never before its first character, nor
+ *  its second where the first is one of them (`token=;…`). */
+const bareValue = (notInIt: string): string => {
+  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
+  return String.raw`${char}(?:(?<=[,;&|])${char})?(?:(?!(?<=[,;&|])${NEXT_SECRET_PAIR})${char})*`;
+};
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('')})`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;
@@ -415,9 +443,56 @@ const URL_PASSWORD =
 /** An env-variable reference standing in for a value (`$PGPASS`, `${TOKEN}`), not a value. */
 const PLACEHOLDER = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 
+// `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
+// convention; the name is matched whole and judged afterwards.
+const ENV_PAIR: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=/g,
+  value: {
+    names: (name) => ENV_SECRET_NAME.test(name),
+    pattern: new RegExp(`${NOT_ALREADY_REDACTED}${ENV_VALUE}`, 'y'),
+  },
+  redact: (_match, [name, value]) =>
+    value === undefined ? undefined : `${name}=${redactedValue(value)}`,
+};
+
+// `password: …`, `POSTGRES_PASSWORD: …`, `aws_secret_access_key = …`, `X-Api-Key: …`,
+// `?token=…` — any case, the name's last word decides.
+const NAME_PAIR: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9_.-])([A-Za-z][A-Za-z0-9_.-]{0,63})(["']?)([ \t]{0,8}[:=][ \t]{0,8})/g,
+  value: {
+    names: namesASecret,
+    pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
+  },
+  redact: (_match, [name, quote, separator, value]) =>
+    value === undefined
+      ? undefined
+      : `${name}${quote ?? ''}${separator ?? ''}${redactedValue(value)}`,
+};
+
+// `--password hunter2`, `--api-key=…`.
+const FLAG_PAIR: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9-])(--[A-Za-z][A-Za-z0-9-]{0,63})(=|[ \t]{1,8})/g,
+  value: {
+    names: (flag) => namesASecret(flag.slice(2)),
+    pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
+  },
+  redact: (_match, [flag, separator, value]) =>
+    value === undefined ? undefined : `${flag}${separator ?? ''}${redactedValue(value)}`,
+};
+
+/** The env-line, name and `--flag` rules, read together (`readTogether`): each reads the text as it
+ *  is written, and what any of them reads for a value is hidden. Where two pairs cross — the value
+ *  of the one that starts first reads in the name of the other, whose value goes on past it — both
+ *  are hidden, the rest of the second's value after the first's (`"api_key": "'.API_TOKEN="<密钥>"`).
+ *  Run one after another, each rule read the text the rules before it had rewritten: where one had
+ *  hidden a value that held a later rule's closing quote, the later rule read no value and kept
+ *  it (`--token='<密钥>":api_key=\"'\"`, `note: API_TOKEN: '<密钥>} .API_TOKEN=\"x'`; legacy 928).
+ *  Not the JSON pair rules after them, which still read the text these rewrote. */
+const NAMED_VALUES: ValuePatternsReadTogether = { together: [ENV_PAIR, NAME_PAIR, FLAG_PAIR] };
+
 /** Applied in order to every string. Exported for `secret-stream.ts`, which must know where a
  *  match starts and ends (`secretMatches`). */
-export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
+export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
   PEM_PRIVATE_KEY,
   // `Authorization: token …`, `Cookie: a=1; b=2` — the whole value, to the end of the line. A value
   // that is only `[redacted]` (this pattern's own output) is left as it is (legacy 420); anything
@@ -441,40 +516,8 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   PREFIXED_PLATFORM_KEY,
   MINTED_PLATFORM_KEY,
   VENDOR_KEY,
-  // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
-  // convention; the name is matched whole and judged afterwards.
-  {
-    pattern: /(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=/g,
-    value: {
-      names: (name) => ENV_SECRET_NAME.test(name),
-      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${ENV_VALUE}`, 'y'),
-    },
-    redact: (_match, [name, value]) =>
-      value === undefined ? undefined : `${name}=${redactedValue(value)}`,
-  },
-  // `password: …`, `POSTGRES_PASSWORD: …`, `aws_secret_access_key = …`, `X-Api-Key: …`,
-  // `?token=…` — any case, the name's last word decides.
-  {
-    pattern: /(?<![A-Za-z0-9_.-])([A-Za-z][A-Za-z0-9_.-]{0,63})(["']?)([ \t]{0,8}[:=][ \t]{0,8})/g,
-    value: {
-      names: namesASecret,
-      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
-    },
-    redact: (_match, [name, quote, separator, value]) =>
-      value === undefined
-        ? undefined
-        : `${name}${quote ?? ''}${separator ?? ''}${redactedValue(value)}`,
-  },
-  // `--password hunter2`, `--api-key=…`.
-  {
-    pattern: /(?<![A-Za-z0-9-])(--[A-Za-z][A-Za-z0-9-]{0,63})(=|[ \t]{1,8})/g,
-    value: {
-      names: (flag) => namesASecret(flag.slice(2)),
-      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
-    },
-    redact: (_match, [flag, separator, value]) =>
-      value === undefined ? undefined : `${flag}${separator ?? ''}${redactedValue(value)}`,
-  },
+  // `PGPASSWORD=…`, `password: …`, `--password …`: the three name rules, read together.
+  NAMED_VALUES,
   // `scheme://user:password@host` — keeps the user, drops the password.
   { pattern: URL_PASSWORD, redact: (_match, [prefix]) => `${prefix}:${REDACTED}@` },
   JSON_SECRET_PAIR,
@@ -491,9 +534,8 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
  * still valid among them to be found and rotated. What is written from now on is masked by the full
  * set.
  */
-export const STORED_REWRITE_SECRET_PATTERNS: readonly ValuePattern[] = SECRET_VALUE_PATTERNS.filter(
-  (valuePattern) => valuePattern !== MINTED_PLATFORM_KEY,
-);
+export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
+  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY);
 
 /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
  *  counts. */
@@ -633,16 +675,26 @@ export interface SecretMatch {
   readonly start: number;
   readonly end: number;
   readonly replacement: string | undefined;
+  /** How many values it replaces, when more than one: pairs read together that cross
+   *  (`readTogether`). */
+  readonly values?: number;
 }
 
-/** Every match of `valuePattern` in `text`, left to right, as a global `replace` would visit them —
- *  except that a name-then-value pattern's name that is not a secret's takes nothing with it, so
- *  the scan goes on right after its separator. Linear in `text`: a name and its separator are
- *  bounded, and a value is scanned once, by the match that then takes it. */
-export function secretMatches(valuePattern: ValuePattern, text: string): SecretMatch[] {
+/** A match, and where its value starts (its start, for a pattern with no `value`). */
+interface ReadMatch extends SecretMatch {
+  readonly valueAt: number;
+}
+
+/** The first match of `valuePattern` in `text` from `from` on, as a global `replace` would find it
+ *  — except that a name-then-value pattern's name that is not a secret's takes nothing with it, so
+ *  the scan goes on right after its separator. */
+function readMatchFrom(
+  valuePattern: ValuePattern,
+  text: string,
+  from: number,
+): ReadMatch | undefined {
   const { pattern, value, redact } = valuePattern;
-  const matches: SecretMatch[] = [];
-  pattern.lastIndex = 0;
+  pattern.lastIndex = from;
   for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
     if (match[0] === '') {
       pattern.lastIndex += 1;
@@ -650,6 +702,7 @@ export function secretMatches(valuePattern: ValuePattern, text: string): SecretM
     }
     const groups = match.slice(1);
     let end = match.index + match[0].length;
+    const valueAt = value === undefined ? match.index : end;
     if (value !== undefined) {
       if (!value.names(groups[0] ?? '')) continue;
       value.pattern.lastIndex = end;
@@ -657,12 +710,142 @@ export function secretMatches(valuePattern: ValuePattern, text: string): SecretM
       if (tail === null) continue;
       end += tail[0].length;
       groups.push(...tail.slice(1));
-      pattern.lastIndex = end;
     }
     const whole = text.slice(match.index, end);
-    matches.push({ start: match.index, end, replacement: redact(whole, groups) });
+    return { start: match.index, end, valueAt, replacement: redact(whole, groups) };
+  }
+  return undefined;
+}
+
+/** Every match of `valuePattern` in `text` from `from` on, left to right, each read on from where
+ *  the one before ends (`readMatchFrom`). Linear in `text`: a name and its separator are bounded,
+ *  and a value is scanned once, by the match that then takes it. */
+function readMatches(valuePattern: ValuePattern, text: string, from: number): ReadMatch[] {
+  const matches: ReadMatch[] = [];
+  for (
+    let match = readMatchFrom(valuePattern, text, from);
+    match !== undefined;
+    match = readMatchFrom(valuePattern, text, match.end)
+  ) {
+    matches.push(match);
   }
   return matches;
+}
+
+/** What replaces the rest of `match`'s value from `from` on, where a pair before it ends inside it,
+ *  written as `redactedValue` writes a value: the mask, and its closing quote kept. `undefined`
+ *  when nothing of the value is left but that quote. */
+function restOfValue(match: ReadMatch, from: number, text: string): string | undefined {
+  const value = text.slice(match.valueAt, match.end);
+  if (from <= match.valueAt) return text.slice(from, match.valueAt) + redactedValue(value);
+  const opening = OPENING_QUOTE.exec(value)?.[0];
+  const closing =
+    opening !== undefined && value.length > opening.length && value.endsWith(opening.slice(-1))
+      ? opening
+      : '';
+  return closing.endsWith(text.slice(from, match.end)) ? undefined : `${REDACTED}${closing}`;
+}
+
+/** A match `readTogether` has taken: what replaces it, in parts — joined once, at the end, so a
+ *  run of pairs that cross one another costs no more than the pairs (a string built up by `+=` is
+ *  copied whole each time it is read). */
+interface TakenMatch {
+  readonly start: number;
+  end: number;
+  readonly parts: string[];
+  /** What replaces it ends with `[redacted]`. */
+  masked: boolean;
+  values: number;
+  /** Where it ended before it last went on to where a match that crossed it ends. */
+  crossedAt: number;
+}
+
+function append(match: TakenMatch, part: string): void {
+  if (part === '') return;
+  match.parts.push(part);
+  match.masked = part.endsWith(REDACTED);
+}
+
+/** The matches of patterns read together (`ValuePatternsReadTogether`), from each pattern's own,
+ *  found on the text as it is written, left to right; at one place, in the order of the patterns.
+ *  One that starts inside a match taken before it and ends there too is left out: that match
+ *  hides it. One that goes on past it crosses it, and the match taken goes on to where it ends,
+ *  the rest of its value hidden after what it replaced — one mask where that ends with one — and
+ *  its pattern reads on from where the match it crossed ended, so a pair inside the rest of its
+ *  value is read as it would be after that match; so does one left out that goes on past there,
+ *  so at one place the pattern read first decides nothing (review #493 on #1586). One match, so
+ *  that text cut inside it is never read apart from the pair it crosses (`secret-stream.ts`).
+ *  Linear in `text`: a pattern reads text again only from where a match taken ended before the
+ *  last match crossed it, at most once for each crossing (what it then reads starts there), and no
+ *  later crossing reads behind where that match now ends. */
+function readTogether(
+  patterns: readonly ValuePattern[],
+  text: string,
+  from: number,
+): SecretMatch[] {
+  const taken: TakenMatch[] = [];
+  const next = patterns.map((valuePattern) => readMatchFrom(valuePattern, text, from));
+  for (;;) {
+    let index = -1;
+    for (let at = 0; at < next.length; at += 1) {
+      const start = next[at]?.start;
+      if (start !== undefined && (index === -1 || start < (next[index]?.start ?? start)))
+        index = at;
+    }
+    const valuePattern = patterns[index];
+    const first = next[index];
+    if (valuePattern === undefined || first === undefined) {
+      return taken.map(({ start, end, parts, values }) => ({
+        start,
+        end,
+        replacement: parts.join(''),
+        values,
+      }));
+    }
+    const last = taken.at(-1);
+    let readOn = first.end;
+    const inside = last !== undefined && first.end <= last.end;
+    if (first.replacement === undefined || inside) {
+      // Kept, or hidden by the match before it. One that goes on past where that match ended
+      // before the last match crossed it reads on from there, as the one that crossed it did.
+      if (inside && first.start < last.crossedAt && last.crossedAt < first.end) {
+        readOn = last.crossedAt;
+      }
+    } else if (last === undefined || first.start >= last.end) {
+      const { start, end, replacement } = first;
+      taken.push({
+        start,
+        end,
+        parts: [replacement],
+        masked: replacement.endsWith(REDACTED),
+        values: 1,
+        crossedAt: end,
+      });
+    } else {
+      const rest = restOfValue(first, last.end, text);
+      if (rest === undefined) {
+        append(last, text.slice(last.end, first.end));
+      } else if (last.masked && rest.startsWith(REDACTED)) {
+        append(last, rest.slice(REDACTED.length));
+      } else {
+        append(last, rest);
+        last.values += 1;
+      }
+      readOn = last.end;
+      last.crossedAt = last.end;
+      last.end = first.end;
+    }
+    next[index] = readMatchFrom(valuePattern, text, readOn);
+  }
+}
+
+/** Every match of `secretPattern` in `text` that starts at `from` or after it, left to right and
+ *  apart, and what replaces each — for patterns read together, as `readTogether` takes them from
+ *  each one's own (`readMatches`). What comes before `from` is only looked back into, as a pattern
+ *  looks behind where a match starts. Linear in `text`. */
+export function secretMatches(secretPattern: SecretPattern, text: string, from = 0): SecretMatch[] {
+  if (!('together' in secretPattern)) return readMatches(secretPattern, text, from);
+  return readTogether(secretPattern.together, text, from);
 }
 
 /** A scrubbed value and how many values in it were replaced. */
@@ -687,14 +870,15 @@ interface WalkState {
   readonly jsonTextKey: ((key: string) => boolean) | undefined;
   /** Where values were replaced — only for a caller that asked (`onRedacted`). */
   readonly onRedacted: ((path: string, count: number) => void) | undefined;
-  readonly patterns: readonly ValuePattern[];
+  readonly patterns: readonly SecretPattern[];
 }
 
 /** `text` with the literals, then every value pattern, replaced. */
 function scrubPlain(
   text: string,
   literals: readonly string[],
-  patterns: readonly ValuePattern[],
+  patterns: readonly SecretPattern[],
+  readFrom = 0,
 ): Scrubbed<string> {
   let out = text;
   let redactedValues = 0;
@@ -706,11 +890,11 @@ function scrubPlain(
   for (const valuePattern of patterns) {
     let scrubbed = '';
     let from = 0;
-    for (const { start, end, replacement } of secretMatches(valuePattern, out)) {
+    for (const { start, end, replacement, values } of secretMatches(valuePattern, out, readFrom)) {
       if (replacement === undefined) continue;
       scrubbed += out.slice(from, start) + replacement;
       from = end;
-      redactedValues += 1;
+      redactedValues += values ?? 1;
     }
     if (from > 0) out = scrubbed + out.slice(from);
   }
@@ -750,12 +934,20 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
 
 /** `text` with every secret-looking value replaced. Linear in `text`; a caller holding text of
  *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`; a rewrite of rows
- *  already stored passes `STORED_REWRITE_SECRET_PATTERNS`. */
+ *  already stored passes `STORED_REWRITE_SECRET_PATTERNS`. `readAfter` is text that came right
+ *  before `text`, already read: the patterns look back into it where a match starts (a `.` before a
+ *  name), and never start one in it (`secret-stream.ts`). */
 export function scrubSecretValues(
   text: string,
-  options: { readonly patterns?: readonly ValuePattern[] } = {},
+  options: { readonly patterns?: readonly SecretPattern[]; readonly readAfter?: string } = {},
 ): Scrubbed<string> {
-  const state = freshState({ patterns: options.patterns ?? SECRET_VALUE_PATTERNS });
+  const patterns = options.patterns ?? SECRET_VALUE_PATTERNS;
+  const before = options.readAfter ?? '';
+  if (before !== '') {
+    const read = scrubPlain(before + text, [], patterns, before.length);
+    return { value: read.value.slice(before.length), redactedValues: read.redactedValues };
+  }
+  const state = freshState({ patterns });
   return { value: scrubInto(text, state), redactedValues: state.count };
 }
 
@@ -1142,7 +1334,7 @@ export interface RedactSecretsOptions {
   readonly pathKey?: (key: string) => string;
   /** The value patterns run over every string. Defaults to `SECRET_VALUE_PATTERNS`; a check that
    *  refuses rather than redacts passes `HIGH_CONFIDENCE_SECRET_PATTERNS`. */
-  readonly patterns?: readonly ValuePattern[];
+  readonly patterns?: readonly SecretPattern[];
   /** Known secret values (`secretFieldLiterals` of the content this value quotes — a tool call's
    *  arguments, for its result) hidden as literals in every string, before the patterns. */
   readonly literals?: readonly string[];
