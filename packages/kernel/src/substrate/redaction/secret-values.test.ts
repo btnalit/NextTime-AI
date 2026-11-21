@@ -1260,12 +1260,59 @@ describe('the name rules read together, each on the text as it is written (legac
     ['a --flag', `--token x,--password "${FAKE} y"`, `--token ${REDACTED}--password "${REDACTED}"`],
     ['a name after a `;`', `token=x;api_key="${FAKE} y"`, `token=${REDACTED}api_key="${REDACTED}"`],
     ['a name after a `|`', `token=x|api_key="${FAKE} y"`, `token=${REDACTED}api_key="${REDACTED}"`],
+    [
+      'an env name after a `&`, which only the env rule reads (review #501 on #1586)',
+      `API_TOKEN=x&TOKEN_VALUE="${FAKE} y"`,
+      `API_TOKEN=${REDACTED}TOKEN_VALUE="${REDACTED}"`,
+    ],
   ])(
     'ends a bare value before the next pair, whose value v0.69.2 and main kept: %s',
     (_label, text, hidden) => {
       expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
     },
   );
+
+  it.each([
+    [
+      'a JSON key',
+      `token=x,password: "api_key": ${FAKE}`,
+      `token=${REDACTED} "api_key": ${REDACTED}`,
+    ],
+    [
+      'a key after the same name',
+      `token=x,token: "password": ${FAKE}`,
+      `token=${REDACTED} "password": ${REDACTED}`,
+    ],
+    [
+      "a '…' value",
+      `"token" = a,token:  "api_key": '${FAKE}'`,
+      `"token" = ${REDACTED}  "api_key": '${REDACTED}'`,
+    ],
+    [
+      'a `;`',
+      `token=x;password: "api_key": "${FAKE}"`,
+      `token=${REDACTED} "api_key": "${REDACTED}"`,
+    ],
+    [
+      'a TOML key after a `|`',
+      `token=x|password: "api_key" = ${FAKE}`,
+      `token=${REDACTED} "api_key" = ${REDACTED}`,
+    ],
+  ])(
+    "reads a bare value on past a next pair whose value is a secret's key, which the key's rule hides, as v0.70.0 does (review #501 on #1586; main kept it): %s",
+    (_label, text, hidden) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it('still ends a bare value before a next pair whose value is a key no rule hides', () => {
+    // Read on there, no rule would hide that pair's value.
+    expect(scrubSecretValues('token=x,password: "note": y')).toEqual({
+      value: `token=${REDACTED}password: "${REDACTED}": y`,
+      redactedValues: 2,
+    });
+  });
 
   it.each([
     ['a --flag', `--password=${FAKE}--api-key="abc"`, `--password=${REDACTED}"${REDACTED}"`, 2],
@@ -1346,6 +1393,17 @@ describe('the name rules read together, each on the text as it is written (legac
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
+
+  it('reads on from its own end inside a match no match crossed (review #501 on #1586; v0.70.0 and v0.69.2 kept the value)', () => {
+    // The env rule takes `API_KEY=x&secret:`, the name rule, whose value stops at the `&`,
+    // `API_KEY=x` inside it: read on from where the env match ends, it skipped `secret: '…'`.
+    const hidden = `API_KEY=${REDACTED} '${REDACTED}'`;
+    expect(scrubSecretValues(`API_KEY=x&secret: '${FAKE}'`)).toEqual({
+      value: hidden,
+      redactedValues: 2,
+    });
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
 
   it('counts a pair inside the value of the one it starts in once, with that value', () => {
     expect(scrubSecretValues(`token="a PASSWORD=${FAKE} b"`)).toEqual({

@@ -4,6 +4,7 @@ import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
   type Scrubbed,
+  bareValueEndsToCome,
   endsAQuotedValue,
   namesASecretField,
   namesASecretValue,
@@ -31,7 +32,10 @@ import {
  *     characters, no backslash) — unless it closes a secret's JSON pair;
  *   - a `-----BEGIN` with no `-----END` after it;
  *   - any match of a secret pattern that crosses that point or reaches the end of the text (it may
- *     still grow — a `NAME=value` whose value goes on in the next delta).
+ *     still grow — a `NAME=value` whose value goes on in the next delta);
+ *   - a `,`, `;`, `&` or `|` before the next pair whose value opens with, or may yet open with, a
+ *     secret's key (`token=x,password: "api_key": …`): a bare value ends there or reads on past
+ *     it as that key decides.
  * The text before that point holds only whole matches, so scrubbing it on its own gives what
  * scrubbing the whole text would: the concatenated output equals `scrubSecretValues` of the whole
  * text. The unit test checks this for every pattern, separator and quoting, split in two at every
@@ -216,14 +220,19 @@ function safeCut(raw: string, context: string): number {
       cut -= blanks[0].length;
       moved = true;
     }
+    // Nor inside a match, nor where a bare value would end before the next pair that the whole
+    // text reads on past, its value opening with a secret's key (`bareValueEndsToCome`).
     const read = context + raw;
-    for (const valuePattern of SECRET_VALUE_PATTERNS) {
-      for (const { start, end } of secretMatches(valuePattern, read, context.length)) {
-        const at = start - context.length;
-        if (at < cut && (end - context.length > cut || end === read.length)) {
-          cut = at;
-          moved = true;
-        }
+    for (const { start, end } of [
+      ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
+        secretMatches(valuePattern, read, context.length),
+      ),
+      ...bareValueEndsToCome(read, context.length),
+    ]) {
+      const at = start - context.length;
+      if (at < cut && (end - context.length > cut || end === read.length)) {
+        cut = at;
+        moved = true;
       }
     }
   }

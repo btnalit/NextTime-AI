@@ -349,6 +349,13 @@ const SHAPES = [
   `token=;${FAKE}clientSecret--token : "x"`,
   `--token TOKEN='token':${FAKE}`,
   `token=--password="I_TOKEN="apikey:\\"${FAKE}`,
+  // A bare value read on past a next pair whose value is a secret's key (review #501 on #1586),
+  // and one that is not, which ends it.
+  `token=x,password: "api_key": ${FAKE}`,
+  `"token" = a,token:  "api_key": '${FAKE}'`,
+  `token=x|password: "api_key" = ${FAKE}`,
+  'token=x,password: "note": y',
+  `API_KEY=x&secret: '${FAKE}'`,
   // Read after what was emitted: a cut after the `.` before a pair reads the pair as the whole
   // text does, here and when the text ends.
   `.API_TOKEN="a}api_key = \\"${FAKE} : `,
@@ -504,6 +511,17 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     // After a dot, where only the --flag and env-line rules take a name (legacy 926).
     expect(createSecretStreamScrubber().push('x.--verbose "a b ').value).toBe('x.--verbose ');
     expect(createSecretStreamScrubber().push('x.DEBUG=" a').value).toBe('x.DEBUG=');
+  });
+
+  it('holds a bare value back at a `,` only while the key after the next quote can still decide where it ends (review #501 on #1586)', () => {
+    // A secret's key, whole: held from its quote, the value before it read on past the `,`.
+    expect(createSecretStreamScrubber().push('token=x,password: "api_key": ').value).toBe(
+      `token=${REDACTED} `,
+    );
+    // A key no rule hides: the value before it ends at the `,`.
+    expect(createSecretStreamScrubber().push('token=x,password: "note": ').value).toBe(
+      `token=${REDACTED}`,
+    );
   });
 
   it('holds back only the word being written', () => {

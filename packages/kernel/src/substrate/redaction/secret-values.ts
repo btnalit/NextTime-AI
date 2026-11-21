@@ -284,11 +284,46 @@ const UNCLOSED = String.raw`\\(?:\\\\)*"(?!${SECRET_KEY_AND_QUOTE})(?:(?!(?=(?<u
  *  (`token=x,api_key="…"`, since v0.69.2 and before). Only there: a name takes in what is written
  *  against it, so the next pair's name could start where the value does and the value was kept
  *  (`--password=…--api-key="…"`, review #493 on #1586); and never before its first character, nor
- *  its second where the first is one of them (`token=;…`). */
+ *  its second where the first is one of them (`token=;…`). Nor where that quote opens a secret's
+ *  key (`SECRET_KEY_AND_QUOTE`, `token=x,password: "api_key": …`): the next name took the key for
+ *  its value and the key's own value was kept (review #501 on #1586). Read on there, the key's
+ *  rule reads the pair, as in v0.70.0. */
 const bareValue = (notInIt: string): string => {
   const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
-  return String.raw`${char}(?:(?<=[,;&|])${char})?(?:(?!(?<=[,;&|])${NEXT_SECRET_PAIR})${char})*`;
+  return String.raw`${char}(?:(?<=[,;&|])${char})?(?:(?!(?<=[,;&|])${NEXT_SECRET_PAIR}(?!${SECRET_KEY_AND_QUOTE}))${char})*`;
 };
+const NEXT_SECRET_PAIR_AFTER_A_STOP = new RegExp(String.raw`[,;&|]${NEXT_SECRET_PAIR}`, 'g');
+const SECRET_KEY_AND_QUOTE_HERE = new RegExp(SECRET_KEY_AND_QUOTE, 'y');
+/** What can still turn out to be a secret's key and its quote once more text comes, when the text
+ *  does not end at the quote: a key not yet closed, or closed with only blanks after it so far, to
+ *  the end of the text. */
+const SECRET_KEY_AND_QUOTE_TO_COME = /[A-Za-z][A-Za-z0-9_.-]{0,63}(?:"[ \t]{0,8})?$/y;
+/** Where in `text`, from `from` on, text cut there reads a bare value as ending at a `,`, `;`, `&`
+ *  or `|` before the next pair that the whole text reads on past, as that pair's value opens with a
+ *  secret's key and its quote (`bareValue`): from the quote to the end of the key. And while what
+ *  follows the quote can still become such a key, from that character to the end of `text`: the
+ *  value ends there or reads on as the key turns out. Cut before the quote, the text reads on as
+ *  the whole does. Exported for `secret-stream.ts`, which never cuts inside one (review #501 on
+ *  #1586). Linear: no such pair holds another's `,`, `;`, `&` or `|`, and the key after each is 74
+ *  characters at most. */
+export function bareValueEndsToCome(text: string, from = 0): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  NEXT_SECRET_PAIR_AFTER_A_STOP.lastIndex = from;
+  for (
+    let pair = NEXT_SECRET_PAIR_AFTER_A_STOP.exec(text);
+    pair !== null;
+    pair = NEXT_SECRET_PAIR_AFTER_A_STOP.exec(text)
+  ) {
+    const quoteEnd = pair.index + pair[0].length;
+    SECRET_KEY_AND_QUOTE_HERE.lastIndex = quoteEnd;
+    const key = SECRET_KEY_AND_QUOTE_HERE.exec(text);
+    SECRET_KEY_AND_QUOTE_TO_COME.lastIndex = quoteEnd;
+    if (key !== null) spans.push({ start: quoteEnd - 1, end: quoteEnd + key[0].length });
+    else if (quoteEnd === text.length || SECRET_KEY_AND_QUOTE_TO_COME.test(text))
+      spans.push({ start: pair.index, end: text.length });
+  }
+  return spans;
+}
 const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('')})`;
 const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
