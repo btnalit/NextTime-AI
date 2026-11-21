@@ -74,9 +74,9 @@ const ENV_NAME_AND_EQUALS_AT_END = /(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=$/;
 /** A quoted JSON key at the end of a short slice, with as much of its colon as has arrived:
  *  `"api key"`, `"api key" `, `"api key": `. */
 const JSON_KEY_AND_COLON_AT_END = /"([^"\\\r\n]{1,128})"[ \t]{0,8}(?::[ \t]{0,8})?$/;
-/** The same, of JSON text written inside one more string (`ESCAPED_JSON_SECRET_PAIR`):
- *  `\"api key\"`, `\"api key\": `. */
-const ESCAPED_JSON_KEY_AND_COLON_AT_END = /\\"([^"\\\r\n]{1,128})\\"[ \t]{0,8}(?::[ \t]{0,8})?$/;
+/** The same, of JSON text written inside one more string (`ESCAPED_JSON_SECRET_PAIR`), whose
+ *  separator may be `=` as well: `\"api key\"`, `\"api key\": `, `\"Password\" = `. */
+const ESCAPED_JSON_KEY_AND_COLON_AT_END = /\\"([^"\\\r\n]{1,128})\\"[ \t]{0,8}(?:[:=][ \t]{0,8})?$/;
 /** The longest JSON key the JSON pattern matches (`[^"\\\r\n]{1,128}`). */
 const JSON_KEY_MAX_CHARS = 128;
 
