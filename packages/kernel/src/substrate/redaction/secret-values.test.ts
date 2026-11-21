@@ -492,8 +492,41 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'password: \\"x\\" ',
     '--password \\"',
     'password=\\"a b ',
+    'A=\\\\\\"',
+    'A=\\\\\\"a\\"',
+    'A=\\\\',
+    'A=\\\\\\\\\\\\\\"a ',
+    'password: \\\\\\"x\\\\\\" ',
+    '\\"password\\":',
+    '\\"password\\": \\"',
+    '{\\"password\\":\\"\\\\',
+    '{\\"password\\":\\"a\\\\\\"',
+    '\\"a\\": \\"',
+    'A="a ',
+    "password: 'a ",
+    '{"session cookie": "a ',
+    '{\\"session cookie\\": \\"a ',
+    'A=a\\\\\\',
+    'A=\\\\"a ',
+    'password: \\\\\\"a\\',
   ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
+    scrubSecretValues(text.slice(0, 1_000));
+    const started = performance.now();
+    scrubSecretValues(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  // One long run, not a short unit repeated: a closing run read back from each place in a line
+  // of backslashes, as long as the run that opened it (review #501 on #1577: 1.9 s at 200 KB).
+  const run = (length: number) => '\\'.repeat(length);
+  it.each([
+    ['a run, a quote and a run twice as long', `password: ${run(66_667)}"${run(133_334)}`],
+    ['an env line', `API_TOKEN=${run(66_667)}"${run(133_334)}`],
+    ['a --password flag', `--password ${run(66_667)}"${run(133_334)}`],
+    ['a closing run one short', `password: ${run(50_001)}"${run(50_000)}"${'x'.repeat(100_000)}`],
+    ['JSON text in a string', `{\\"password\\":\\"${run(199_970)}`],
+  ])('%s × 200 KB within 1 s', (_name, text) => {
     scrubSecretValues(text.slice(0, 1_000));
     const started = performance.now();
     scrubSecretValues(text);
@@ -546,6 +579,201 @@ describe('a quoted value written inside a string: \\"…\\" (legacy 918)', () =>
   });
 });
 
+describe('a value written inside a string twice over, and JSON text inside a string (review #501 on #1575)', () => {
+  it.each([
+    [
+      'a JSON string printed in a log',
+      `"cmd": "export API_TOKEN=\\\\\\"${FAKE}\\\\\\""`,
+      `"cmd": "export API_TOKEN=\\\\\\"${REDACTED}\\\\\\""`,
+    ],
+    [
+      'spaces in it',
+      `"cmd": "run --password \\\\\\"${FAKE} x\\\\\\" now"`,
+      `"cmd": "run --password \\\\\\"${REDACTED}\\\\\\" now"`,
+    ],
+    [
+      'a YAML key',
+      `"line": "password: \\\\\\"${FAKE}\\\\\\""`,
+      `"line": "password: \\\\\\"${REDACTED}\\\\\\""`,
+    ],
+    [
+      'three times over',
+      `API_TOKEN=\\\\\\\\\\\\\\"${FAKE}\\\\\\\\\\\\\\" b`,
+      `API_TOKEN=\\\\\\\\\\\\\\"${REDACTED}\\\\\\\\\\\\\\" b`,
+    ],
+    [
+      'a JSON body in a log',
+      `payload={\\"password\\":\\"${FAKE}\\",\\"x\\":\\"y\\"}`,
+      `payload={\\"password\\":\\"${REDACTED}\\",\\"x\\":\\"y\\"}`,
+    ],
+    [
+      'a key in words, escapes of the inner text in the value',
+      `{\\"client secret\\" : \\"a b\\\\\\"c\\\\\\\\ d\\\\n${FAKE}\\"}`,
+      `{\\"client secret\\" : \\"${REDACTED}\\"}`,
+    ],
+    [
+      'after a quoted value of another key',
+      `{\\"note\\":\\"say \\\\\\"hi\\\\\\"\\",\\"token\\":\\"${FAKE}\\"}`,
+      `{\\"note\\":\\"say \\\\\\"hi\\\\\\"\\",\\"token\\":\\"${REDACTED}\\"}`,
+    ],
+  ])('hides the value whole, its quotes kept: %s', (_label, text, hidden) => {
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
+
+  it('takes a value to the next quote, which the run it opened with closes', () => {
+    expect(scrubSecretValues(`API_TOKEN=\\\\\\"a b\\\\\\" c \\\\\\"d\\\\\\"`).value).toBe(
+      `API_TOKEN=\\\\\\"${REDACTED}\\\\\\" c \\\\\\"d\\\\\\"`,
+    );
+    expect(scrubSecretValues(`{\\"password\\":\\"a\\",\\"b\\":\\"c\\"}`).value).toBe(
+      `{\\"password\\":\\"${REDACTED}\\",\\"b\\":\\"c\\"}`,
+    );
+  });
+
+  it('leaves a key that is not a secret, a value already hidden, and a key with no value', () => {
+    for (const text of [
+      `{\\"user\\":\\"bob\\",\\"max_tokens\\":\\"1024\\"}`,
+      `{\\"password\\":\\"${REDACTED}\\"} API_TOKEN=\\\\\\"${REDACTED}\\\\\\"`,
+      `\\"password\\" and \\"x\\"`,
+    ]) {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+});
+
+describe('a quoted value whose closing quote is not on its line (legacy 921)', () => {
+  it.each([
+    [
+      'tool output cut short',
+      `export API_TOKEN=\\"${FAKE} and the rest`,
+      `export API_TOKEN=\\"${REDACTED}`,
+    ],
+    [
+      'written inside a string',
+      `sh -c "export API_TOKEN=\\\"${FAKE} x`,
+      `sh -c "export API_TOKEN=\\\"${REDACTED}`,
+    ],
+    ['twice over', `API_TOKEN=\\\\\\"${FAKE} x`, `API_TOKEN=\\\\\\"${REDACTED}`],
+    ['a --password flag', `run --password \\"${FAKE}`, `run --password \\"${REDACTED}`],
+    [
+      'closed after a carriage return',
+      `API_TOKEN=\\"${FAKE}\r\\" b`,
+      `API_TOKEN=\\"${REDACTED}\r\\" b`,
+    ],
+    [
+      'going on to the next line',
+      `password=\\"${FAKE} a\n b\\" c`,
+      `password=\\"${REDACTED}\n b\\" c`,
+    ],
+    [
+      'inside a JSON string, to its quote',
+      `{"cmd":"PASSWORD=\\"${FAKE}","x":1}`,
+      `{"cmd":"PASSWORD=\\"${REDACTED}","x":1}`,
+    ],
+    [
+      'JSON text cut short',
+      `{"user":"bob","password": "${FAKE} a`,
+      `{"user":"bob","password": "${REDACTED}`,
+    ],
+    [
+      'a JSON key in words, a backslash last',
+      `{"session cookie": "${FAKE} a\\`,
+      `{"session cookie": "${REDACTED}\\`,
+    ],
+    [
+      'JSON text inside a string, cut short',
+      `payload={\\"session cookie\\":\\"${FAKE} a`,
+      `payload={\\"session cookie\\":\\"${REDACTED}`,
+    ],
+    [
+      'JSON text inside a string, to an unescaped quote',
+      `log "{\\"client secret\\":\\"${FAKE}" x`,
+      `log "{\\"client secret\\":\\"${REDACTED}" x`,
+    ],
+  ])(
+    'hides it to the end of its line, with no closing quote written: %s',
+    (_label, text, hidden) => {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it('still writes the closing quote of a value closed on its line', () => {
+    expect(scrubSecretValues(`password="${FAKE}" b="c`).value).toBe(`password="${REDACTED}" b="c`);
+    expect(scrubSecretValues(`{"session cookie": "${FAKE}", "a": ""}`).value).toBe(
+      `{"session cookie": "${REDACTED}", "a": ""}`,
+    );
+    expect(scrubSecretValues('{"session cookie": "", "password": ""}').value).toBe(
+      `{"session cookie": "${REDACTED}", "password": "${REDACTED}"}`,
+    );
+  });
+
+  it('never takes into a bare value the \\ of a \\" that ends it, but a pair of its own', () => {
+    for (const [text, hidden] of [
+      [`-e \\"API_TOKEN=${FAKE}\\" -e`, `-e \\"API_TOKEN=${REDACTED}\\" -e`],
+      [`-e \\"API_TOKEN=${FAKE}\\\\\\" -e`, `-e \\"API_TOKEN=${REDACTED}\\" -e`],
+      [`{"cmd":"PASSWORD=${FAKE}\\\\","x":1}`, `{"cmd":"PASSWORD=${REDACTED}","x":1}`],
+      [`password=${FAKE}\\\\\\x`, `password=${REDACTED}`],
+      [`export API_TOKEN=${FAKE}\\x${FAKE}`, `export API_TOKEN=${REDACTED}`],
+      [`{"cmd":"run --password ${FAKE}\\\\","x":1}`, `{"cmd":"run --password ${REDACTED}","x":1}`],
+      [`sh -c \\"run --password ${FAKE}\\" x`, `sh -c \\"run --password ${REDACTED}\\" x`],
+    ] as const) {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    }
+  });
+
+  it('leaves a quote with nothing after it on its line', () => {
+    for (const text of [
+      'password="',
+      "API_TOKEN='\nb",
+      'API_TOKEN=\\"\r\n',
+      '{"client secret": "',
+      '{\\"client secret\\": \\"\nb',
+    ]) {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  // A `"` or `'` with no close on its line is no value: here it closes a prompt or a label that
+  // ends with a name and its separator (review #501 on #1577), and the stored rewrite would cut
+  // the rows for good.
+  it('leaves a name quoted in code or a prompt, the quote after it one that closes', () => {
+    for (const text of [
+      'pw = input("Password:")',
+      'read -sp "Password:" PW',
+      'console.log("Password:", value);',
+      '  "loginPrompt": "Enter password: ",',
+      '{"label":"Password:"}',
+      'The field labeled "API token:" is required.',
+      "prompt('New secret: ');",
+      '<input placeholder="Password:">',
+      'msg="Password:" retry=3',
+      'echo "API_TOKEN=" >> .env',
+      "VALUES ('api_key=');",
+    ]) {
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  it('ends a value opened with backslashes where its string does, that \\ of a \\" kept', () => {
+    for (const [text, hidden] of [
+      [
+        `{"cmd":"{\\"env\\":\\"password: \\\\\\"${FAKE}\\"}"}`,
+        `{"cmd":"{\\"env\\":\\"password: \\\\\\"${REDACTED}\\"}"}`,
+      ],
+      [`password: \\\\\\"${FAKE}\\" b\\\\\\" c`, `password: \\\\\\"${REDACTED}\\" b\\\\\\" c`],
+      [`password: \\\\\\"${FAKE}\\\\" b`, `password: \\\\\\"${REDACTED}" b`],
+      [
+        `password: ${'\\'.repeat(9)}"${FAKE}${'\\'.repeat(9)}" b`,
+        `password: ${'\\'.repeat(9)}"${REDACTED}\\" b`,
+      ],
+    ] as const) {
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    }
+  });
+});
+
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
   /** What the value patterns wrote before they read `\\"…\\"` as one value: the `\\` alone hidden. */
   const split = (text: string) => text.replace(/\\"([^"]*)\\"/, `${REDACTED}"$1\\"`);
@@ -562,6 +790,17 @@ describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split,
     expect(stored).toContain(`${REDACTED}"${FAKE}`);
     const now = scrubSecretValues(text).value;
     expect(repairSplitQuotedMasks(stored)).toEqual({ value: now, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(now)).toEqual({ value: now, redactedValues: 0 });
+  });
+
+  it('writes a value written inside a string twice over with its own run (review #501 on #1575)', () => {
+    // As written before: the bare run took the whole opening `\\\\\\"`.
+    const text = `"cmd": "export API_TOKEN=\\\\\\"${FAKE} x\\\\\\" && run"`;
+    const now = `"cmd": "export API_TOKEN=\\\\\\"${REDACTED}\\\\\\" && run"`;
+    expect(scrubSecretValues(text).value).toBe(now);
+    expect(
+      repairSplitQuotedMasks(`"cmd": "export API_TOKEN=${REDACTED}"${FAKE} x\\\\\\" && run"`),
+    ).toEqual({ value: now, redactedValues: 1 });
     expect(repairSplitQuotedMasks(now)).toEqual({ value: now, redactedValues: 0 });
   });
 
@@ -584,32 +823,36 @@ describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split,
     }
   });
 
-  // The text up to the next \" is taken for the value. The value patterns still write both, and
-  // the stored rewrite runs at each upgrade: a row written from now on is rewritten once too.
-  it.each([
-    [
-      'a bare value cut by a quote, a \\" later on its line',
-      `-e "PW_TOKEN=${FAKE}" img \\"x\\"`,
-      `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`,
-      `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`,
-    ],
-    [
-      'a name and its bare value inside \\"…\\" (review #501 on #1575)',
-      `docker run -e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\" img`,
-      `docker run -e \\"API_TOKEN=${REDACTED}" -e \\"DEBUG=1\\" img`,
-      `docker run -e \\"API_TOKEN=\\"${REDACTED}\\"DEBUG=1\\" img`,
-    ],
-  ])('cannot tell %s from a split one: rewritten once', (_label, text, written, rewritten) => {
+  // The text up to the next \" is taken for the value. The value patterns still write this one,
+  // and the stored rewrite runs at each upgrade: a row written from now on is rewritten once too.
+  it('cannot tell a bare value cut by a quote, a \\" later on its line, from a split one: rewritten once', () => {
+    const text = `-e "PW_TOKEN=${FAKE}" img \\"x\\"`;
+    const written = `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`;
+    const rewritten = `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`;
     expect(scrubSecretValues(text)).toEqual({ value: written, redactedValues: 1 });
     expect(repairSplitQuotedMasks(written)).toEqual({ value: rewritten, redactedValues: 1 });
     expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
     expect(scrubSecretValues(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
   });
 
+  // Review #501 on #1575: the bare run took the \ of the \" that closes the string, and wrote
+  // `[redacted]"`. It no longer does, so only rows stored before are read wrong, once.
+  it('writes a name and its bare value inside \\"…\\" with its \\" kept, which it leaves', () => {
+    const text = `docker run -e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\" img`;
+    const written = `docker run -e \\"API_TOKEN=${REDACTED}\\" -e \\"DEBUG=1\\" img`;
+    expect(scrubSecretValues(text)).toEqual({ value: written, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(written)).toEqual({ value: written, redactedValues: 0 });
+    const stored = `docker run -e \\"API_TOKEN=${REDACTED}" -e \\"DEBUG=1\\" img`;
+    const rewritten = `docker run -e \\"API_TOKEN=\\"${REDACTED}\\"DEBUG=1\\" img`;
+    expect(repairSplitQuotedMasks(stored)).toEqual({ value: rewritten, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+  });
+
   it.each([
     ['masks and quotes', `${`=${REDACTED}"x`.repeat(15_000)}`],
     ['a mask, then text', `=${REDACTED}"${'x'.repeat(200_000)}`],
     ['split masks', `${`=${REDACTED}"x\\" `.repeat(12_000)}`],
+    ['a long run of backslashes', `=${REDACTED}"${'\\'.repeat(199_999)}"`],
   ])('%s × 200 KB within 1 s', (_name, text) => {
     repairSplitQuotedMasks(text.slice(0, 1_000));
     const started = performance.now();

@@ -147,13 +147,17 @@ function decodesToUserPass(value: string): boolean {
   return true;
 }
 
-/** `value` replaced, its quotes kept — `\"…\"` (a quoted value written inside a string) too. */
+/** `value` replaced, its quotes kept — `\"…\"` and `\\\"…\\\"` (a quoted value written inside a
+ *  string, once or twice over) too: only `ESCAPED_QUOTED` reads a value that opens with
+ *  backslashes and a quote, closed by as many. A value whose closing quote is not on its line
+ *  (`UNCLOSED`) is written without one: it never ends with its quote, which a closed one does,
+ *  and is never its opening quote alone. */
 function redactedValue(value: string): string {
-  if (value.startsWith('\\"') && value.length >= 4) return `\\"${REDACTED}\\"`;
-  const quote = value.charAt(0);
-  return (quote === '"' || quote === "'") && value.length >= 2
-    ? `${quote}${REDACTED}${quote}`
-    : REDACTED;
+  const opening = OPENING_QUOTE.exec(value)?.[0];
+  if (opening === undefined) return REDACTED;
+  return value.endsWith(opening.slice(-1))
+    ? `${opening}${REDACTED}${opening}`
+    : `${opening}${REDACTED}`;
 }
 
 /** Returns the replacement for one match, or `undefined` to keep it as it is. */
@@ -175,20 +179,72 @@ export interface ValuePattern {
  *  next space or quote; in a `name: value` also to the next `&`, a query string's separator).
  *  Quoted with `\"` too, to the next `\"` on the line: a quoted value written inside a string —
  *  `sh -c "export API_TOKEN=\"…\""`, a compose `command:`, source code. Read as it is written,
- *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). First: the
- *  bare run starts with `\` too. Linear: the run inside stops at the first `"`. */
-const ESCAPED_QUOTED = String.raw`\\"[^"\r\n]*\\"`;
-const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"&]+)`;
-const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\"|["'])?\[redacted\])`;
+ *  the `\` alone was the bare run and the value after it was kept (#501 on #1573). And with
+ *  `\\\"`, to the next `\\\"`: such a string written inside one more (a JSON string printed in a
+ *  log, `"cmd": "export API_TOKEN=\\\"…\\\""`) — any odd run of up to seven backslashes (three
+ *  strings deep) before the quote, closed by the same run (review #501 on #1575). First: the bare
+ *  run starts with `\` too. Linear because that run is bounded: the run inside stops at the first
+ *  `"` and the closing run is read back from each place before it, so with no bound a line of
+ *  backslashes cost its length squared (review #501 on #1577: 42 s at 1 MiB). A longer run is
+ *  read as `UNCLOSED`, to the first `"`. */
+const ESCAPED_QUOTED = String.raw`(?<escapes>\\(?:\\\\){0,3})"[^"\r\n]*\k<escapes>"`;
+/** A value opened with `\"` (or more backslashes) whose closing run is not on its line — tool
+ *  output cut short, a string that goes on to the next line, one closed after a `\r` (legacy 921):
+ *  to the end of the line or the first `"` on it, so a value written inside a string ends with
+ *  that string (`"cmd":"PASSWORD=\"…","x":1`). Its backslashes are read two at a time, as a bare
+ *  run's: never the `\` of a `\"` that ends it, a string one level up closing, which it keeps
+ *  (`{\"env\":\"password: \\\"…\"}`). Read as it was, the `\` alone was the bare run and the
+ *  value after it was kept. Second to its closed form, which is tried first; never a quote alone,
+ *  which has no value to hide. A `"` or `'` with no close on its line is still no value: as often
+ *  as it opens a value cut short, it closes a prompt or a label that ends with a name
+ *  (`input("Password:")`, `{"label":"Password:"}`), and the stored rewrite would cut those rows
+ *  for good (review #501 on #1577). */
+const UNCLOSED = String.raw`\\(?:\\\\)*"(?:[^"\\\r\n]|\\\\|\\(?!"))+`;
+/** A bare run, its backslashes read two at a time: never the `\` of a `\"` that ends it, which
+ *  closes a string the pair is written inside (`-e \"API_TOKEN=…\" -e \"DEBUG=1\"`). Taken with
+ *  the value it was cut, the `[redacted]"` left was read for a split `\"…\"` value at the next
+ *  upgrade (review #501 on #1575). Before a `\\"` the pair is the value's own and the quote not
+ *  escaped: it stays a quote that closes a string (`"cmd":"PASSWORD=…\\","x":1`). */
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"\\]|\\\\|\\(?!"))+)`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|"[^"\r\n]*"|'[^'\r\n]*'|${UNCLOSED}|(?:[^\s'"&\\]|\\\\|\\(?!"))+)`;
+const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
+/** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
+const OPENING_QUOTE = /^(?:\\+"|["'])/;
 
 /** `"api_key": "…"` inside a string that is itself JSON text (a capability tool's result text).
  *  Exported for `secret-stream.ts`: the `"` that closes such a pair opens no JSON key. */
 export const JSON_SECRET_PAIR: ValuePattern = {
   pattern: /"([^"\\\r\n]{1,128})"([ \t]{0,8}:[ \t]{0,8})/g,
-  value: { names: (key) => namesASecretField(key), pattern: /"((?:[^"\\\r\n]|\\.)*)"/y },
-  redact: (_match, [key, separator, value]) =>
-    value === undefined || value === REDACTED ? undefined : `"${key}"${separator}"${REDACTED}"`,
+  value: { names: (key) => namesASecretField(key), pattern: /"((?:[^"\\\r\n]|\\.)*)(")?/y },
+  redact: (_match, [key, separator, value, close]) =>
+    keepsJsonValue(value, close) ? undefined : `"${key}"${separator}"${REDACTED}${close ?? ''}`,
+};
+
+/** Whether a JSON pair's value is left as it is: none, already the mask, or an empty string that
+ *  is not closed. A value not closed on its line — JSON text cut short, or not JSON after all — is
+ *  hidden as far as it reads (to the line's end, or to a quote that does not close it) and written
+ *  without the closing quote it lacks (legacy 921). */
+function keepsJsonValue(value: string | undefined, close: string | undefined): boolean {
+  return value === undefined || value === REDACTED || (close === undefined && value === '');
+}
+
+/** `\"api_key\": \"…\"`: that JSON text written inside one more string, its quotes escaped once
+ *  more — a JSON body printed in a log or a command (`payload={\"password\":\"…\"}`). The key is
+ *  read as `JSON_SECRET_PAIR` reads it; in the value, every escape of the inner text is written
+ *  with two backslashes (`\\\"`, `\\\\`, `\\n`), so the first `\"` that is not part of one
+ *  closes it. Review #501 on #1575: neither the name rules (no separator right after the name) nor
+ *  `JSON_SECRET_PAIR` (no `\` in a key) read it. Exported for `secret-stream.ts`, as that one is.
+ *  Linear: each step of the value reads one fixed token. */
+export const ESCAPED_JSON_SECRET_PAIR: ValuePattern = {
+  pattern: /\\"([^"\\\r\n]{1,128})\\"([ \t]{0,8}:[ \t]{0,8})/g,
+  value: {
+    names: (key) => namesASecretField(key),
+    pattern: /\\"((?:[^"\\\r\n]|\\\\(?:\\\\|\\"|[^"\\\r\n]))*)(\\")?/y,
+  },
+  redact: (_match, [key, separator, value, close]) =>
+    keepsJsonValue(value, close)
+      ? undefined
+      : `\\"${key}\\"${separator}\\"${REDACTED}${close ?? ''}`,
 };
 
 const PEM_PRIVATE_KEY: ValuePattern = {
@@ -364,6 +420,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // `scheme://user:password@host` — keeps the user, drops the password.
   { pattern: URL_PASSWORD, redact: (_match, [prefix]) => `${prefix}:${REDACTED}@` },
   JSON_SECRET_PAIR,
+  ESCAPED_JSON_SECRET_PAIR,
 ];
 
 /**
@@ -397,9 +454,9 @@ export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLAT
  *  value cut by a closing quote with a `\"` later on its line (`-e "PW_TOKEN=[redacted]" img
  *  \"x\"`), and a name with its bare value written inside `\"…\"`, the `\` of the closing `\"`
  *  taken with the value (`-e \"API_TOKEN=[redacted]" -e \"DEBUG=1\"`, review #501 on #1575). The
- *  value patterns still write both, and the stored rewrite runs over every row at each upgrade: a
- *  row written from now on is rewritten too, once, at the next upgrade — text lost, no value shown
- *  — until this repair is dropped. */
+ *  value patterns still write the first (the second no longer: a bare run leaves that `\`), and
+ *  the stored rewrite runs over every row at each upgrade: a row written from now on is rewritten
+ *  too, once, at the next upgrade — text lost, no value shown — until this repair is dropped. */
 const SPLIT_QUOTED_MASK = /(?<=[=: \t])\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
 
 /** Whether `text` holds a C0 control character — a char-code loop, not a regex class (biome's
@@ -412,9 +469,11 @@ function holdsControlCharacter(text: string): boolean {
 }
 
 /** Stored text with each `SPLIT_QUOTED_MASK` written as the value patterns write that value now —
- *  `\"[redacted]\"` — counted: for a one-way rewrite of rows already stored, before the stored set
- *  (`STORED_REWRITE_SECRET_PATTERNS`) runs over it (application/platform/scrub-raw-secrets;
- *  application/chat's `rescrubStoredToolCallResult`). Linear: the run inside stops at a quote. */
+ *  `\"[redacted]\"`, or `\\\"[redacted]\\\"` when the run that closes it is `\\\"` (a value written
+ *  inside a string twice over, whose opening run the mask took) — counted: for a one-way rewrite of
+ *  rows already stored, before the stored set (`STORED_REWRITE_SECRET_PATTERNS`) runs over it
+ *  (application/platform/scrub-raw-secrets; application/chat's `rescrubStoredToolCallResult`).
+ *  Linear: the run inside stops at a quote. */
 export function repairSplitQuotedMasks(text: string): Scrubbed<string> {
   // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
   if (!text.includes(`${REDACTED}"`)) return { value: text, redactedValues: 0 };
@@ -422,7 +481,11 @@ export function repairSplitQuotedMasks(text: string): Scrubbed<string> {
   const value = text.replace(SPLIT_QUOTED_MASK, (match) => {
     if (holdsControlCharacter(match)) return match;
     redactedValues += 1;
-    return `\\"${REDACTED}\\"`;
+    // The run before its closing quote: odd, as the run inside reads backslashes two at a time.
+    let closing = 1;
+    while (match.charAt(match.length - 2 - closing) === '\\') closing += 1;
+    const escapes = '\\'.repeat(closing);
+    return `${escapes}"${REDACTED}${escapes}"`;
   });
   return { value, redactedValues };
 }
