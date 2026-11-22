@@ -1986,6 +1986,17 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       `--token \\\\\\"Password\\"=\\"${FAKE}\\"`,
       `--token \\\\\\"${REDACTED}\\"=\\"${REDACTED}\\"`,
     ],
+    // A key with `-` in it, and one of more than 16 characters (review #493 on #1591).
+    [
+      'a key with `-`',
+      `token: \\"my-api-key\\": \\"${FAKE}\\"`,
+      `token: \\"${REDACTED}\\": \\"${REDACTED}\\"`,
+    ],
+    [
+      'a key of 18 characters',
+      `token: \\"service_password_2\\": \\"${FAKE}\\"`,
+      `token: \\"${REDACTED}\\": \\"${REDACTED}\\"`,
+    ],
   ])(
     "crosses a value that is a secret's key and its escaped quote with the key's own pair, whose value main and v0.70.0 kept: %s",
     (_label, text, hidden) => {
@@ -2187,6 +2198,12 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     // Kept since #1591, where main hid it: a pair read from where the value it starts in starts
     // took the key for its value (review #501 on #1591).
     `APIKEY=password:"passwordx":"${FAKE}"`,
+    // Kept since #1591's fourth commit, where fb4eee26, main and v0.70.0 hid it: the escaped JSON
+    // pair, read with the name rules, took the key for its value (review #493 on #1591).
+    `{\\"token\\": \\"passwordx": "${FAKE}"`,
+    `\\"token\\":\\"_password": "${FAKE}"`,
+    // Kept since #1591's third commit, where main and v0.70.0 hid it (review #493 on #1591).
+    `token=x,api_key: \\"passwordx"  :  "${FAKE}"`,
   ])('hides the value of a JSON key the name rules read as a value (legacy 930): %s', (text) => {
     expect(scrubSecretValues(text).value).not.toContain(FAKE);
   });
