@@ -421,6 +421,19 @@ const SHAPES = [
   `token: "password": "${FAKE} x`,
   `--password 'Password:\\"TOKEN='"'${FAKE}`,
   `--password "\\"secret:'"='${FAKE}"`,
+  // A value that ends with a secret's name and its escaped quote; a secret's key and its escaped
+  // quote, which that key's own pair crosses; a JSON value inside a string, stopped before a pair
+  // in it; quotes many deep that streamed apart from the whole before (review #493 on #1591).
+  String.raw`run _--token '", \"Password\"=\",${FAKE}', \"password\": \" ${FAKE}\"\"'}`,
+  `password=\\"${FAKE}myToken\\": 1`,
+  `token=\\"abc${FAKE}Secret\\" = 1`,
+  `\\"password\\": \\"${FAKE}myToken\\": 1`,
+  `{\\"token\\":\\"password\\":\\"${FAKE}\\"}`,
+  `token: \\"password\\": \\"a\\\\\\"b${FAKE}\\"`,
+  `token: \\"password\\": \\"${FAKE}\\"`,
+  `\\"password\\": \\"token: apiKey' = \\"${FAKE}\\"`,
+  `{\\"api_key=${FAKE}&token\\": \\"x\\"}`,
+  `token: \\"_password\\": \\"${FAKE}\\"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -532,15 +545,10 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
   const TAB = '\t';
   // Known limit, as legacy 920: where one rule's mask changes how a later rule reads the text
   // (quotes three or four deep on a line), the cut is found on the text as it came and can fall
-  // inside a value only the whole text reads. Pinned so that a change to either shows (#493 on
-  // #1579; release.md §3.214, §3.216): main streamed these two apart too, and the two it pinned
-  // before stream as the whole text now (`SHAPES`).
+  // inside a value only the whole text reads. Pinned so that a change to it shows (#493 on #1579;
+  // release.md §3.214, §3.216, §3.217): main streamed this one apart too; the two main pinned, and
+  // the other one pinned here before, stream as the whole text now (`SHAPES`).
   it.each([
-    [
-      String.raw`run _--token '", \"Password\"=\",${FAKE}', \"password\": \" ${FAKE}\"\"'}`,
-      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}\"\"'}`,
-      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}${FAKE}\"\"'}`,
-    ],
     [
       String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
       String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
