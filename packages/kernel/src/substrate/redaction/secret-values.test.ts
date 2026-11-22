@@ -2204,6 +2204,12 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     `\\"token\\":\\"_password": "${FAKE}"`,
     // Kept since #1591's third commit, where main and v0.70.0 hid it (review #493 on #1591).
     `token=x,api_key: \\"passwordx"  :  "${FAKE}"`,
+    // Kept since #1591's fourth commit, where fb4eee26, main and v0.70.0 hid it: the escaped JSON
+    // value, gone on past the pair inside it, was closed early, at a `\\\"` or a plain `"` (review
+    // #501 on #1591).
+    `\\"token\\":\\"'apikey=x&\\\\\\"'${FAKE}`,
+    `\\"password\\":\\" token:x"\\"'apikey\\":\\"${FAKE}`,
+    `password=\\"\\"password\\"=\\"\\\\\\"${FAKE}Token:`,
   ])('hides the value of a JSON key the name rules read as a value (legacy 930): %s', (text) => {
     expect(scrubSecretValues(text).value).not.toContain(FAKE);
   });
