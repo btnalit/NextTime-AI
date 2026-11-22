@@ -434,6 +434,22 @@ const SHAPES = [
   `\\"password\\": \\"token: apiKey' = \\"${FAKE}\\"`,
   `{\\"api_key=${FAKE}&token\\": \\"x\\"}`,
   `token: \\"_password\\": \\"${FAKE}\\"`,
+  // A JSON key the name rule reads no name at the end of, read with the name rules where a value
+  // before it reads it in; one with a `,`, a `'`, a blank or a `--` in it; a `--flag` and a blank
+  // in a key; a `\\\"` in an escaped JSON value, a quote of its own (legacy 930, review #501 on
+  // #1591).
+  `apikey=passwd:"apikeye":"${FAKE}`,
+  `APIKEY=password:"x,passwordx":"${FAKE}"`,
+  `token: "token: "x passwordx": "${FAKE}"`,
+  `token: "token: "x --passwordx": "${FAKE}"`,
+  `token:\\"--passwd\\":\\"${FAKE}`,
+  `token:"--passwd":"${FAKE}`,
+  `{"x --token ${FAKE}": "x"}`,
+  `{\\"token\\": \\"passwordx": "${FAKE}"`,
+  `--token --token \\",passwd\\"=\\"${FAKE}`,
+  `\\"password\\":\\" token:x"\\"'apikey\\":\\"${FAKE}`,
+  `\\"token\\":\\"'apikey=x&\\\\\\"'${FAKE}`,
+  `password=\\"\\"password\\"=\\"\\\\\\"${FAKE}Token:`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
