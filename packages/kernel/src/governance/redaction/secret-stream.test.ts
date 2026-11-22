@@ -403,7 +403,9 @@ const SHAPES = [
   // `"…"` value read on past a pair whose `'…'` value holds its quote; a pair at the first
   // character of a value inside another; a `"…"` value that is a secret's key and its quote, and
   // one inside another value; a value stopped where the value of the pair that crossed it opens;
-  // a JSON value that is a secret's key and its quote (review #501, #493 on #1591).
+  // a JSON value that is a secret's key and its quote; a "… not closed on its line after a key in
+  // quotes; a value with an escaped quote that a pair crosses or follows (review #501, #493 on
+  // #1591).
   `password:\\"TOKEN='"'${FAKE}`,
   `--token \\"TOKEN='"'${FAKE}\\"`,
   `password:"\\"a TOKEN='"'${FAKE}"`,
@@ -415,6 +417,10 @@ const SHAPES = [
   `--token='x,api_key="api_key":'${FAKE}' :`,
   `apikey=\\"token=token='apikey="'\\"'${FAKE}`,
   `"TOKEN'":"passwd":"${FAKE}`,
+  `token=password: "api_key": "${FAKE}`,
+  `token: "password": "${FAKE} x`,
+  `--password 'Password:\\"TOKEN='"'${FAKE}`,
+  `--password "\\"secret:'"='${FAKE}"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

@@ -343,8 +343,17 @@ export function bareValueEndsToCome(text: string, from = 0): { start: number; en
  *  value there, as since v0.69.2, a value that ends like a key was kept (`token="…Secret" = 1`;
  *  review #493 on #1591). */
 const PLAIN_QUOTED = String.raw`"[^"\r\n]*"`;
+/** A `"…` value not closed on its line after a key written as JSON writes one, in quotes and
+ *  before a `:` (`"api_key": "<密钥>`): to the end of the line, as `JSON_SECRET_PAIR` reads it
+ *  (legacy 921). Read by that rule alone, on the text these rules had rewritten, the pair was kept
+ *  where the value of a pair before it was its key (`token: "password": "<密钥>`,
+ *  `token=password: "api_key": "<密钥>`: `"[redacted]": "<密钥>`; review #493 on #1591); read
+ *  here, it crosses that value, and both are hidden. Only there: a `"` with no close on its line is
+ *  no value after any other name (`UNCLOSED`). Tried only where no `"` follows on the line, at
+ *  which `PLAIN_QUOTED` closes it, so it reads no next pair (`NEXT_SECRET_PAIR`) in. */
+const UNCLOSED_AFTER_A_QUOTED_KEY = String.raw`(?<="[^"\\\r\n]{1,128}"[ \t]{0,8}:[ \t]{0,8})"[^"\r\n]+`;
 const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*'|${UNCLOSED}|${bareValue('')})`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*'|${UNCLOSED}|${bareValue('&')})`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*'|${UNCLOSED}|${UNCLOSED_AFTER_A_QUOTED_KEY}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;
@@ -830,6 +839,10 @@ interface TakenMatch {
   closingQuoteAt: number;
   /** The quote the value it ends with opens with, when that value is not closed; else `''`. */
   openQuote: string;
+  /** The same of the last value left out inside it since a match last crossed it, and where that
+   *  value stopped; `''` when there is none. */
+  insideOpenQuote: string;
+  insideOpenEnd: number;
 }
 
 /** The quote that closes `match`'s value, and where it starts — or, when the value is quoted but
@@ -880,6 +893,21 @@ function pairAtFirstCharacter(match: ReadMatch, text: string): number | undefine
   if (!ESCAPED_QUOTE_HERE.test(text) || ESCAPED_QUOTE_HERE.lastIndex >= match.end) return undefined;
   NEXT_SECRET_PAIR_HERE.lastIndex = ESCAPED_QUOTE_HERE.lastIndex;
   return NEXT_SECRET_PAIR_HERE.test(text) ? ESCAPED_QUOTE_HERE.lastIndex : undefined;
+}
+
+/** Whether `taken`'s value is a `"…"` closed by a quote a backslash escapes, as only `PLAIN_QUOTED`
+ *  reads one (`"\"`), and `match`, right after it, a next pair whose `'…'` value holds a `"`
+ *  (`NEXT_SECRET_PAIR`): read with escapes, as `QUOTED` reads it, the value is not closed there, and
+ *  that `"` may be where it is (`--password "\"secret:'"='<密钥>"`; review #501 on #1591). */
+function closedShortOfAPair(taken: TakenMatch, match: ReadMatch, text: string): boolean {
+  if (taken.closingQuote !== '"') return false;
+  let backslashes = 0;
+  while (text.charAt(taken.closingQuoteAt - backslashes - 1) === '\\') backslashes += 1;
+  if (backslashes % 2 === 0) return false;
+  NEXT_SECRET_PAIR_HERE.lastIndex = match.start;
+  return (
+    NEXT_SECRET_PAIR_HERE.test(text) && text.charAt(NEXT_SECRET_PAIR_HERE.lastIndex - 1) === "'"
+  );
 }
 
 /** How long the quote `match`'s value opens with is: at least one, so that a quote right where a
@@ -933,13 +961,15 @@ function append(match: TakenMatch, part: string): void {
  *  a quote not its own: it goes on past it, to its next quote on the line, short of the next pair
  *  (`NEXT_SECRET_PAIR`) and the line's end (`password:"TOKEN='"'<密钥>"`; v0.70.0 hid it, as one
  *  rule rewrote the pair before the next read it; review #501 on #1589). So does a value that
- *  stopped there, not closed (`password:\"TOKEN='"'<密钥>`; review #501 on #1591). A pattern whose
- *  match is taken reads on from where that match's value starts, so a pair that starts inside its
- *  value and goes on past it crosses it (`TOKEN=x,token="apikey:"<密钥>"`: `token="apikey:"`, then
- *  `apikey:"<密钥>"`; legacy 934); so does one left out that starts where that match starts. One left
- *  out whose value reads a pair in from its first character, after the escaped quote it opens with
- *  (`ESCAPED_QUOTED`, `UNCLOSED`; `--token='token: \"api_key="'<密钥>"`, review #493 on #1591), or is
- *  a secret's key and its quote (`--token='x,api_key="api_key":'<密钥>'`), reads on from that pair,
+ *  stopped there, not closed (`password:\"TOKEN='"'<密钥>`), and one left out inside it that did,
+ *  or that stopped before that pair, past blanks alone (`--password 'Password:\"TOKEN='"'<密钥>`;
+ *  review #501 on #1591). A pattern whose match is taken reads on from where that match's value
+ *  starts, so a pair that starts inside its value and goes on past it crosses it
+ *  (`TOKEN=x,token="apikey:"<密钥>"`: `token="apikey:"`, then `apikey:"<密钥>"`; legacy 934); so
+ *  does one left out that starts where that match starts. One left out whose value reads a pair
+ *  in from its first character, after the escaped quote it opens with (`ESCAPED_QUOTED`,
+ *  `UNCLOSED`; `--token='token: \"api_key="'<密钥>"`, review #493 on #1591), or is a secret's key
+ *  and its quote (`--token='x,api_key="api_key":'<密钥>'`), reads on from that pair,
  *  which may cross the match taken. One match, so that text cut inside it is never read apart from
  *  the pair it crosses (`secret-stream.ts`). Linear in `text`: a pattern reads text again only from
  *  where the value of a match taken starts, once when it is taken; from where a match taken ended
@@ -951,7 +981,9 @@ function append(match: TakenMatch, part: string): void {
  *
  *  A match whose value stopped, not closed, short of the next pair goes on past that pair the same
  *  way, where only blanks stand before it: that pair is inside the value, as v0.70.0 read it
- *  (`--token \"xa TOKEN='\"'<密钥> y'`, `apikey=\"a TOKEN='"'<密钥>`; legacy 934). Such a match
+ *  (`--token \"xa TOKEN='\"'<密钥> y'`, `apikey=\"a TOKEN='"'<密钥>`; legacy 934). So does a
+ *  `"…"` closed by a quote a backslash escapes, before a pair whose `'…'` value holds a `"`
+ *  (`closedShortOfAPair`: `--password "\"secret:'"='<密钥>"`; review #501 on #1591). Such a match
  *  is `open`: text cut after it, before what may be that pair, is held with it
  *  (`secret-stream.ts`). */
 function readTogether(
@@ -993,20 +1025,28 @@ function readTogether(
       // on from that pair, which may go on past the match taken.
       const pairAt = inside ? pairAtFirstCharacter(first, text) : undefined;
       if (pairAt !== undefined) readOn = Math.min(readOn, pairAt);
+      // One whose value stopped, not closed, may yet be crossed where it stopped.
+      const { openQuote } = inside ? quotesOf(first, text) : { openQuote: '' };
+      if (inside && openQuote !== '') {
+        last.insideOpenQuote = openQuote;
+        last.insideOpenEnd = first.end;
+      }
     } else if (
       last !== undefined &&
       first.start >= last.end &&
-      last.openQuote !== '' &&
+      (last.openQuote !== '' || closedShortOfAPair(last, first, text)) &&
       BLANKS_ONLY.test(text.slice(last.end, first.start))
     ) {
       // Its value stopped, not closed, before this pair: this pair is inside that value, which
-      // goes on past it (`goOnTo`).
+      // goes on past it (`goOnTo`). So too where it was closed short of it.
+      const quote = last.openQuote !== '' ? last.openQuote : last.closingQuote;
       append(last, text.slice(last.end, first.start));
       append(last, first.replacement);
       last.values += 1;
       last.crossedAt = last.end;
       last.end = first.end;
-      goOnTo(last, last.openQuote, text);
+      last.insideOpenQuote = '';
+      goOnTo(last, quote, text);
       readOn = first.valueAt;
     } else if (last === undefined || first.start >= last.end) {
       const { start, end, replacement } = first;
@@ -1018,6 +1058,8 @@ function readTogether(
         values: 1,
         crossedAt: end,
         ...quotesOf(first, text),
+        insideOpenQuote: '',
+        insideOpenEnd: -1,
       });
       readOn = first.valueAt;
     } else {
@@ -1033,6 +1075,8 @@ function readTogether(
       readOn = last.end;
       last.crossedAt = last.end;
       last.end = first.end;
+      const insideOpenQuote = last.insideOpenQuote;
+      last.insideOpenQuote = '';
       if (
         last.closingQuote !== '' &&
         last.closingQuoteAt >= first.valueAt + openingQuoteLength(first, text)
@@ -1045,6 +1089,15 @@ function readTogether(
       ) {
         // So is where its value stopped, not closed.
         goOnTo(last, last.openQuote, text);
+      } else if (
+        insideOpenQuote !== '' &&
+        (last.insideOpenEnd >= first.valueAt + openingQuoteLength(first, text) ||
+          (last.insideOpenEnd <= first.start &&
+            BLANKS_ONLY.test(text.slice(last.insideOpenEnd, first.start))))
+      ) {
+        // So is where a value left out inside it stopped, not closed, or the pair that crossed it
+        // stands right after that value, past blanks alone: that value goes on to its own quote.
+        goOnTo(last, insideOpenQuote, text);
       } else {
         Object.assign(last, quotesOf(first, text));
       }
