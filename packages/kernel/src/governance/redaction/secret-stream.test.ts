@@ -450,6 +450,8 @@ const SHAPES = [
   `\\"password\\":\\" token:x"\\"'apikey\\":\\"${FAKE}`,
   `\\"token\\":\\"'apikey=x&\\\\\\"'${FAKE}`,
   `password=\\"\\"password\\"=\\"\\\\\\"${FAKE}Token:`,
+  `token='\\"password\\": \\"x' ${FAKE}\\\\\\"`,
+  `password='\\"token\\": \\"a TOKEN='x'\\\\\\" ${FAKE}\\" z`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

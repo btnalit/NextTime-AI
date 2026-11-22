@@ -2357,6 +2357,29 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
+
+  it.each([
+    [
+      'the rest of it, after a value before it',
+      `token='\\"password\\": \\"x' ${FAKE}\\\\\\"`,
+      `token='${REDACTED}'${REDACTED}`,
+      2,
+    ],
+    [
+      'a value left out inside the value a pair crossed',
+      `password='\\"token\\": \\"a TOKEN='x'\\\\\\" ${FAKE}\\" z`,
+      `password='${REDACTED}'${REDACTED}'${REDACTED}\\" z`,
+      3,
+    ],
+  ])(
+    'reads a `\\\\\\"` in an escaped JSON value a pair crossed as a quote of its own (legacy 930): %s',
+    (_label, text, hidden, values) => {
+      // main read that `\"` as the value's close: it wrote it after the mask (the first), or
+      // went on to it and no further, and kept what came after it (the second, as v0.70.0 did).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
 });
 
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
