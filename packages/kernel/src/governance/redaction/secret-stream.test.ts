@@ -365,6 +365,75 @@ const SHAPES = [
   // end of what was emitted (legacy 920, #493 on #1579).
   String.raw`run password='\\" , API_TOKEN="\a'""api_key": "' `,
   String.raw`echo "--password="\n\"password: '"\\'\"}"}`,
+  // Held while a key and its quote can still come, to the bounds the whole text reads them to
+  // (reviews #493 and #501 on #1589): eight blanks after the quote, a key of 64 characters, a key
+  // that opens with a capital; and the next pair looked for after what was emitted.
+  `token=x,password: "api_key"${' '.repeat(8)}: ${FAKE}`,
+  `token=x,password: "${'a'.repeat(58)}_token": ${FAKE}`,
+  `token=x,password: "Api_key": ${FAKE}`,
+  `password = &token = "user${FAKE}"`,
+  // A pair that starts inside a value and goes on past it, read on from where that value starts
+  // (legacy 934); a value closed by a quote inside the value of a pair that crossed it (review
+  // #501 on #1589); a secret's key and its quote, which is no value (legacy 930).
+  `TOKEN=x,token="apikey:"${FAKE}"`,
+  `apikey=x,apikey="Secret="${FAKE}"`,
+  `TOKEN=x,I_TOKEN="password:\\"${FAKE}`,
+  `password:"TOKEN='"'${FAKE}"`,
+  `token='TOKEN="'"${FAKE}'`,
+  `--apikey='password:"'"${FAKE}'`,
+  `token: "password": ${FAKE}`,
+  `token: \\"password\\": \\"${FAKE}\\"`,
+  `"token": "password": "${FAKE}"`,
+  // A pair at a value's first character; a pair after a value cut short, past blanks, which is
+  // held with that value until what follows the blanks is known; a value that goes on to its own
+  // quote, stopping at a secret's key but not at one whose opening quote is escaped (legacy 934).
+  `--token \\"TOKEN='\\"'${FAKE}\\"`,
+  `--token \\"xa TOKEN='\\"'${FAKE} y':`,
+  `apikey=\\"a TOKEN='"'${FAKE}`,
+  `TOKEN=\\";passwd=""${FAKE}`,
+  `password:"a apikey:'"${FAKE}' : APIKEY="a --apikey=""${FAKE} y, `,
+  `--token 'a TOKEN="'"x' : --apikey="xpassword:''"${FAKE} y'|`,
+  `api_key: 'a TOKEN=\\"'x'\\", api_key: "password:''"${FAKE} y", `,
+  `token="a a TOKEN='"${FAKE}"'\t:\tAPIKEY="Secret=\\""\\""${FAKE}\\"", `,
+  `api_key: "xa TOKEN='"'${FAKE} y';`,
+  `token='a password=\\"secret': "${FAKE}"`,
+  `"password":\\"&token: "\\\\"\\\\\\" : \\"password\\": \\",${FAKE}\\"`,
+  `--token "passwd='"'\\"secret"=""${FAKE}`,
+  // A value that stopped at a quote inside the value of the pair that crossed it, going on; a
+  // `"…"` value read on past a pair whose `'…'` value holds its quote; a pair at the first
+  // character of a value inside another; a `"…"` value that is a secret's key and its quote, and
+  // one inside another value; a value stopped where the value of the pair that crossed it opens;
+  // a JSON value that is a secret's key and its quote; a "… not closed on its line after a key in
+  // quotes; a value with an escaped quote that a pair crosses or follows (review #501, #493 on
+  // #1591).
+  `password:\\"TOKEN='"'${FAKE}`,
+  `--token \\"TOKEN='"'${FAKE}\\"`,
+  `password:"\\"a TOKEN='"'${FAKE}"`,
+  `password:"\\"${FAKE} TOKEN='"'"`,
+  `--token='token: \\"api_key="'${FAKE}"`,
+  `token=x,password: "api_key": ${FAKE}`,
+  `token="abc${FAKE}Secret" = 1`,
+  `TOKEN=password:"TOKEN='"'${FAKE}`,
+  `--token='x,api_key="api_key":'${FAKE}' :`,
+  `apikey=\\"token=token='apikey="'\\"'${FAKE}`,
+  `"TOKEN'":"passwd":"${FAKE}`,
+  `token=password: "api_key": "${FAKE}`,
+  `token: "password": "${FAKE} x`,
+  `--password 'Password:\\"TOKEN='"'${FAKE}`,
+  `--password "\\"secret:'"='${FAKE}"`,
+  // A value that ends with a secret's name and its escaped quote; a secret's key and its escaped
+  // quote, which that key's own pair crosses; a JSON value inside a string, stopped before a pair
+  // in it; quotes many deep that streamed apart from the whole before (review #493 on #1591).
+  String.raw`run _--token '", \"Password\"=\",${FAKE}', \"password\": \" ${FAKE}\"\"'}`,
+  `password=\\"${FAKE}myToken\\": 1`,
+  `token=\\"abc${FAKE}Secret\\" = 1`,
+  `\\"password\\": \\"${FAKE}myToken\\": 1`,
+  `{\\"token\\":\\"password\\":\\"${FAKE}\\"}`,
+  `token: \\"password\\": \\"a\\\\\\"b${FAKE}\\"`,
+  `token: \\"password\\": \\"${FAKE}\\"`,
+  `\\"password\\": \\"token: apiKey' = \\"${FAKE}\\"`,
+  `{\\"api_key=${FAKE}&token\\": \\"x\\"}`,
+  `token: \\"_password\\": \\"${FAKE}\\"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -476,15 +545,10 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
   const TAB = '\t';
   // Known limit, as legacy 920: where one rule's mask changes how a later rule reads the text
   // (quotes three or four deep on a line), the cut is found on the text as it came and can fall
-  // inside a value only the whole text reads. Pinned so that a change to either shows (#493 on
-  // #1579; release.md §3.214, §3.216): main streamed these two apart too, and the two it pinned
-  // before stream as the whole text now (`SHAPES`).
+  // inside a value only the whole text reads. Pinned so that a change to it shows (#493 on #1579;
+  // release.md §3.214, §3.216, §3.217): main streamed this one apart too; the two main pinned, and
+  // the other one pinned here before, stream as the whole text now (`SHAPES`).
   it.each([
-    [
-      String.raw`run _--token '", \"Password\"=\",${FAKE}', \"password\": \" ${FAKE}\"\"'}`,
-      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}\"\"'}`,
-      String.raw`run _--token '${REDACTED}', \"password\": \"${REDACTED}${FAKE}\"\"'}`,
-    ],
     [
       String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
       String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
@@ -514,14 +578,24 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
   });
 
   it('holds a bare value back at a `,` only while the key after the next quote can still decide where it ends (review #501 on #1586)', () => {
-    // A secret's key, whole: held from its quote, the value before it read on past the `,`.
-    expect(createSecretStreamScrubber().push('token=x,password: "api_key": ').value).toBe(
-      `token=${REDACTED} `,
-    );
+    // A secret's key, whole: the value before it read on past the `,`, and the key's pair, whose
+    // value has not come, crossing both (review #493 on #1591) — held whole.
+    const scrubber = createSecretStreamScrubber();
+    expect(scrubber.push('token=x,password: "api_key": ').value).toBe('');
+    expect(scrubber.flush().value).toBe(`token=${REDACTED} "${REDACTED}": `);
     // A key no rule hides: the value before it ends at the `,`.
     expect(createSecretStreamScrubber().push('token=x,password: "note": ').value).toBe(
       `token=${REDACTED}`,
     );
+  });
+
+  it('lets a value still open go once more than blanks follows it (legacy 934)', () => {
+    // A pair after it, past blanks, may be read as inside it; one on the next line is not.
+    const scrubber = createSecretStreamScrubber();
+    expect(scrubber.push('TOKEN=\\"abc"\nnext line ').value).toBe(
+      `TOKEN=\\"${REDACTED}"\nnext line `,
+    );
+    expect(scrubber.flush().value).toBe('');
   });
 
   it('holds back only the word being written', () => {
