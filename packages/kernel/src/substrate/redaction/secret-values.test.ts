@@ -2512,6 +2512,19 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       2,
     ],
     [
+      // The next key as long as the JSON rule reads one (review #493 on 339705af, its P5).
+      'then a long key',
+      `{"passwordx": "a token: ", "service_${'x'.repeat(50)}_password": "${FAKE}Secret:"}`,
+      `{"passwordx": "${REDACTED}", "service_${'x'.repeat(50)}_password": "${REDACTED}"}`,
+      2,
+    ],
+    [
+      'then a key of 128 characters',
+      `{"passwordx": "a token: ", "service_${'x'.repeat(111)}_password": "${FAKE}Secret:"}`,
+      `{"passwordx": "${REDACTED}", "service_${'x'.repeat(111)}_password": "${REDACTED}"}`,
+      2,
+    ],
+    [
       'after a --flag',
       `{"passwordx": "a --token ", "password:k": " ${FAKE}"}`,
       `{"passwordx": "${REDACTED}", "password:${REDACTED}": "${REDACTED}"}`,

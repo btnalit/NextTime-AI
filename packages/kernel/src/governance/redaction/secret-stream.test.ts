@@ -628,6 +628,20 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     expect(scrubber.flush().value).toBe('');
   });
 
+  it('settles a line of JSON members, each read on to the next key, without reading it again for each (review #493 on #1593)', () => {
+    // Each member's value closes where JSON goes on to the next key, and the cut is held before
+    // it, one member back at a time: the text is read once for each cut, not once for each move.
+    const member = '"passwordx": "a token: ", ';
+    const text = `{${member.repeat(115)}"x": 1}\n`.repeat(3);
+    const scrubber = createSecretStreamScrubber();
+    let out = '';
+    const started = performance.now();
+    for (let at = 0; at < text.length; at += 7) out += scrubber.push(text.slice(at, at + 7)).value;
+    out += scrubber.flush().value;
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(out).toBe(scrubSecretValues(text).value);
+  });
+
   it('holds back only the word being written', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('hello wor').value).toBe('hello ');

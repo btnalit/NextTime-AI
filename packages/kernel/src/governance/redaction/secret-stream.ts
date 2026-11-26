@@ -201,6 +201,16 @@ function safeCut(raw: string, context: string): number {
   const begin = raw.lastIndexOf('-----BEGIN');
   if (begin !== -1 && raw.indexOf('-----END', begin) === -1) cut = Math.min(cut, begin);
 
+  // What the value rules read does not turn on the cut: read once, not again each time the cut
+  // moves back (review #493 on #1593: a line of JSON members, each settled at the next key, moved
+  // it back one member at a time, and read the whole text again each time).
+  const read = context + raw;
+  const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open' | 'settledAt'>[] = [
+    ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
+      secretMatches(valuePattern, read, context.length),
+    ),
+    ...bareValueEndsToCome(read, context.length),
+  ];
   for (let moved = true; moved; ) {
     moved = false;
     // Never right after a backslash: what it escapes would be read apart from it (`\\\\\"[redacted]`
@@ -232,13 +242,6 @@ function safeCut(raw: string, context: string): number {
     // text read past a match to settle how it reads ends, or where that read reached the end:
     // a JSON string closed short of a pair in it, as JSON goes on to the next key (`settledAt`;
     // review #501 on #1593).
-    const read = context + raw;
-    const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open' | 'settledAt'>[] = [
-      ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
-        secretMatches(valuePattern, read, context.length),
-      ),
-      ...bareValueEndsToCome(read, context.length),
-    ];
     for (const { start, end, open, settledAt } of spans) {
       const at = start - context.length;
       if (
