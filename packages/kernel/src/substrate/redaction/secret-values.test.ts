@@ -2549,6 +2549,19 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       3,
     ],
     [
+      // Only blanks between them (review #501 on #1593).
+      'then the next object after blanks',
+      `{"passwordx": "a token: "} {"password:k": " ${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"} {"password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      'then the next array after blanks',
+      `[{"passwordx": "a token: "}] [{"password:k": " ${FAKE}"}]`,
+      `[{"passwordx": "${REDACTED}"}] [{"password:${REDACTED}": "${REDACTED}"}]`,
+      3,
+    ],
+    [
       'written in a string',
       `{\\"passwordx\\": \\"a token: \\", \\"password:k\\": \\" ${FAKE}\\"}`,
       `{\\"passwordx\\": \\"${REDACTED}\\", \\"password:${REDACTED}\\": \\"${REDACTED}\\"}`,
@@ -2559,6 +2572,19 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       `{\\"passwordx\\": \\"a token: \\"}, {\\"password:k\\": \\" ${FAKE}\\"}`,
       `{\\"passwordx\\": \\"${REDACTED}\\"}, {\\"password:${REDACTED}\\": \\"${REDACTED}\\"}`,
       3,
+    ],
+    [
+      'written in a string, then the next object after blanks',
+      `{\\"passwordx\\": \\"a token: \\"} {\\"password:k\\": \\" ${FAKE}\\"}`,
+      `{\\"passwordx\\": \\"${REDACTED}\\"} {\\"password:${REDACTED}\\": \\"${REDACTED}\\"}`,
+      3,
+    ],
+    [
+      // The next key as long as the JSON rule reads one, written in a string (review #501 on #1593).
+      'written in a string, then a long key',
+      `{\\"passwordx\\": \\"a token: \\", \\"service_${'x'.repeat(50)}_password\\": \\"${FAKE}\\"}`,
+      `{\\"passwordx\\": \\"${REDACTED}\\", \\"service_${'x'.repeat(50)}_password\\": \\"${REDACTED}\\"}`,
+      2,
     ],
     [
       'written in a string, then the end of that string',
@@ -2609,10 +2635,37 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}"}`,
       4,
     ],
+    [
+      'a key straight after the end of an object',
+      `{"passwordx": "a token: "} "note": "${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}"}`,
+      4,
+    ],
+    [
+      'the next object straight after the value',
+      `{"passwordx": "a token: " {"note": "${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}"}`,
+      4,
+    ],
+    [
+      'a key with a backslash in it',
+      `{"passwordx": "a token: ", "password\\\\k": "${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}"}`,
+      4,
+    ],
+    [
+      'a key with a backslash in it, written in a string',
+      `{\\"passwordx\\": \\"a token: \\", \\"password\\\\\\\\k\\": \\"${FAKE}\\"}`,
+      `{\\"passwordx\\": \\"${REDACTED}\\"${REDACTED}\\"${REDACTED}\\"}`,
+      4,
+    ],
   ])(
     'goes on with a JSON value past a pair whose value starts at its closing quote, where other text follows (review #501 on #1593): %s',
     (_label, text, hidden, redactedValues) => {
       // No JSON goes on there: `token: "} and <密钥>"` may be a pair, as main and v0.70.0 read it.
+      // Nor at a key straight after a `}` or an object straight after the value, or at a key with a
+      // backslash in it, which the JSON rule does not read: closed there, short of the pair, the
+      // string kept the value after that key.
       expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues });
     },
   );

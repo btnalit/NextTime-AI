@@ -1014,17 +1014,21 @@ function closedByItsQuote(value: string, opening: string, jsonStrings: JsonStrin
 }
 
 /** After the quote that closes a JSON string written in one string, or in two: JSON going on —
- *  past blanks and any `}` or `]` that close what the string is in, a `,`, any `{` or `[` that
- *  open the next object, and its first key, up to its `:` (a key of at most 128 characters, as
- *  `JSON_SECRET_PAIR` reads one); or the line's end. For a string written in two, also the `"`
- *  that closes the string it is written in, and JSON in one string going on after that
- *  (`{"log": "{\"passwordx\": \"a token: \"}"}`).
- *  Not other text (`{"passwordx": "a token: "} and <密钥>"`: `token: "} and <密钥>"` may be a pair). */
-const JSON_GOES_ON_IN_ONE = String.raw`[ \t]*(?:[}\]][ \t]*)*(?:,[ \t]*(?:[{[][ \t]*)*"[^"\\\r\n]{0,128}"[ \t]*:|$|[\r\n])`;
+ *  past blanks and any `}` or `]` that close what the string is in, a `,` — or, after one of those
+ *  at least, only blanks before the next object or array (`{…} {…}`, review #501 on #1593) — any
+ *  `{` or `[` that open the next object, and its first key, up to its `:` (a key of at most 128
+ *  characters and no backslash, as `JSON_SECRET_PAIR` reads one); or the line's end. For a string
+ *  written in two, also the `"` that closes the string it is written in, and JSON in one string
+ *  going on after that (`{"log": "{\"passwordx\": \"a token: \"}"}`).
+ *  Not other text (`{"passwordx": "a token: "} and <密钥>"`: `token: "} and <密钥>"` may be a pair),
+ *  nor a key straight after a `}` or `]` (`{"passwordx": "a token: "} "note": "<密钥>"}`). */
+const JSON_CLOSES = String.raw`(?:[}\]][ \t]*)`;
+const JSON_ON_TO_THE_NEXT_KEY = String.raw`(?:${JSON_CLOSES}*,[ \t]*|${JSON_CLOSES}+(?=[{[]))(?:[{[][ \t]*)*`;
+const JSON_GOES_ON_IN_ONE = String.raw`[ \t]*(?:${JSON_ON_TO_THE_NEXT_KEY}"[^"\\\r\n]{0,128}"[ \t]*:|${JSON_CLOSES}*(?:$|[\r\n]))`;
 const JSON_GOES_ON_HERE = {
   1: new RegExp(JSON_GOES_ON_IN_ONE, 'y'),
   2: new RegExp(
-    String.raw`[ \t]*(?:[}\]][ \t]*)*(?:,[ \t]*(?:[{[][ \t]*)*\\"[^"\\\r\n]{0,128}\\"[ \t]*:|$|[\r\n]|"${JSON_GOES_ON_IN_ONE})`,
+    String.raw`[ \t]*(?:${JSON_ON_TO_THE_NEXT_KEY}\\"[^"\\\r\n]{0,128}\\"[ \t]*:|${JSON_CLOSES}*(?:$|[\r\n]|"${JSON_GOES_ON_IN_ONE}))`,
     'y',
   ),
 } as const;
