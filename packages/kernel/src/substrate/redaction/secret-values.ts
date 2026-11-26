@@ -1662,11 +1662,13 @@ const FLOORS = new Map<readonly SecretPattern[], readonly released.ValuePattern[
  *  (legacy 939). Most text one leaves as it is, or both read alike: that reading. Else each
  *  reading is placed in `text` (`runsOf`); what this file's shows and v0.70.0's hid is hidden, and
  *  so is what this file's wrote that is not where it came from (`WROTE_OTHER`), one `[redacted]`
- *  for each stretch of hidden text and the masks beside it. What the result shows, both readings
- *  show, so it never shows what either hid. (Text a replacement keeps between two of its masks is
- *  placed where it is first found after the part before, `placeIn`: if it came from further on,
- *  what is shown is the same text v0.70.0 shows where it was placed.) Exported for its tests,
- *  which read with rules of their own; `scrubPlain` passes the two lists v0.70.0 had (`FLOORS`). */
+ *  for each stretch of hidden text and the masks beside it. Each stretch the result shows is text
+ *  both readings show where it is placed. Text a replacement keeps between two of its masks is
+ *  placed where it is first found after the part before (`placeIn`), not always where it came
+ *  from: placed on text the other reading hid, it is hidden with it — more hidden than either
+ *  reading, never less (review #493 on #1595). So whether it is can turn on text elsewhere in the
+ *  same text, which decides if the two readings are aligned at all. Exported for its tests, which
+ *  read with rules of their own; `scrubPlain` passes the two lists v0.70.0 had (`FLOORS`). */
 export function withFloor(
   text: string,
   patterns: readonly SecretPattern[],
