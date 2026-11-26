@@ -144,8 +144,9 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
  * no UPDATE on `decisions` or `chat_messages`, core 0035 / 0008). A rewrite is conditional on the
  * value it read (`… and <column> = <what was read>`), so a row changed in between is left as it is
- * (`skipped`) for the next run. A rewrite changes a value only to the mask, so a second run finds
- * nothing to do.
+ * (`skipped`) for the next run. A rewrite only hides more of a value, as the mask. A second run
+ * finds nothing to do in almost every row, but not in all: in a few, the rules read the rewritten
+ * value on and hide a little more (release.md §3.219: a third run finds nothing more).
  *
  * **Audit.** An executing run writes one platform audit row, `cli.raw_secrets_scrubbed`, with the
  * counts — also when it fails part-way, so the windows that did commit are on record

@@ -509,6 +509,11 @@ function firstMismatch(text: string, inThree: boolean): string | undefined {
   return undefined;
 }
 
+/** For the two tests below that scrub a text whole again at every cut, thousands of times over: with
+ *  v0.70.0's rules read under every text as well (legacy 939), each takes about twice as long as
+ *  before — some 4 s alone, past the default 5 s on a loaded run. Only these two. */
+const SCRUBBED_AT_EVERY_CUT_MS = 20_000;
+
 describe('createSecretStreamScrubber — split anywhere, the output is the whole text scrubbed', () => {
   it.each(PAIR_NAMES)(
     '%s with every separator and value: in two at every offset, in three at every pair',
@@ -537,62 +542,80 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
       );
       expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
     },
+    SCRUBBED_AT_EVERY_CUT_MS,
   );
 
-  it('in up to nine uneven pieces, cut at random', () => {
-    // mulberry32: the product of the 31-bit generator used before passed 2^53, lost its low bits
-    // and fell into a short cycle, so most texts were cut the same few ways.
-    let seed = 7;
-    const random = (below: number) => {
-      seed = (seed + 0x6d2b79f5) | 0;
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4_294_967_296) * below);
-    };
-    const texts = [
-      ...PAIR_NAMES.flatMap((name) =>
-        SEPARATORS.map(
-          (separator, index) =>
-            `see ${name}${separator}${PAIR_VALUES[index % PAIR_VALUES.length]} ok`,
+  it(
+    'in up to nine uneven pieces, cut at random',
+    () => {
+      // mulberry32: the product of the 31-bit generator used before passed 2^53, lost its low bits
+      // and fell into a short cycle, so most texts were cut the same few ways.
+      let seed = 7;
+      const random = (below: number) => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4_294_967_296) * below);
+      };
+      const texts = [
+        ...PAIR_NAMES.flatMap((name) =>
+          SEPARATORS.map(
+            (separator, index) =>
+              `see ${name}${separator}${PAIR_VALUES[index % PAIR_VALUES.length]} ok`,
+          ),
         ),
-      ),
-      ...SHAPES.flatMap((shape) => CONTEXTS.map(([before, after]) => `${before}${shape}${after}`)),
-    ];
-    const mismatches: string[] = [];
-    for (const text of texts) {
-      const scrubbed = scrubSecretValues(text);
-      const whole = `${scrubbed.value} (${scrubbed.redactedValues})`;
-      for (let round = 0; round < 20; round += 1) {
-        const cuts = Array.from({ length: 1 + random(8) }, () => random(text.length + 1));
-        cuts.sort((a, b) => a - b);
-        if (streamedAt(text, cuts) !== whole) {
-          mismatches.push(`${JSON.stringify(text)} split at ${cuts.join(', ')}`);
-          break;
+        ...SHAPES.flatMap((shape) =>
+          CONTEXTS.map(([before, after]) => `${before}${shape}${after}`),
+        ),
+      ];
+      const mismatches: string[] = [];
+      for (const text of texts) {
+        const scrubbed = scrubSecretValues(text);
+        const whole = `${scrubbed.value} (${scrubbed.redactedValues})`;
+        for (let round = 0; round < 20; round += 1) {
+          const cuts = Array.from({ length: 1 + random(8) }, () => random(text.length + 1));
+          cuts.sort((a, b) => a - b);
+          if (streamedAt(text, cuts) !== whole) {
+            mismatches.push(`${JSON.stringify(text)} split at ${cuts.join(', ')}`);
+            break;
+          }
         }
       }
-    }
-    expect(mismatches).toEqual([]);
-  });
+      expect(mismatches).toEqual([]);
+    },
+    SCRUBBED_AT_EVERY_CUT_MS,
+  );
 
   const TAB = '\t';
   // Known limit, as legacy 920: where one rule's mask changes how a later rule reads the text
   // (quotes three or four deep on a line), the cut is found on the text as it came and can fall
   // inside a value only the whole text reads. Pinned so that a change to it shows (#493 on #1579;
   // release.md §3.214, §3.216, §3.217): main streamed this one apart too; the two main pinned, and
-  // the other one pinned here before, stream as the whole text now (`SHAPES`).
+  // the other one pinned here before, stream as the whole text now (`SHAPES`). This one does too
+  // since every text is read with v0.70.0's rules as well (legacy 939): v0.70.0 reads the value
+  // after `token: ` on to the end of the line, and the stream does not cut inside what it reads.
   it.each([
     [
       String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
       String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
-      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
     ],
   ])(
-    'quotes many deep on a line can still stream apart from the whole: %s',
-    (text, whole, streamed) => {
+    'quotes many deep on a line, which main streamed apart from the whole, stream as it: %s',
+    (text, whole) => {
       expect(scrubSecretValues(text).value).toBe(whole);
-      expect(stream([text]).text).toBe(streamed);
+      expect(stream([text]).text).toBe(whole);
     },
   );
+
+  it('a text v0.70.0 reads further than the rules here: in two at every offset, in three at every pair (legacy 939)', () => {
+    const texts = [
+      `token:token:"password:k"${TAB}:"a''${FAKE}"`,
+      String.raw`.--token=\" : .'token' = '\\"x${FAKE}"}password=',${FAKE}"|`,
+      'token=x,password: "note": ',
+    ];
+    const mismatches = texts.map((text) => firstMismatch(text, true));
+    expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
+  });
 });
 
 describe('createSecretStreamScrubber — the stream stays live', () => {
@@ -615,9 +638,15 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('token=x,password: "api_key": ').value).toBe('');
     expect(scrubber.flush().value).toBe(`token=${REDACTED} "${REDACTED}": `);
-    // A key no rule hides: the value before it ends at the `,`.
-    expect(createSecretStreamScrubber().push('token=x,password: "note": ').value).toBe(
-      `token=${REDACTED}`,
+    // A key no rule hides: the rules here end the value before it at the `,`, but v0.70.0 reads
+    // that value on to the name's `:`, and every text is read with its rules too (legacy 939) —
+    // held as well, till the value after the key comes.
+    const other = createSecretStreamScrubber();
+    expect(other.push('token=x,password: "note": ').value).toBe('');
+    expect(other.push('"a" ok').value).toBe(`token=${REDACTED} "${REDACTED}": "a`);
+    // After a quoted name, where v0.70.0 ends the value at the `,` too, it goes.
+    expect(createSecretStreamScrubber().push('token=x,"password": "note": ').value).toBe(
+      `token=${REDACTED}"password": "${REDACTED}": `,
     );
   });
 

@@ -12,7 +12,10 @@ import {
   SECRET_VALUE_PATTERNS,
   STORED_REWRITE_SECRET_PATTERNS,
   type Scrubbed,
+  type SecretPattern,
   endsAQuotedValue,
+  floorReadSpans,
+  placeIn,
   platformApiKeys,
   platformKeyShapes,
   redactSecretFieldsInJsonText,
@@ -24,7 +27,9 @@ import {
   scrubSecretValues,
   scrubbedCut,
   secretFieldLiterals,
+  withFloor,
 } from './index.js';
+import * as released from './secret-values-v0.70.0.js';
 
 /** A Handle-shaped compact JWT. Synthetic — `.gitleaks.toml` allows this signature segment, and
  *  every other fixture here spells out `abcdefghijklmnopqrstuvwxyz`, which it allows too. */
@@ -36,6 +41,20 @@ const PLATFORM_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
 /** 32 bytes in standard base64 — 43 characters, the last one's low bits zero, then `=` — the
  *  shape of a WireGuard public key. Synthetic. */
 const WIREGUARD_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYQ=';
+
+/** The rules of secret-values.ts read alone: a list of patterns a caller passes has no floor of
+ *  v0.70.0's under it (legacy 939). What every case here pins is what they read; where v0.70.0 hid
+ *  more, what is returned hides that too (`expectFloored`, and the floor's own cases below). */
+const OWN_READING: readonly SecretPattern[] = [...SECRET_VALUE_PATTERNS];
+const readOwn = (text: string): Scrubbed<string> =>
+  scrubSecretValues(text, { patterns: OWN_READING });
+const fakesIn = (text: string): number => text.split(FAKE).length - 1;
+/** What is returned shows `FAKE` no more often than the rules' own reading does, nor v0.70.0's. */
+function expectFloored(text: string): void {
+  const shown = fakesIn(scrubSecretValues(text).value);
+  expect(shown).toBeLessThanOrEqual(fakesIn(readOwn(text).value));
+  expect(shown).toBeLessThanOrEqual(fakesIn(released.scrubSecretValues(text).value));
+}
 
 describe('scrubSecretValues — the common ways a secret is written down', () => {
   it.each([
@@ -1182,7 +1201,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     "hides a '…' value whose closing quote the rule read before it hid, as v0.69.2 did: %s",
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1275,7 +1295,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     'ends a bare value before the next pair, whose value v0.69.2 and main kept: %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expectFloored(text);
     },
   );
 
@@ -1315,10 +1336,11 @@ describe('the name rules read together, each on the text as it is written (legac
 
   it('still ends a bare value before a next pair whose value is a key no rule hides', () => {
     // Read on there, no rule would hide that pair's value.
-    expect(scrubSecretValues('token=x,password: "note": y')).toEqual({
+    expect(readOwn('token=x,password: "note": y')).toEqual({
       value: `token=${REDACTED}password: "${REDACTED}": y`,
       redactedValues: 2,
     });
+    expectFloored('token=x,password: "note": y');
   });
 
   it.each([
@@ -1456,7 +1478,8 @@ describe('a secret key after an escaped quote is no value (legacy 929)', () => {
     ],
     ['a dotted key', `token: \\"my.api_key": ${FAKE}`, `token: \\"my.api_key": ${REDACTED}`],
   ])("hides the key's value, which main kept: %s", (_label, text, hidden) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readOwn(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expectFloored(text);
   });
 });
 
@@ -1563,7 +1586,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     'hides the value of a pair that starts inside a value and goes on past it, which main kept and v0.70.0 hid: %s',
     (_label, text, hidden, values) => {
       // Its rule reads on from where the value it starts in starts (`readTogether`).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1604,7 +1628,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'hides the value of a pair that starts inside a value and goes on past it, which main and v0.70.0 kept: %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1646,7 +1671,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'hides the value of a pair that starts inside a value and goes on past it, which main kept and v0.70.0 hid (review #501, #493 on #1591): %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1674,17 +1700,19 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'goes on with a value as far as its line (review #501 on #1591): %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
   it('writes one mask for a value that goes on from where it ends hidden', () => {
     // `password`'s value goes on past the one that crossed it, which runs to the line's end.
-    expect(scrubSecretValues(`password:'a TOKEN=\\"x'${FAKE}  `)).toEqual({
+    expect(readOwn(`password:'a TOKEN=\\"x'${FAKE}  `)).toEqual({
       value: `password:'${REDACTED}'${REDACTED}`,
       redactedValues: 2,
     });
+    expectFloored(`password:'a TOKEN=\\"x'${FAKE}  `);
   });
 
   it('reads no pair into a value cut short where other text stands between them, as main and v0.70.0 do', () => {
@@ -1810,7 +1838,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     'reads a "… not closed on its line after a key in quotes and a `:` as the JSON rule reads it, so the pair crosses the value before it that its key is, and all are hidden (review #493 on #1591): %s',
     (_label, text, hidden, values) => {
       // Read by the JSON rule alone, after the name rules hid the key as a value, it was kept.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -1884,7 +1913,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'goes on past a pair that crosses or follows a value with an escaped quote, as v0.70.0 read it (review #501 on #1591): %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -2131,8 +2161,10 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     "the JSON rule reads no value that is a secret's key and its quote, whose value main and v0.70.0 kept: %s",
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
+      // Not with the floor: in what is hidden, v0.70.0 reads the key in front as a JSON pair's.
+      expect(readOwn(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2152,7 +2184,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     "goes on to a value's own quote no further than a secret's key, which its JSON rule reads, as main and v0.70.0 do: %s",
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
+      expectFloored(text);
     },
   );
 
@@ -2182,7 +2215,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // That key's pair is read with the name rules now, and crosses the value it is (review
       // #493 on #1591). Known failures here before.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -2611,7 +2645,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // The pair's name is a word of the string's, hidden with it. Gone on past that pair, the
       // value read in the next key, which the JSON rule then no longer found; main and v0.70.0 did
       // not read the value together, and kept the key (but the one written in a string, on main).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues });
+      expect(readOwn(text)).toEqual({ value: hidden, redactedValues });
+      expectFloored(text);
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -2705,6 +2740,194 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     const text = `"passwordx":"\\"password\\":\\""_password":" token:", "note": "${FAKE}"`;
     const hidden = `"passwordx":"${REDACTED}"_password":"${REDACTED}token:"${REDACTED}"${REDACTED}`;
     expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 4 });
+  });
+});
+
+describe('v0.70.0 read under every text: a floor (legacy 939)', () => {
+  const TAB = '\t';
+  const CROSSING = `token:token:"password:k"${TAB}:"a''${FAKE}"`;
+
+  // What the rules here read alone, what v0.70.0 read, and what is returned: what either hid. A
+  // stretch only v0.70.0 hid counts one value more; one with a mask of the rules here in it counts
+  // as that mask's value did.
+  it.each([
+    [
+      'a secret key the rules here read as a value, and v0.70.0 the value after it',
+      CROSSING,
+      `token:${REDACTED}"${REDACTED}"${TAB}:"a''${FAKE}"`,
+      `token:${REDACTED}"password:${REDACTED}"${TAB}:"${REDACTED}"`,
+      { value: `token:${REDACTED}"${REDACTED}"${TAB}:"${REDACTED}"`, redactedValues: 3 },
+    ],
+    [
+      'the text after a quoted value, which v0.70.0 read on past its quote',
+      String.raw`.--token=\" : .'token' = '\\"x${FAKE}"}password=',${FAKE}"|`,
+      String.raw`.--token=\"${REDACTED}'token' = '${REDACTED}',${FAKE}"|`,
+      String.raw`.--token=\"${REDACTED}"|`,
+      { value: String.raw`.--token=\"${REDACTED}"|`, redactedValues: 2 },
+    ],
+    [
+      'each hiding what the other shows, side by side',
+      'token=x,password: "note": ',
+      `token=${REDACTED}password: "${REDACTED}": `,
+      `token=${REDACTED} "note": `,
+      { value: `token=${REDACTED} "${REDACTED}": `, redactedValues: 2 },
+    ],
+  ])('%s', (_label, text, own, old, floored) => {
+    expect(readOwn(text).value).toBe(own);
+    expect(released.scrubSecretValues(text).value).toBe(old);
+    expect(scrubSecretValues(text)).toEqual(floored);
+  });
+
+  it('is under both lists v0.70.0 had, wherever they read', () => {
+    const floored = scrubSecretValues(CROSSING);
+    expect(floored.value).not.toContain(FAKE);
+    expect(scrubSecretValues(CROSSING, { patterns: STORED_REWRITE_SECRET_PATTERNS })).toEqual(
+      floored,
+    );
+    expect(redactSecrets({ note: CROSSING })).toEqual({
+      value: { note: floored.value },
+      redactedValues: floored.redactedValues,
+      omitted: false,
+    });
+  });
+
+  it('is under no list of a caller’s own: a copy of either list reads as the rules here do', () => {
+    expect(scrubSecretValues(CROSSING, { patterns: [...SECRET_VALUE_PATTERNS] }).value).toContain(
+      FAKE,
+    );
+    expect(
+      scrubSecretValues(CROSSING, { patterns: [...STORED_REWRITE_SECRET_PATTERNS] }).value,
+    ).toContain(FAKE);
+  });
+
+  it('needs none under the high-confidence list, which reads as v0.70.0’s did', () => {
+    for (const text of [
+      CROSSING,
+      `Authorization: Bearer ${FAKE}`,
+      `Authorization: token ${FAKE}`,
+      `curl -H "Authorization: Basic ${Buffer.from('user:pass').toString('base64')}"`,
+      `handle ${HANDLE} key ${PLATFORM_KEY} url https://user:${FAKE}@example.invalid/`,
+      `${PLATFORM_API_KEY_PREFIX}${PLATFORM_KEY}`,
+    ]) {
+      expect(scrubSecretValues(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS })).toEqual(
+        released.scrubSecretValues(text, { patterns: released.HIGH_CONFIDENCE_SECRET_PATTERNS }),
+      );
+    }
+  });
+
+  it('shows nothing either reading hid, on texts drawn at random; where v0.70.0 hid nothing more, is the rules’ own reading', () => {
+    // mulberry32, as the stream's random cuts are drawn.
+    let seed = 939;
+    const random = (below: number): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4_294_967_296) * below);
+    };
+    const pick = <T>(list: readonly T[]): T => list[random(list.length)] as T;
+    const B = '\\';
+    const NAMES = ['token:', 'token=', 'password: ', 'API_TOKEN=', '--token ', 'api_key = '];
+    const QUOTES = ['', '"', "'", `${B}"`];
+    const KEYS = ['password', 'password:k', 'note', 'passwordx', 'x,passwordx', 'a=passwordx'];
+    const VALUES = ['', 'a', "a''", 'x', 'a token: x', ' token:x', 'note: '];
+    const TAILS = ['', '"', ' y', `${B}"`, 'myToken": 1', '"}', ',', `, "password": "${FAKE}"`];
+    const draw = (): string => {
+      let text = '';
+      for (let part = 1 + random(2); part > 0; part -= 1) {
+        text += pick([...NAMES, 'x.secret=', '"api_key": ', 'note: ', '']) + pick(QUOTES);
+        text += `${pick(['', 'x', 'a '])}"${pick(KEYS)}"${pick([':', ': ', ' : ', `${TAB}:`])}`;
+        text += pick(QUOTES) + pick(VALUES) + pick(QUOTES) + FAKE + pick(TAILS);
+      }
+      return text;
+    };
+    const wrong: string[] = [];
+    let readPastTheRules = 0;
+    for (let round = 0; round < 4_000; round += 1) {
+      const text = draw();
+      const own = readOwn(text);
+      const old = released.scrubSecretValues(text);
+      const floored = scrubSecretValues(text);
+      if (old.value === text || old.value === own.value) {
+        if (floored.value !== own.value || floored.redactedValues !== own.redactedValues) {
+          wrong.push(JSON.stringify(text));
+        }
+        continue;
+      }
+      if (floored.value !== own.value) readPastTheRules += 1;
+      const shown = fakesIn(floored.value);
+      if (
+        shown > fakesIn(own.value) ||
+        shown > fakesIn(old.value) ||
+        floored.redactedValues < own.redactedValues
+      ) {
+        wrong.push(JSON.stringify(text));
+      }
+    }
+    expect(wrong).toEqual([]);
+    // Not a property of nothing: v0.70.0 read some of them past what the rules here hide.
+    expect(readPastTheRules).toBeGreaterThanOrEqual(10);
+  });
+
+  it('places the text a replacement keeps where it came from, between its masks', () => {
+    const MASK = { at: -1, length: REDACTED.length };
+    expect(placeIn('x,password:', REDACTED)).toEqual([MASK]);
+    expect(placeIn('token: "abc" more', `token: "${REDACTED}" more`)).toEqual([
+      { at: 0, length: 8 },
+      MASK,
+      { at: 11, length: 6 },
+    ]);
+    expect(placeIn('a"b"c', `${REDACTED}"${REDACTED}"${REDACTED}`)).toEqual([
+      MASK,
+      { at: 1, length: 1 },
+      MASK,
+      { at: 3, length: 1 },
+      MASK,
+    ]);
+  });
+
+  // What no rule here writes yet: a replacement that is not the text it replaced, in order,
+  // between its masks. Only what it starts and ends with as that text does is placed; the rest is
+  // written (`at` -2).
+  it('places only the ends of a replacement that is not its text in order', () => {
+    // Its last part would start inside its first.
+    expect(placeIn('ab', `ab${REDACTED}b`)).toEqual([
+      { at: 0, length: 2 },
+      { at: -2, length: REDACTED.length + 1 },
+    ]);
+    expect(placeIn('abc', 'xbc')).toEqual([
+      { at: -2, length: 1 },
+      { at: 1, length: 2 },
+    ]);
+    // Text dropped, with no mask written for it.
+    expect(placeIn('a-b', 'ab')).toEqual([
+      { at: 0, length: 1 },
+      { at: 2, length: 1 },
+    ]);
+  });
+
+  const rule = (pattern: RegExp, replacement: string) => ({ pattern, redact: () => replacement });
+
+  it('hides what a reading wrote that is not the text it replaced, though v0.70.0 hid nothing more', () => {
+    expect(
+      withFloor('abc z', [rule(/abc/g, 'cba'), rule(/z/g, REDACTED)], [rule(/z/g, REDACTED)], 0),
+    ).toEqual({ value: `${REDACTED} ${REDACTED}`, redactedValues: 3 });
+  });
+
+  // Where a stream must not cut: each of v0.70.0's matches, where it lies in the text as given,
+  // one that reads over what an earlier pass wrote on to the end of what that pass replaced.
+  it('finds where each match v0.70.0 reads lies in the text, over what an earlier one wrote', () => {
+    const token = `ghp_${FAKE}`;
+    expect(floorReadSpans(`secret==${token}`)).toEqual([
+      { start: 8, end: 8 + token.length },
+      { start: 0, end: 8 + token.length },
+    ]);
+  });
+
+  it('keeps apart two stretches a reading kept, with text it dropped between them', () => {
+    expect(withFloor('xa-by', [rule(/a-b/g, 'ab')], [rule(/b/g, REDACTED)], 0)).toEqual({
+      value: `xa${REDACTED}y`,
+      redactedValues: 2,
+    });
   });
 });
 
