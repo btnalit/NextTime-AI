@@ -372,12 +372,14 @@ const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;
-/** A JSON key in which no pair can be written, of at most 64 characters: no `:` or `=`, one of
+/** A JSON key in which no pair can be written, of at most 128 characters — as long as a key the
+ *  JSON rule reads (`JSON_SECRET_PAIR`), so that no key it reads is left to it alone once a value
+ *  before it read the key in (review #493 on #1593): no `:` or `=`, one of
  *  which stands between every pair's name and its value but a `--flag`'s, and no `--flag` with a
  *  blank after it, which stands between that flag and its value (`FLAG_PAIR`). Blanks may stand
  *  in it (`"x passwordx"`), and so may `--` (`"max_tokens--password"`), but not both around a
  *  flag's name. */
-const KEY_WITH_NO_PAIR_IN_IT = String.raw`(?:[^"\\\r\n:=-]|-(?!-[A-Za-z][A-Za-z0-9-]{0,63}[ \t])){1,64}`;
+const KEY_WITH_NO_PAIR_IN_IT = String.raw`(?:[^"\\\r\n:=-]|-(?!-[A-Za-z][A-Za-z0-9-]{0,63}[ \t])){1,128}`;
 
 /** `"api_key": "…"` inside a string that is itself JSON text (a capability tool's result text).
  *  Read after the name rules, on the text they rewrote, and with them where the name rule reads no
@@ -1155,7 +1157,7 @@ function append(match: TakenMatch, part: string): void {
  *  where the value of a match taken starts, once when it is taken; from where a match taken ended
  *  before the last match crossed it, at most once for each crossing (what it then reads starts
  *  there); or from a pair at the first character of a value left out, which stops short of every
- *  pair after it or is a key of at most 64 characters, so no text is read again for two of them. A
+ *  pair after it or is a key of at most 128 characters, so no text is read again for two of them. A
  *  quote is looked for only past where the match taken ends, which then ends where the look
  *  stopped; and no later crossing reads behind where that match now ends.
  *

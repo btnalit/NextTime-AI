@@ -2311,6 +2311,38 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   );
 
   it.each([
+    [
+      'after a name',
+      `APIKEY=password:"${'a'.repeat(56)}passwordx": "${FAKE}"`,
+      `APIKEY=${REDACTED}"${REDACTED}": "${REDACTED}"`,
+    ],
+    [
+      'in a value',
+      `token: "token: "${'a'.repeat(56)}passwordx": "${FAKE}"`,
+      `token: "${REDACTED}"${REDACTED}": "${REDACTED}"`,
+    ],
+    [
+      'escaped',
+      `token: \\"token: \\"${'a'.repeat(56)}passwordx\\": \\"${FAKE}\\"`,
+      `token: \\"${REDACTED}\\"${REDACTED}\\": \\"${REDACTED}\\"`,
+    ],
+    [
+      'of 128 characters',
+      `APIKEY=password:"${'a'.repeat(119)}passwordx": "${FAKE}"`,
+      `APIKEY=${REDACTED}"${REDACTED}": "${REDACTED}"`,
+    ],
+  ])(
+    "crosses a value that reads in a JSON key longer than 64 characters with the key's own pair, as v0.70.0 did (review #493 on #1593): %s",
+    (_label, text, hidden) => {
+      // A key is read with the name rules as long as the JSON rule reads one. Read so only up to
+      // 64 characters, a longer one was left to that rule alone, on the text the value before it
+      // rewrote, and kept its value; main too.
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it.each([
     ['`=`', `{"api_key=${FAKE}&tokenx": "x"}`, `{"api_key=${REDACTED}&tokenx": "${REDACTED}"}`],
     [':', `{"api_key:${FAKE}&tokenx": "x"}`, `{"api_key:${REDACTED}&tokenx": "${REDACTED}"}`],
     [
@@ -2422,6 +2454,23 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // Read as any `"` value is, it closed at the `"` of that `\"`, and kept the rest: the first
       // five main and v0.70.0 hid, the last every version kept.
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it.each([
+    ['a JSON value', `"passwordx":"\\"token:x"${FAKE}`, `"passwordx":"${REDACTED}`],
+    [
+      'an escaped JSON value',
+      `\\"passwordx\\":\\"\\\\\\"token:x\\"${FAKE}`,
+      `\\"passwordx\\":\\"${REDACTED}`,
+    ],
+  ])(
+    'reads a JSON value that stops short of a pair right after a quote of its own as open, and goes on with it (review #493 on #1593): %s',
+    (_label, text, hidden) => {
+      // It ends with a quote of its own (`\"`, `\\\"`), not its close: read as closed there, it
+      // went on no further, and kept what follows that pair's value; so did main and v0.70.0.
       expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
