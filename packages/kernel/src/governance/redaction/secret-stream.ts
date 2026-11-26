@@ -228,21 +228,26 @@ function safeCut(raw: string, context: string): number {
     // a match whose quoted value is still open, blanks alone after it: what comes next may be a
     // pair the whole text reads as inside that value (`open`; legacy 934). The name before that
     // value holds it as well, where this file reads one (`secretNameStart`); this holds it as the
-    // value rules read it, whatever name they took (review #501 on #1591).
+    // value rules read it, whatever name they took (review #501 on #1591). Nor before where the
+    // text read past a match to settle how it reads ends, or where that read reached the end:
+    // a JSON string closed short of a pair in it, as JSON goes on to the next key (`settledAt`;
+    // review #501 on #1593).
     const read = context + raw;
-    const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open'>[] = [
+    const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open' | 'settledAt'>[] = [
       ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
         secretMatches(valuePattern, read, context.length),
       ),
       ...bareValueEndsToCome(read, context.length),
     ];
-    for (const { start, end, open } of spans) {
+    for (const { start, end, open, settledAt } of spans) {
       const at = start - context.length;
       if (
         at < cut &&
         (end - context.length > cut ||
           end === read.length ||
-          (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))))
+          (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))) ||
+          (settledAt !== undefined &&
+            (settledAt - context.length > cut || settledAt === read.length)))
       ) {
         cut = at;
         moved = true;

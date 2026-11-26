@@ -459,6 +459,11 @@ const SHAPES = [
   `APIKEY=password:"${'a'.repeat(56)}passwordx": "${FAKE}"`,
   `"passwordx":"\\"token:x"${FAKE}`,
   `"passwordx":"\\\\"token:="tokenValue":"${FAKE}Secret:"`,
+  `{"passwordx": "a token: ", "password:k": " ${FAKE}"}`,
+  `[[{"passwordx": "a token: "}],\t[{"password:k": " ${FAKE}"}]]`,
+  `{\\"passwordx\\": \\"a token: \\"}, {\\"password:k\\": \\" ${FAKE}\\"}`,
+  `{"log": "{\\"passwordx\\": \\"a token: \\"}", "password:k": " ${FAKE}"}`,
+  `{"passwordx": "a token: "} and ${FAKE}"`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

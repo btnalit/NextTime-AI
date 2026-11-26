@@ -2497,6 +2497,149 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
+
+  it.each([
+    [
+      'then a key a pair can be written in',
+      `{"passwordx": "a token: ", "password:k": " ${FAKE}"}`,
+      `{"passwordx": "${REDACTED}", "password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      'then a value that ends with a name',
+      `{"passwordx": "a token: ", "passwordx": "${FAKE}API_TOKEN="}`,
+      `{"passwordx": "${REDACTED}", "passwordx": "${REDACTED}"}`,
+      2,
+    ],
+    [
+      'after a --flag',
+      `{"passwordx": "a --token ", "password:k": " ${FAKE}"}`,
+      `{"passwordx": "${REDACTED}", "password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      'then a member of no secret',
+      `{"passwordx": "a token: ", "note": "x", "password:k": " ${FAKE}"}`,
+      `{"passwordx": "${REDACTED}", "note": "x", "password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      'at the end of an object',
+      `{"a": {"passwordx": "a token: " }, "password:k": " ${FAKE}"}`,
+      `{"a": {"passwordx": "${REDACTED}" }, "password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      'then the next object of an array',
+      `[[{"passwordx": "a token: "}],\t[{"password:k": " ${FAKE}"}]]`,
+      `[[{"passwordx": "${REDACTED}"}],\t[{"password:${REDACTED}": "${REDACTED}"}]]`,
+      3,
+    ],
+    [
+      'written in a string',
+      `{\\"passwordx\\": \\"a token: \\", \\"password:k\\": \\" ${FAKE}\\"}`,
+      `{\\"passwordx\\": \\"${REDACTED}\\", \\"password:${REDACTED}\\": \\"${REDACTED}\\"}`,
+      3,
+    ],
+    [
+      'written in a string, then the next object',
+      `{\\"passwordx\\": \\"a token: \\"}, {\\"password:k\\": \\" ${FAKE}\\"}`,
+      `{\\"passwordx\\": \\"${REDACTED}\\"}, {\\"password:${REDACTED}\\": \\"${REDACTED}\\"}`,
+      3,
+    ],
+    [
+      'written in a string, then the end of that string',
+      `{"log": "{\\"passwordx\\": \\"a token: \\"}", "password:k": " ${FAKE}"}`,
+      `{"log": "{\\"passwordx\\": \\"${REDACTED}\\"}", "password:${REDACTED}": "${REDACTED}"}`,
+      3,
+    ],
+    [
+      // main and the reading before this one kept the secret; v0.70.0 hid it.
+      'written in a string after one a quoted value crossed, then the end of that string',
+      `{"log": "{\\"_password\\":\\"password: Secret:'\\",\\"x'passwordx\\":\\" a=${FAKE}API_TOKEN=\\"}"}`,
+      `{"log": "{\\"_password\\":\\"${REDACTED}\\":\\"${REDACTED}\\"}"}`,
+      4,
+    ],
+    [
+      'written in a string after one a quoted value crossed, then the end of that string and of its line',
+      `{"log": "{\\"_password\\":\\"password: Secret:'\\",\\"x'passwordx\\":\\" a=${FAKE}API_TOKEN=\\"}"}\n{"log": "x"}`,
+      `{"log": "{\\"_password\\":\\"${REDACTED}\\":\\"${REDACTED}\\"}"}\n{"log": "x"}`,
+      4,
+    ],
+  ])(
+    'closes a JSON value short of a pair whose value starts at its closing quote, where JSON goes on (review #501 on #1593): %s',
+    (_label, text, hidden, redactedValues) => {
+      // The pair's name is a word of the string's, hidden with it. Gone on past that pair, the
+      // value read in the next key, which the JSON rule then no longer found; main and v0.70.0 did
+      // not read the value together, and kept the key (but the one written in a string, on main).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
+
+  it.each([
+    [
+      'after the end of an object',
+      `{"passwordx": "a token: "} and ${FAKE}"`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"`,
+      3,
+    ],
+    [
+      'after a `,`',
+      `{"passwordx": "a token: ", and ${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}`,
+      4,
+    ],
+    [
+      'in what is no key',
+      `{"passwordx": "a token: ", "${FAKE}"}`,
+      `{"passwordx": "${REDACTED}"${REDACTED}"${REDACTED}"}`,
+      4,
+    ],
+  ])(
+    'goes on with a JSON value past a pair whose value starts at its closing quote, where other text follows (review #501 on #1593): %s',
+    (_label, text, hidden, redactedValues) => {
+      // No JSON goes on there: `token: "} and <密钥>"` may be a pair, as main and v0.70.0 read it.
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues });
+    },
+  );
+
+  it('closes no JSON value short of a pair on the line after it (review #501 on #1593)', () => {
+    // A JSON string ends with its line: one stopped there is not closed at a quote of the next
+    // line, which would hide the line's end with it; the pair there is read on its own, as main
+    // and v0.70.0 read it.
+    for (const [text, hidden] of [
+      [
+        `{"passwordx": "a\ntoken: ", "password:k": " ${FAKE}"}`,
+        `{"passwordx": "${REDACTED}\ntoken: "${REDACTED}"password:${REDACTED}": "${REDACTED}"}`,
+      ],
+      [
+        `{"passwordx": "\\"x\n"_password":"}\n{"a": 1}`,
+        `{"passwordx": "${REDACTED}\n"_password":"${REDACTED}\n{"a": 1}`,
+      ],
+    ] as const) {
+      expect(scrubSecretValues(text).value).toBe(hidden);
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    }
+  });
+
+  it('compares the quote a JSON value goes on to with the one of its JSON string (review #501 on #1593)', () => {
+    // A JSON value read on past a value left out inside it may stop at a `\"` there while it is a
+    // JSON string written in one string: going on from that, it goes on to its next `\"`, not to
+    // the quote that closes its string, and kept what follows; so did main and v0.70.0.
+    const text = `"passwordx":"\\"password\\":\\""_password":" token:""" ${FAKE}`;
+    const hidden = `"passwordx":"${REDACTED}"_password":"${REDACTED}token:"${REDACTED}"${REDACTED}`;
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 4 });
+  });
+
+  it('closes a JSON value short of a pair only where it is open at the quote of its JSON string (review #501 on #1593)', () => {
+    // Open at a `\"` in it, a JSON value is no string that quote of its JSON string closes: closed
+    // there, short of the pair after `token:`, it read `"note"` as the next key and kept the value
+    // after it; main and v0.70.0 kept it too.
+    const text = `"passwordx":"\\"password\\":\\""_password":" token:", "note": "${FAKE}"`;
+    const hidden = `"passwordx":"${REDACTED}"_password":"${REDACTED}token:"${REDACTED}"${REDACTED}`;
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 4 });
+  });
 });
 
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {

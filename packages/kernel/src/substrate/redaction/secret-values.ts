@@ -845,6 +845,10 @@ export interface SecretMatch {
   /** The value it ends with is quoted and not closed, stopped short of a next pair or the line's
    *  end: a pair right after it, past blanks, may yet be read as inside it (`readTogether`). */
   readonly open?: true;
+  /** Where the text read past its end to settle how it reads ends: a JSON string closed short of a
+   *  pair in it, read on to the next key's `:` (`jsonGoesOnAfterItsClose`). Cut before there, or
+   *  where that read reached the text's end, the text reads it otherwise (`secret-stream.ts`). */
+  readonly settledAt?: number;
 }
 
 /** A match, and where its value starts (its start, for a pattern with no `value`). */
@@ -955,6 +959,8 @@ interface TakenMatch {
    *  (`ValuePattern.jsonStrings`); the same of the last value left out inside it. */
   jsonStrings: JsonStrings;
   insideOpenJsonStrings: JsonStrings;
+  /** `SecretMatch.settledAt`; `-1` while no text past it was read. */
+  settledAt: number;
 }
 
 /** The quote that closes `match`'s value, and where it starts — or, when the value is quoted but
@@ -1005,6 +1011,34 @@ function closedByItsQuote(value: string, opening: string, jsonStrings: JsonStrin
   let backslashes = 0;
   while (value.charAt(value.length - 2 - backslashes) === '\\') backslashes += 1;
   return closesAJsonString(backslashes, jsonStrings);
+}
+
+/** After the quote that closes a JSON string written in one string, or in two: JSON going on —
+ *  past blanks and any `}` or `]` that close what the string is in, a `,`, any `{` or `[` that
+ *  open the next object, and its first key, up to its `:` (a key of at most 128 characters, as
+ *  `JSON_SECRET_PAIR` reads one); or the line's end. For a string written in two, also the `"`
+ *  that closes the string it is written in, and JSON in one string going on after that
+ *  (`{"log": "{\"passwordx\": \"a token: \"}"}`).
+ *  Not other text (`{"passwordx": "a token: "} and <密钥>"`: `token: "} and <密钥>"` may be a pair). */
+const JSON_GOES_ON_IN_ONE = String.raw`[ \t]*(?:[}\]][ \t]*)*(?:,[ \t]*(?:[{[][ \t]*)*"[^"\\\r\n]{0,128}"[ \t]*:|$|[\r\n])`;
+const JSON_GOES_ON_HERE = {
+  1: new RegExp(JSON_GOES_ON_IN_ONE, 'y'),
+  2: new RegExp(
+    String.raw`[ \t]*(?:[}\]][ \t]*)*(?:,[ \t]*(?:[{[][ \t]*)*\\"[^"\\\r\n]{0,128}\\"[ \t]*:|$|[\r\n]|"${JSON_GOES_ON_IN_ONE})`,
+    'y',
+  ),
+} as const;
+/** Where JSON going on (`JSON_GOES_ON_HERE`) ends, read from right after the quote at `at` that
+ *  closes a JSON string written in `jsonStrings` strings — the value of a pair inside that string
+ *  starts there, with that quote, not escaped, as the pair's separator stands before it; `-1` when
+ *  no JSON goes on, or no such quote is there. Linear: it reads on from that quote no further than
+ *  the next key, which no other such quote is inside. */
+function jsonGoesOnAfterItsClose(text: string, at: number, jsonStrings: 1 | 2): number {
+  const quote = jsonQuote(jsonStrings);
+  if (!text.startsWith(quote, at)) return -1;
+  const goesOn = JSON_GOES_ON_HERE[jsonStrings];
+  goesOn.lastIndex = at + quote.length;
+  return goesOn.test(text) ? goesOn.lastIndex : -1;
 }
 
 /** `match`, whose value a pair inside it ended at a quote not its own, goes on with that value
@@ -1169,7 +1203,10 @@ function append(match: TakenMatch, part: string): void {
  *  is `open`: text cut after it, before what may be that pair, is held with it
  *  (`secret-stream.ts`).
  *
- *  A JSON string goes on to the quote that closes it (`nextJsonQuoteOnTheLine`). */
+ *  A JSON string goes on to the quote that closes it (`nextJsonQuoteOnTheLine`). One that stopped
+ *  short of a pair whose value starts at that quote, where JSON goes on after it
+ *  (`jsonGoesOnAfterItsClose`), closes there instead, and that pair is not read: its name is a word
+ *  of the string's. */
 function readTogether(
   patterns: readonly ValuePattern[],
   text: string,
@@ -1187,12 +1224,13 @@ function readTogether(
     const valuePattern = patterns[index];
     const first = next[index];
     if (valuePattern === undefined || first === undefined) {
-      return taken.map(({ start, end, parts, values, openQuote }) => ({
+      return taken.map(({ start, end, parts, values, openQuote, settledAt }) => ({
         start,
         end,
         replacement: parts.join(''),
         values,
         ...(openQuote === '' ? {} : { open: true as const }),
+        ...(settledAt > end ? { settledAt } : {}),
       }));
     }
     const last = taken.at(-1);
@@ -1216,6 +1254,33 @@ function readTogether(
         last.insideOpenEnd = first.end;
         last.insideOpenJsonStrings = first.jsonStrings ?? 0;
       }
+    } else if (
+      last !== undefined &&
+      first.start >= last.end &&
+      last.jsonStrings !== 0 &&
+      last.openQuote === jsonQuote(last.jsonStrings) &&
+      BLANKS_ONLY.test(text.slice(last.end, first.start)) &&
+      jsonGoesOnAfterItsClose(text, first.valueAt, last.jsonStrings) !== -1
+    ) {
+      // Its value, a JSON string, stopped before this pair, whose value starts at the quote that
+      // closes that string where JSON goes on: the string closes there, and this pair, its name
+      // hidden with the string, is not read (`{"passwordx": "a token: ", "password:k": "<密钥>"}`:
+      // gone on past it, the string read in the next key, which the JSON rule then no longer
+      // found; review #501 on #1593).
+      const quote = jsonQuote(last.jsonStrings);
+      if (!last.masked) {
+        append(last, REDACTED);
+        last.values += 1;
+      }
+      append(last, quote);
+      last.crossedAt = last.end;
+      last.end = first.valueAt + quote.length;
+      last.closingQuote = quote;
+      last.closingQuoteAt = first.valueAt;
+      last.openQuote = '';
+      last.insideOpenQuote = '';
+      last.settledAt = jsonGoesOnAfterItsClose(text, first.valueAt, last.jsonStrings);
+      readOn = last.end;
     } else if (
       last !== undefined &&
       first.start >= last.end &&
@@ -1246,6 +1311,7 @@ function readTogether(
         insideOpenQuote: '',
         insideOpenEnd: -1,
         insideOpenJsonStrings: 0,
+        settledAt: -1,
       });
       readOn = first.valueAt;
     } else {
