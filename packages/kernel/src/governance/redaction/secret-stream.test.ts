@@ -434,6 +434,38 @@ const SHAPES = [
   `\\"password\\": \\"token: apiKey' = \\"${FAKE}\\"`,
   `{\\"api_key=${FAKE}&token\\": \\"x\\"}`,
   `token: \\"_password\\": \\"${FAKE}\\"`,
+  // A JSON key the name rule reads no name at the end of, read with the name rules where a value
+  // before it reads it in; one with a `,`, a `'`, a blank or a `--` in it; a `--flag` and a blank
+  // in a key; a key longer than 64 characters; a `\\\"` in an escaped JSON value and a `\"` in a
+  // JSON value, a quote of its own, and an escaped one gone on to its close short of the next pair;
+  // a JSON string closed short of a pair, where JSON goes on and where it does not
+  // (legacy 930, reviews #501 on #1591 and #1593, #493 on #1593).
+  `apikey=passwd:"apikeye":"${FAKE}`,
+  `APIKEY=password:"x,passwordx":"${FAKE}"`,
+  `token: "token: "x passwordx": "${FAKE}"`,
+  `token: "token: "x --passwordx": "${FAKE}"`,
+  `token:\\"--passwd\\":\\"${FAKE}`,
+  `token:"--passwd":"${FAKE}`,
+  `{"x --token ${FAKE}": "x"}`,
+  `{\\"token\\": \\"passwordx": "${FAKE}"`,
+  `--token --token \\",passwd\\"=\\"${FAKE}`,
+  `\\"password\\":\\" token:x"\\"'apikey\\":\\"${FAKE}`,
+  `\\"token\\":\\"'apikey=x&\\\\\\"'${FAKE}`,
+  `password=\\"\\"password\\"=\\"\\\\\\"${FAKE}Token:`,
+  `token='\\"password\\": \\"x' ${FAKE}\\\\\\"`,
+  `password='\\"token\\": \\"a TOKEN='x'\\\\\\" ${FAKE}\\" z`,
+  `"passwordx": "a token: x\\" ${FAKE}"`,
+  `token=""passwordx":"\\"${FAKE}Secret:`,
+  `\\"token\\":\\"'token:${FAKE}\\"token\\":\\"\\"|${FAKE}`,
+  `APIKEY=password:"${'a'.repeat(56)}passwordx": "${FAKE}"`,
+  `"passwordx":"\\"token:x"${FAKE}`,
+  `"passwordx":"\\\\"token:="tokenValue":"${FAKE}Secret:"`,
+  `{"passwordx": "a token: ", "password:k": " ${FAKE}"}`,
+  `[[{"passwordx": "a token: "}],\t[{"password:k": " ${FAKE}"}]]`,
+  `{\\"passwordx\\": \\"a token: \\"}, {\\"password:k\\": \\" ${FAKE}\\"}`,
+  `{"log": "{\\"passwordx\\": \\"a token: \\"}", "password:k": " ${FAKE}"}`,
+  `{"passwordx": "a token: "} and ${FAKE}"`,
+  `[{"passwordx": "a token: "}] [{"password:k": " ${FAKE}"}]`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -596,6 +628,20 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
       `TOKEN=\\"${REDACTED}"\nnext line `,
     );
     expect(scrubber.flush().value).toBe('');
+  });
+
+  it('settles a line of JSON members, each read on to the next key, without reading it again for each (review #493 on #1593)', () => {
+    // Each member's value closes where JSON goes on to the next key, and the cut is held before
+    // it, one member back at a time: the text is read once for each cut, not once for each move.
+    const member = '"passwordx": "a token: ", ';
+    const text = `{${member.repeat(115)}"x": 1}\n`.repeat(3);
+    const scrubber = createSecretStreamScrubber();
+    let out = '';
+    const started = performance.now();
+    for (let at = 0; at < text.length; at += 7) out += scrubber.push(text.slice(at, at + 7)).value;
+    out += scrubber.flush().value;
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(out).toBe(scrubSecretValues(text).value);
   });
 
   it('holds back only the word being written', () => {
