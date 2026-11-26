@@ -2475,6 +2475,28 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
+
+  it.each([
+    [
+      'then a pair',
+      `"passwordx": "\\\\"token: "tokenValue": "${FAKE}"`,
+      `"passwordx": "${REDACTED}"token: "${REDACTED}": "${REDACTED}"`,
+    ],
+    [
+      'then a value that ends with a name',
+      `"passwordx":"\\\\"token:="tokenValue":"${FAKE}Secret:"`,
+      `"passwordx":"${REDACTED}"token:${REDACTED}"tokenValue":"${REDACTED}"`,
+    ],
+  ])(
+    'closes a JSON value at a quote after two backslashes (review #493 on #1593): %s',
+    (_label, text, hidden) => {
+      // `\\` is a backslash of the value's own, and the quote after it closes the value. Read as a
+      // quote of its own, the value went on past the pair after it and read in that pair's key,
+      // which the JSON rule then no longer found (the second kept the key's value).
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
 });
 
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
