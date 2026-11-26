@@ -8,6 +8,7 @@ import {
   secretFieldLiterals,
   sliceKeepingPairs,
 } from '@nexttime/shared';
+import * as released from './secret-values-v0.70.0.js';
 
 /**
  * substrate/redaction/secret-values: the kernel's one definition of "a value that looks like a
@@ -42,6 +43,15 @@ import {
  *   - the password in a `scheme://user:password@host` URL;
  *   - the value of a quoted `"…token…": "…"` pair inside text that is itself JSON.
  * Over-redaction is the accepted failure mode: a value that only looks like a secret is hidden.
+ *
+ * **A floor (legacy 939).** Every text is read with v0.70.0's rules as well, frozen in
+ * secret-values-v0.70.0.ts, and a character either reading hides is hidden (`withFloor`): a change
+ * to the rules here never hides less than that release did. Where v0.70.0 misread a text and hid
+ * more than it meant to — the text after a JSON string it had closed, a key it took for a value —
+ * that stays hidden too: the accepted cost. The floor belongs to `SECRET_VALUE_PATTERNS` and
+ * `STORED_REWRITE_SECRET_PATTERNS`, the two lists v0.70.0 had; a list of a caller's own — a copy
+ * of either, `HIGH_CONFIDENCE_SECRET_PATTERNS` — is read as it is. A stream does not cut inside
+ * what v0.70.0 reads either (`floorReadSpans`, secret-stream.ts).
  *
  * **Linear time.** These run synchronously on the kernel's event loop over model and tool output,
  * so every pattern is written to run in time linear in its input: a pattern may only start where
@@ -1396,6 +1406,359 @@ interface WalkState {
   readonly patterns: readonly SecretPattern[];
 }
 
+/** What a reading wrote rather than kept (`Run.at`): a `[redacted]` of its own, or other text a
+ *  replacement wrote that is not `text` where it came from. */
+const WROTE_MASK = -1;
+const WROTE_OTHER = -2;
+
+/** A stretch of what a reading made of `text`: `text` from `at` on, kept, or (`at` below 0)
+ *  characters it wrote, which stand for `text` from `first` to `end` — what the match replaced. */
+interface Run {
+  readonly at: number;
+  readonly length: number;
+  readonly first: number;
+  readonly end: number;
+}
+
+/** One pattern's matches, in the text as the patterns before it left it. */
+type Pass = (text: string) => readonly SecretMatch[];
+
+/** A pass that replaced something: the text it read, and its matches. */
+interface Step {
+  readonly read: string;
+  readonly matches: readonly SecretMatch[];
+}
+
+/** What `passes` made of a text, one after the other as `scrubPlain` runs patterns, and each pass
+ *  that replaced something (`withFloor` places them in the text only when it must). */
+interface Reading extends Scrubbed<string> {
+  readonly steps: readonly Step[];
+}
+
+function readWith(text: string, passes: readonly Pass[]): Reading {
+  let out = text;
+  let redactedValues = 0;
+  const steps: Step[] = [];
+  for (const pass of passes) {
+    const matches = pass(out);
+    let scrubbed = '';
+    let from = 0;
+    for (const { start, end, replacement, values } of matches) {
+      if (replacement === undefined) continue;
+      scrubbed += out.slice(from, start) + replacement;
+      from = end;
+      redactedValues += values ?? 1;
+    }
+    if (from === 0) continue;
+    steps.push({ read: out, matches });
+    out = scrubbed + out.slice(from);
+  }
+  return { value: out, redactedValues, steps };
+}
+
+/** Where the parts of `replacement` come from in `replaced`, the text it replaces, in order: a
+ *  stretch of it from `at`, or a `[redacted]` (`WROTE_MASK`). A replacement keeps `replaced`'s own
+ *  text, in order, between the masks it writes: its first part where `replaced` starts, its last
+ *  where it ends, each one between at the first place after the part before. A replacement not
+ *  so has only what it starts and ends with as `replaced` does placed, and the rest `WROTE_OTHER`.
+ *  No rule here writes such a replacement yet; exported for the tests that place one. */
+export function placeIn(replaced: string, replacement: string): { at: number; length: number }[] {
+  const parts = replacement.split(REDACTED);
+  const last = parts.length - 1;
+  const places: { at: number; length: number }[] = [];
+  let at = 0;
+  for (let index = 0; index <= last; index += 1) {
+    const part = parts[index] ?? '';
+    let found = -1;
+    if (index === 0) {
+      if (replaced.startsWith(part) && (last > 0 || part.length === replaced.length)) found = 0;
+    } else if (index === last) {
+      const from = replaced.length - part.length;
+      if (from >= at && replaced.endsWith(part)) found = from;
+    } else {
+      found = replaced.indexOf(part, at);
+    }
+    if (found === -1) return placedAtItsEnds(replaced, replacement);
+    if (index > 0) places.push({ at: WROTE_MASK, length: REDACTED.length });
+    if (part !== '') places.push({ at: found, length: part.length });
+    at = found + part.length;
+  }
+  return places;
+}
+
+function placedAtItsEnds(replaced: string, replacement: string): { at: number; length: number }[] {
+  let prefix = 0;
+  while (
+    prefix < replaced.length &&
+    prefix < replacement.length &&
+    replaced[prefix] === replacement[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < replaced.length - prefix &&
+    suffix < replacement.length - prefix &&
+    replaced[replaced.length - 1 - suffix] === replacement[replacement.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return [
+    { at: 0, length: prefix },
+    { at: WROTE_OTHER, length: replacement.length - prefix - suffix },
+    { at: replaced.length - suffix, length: suffix },
+  ].filter(({ length }) => length > 0);
+}
+
+/** Reads `runs` left to right, taking them up to a place, split there. */
+class RunCursor {
+  private index = 0;
+  private inner = 0;
+  private at = 0;
+  private readonly runs: readonly Run[];
+  constructor(runs: readonly Run[]) {
+    this.runs = runs;
+  }
+
+  /** The runs from here to `to`, onto `into` (all but dropped, without it); then here is `to`. */
+  take(to: number, into?: Run[]): void {
+    while (this.at < to) {
+      const run = this.runs[this.index];
+      if (run === undefined) return;
+      const length = Math.min(run.length - this.inner, to - this.at);
+      if (into !== undefined) {
+        into.push(
+          run.at >= 0
+            ? {
+                at: run.at + this.inner,
+                length,
+                first: run.at + this.inner,
+                end: run.at + this.inner + length,
+              }
+            : { at: run.at, length, first: run.first, end: run.end },
+        );
+      }
+      this.inner += length;
+      this.at += length;
+      if (this.inner === run.length) {
+        this.index += 1;
+        this.inner = 0;
+      }
+    }
+  }
+}
+
+/** `run` added to `runs`, joined to the last where the two are one stretch. */
+function pushRun(runs: Run[], run: Run): void {
+  const before = runs.at(-1);
+  if (before !== undefined && before.at >= 0 && run.at === before.at + before.length) {
+    runs[runs.length - 1] = { ...before, length: before.length + run.length, end: run.end };
+  } else if (
+    before !== undefined &&
+    before.at < 0 &&
+    run.at === before.at &&
+    run.first === before.first &&
+    run.end === before.end
+  ) {
+    runs[runs.length - 1] = { ...before, length: before.length + run.length };
+  } else if (run.length > 0) {
+    runs.push(run);
+  }
+}
+
+/** The runs of what `step` made of its text, given the runs of that text. */
+function runsAfter(runs: readonly Run[], step: Step): Run[] {
+  const next: Run[] = [];
+  const add = (into: Run[]) => (run: Run) => pushRun(into, run);
+  const cursor = new RunCursor(runs);
+  for (const { start, end, replacement } of step.matches) {
+    if (replacement === undefined) continue;
+    const kept: Run[] = [];
+    cursor.take(start, kept);
+    kept.forEach(add(next));
+    const replaced: Run[] = [];
+    cursor.take(end, replaced);
+    let first = Number.POSITIVE_INFINITY;
+    let last = -1;
+    for (const run of replaced) {
+      first = Math.min(first, run.first);
+      last = Math.max(last, run.end);
+    }
+    const inside = new RunCursor(replaced);
+    for (const place of placeIn(step.read.slice(start, end), replacement)) {
+      if (place.at < 0) {
+        pushRun(next, { at: place.at, length: place.length, first, end: last });
+        continue;
+      }
+      inside.take(place.at);
+      const taken: Run[] = [];
+      inside.take(place.at + place.length, taken);
+      taken.forEach(add(next));
+    }
+  }
+  const rest: Run[] = [];
+  cursor.take(Number.POSITIVE_INFINITY, rest);
+  rest.forEach(add(next));
+  return next;
+}
+
+/** The runs of what `reading` made of `text`. */
+function runsOf(text: string, reading: Reading): Run[] {
+  let runs: Run[] = text === '' ? [] : [{ at: 0, length: text.length, first: 0, end: text.length }];
+  for (const step of reading.steps) runs = runsAfter(runs, step);
+  return runs;
+}
+
+/** The stretches of `text` `runs` keep, left to right (a reading keeps text in order). */
+function keptOf(runs: readonly Run[]): { start: number; end: number }[] {
+  return runs
+    .filter(({ at }) => at >= 0)
+    .map(({ at, length }) => ({ start: at, end: at + length }));
+}
+
+/** Of `shown`, what `alsoShown` does not show: stretches of `text`, left to right. */
+function shownOnlyBy(
+  shown: readonly { start: number; end: number }[],
+  alsoShown: readonly { start: number; end: number }[],
+): { start: number; end: number }[] {
+  const only: { start: number; end: number }[] = [];
+  let index = 0;
+  for (const { start, end } of shown) {
+    let at = start;
+    while (at < end) {
+      while (index < alsoShown.length && (alsoShown[index]?.end ?? 0) <= at) index += 1;
+      const other = alsoShown[index];
+      if (other === undefined || other.start >= end) {
+        only.push({ start: at, end });
+        break;
+      }
+      if (other.start > at) only.push({ start: at, end: other.start });
+      at = Math.max(at, other.end);
+    }
+  }
+  return only;
+}
+
+/** The passes of `patterns` over a text whose matches start at `readFrom` or after it. */
+function ownPasses(patterns: readonly SecretPattern[], readFrom: number): Pass[] {
+  return patterns.map((valuePattern) => (out) => secretMatches(valuePattern, out, readFrom));
+}
+
+/** The passes of v0.70.0's `patterns`, their matches that start before `readFrom` dropped. */
+function releasedPasses(patterns: readonly released.ValuePattern[], readFrom: number): Pass[] {
+  return patterns.map(
+    (valuePattern) => (out) =>
+      released.secretMatches(valuePattern, out).filter(({ start }) => start >= readFrom),
+  );
+}
+
+/** v0.70.0's list for each list it had (`withFloor`). */
+const FLOORS = new Map<readonly SecretPattern[], readonly released.ValuePattern[]>([
+  [SECRET_VALUE_PATTERNS, released.SECRET_VALUE_PATTERNS],
+  [STORED_REWRITE_SECRET_PATTERNS, released.STORED_REWRITE_SECRET_PATTERNS],
+]);
+
+/** `text` read by `patterns` and by `floor`, v0.70.0's: a character either hides is hidden
+ *  (legacy 939). Most text one leaves as it is, or both read alike: that reading. Else each
+ *  reading is placed in `text` (`runsOf`); what this file's shows and v0.70.0's hid is hidden, and
+ *  so is what this file's wrote that is not where it came from (`WROTE_OTHER`), one `[redacted]`
+ *  for each stretch of hidden text and the masks beside it. What the result shows, both readings
+ *  show, so it never shows what either hid. (Text a replacement keeps between two of its masks is
+ *  placed where it is first found after the part before, `placeIn`: if it came from further on,
+ *  what is shown is the same text v0.70.0 shows where it was placed.) Exported for its tests,
+ *  which read with rules of their own; `scrubPlain` passes the two lists v0.70.0 had (`FLOORS`). */
+export function withFloor(
+  text: string,
+  patterns: readonly SecretPattern[],
+  floor: readonly released.ValuePattern[],
+  readFrom: number,
+): Scrubbed<string> {
+  const own = readWith(text, ownPasses(patterns, readFrom));
+  const old = readWith(text, releasedPasses(floor, readFrom));
+  if (old.value === text || old.value === own.value) return own;
+  const runs = runsOf(text, own);
+  const hidden = shownOnlyBy(keptOf(runs), keptOf(runsOf(text, old)));
+  if (hidden.length === 0 && runs.every(({ at }) => at !== WROTE_OTHER)) return own;
+  let value = '';
+  let redactedValues = own.redactedValues;
+  // In a stretch of hidden text: its one mask is written, and it counts one value more unless it
+  // holds a mask of this file's reading, whose value is counted.
+  let masking = false;
+  let ownMask = false;
+  const hide = (isOwnMask: boolean): void => {
+    if (!masking) value += REDACTED;
+    masking = true;
+    ownMask ||= isOwnMask;
+  };
+  const show = (shown: string): void => {
+    if (masking && !ownMask) redactedValues += 1;
+    masking = false;
+    ownMask = false;
+    value += shown;
+  };
+  let index = 0;
+  for (const run of runs) {
+    if (run.at < 0) {
+      hide(run.at === WROTE_MASK);
+      continue;
+    }
+    const runEnd = run.at + run.length;
+    for (let at = run.at; at < runEnd; ) {
+      while (index < hidden.length && (hidden[index]?.end ?? 0) <= at) index += 1;
+      const next = hidden[index];
+      if (next !== undefined && next.start <= at) {
+        hide(false);
+        at = Math.min(next.end, runEnd);
+      } else {
+        const until = Math.min(next?.start ?? runEnd, runEnd);
+        show(text.slice(at, until));
+        at = until;
+      }
+    }
+  }
+  show('');
+  return { value, redactedValues };
+}
+
+/** What each match of v0.70.0's rules covers in `text`, of those that start at `from` or after
+ *  it, read as `withFloor` reads it: where a stream must not cut (`secret-stream.ts`), for the
+ *  text before the cut to read as the whole text does. What a pass before wrote stands for all
+ *  it replaced. */
+export function floorReadSpans(text: string, from = 0): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let runs: Run[] = text === '' ? [] : [{ at: 0, length: text.length, first: 0, end: text.length }];
+  let out = text;
+  for (const pass of releasedPasses(released.SECRET_VALUE_PATTERNS, from)) {
+    const matches = pass(out);
+    if (matches.length === 0) continue;
+    let run = 0;
+    let runStart = 0;
+    for (const { start, end } of matches) {
+      while (run < runs.length && runStart + (runs[run]?.length ?? 0) <= start) {
+        runStart += runs[run]?.length ?? 0;
+        run += 1;
+      }
+      let first = Number.POSITIVE_INFINITY;
+      let last = -1;
+      for (let k = run, kStart = runStart; k < runs.length && kStart < end; k += 1) {
+        const covering = runs[k];
+        if (covering === undefined) break;
+        const inFrom = Math.max(start, kStart) - kStart;
+        const inTo = Math.min(end, kStart + covering.length) - kStart;
+        first = Math.min(first, covering.at >= 0 ? covering.at + inFrom : covering.first);
+        last = Math.max(last, covering.at >= 0 ? covering.at + inTo : covering.end);
+        kStart += covering.length;
+      }
+      if (last > first) spans.push({ start: first, end: last });
+    }
+    if (matches.every(({ replacement }) => replacement === undefined)) continue;
+    const step = { read: out, matches };
+    runs = runsAfter(runs, step);
+    out = readWith(out, [() => matches]).value;
+  }
+  return spans;
+}
+
 /** `text` with the literals, then every value pattern, replaced. */
 function scrubPlain(
   text: string,
@@ -1410,18 +1773,12 @@ function scrubPlain(
     redactedValues += literal.redactedValues;
     out = literal.value;
   }
-  for (const valuePattern of patterns) {
-    let scrubbed = '';
-    let from = 0;
-    for (const { start, end, replacement, values } of secretMatches(valuePattern, out, readFrom)) {
-      if (replacement === undefined) continue;
-      scrubbed += out.slice(from, start) + replacement;
-      from = end;
-      redactedValues += values ?? 1;
-    }
-    if (from > 0) out = scrubbed + out.slice(from);
-  }
-  return { value: out, redactedValues };
+  const floor = FLOORS.get(patterns);
+  const read =
+    floor === undefined
+      ? readWith(out, ownPasses(patterns, readFrom))
+      : withFloor(out, patterns, floor, readFrom);
+  return { value: read.value, redactedValues: redactedValues + read.redactedValues };
 }
 
 function scrubInto(text: string, state: WalkState): string {

@@ -7,6 +7,7 @@ import {
   type SecretMatch,
   bareValueEndsToCome,
   endsAQuotedValue,
+  floorReadSpans,
   namesASecretField,
   namesASecretValue,
   scrubSecretValues,
@@ -33,7 +34,8 @@ import {
  *     characters, no backslash) — unless it closes a secret's JSON pair;
  *   - a `-----BEGIN` with no `-----END` after it;
  *   - any match of a secret pattern that crosses that point or reaches the end of the text (it may
- *     still grow — a `NAME=value` whose value goes on in the next delta);
+ *     still grow — a `NAME=value` whose value goes on in the next delta) — of v0.70.0's patterns
+ *     too, which every text is read with as well (`floorReadSpans`; legacy 939);
  *   - a `,`, `;`, `&` or `|` before the next pair whose value opens with, or may yet open with, a
  *     secret's key (`token=x,password: "api_key": …`): a bare value ends there or reads on past
  *     it as that key decides.
@@ -210,6 +212,8 @@ function safeCut(raw: string, context: string): number {
       secretMatches(valuePattern, read, context.length),
     ),
     ...bareValueEndsToCome(read, context.length),
+    // And v0.70.0's, which every text is read with as well (legacy 939).
+    ...floorReadSpans(read, context.length),
   ];
   for (let moved = true; moved; ) {
     moved = false;
