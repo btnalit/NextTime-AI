@@ -2380,6 +2380,52 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
+
+  it('goes on with an escaped JSON value a pair crossed to its close, short of the next pair in it (review #501 on #1593)', () => {
+    // Read on past that pair to a `\"` in it, the value hid that pair and kept what came after
+    // that quote; v0.70.0 kept that pair's value.
+    const text = `\\"token\\":\\"'token:${FAKE}\\"token\\":\\"\\"|${FAKE}`;
+    const hidden = `\\"token\\":\\"${REDACTED}\\"token\\":\\"${REDACTED}\\"${REDACTED}`;
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 5 });
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
+
+  it.each([
+    ['after a pair in it', `"passwordx": "a token: x\\" ${FAKE}"`, `"passwordx": "${REDACTED}"`],
+    [
+      "after a pair in it, in a `'…'`",
+      `"passwordx":"'apikey=x&\\"'${FAKE}"`,
+      `"passwordx":"${REDACTED}"`,
+    ],
+    [
+      'after a pair in it, not closed',
+      `"_password":" token:x\\"'${FAKE}`,
+      `"_password":"${REDACTED}`,
+    ],
+    [
+      'crossed by a pair before it',
+      `token=""passwordx":"\\"${FAKE}Secret:`,
+      `token="${REDACTED}"passwordx":"${REDACTED}`,
+    ],
+    [
+      'crossed by a `--flag` before it',
+      `--password=""_password":"\\"${FAKE}Secret:`,
+      `--password="${REDACTED}"_password":"${REDACTED}`,
+    ],
+    [
+      'after a pair in it, its key read as a value',
+      `token: "passwordx": "a token: x\\" ${FAKE}"`,
+      `token: "${REDACTED}": "${REDACTED}token: ${REDACTED}"`,
+    ],
+  ])(
+    'reads a `\\"` in a JSON value read with the name rules as a quote of its own, not its close (review #501 on #1593): %s',
+    (_label, text, hidden) => {
+      // Read as any `"` value is, it closed at the `"` of that `\"`, and kept the rest: the first
+      // five main and v0.70.0 hid, the last every version kept.
+      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    },
+  );
 });
 
 describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {

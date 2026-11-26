@@ -179,11 +179,14 @@ export interface ValuePattern {
    *  password=…`, `--user --password …`, `X=PGPASSWORD=…`). */
   readonly value?: { readonly names: (name: string) => boolean; readonly pattern: RegExp };
   readonly redact: Redact;
-  /** Its value is JSON text written inside one more string, from the `\"` it opens with
-   *  (`ESCAPED_JSON_NAME_PAIR`): a quote of that text's own is written `\\\"`, so a `\"` closes it
-   *  only after one backslash, or five, nine … — never after three (`closedByItsQuote`,
-   *  `nextEscapedTwiceOnTheLine`). */
-  readonly escapedTwice?: true;
+  /** Its value is a JSON string, and how many strings it is written in: one, from the `"` it
+   *  opens with (`JSON_NAME_PAIR`), where a quote of its own is written `\"`; or, as JSON text
+   *  written inside one more string, two, from the `\"` it opens with (`ESCAPED_JSON_NAME_PAIR`),
+   *  where a quote of its own is written `\\\"`. Its quote closes it only where it stands escaped
+   *  no further than its opening quote is: after no backslash, or two, four … (one string), after
+   *  one backslash, or five, nine … (two) — never after one more than that (`closedByItsQuote`,
+   *  `nextJsonQuoteOnTheLine`). */
+  readonly jsonStrings?: 1 | 2;
 }
 
 /** Name-then-value patterns read together, as one pattern (`NAMED_VALUES`): each reads the text
@@ -594,7 +597,7 @@ const ESCAPED_JSON_NAME_PAIR: ValuePattern = {
       'y',
     ),
   },
-  escapedTwice: true,
+  jsonStrings: 2,
 };
 
 const NAME_AT_THE_END = /(?<![A-Za-z0-9_.-])[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
@@ -628,6 +631,7 @@ const JSON_NAME_PAIR: ValuePattern = {
       'y',
     ),
   },
+  jsonStrings: 1,
 };
 
 /** The env-line, name and `--flag` rules, and the JSON pairs whose key no other of them reads
@@ -844,9 +848,8 @@ export interface SecretMatch {
 /** A match, and where its value starts (its start, for a pattern with no `value`). */
 interface ReadMatch extends SecretMatch {
   readonly valueAt: number;
-  /** Its pattern's value is JSON text written inside one more string
-   *  (`ValuePattern.escapedTwice`). */
-  readonly escapedTwice?: true;
+  /** Its pattern's value is a JSON string written in so many strings (`ValuePattern.jsonStrings`). */
+  readonly jsonStrings?: 1 | 2;
 }
 
 /** The first match of `valuePattern` in `text` from `from` on, as a global `replace` would find it
@@ -881,7 +884,7 @@ function readMatchFrom(
       end,
       valueAt,
       replacement: redact(whole, groups),
-      ...(valuePattern.escapedTwice === true ? { escapedTwice: true as const } : {}),
+      ...(valuePattern.jsonStrings === undefined ? {} : { jsonStrings: valuePattern.jsonStrings }),
     };
   }
   return undefined;
@@ -903,14 +906,14 @@ function readMatches(valuePattern: ValuePattern, text: string, from: number): Re
 }
 
 /** What replaces the rest of `match`'s value from `from` on, where a pair before it ends inside it,
- *  written as `redactedValue` writes a value: the mask, and its closing quote kept — for JSON text
- *  written inside one more string, only a quote that closes it (`closedByItsQuote`). `undefined`
- *  when nothing of the value is left but that quote. */
+ *  written as `redactedValue` writes a value: the mask, and its closing quote kept — for a JSON
+ *  string, only a quote that closes it (`closedByItsQuote`). `undefined` when nothing of the value
+ *  is left but that quote. */
 function restOfValue(match: ReadMatch, from: number, text: string): string | undefined {
   const value = text.slice(match.valueAt, match.end);
   const opening = OPENING_QUOTE.exec(value)?.[0];
-  if (match.escapedTwice === true && opening !== undefined) {
-    const closing = closedByItsQuote(value, opening, true) ? opening : '';
+  if (match.jsonStrings !== undefined && opening !== undefined) {
+    const closing = closedByItsQuote(value, opening, match.jsonStrings) ? opening : '';
     if (from <= match.valueAt) {
       return `${text.slice(from, match.valueAt)}${opening}${REDACTED}${closing}`;
     }
@@ -946,10 +949,10 @@ interface TakenMatch {
    *  value stopped; `''` when there is none. */
   insideOpenQuote: string;
   insideOpenEnd: number;
-  /** The value it ends with is JSON text written inside one more string
-   *  (`ValuePattern.escapedTwice`); the same of the last value left out inside it. */
-  escapedTwice: boolean;
-  insideOpenEscapedTwice: boolean;
+  /** How many strings the value it ends with is a JSON string written in, `0` for one that is not
+   *  (`ValuePattern.jsonStrings`); the same of the last value left out inside it. */
+  jsonStrings: JsonStrings;
+  insideOpenJsonStrings: JsonStrings;
 }
 
 /** The quote that closes `match`'s value, and where it starts — or, when the value is quoted but
@@ -957,41 +960,59 @@ interface TakenMatch {
 function quotesOf(
   match: ReadMatch,
   text: string,
-): Pick<TakenMatch, 'closingQuote' | 'closingQuoteAt' | 'openQuote' | 'escapedTwice'> {
+): Pick<TakenMatch, 'closingQuote' | 'closingQuoteAt' | 'openQuote' | 'jsonStrings'> {
   const value = text.slice(match.valueAt, match.end);
   const opening = OPENING_QUOTE.exec(value)?.[0];
-  const escapedTwice = match.escapedTwice === true;
+  const jsonStrings = match.jsonStrings ?? 0;
   if (opening === undefined) {
-    return { closingQuote: '', closingQuoteAt: -1, openQuote: '', escapedTwice };
+    return { closingQuote: '', closingQuoteAt: -1, openQuote: '', jsonStrings };
   }
-  if (!closedByItsQuote(value, opening, escapedTwice)) {
-    return { closingQuote: '', closingQuoteAt: -1, openQuote: opening, escapedTwice };
+  if (!closedByItsQuote(value, opening, jsonStrings)) {
+    return { closingQuote: '', closingQuoteAt: -1, openQuote: opening, jsonStrings };
   }
   const closingQuoteAt = match.end - opening.length;
-  return { closingQuote: opening, closingQuoteAt, openQuote: '', escapedTwice };
+  return { closingQuote: opening, closingQuoteAt, openQuote: '', jsonStrings };
 }
 
-/** Whether `value`, which opens with `opening`, ends with the quote that closes it. A `\"` closes a
- *  value of JSON text written inside one more string (`escapedTwice`) only after one backslash,
- *  or five, nine …: after three, it is a quote of that text's own, and the value goes on past it
- *  (`password=\"\"password\"=\"\\\"<密钥>Token:`, read as closed there, was hidden to that quote and
- *  closed; review #501 on #1591). */
-function closedByItsQuote(value: string, opening: string, escapedTwice: boolean): boolean {
+/** How many strings a value is a JSON string written in (`ValuePattern.jsonStrings`); `0` for one
+ *  that is not. */
+type JsonStrings = 0 | 1 | 2;
+
+/** The quote a JSON string written in `jsonStrings` strings opens with. */
+function jsonQuote(jsonStrings: 1 | 2): string {
+  return jsonStrings === 1 ? '"' : '\\"';
+}
+
+/** Whether a `"` after `backslashes` backslashes, in a JSON string written in `jsonStrings`
+ *  strings, is the quote that closes it: escaped as far as its opening quote is, no further. After
+ *  no backslash, or two, four … in one string: after one, three … it is `\"`, a quote of the
+ *  string's own (`"passwordx": "a token: x\" <密钥>"`, read as closed at that quote, was hidden to
+ *  it and closed; review #501 on #1593). After one backslash, or five, nine … in two: after three,
+ *  or seven …, it is `\\\"`, a quote of the JSON text's own (`password=\"\"password\"=\"\\\"<密钥>Token:`;
+ *  review #501 on #1591). */
+function closesAJsonString(backslashes: number, jsonStrings: 1 | 2): boolean {
+  return jsonStrings === 1 ? backslashes % 2 === 0 : backslashes % 4 === 1;
+}
+
+/** Whether `value`, which opens with `opening`, ends with the quote that closes it — for a JSON
+ *  string that opens with its own quote, one that stands escaped no further than that quote does
+ *  (`closesAJsonString`). */
+function closedByItsQuote(value: string, opening: string, jsonStrings: JsonStrings): boolean {
   if (value.length < 2 * opening.length || !value.endsWith(opening)) return false;
-  if (!escapedTwice || opening !== '\\"') return true;
+  if (jsonStrings === 0 || opening !== jsonQuote(jsonStrings)) return true;
   let backslashes = 0;
   while (value.charAt(value.length - 2 - backslashes) === '\\') backslashes += 1;
-  return backslashes % 4 === 1;
+  return closesAJsonString(backslashes, jsonStrings);
 }
 
 /** `match`, whose value a pair inside it ended at a quote not its own, goes on with that value
  *  from where it now ends to the value's next `quote` on the line, short of the next pair and the
- *  line's end (`nextOnTheLine`) — for JSON text written inside one more string, to its next `\"`
- *  that closes it (`nextEscapedTwiceOnTheLine`): hidden, and that quote kept. */
-function goOnTo(match: TakenMatch, quote: string, text: string, escapedTwice: boolean): void {
+ *  line's end (`nextOnTheLine`) — for a JSON string, to its next quote that closes it
+ *  (`nextJsonQuoteOnTheLine`): hidden, and that quote kept. */
+function goOnTo(match: TakenMatch, quote: string, text: string, jsonStrings: JsonStrings): void {
   const next =
-    escapedTwice && quote === '\\"'
-      ? nextEscapedTwiceOnTheLine(text, match.end)
+    jsonStrings !== 0 && quote === jsonQuote(jsonStrings)
+      ? nextJsonQuoteOnTheLine(text, match.end, jsonStrings)
       : nextOnTheLine(text, quote, match.end);
   if (next.at > match.end && !match.masked) {
     match.values += 1;
@@ -1072,22 +1093,27 @@ function nextOnTheLine(text: string, quote: string, from: number): { at: number;
   return { at, found: false };
 }
 
-/** `nextOnTheLine` for a value of JSON text written inside one more string, to the `\"` that closes
- *  it (`ValuePattern.escapedTwice`): a `\"` after one backslash, or five, nine …, where a quote may
- *  close a value. After three, or seven …, it is a quote of that text's own: read as any `\"` value
- *  is, the value closed at the `\"` of a `\\\"`, and the rest was kept
- *  (`\"token\":\"'apikey=x&\\\"'<密钥>`; review #501 on #1591). No pair starts inside a run of
- *  backslashes, nor at a quote one ends with: each run is read once. */
-function nextEscapedTwiceOnTheLine(text: string, from: number): { at: number; found: boolean } {
+/** `nextOnTheLine` for a JSON string written in `jsonStrings` strings, to the quote that closes it
+ *  (`ValuePattern.jsonStrings`): a `"` escaped as far as its opening quote is
+ *  (`closesAJsonString`), where a quote may close a value. Escaped one further, it is a quote of
+ *  the string's own: read as any `"` or `\"` value is, the value closed at the `"` of a `\"`
+ *  (`"passwordx": "a token: x\" <密钥>"`; review #501 on #1593), or at the `\"` of a `\\\"`
+ *  (`\"token\":\"'apikey=x&\\\"'<密钥>`; review #501 on #1591), and the rest was kept. No pair starts
+ *  inside a run of backslashes, nor at a quote one ends with: each run is read once. */
+function nextJsonQuoteOnTheLine(
+  text: string,
+  from: number,
+  jsonStrings: 1 | 2,
+): { at: number; found: boolean } {
+  const quoteLength = jsonQuote(jsonStrings).length;
   let at = from;
   while (at < text.length && text[at] !== '\n' && text[at] !== '\r') {
     let end = at;
     while (text[end] === '\\') end += 1;
     if (text[end] === '"') {
-      const backslashes = end - at;
       CLOSES_A_VALUE_HERE.lastIndex = end + 1;
-      if (backslashes % 4 === 1 && CLOSES_A_VALUE_HERE.test(text)) {
-        return { at: end - 1, found: true };
+      if (closesAJsonString(end - at, jsonStrings) && CLOSES_A_VALUE_HERE.test(text)) {
+        return { at: end + 1 - quoteLength, found: true };
       }
     }
     A_PAIR_HERE.lastIndex = at;
@@ -1141,8 +1167,7 @@ function append(match: TakenMatch, part: string): void {
  *  is `open`: text cut after it, before what may be that pair, is held with it
  *  (`secret-stream.ts`).
  *
- *  A value of JSON text written inside one more string goes on to the `\"` that closes it
- *  (`nextEscapedTwiceOnTheLine`). */
+ *  A JSON string goes on to the quote that closes it (`nextJsonQuoteOnTheLine`). */
 function readTogether(
   patterns: readonly ValuePattern[],
   text: string,
@@ -1187,7 +1212,7 @@ function readTogether(
       if (inside && openQuote !== '') {
         last.insideOpenQuote = openQuote;
         last.insideOpenEnd = first.end;
-        last.insideOpenEscapedTwice = first.escapedTwice === true;
+        last.insideOpenJsonStrings = first.jsonStrings ?? 0;
       }
     } else if (
       last !== undefined &&
@@ -1204,7 +1229,7 @@ function readTogether(
       last.crossedAt = last.end;
       last.end = first.end;
       last.insideOpenQuote = '';
-      goOnTo(last, quote, text, last.escapedTwice);
+      goOnTo(last, quote, text, last.jsonStrings);
       readOn = first.valueAt;
     } else if (last === undefined || first.start >= last.end) {
       const { start, end, replacement } = first;
@@ -1218,7 +1243,7 @@ function readTogether(
         ...quotesOf(first, text),
         insideOpenQuote: '',
         insideOpenEnd: -1,
-        insideOpenEscapedTwice: false,
+        insideOpenJsonStrings: 0,
       });
       readOn = first.valueAt;
     } else {
@@ -1241,13 +1266,13 @@ function readTogether(
         last.closingQuoteAt >= first.valueAt + openingQuoteLength(first, text)
       ) {
         // The quote that closed its value is inside the value of the pair that crossed it.
-        goOnTo(last, last.closingQuote, text, last.escapedTwice);
+        goOnTo(last, last.closingQuote, text, last.jsonStrings);
       } else if (
         last.openQuote !== '' &&
         last.crossedAt >= first.valueAt + openingQuoteLength(first, text)
       ) {
         // So is where its value stopped, not closed.
-        goOnTo(last, last.openQuote, text, last.escapedTwice);
+        goOnTo(last, last.openQuote, text, last.jsonStrings);
       } else if (
         insideOpenQuote !== '' &&
         (last.insideOpenEnd >= first.valueAt + openingQuoteLength(first, text) ||
@@ -1256,7 +1281,7 @@ function readTogether(
       ) {
         // So is where a value left out inside it stopped, not closed, or the pair that crossed it
         // stands right after that value, past blanks alone: that value goes on to its own quote.
-        goOnTo(last, insideOpenQuote, text, last.insideOpenEscapedTwice);
+        goOnTo(last, insideOpenQuote, text, last.insideOpenJsonStrings);
       } else {
         Object.assign(last, quotesOf(first, text));
       }
