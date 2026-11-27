@@ -184,7 +184,10 @@ export function ActionRequestCard({
       ) : null}
       {alwaysAllowBlock === 'stale' && card.publishedDefinition?.version != null ? (
         <p className="field-hint" data-testid="action-card-always-allow-stale">
-          {alwaysAllowStaleRequestText(t, card.publishedDefinition.version)}
+          {alwaysAllowStaleRequestText(t, {
+            ...card.publishedDefinition,
+            version: card.publishedDefinition.version,
+          })}
         </p>
       ) : null}
       {alwaysAllowBlock === 'unpublished' ? (
