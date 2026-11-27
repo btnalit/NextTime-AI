@@ -1,0 +1,11 @@
+diff --git a/packages/kernel/src/governance/redaction/secret-stream.ts b/packages/kernel/src/governance/redaction/secret-stream.ts
+index f483cbc8..97f1d354 100644
+--- a/packages/kernel/src/governance/redaction/secret-stream.ts
++++ b/packages/kernel/src/governance/redaction/secret-stream.ts
+@@ -228,5 +228,5 @@ function safeCut(raw: string, context: string): number {
+ 
+   const begin = raw.lastIndexOf('-----BEGIN');
+-  if (begin !== -1 && raw.indexOf('-----END', begin) === -1) cut = Math.min(cut, begin);
++  if (begin !== -1 && raw.indexOf('-----END', begin) === -1 && begin < 0) cut = Math.min(cut, begin);
+ 
+   // What the value rules read does not turn on the cut: read once, not again each time the cut

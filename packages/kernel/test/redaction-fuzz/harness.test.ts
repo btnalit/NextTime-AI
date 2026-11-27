@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { STREAM_HOLD_MAX_CHARS } from '../../src/governance/redaction/secret-stream.js';
 import { namesASecretValue } from '../../src/substrate/redaction/secret-values.js';
 import { CORPUS, GENERATORS } from './generators/index.js';
 import { SECRET_NAMES } from './generators/real-formats.js';
-import { MASK, type Reader, compare, cutsFor, keptChars, shown, shownThrough } from './measure.js';
+import {
+  DENSE_STEP_MAX,
+  MASK,
+  type Reader,
+  compare,
+  cutsFor,
+  keptChars,
+  shown,
+  shownInRuns,
+  shownThrough,
+} from './measure.js';
 import { mulberry32 } from './rng.js';
-import { type Row, secretPlaces } from './row.js';
+import { type Generator, type Row, secretPlaces } from './row.js';
 
 /** The acceptance run's own machinery: what it counts as shown, and what the generators write. */
 
@@ -75,6 +86,30 @@ describe('shown: the secret characters an output kept', () => {
   });
 });
 
+describe('shownInRuns: the secret characters an output holds, read without lining it up', () => {
+  const secret = 'FAKEabcdefghijklmnop';
+  const row: Row = { t: `API_TOKEN=${MASK}"${secret}\\"`, req: [secret], stored: true };
+  const places = secretPlaces(row);
+  const count = (output: string) => [...shownInRuns(row, places, output)].filter((x) => x).length;
+
+  it('counts none where no run of 8 of the secret is in the output, however it was rewritten', () => {
+    expect(count(`API_TOKEN=\\"${MASK}\\"`)).toBe(0);
+    expect(count(`API_TOKEN=${MASK}"FAKEabc${MASK}`)).toBe(0);
+  });
+
+  it('counts the characters of each run of 8 the output holds', () => {
+    expect(count(row.t)).toBe(secret.length);
+    expect(count(`x ${secret.slice(0, 8)} y`)).toBe(8);
+    expect(count(`${secret.slice(0, 8)}${MASK}${secret.slice(-8)}`)).toBe(16);
+  });
+
+  it('reads a secret shorter than 8 whole', () => {
+    const short: Row = { t: 'k=FAKEx', req: ['FAKEx'], stored: true };
+    expect([...shownInRuns(short, secretPlaces(short), 'k=FAKEx')].filter((x) => x).length).toBe(5);
+    expect([...shownInRuns(short, secretPlaces(short), 'k=FAKE')].filter((x) => x).length).toBe(0);
+  });
+});
+
 describe('compare: rows now shows a secret character of that before hid', () => {
   /** A reader that masks every occurrence of `words`. */
   const masking = (...words: string[]): Reader => {
@@ -108,6 +143,22 @@ describe('compare: rows now shows a secret character of that before hid', () => 
     expect(result.info.hidesMore).toBe(1);
   });
 
+  it('counts rows whose stream is not their whole text, a stream that hides more included', () => {
+    const plain = masking('FAKEone');
+    const hidingMore: Reader = {
+      ...plain,
+      stream: (text, cuts) => plain.stream(text, cuts).replace('note', MASK),
+    };
+    const result = compare(rows, hidingMore, plain, { seed: 1 });
+    expect(result.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+    expect(result.streamDiffers).toEqual({ now: 1, before: 0 });
+    expect(result.examples.streamNotWhole?.[0]?.now).toBe(`token=${MASK} ${MASK}`);
+    expect(compare(rows, plain, hidingMore, { seed: 1 }).streamDiffers).toEqual({
+      now: 0,
+      before: 1,
+    });
+  });
+
   it('cuts a row the same way for the same seed, inside its text', () => {
     const text = 'token=FAKEone note';
     expect(cutsFor(3, text, 2)).toEqual(cutsFor(3, text, 2));
@@ -117,6 +168,42 @@ describe('compare: rows now shows a secret character of that before hid', () => 
       for (const cut of cuts) expect(cut).toBeLessThanOrEqual(text.length);
     }
   });
+
+  it('cuts a row densely once more, every 1–4 characters, as textDeltas come', () => {
+    const text = 'token=FAKEone note, and a longer tail after it';
+    expect(cutsFor(3, text, 0)).toEqual([]);
+    const sets = cutsFor(3, text, 2);
+    expect(sets.length).toBe(3);
+    const dense = sets[2] as number[];
+    const steps = [...dense, text.length].map(
+      (cut, i) => cut - (i === 0 ? 0 : (dense[i - 1] as number)),
+    );
+    for (const step of steps.slice(0, -1)) expect(step).toBeGreaterThanOrEqual(1);
+    for (const step of steps) expect(step).toBeLessThanOrEqual(DENSE_STEP_MAX);
+    expect(new Set(steps.slice(0, -1)).size).toBeGreaterThan(1);
+  });
+
+  it('reads a stored row with the stored reading alone, from the row itself', () => {
+    const stored: Row = { t: `password=${MASK}"FAKEthree\\" x`, req: ['FAKEthree'], stored: true };
+    const repairing: Reader = {
+      whole: () => {
+        throw new Error('a stored row is not read whole');
+      },
+      stream: () => {
+        throw new Error('a stored row is not streamed');
+      },
+      stored: (text) => ({ value: text.replace('"FAKEthree\\"', ''), redactedValues: 1 }),
+    };
+    const asWritten: Reader = {
+      ...repairing,
+      stored: (text) => ({ value: text, redactedValues: 0 }),
+    };
+    const worse = compare([stored], asWritten, repairing, { seed: 1 });
+    expect(worse.showsMore).toEqual({ whole: 0, stream: 0, stored: 1, reread: 0 });
+    expect(worse.info.showing).toEqual({ now: 1, before: 0 });
+    const same = compare([stored], repairing, repairing, { seed: 1 });
+    expect(same.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+  });
 });
 
 describe('the generators', () => {
@@ -125,12 +212,79 @@ describe('the generators', () => {
     it(`${name}: the same distinct rows for a seed, a tenth or more holding a secret`, () => {
       const rows = generator(mulberry32(7), 200);
       expect(generator(mulberry32(7), 200)).toEqual(rows);
-      expect(rows.length).toBe(200);
+      expect(rows.length).toBe(Math.min(200, generator.maxRows ?? 200));
       expect(new Set(rows.map((row) => row.t)).size).toBe(rows.length);
       const holding = rows.filter((row) => secretPlaces(row).includes(1)).length;
       expect(holding).toBeGreaterThanOrEqual(rows.length / 10);
     });
   }
+});
+
+describe('the stored rows', () => {
+  for (const name of Object.keys(GENERATORS).filter((key) => key.startsWith('stored/'))) {
+    it(`${name}: every row stored, a mask in it, its secret after the mask`, () => {
+      for (const row of (GENERATORS[name] as (typeof GENERATORS)[string])(mulberry32(7), 300)) {
+        expect(row.stored).toBe(true);
+        expect(row.t).toContain(MASK);
+        for (const secret of row.req ?? []) {
+          expect(row.t.indexOf(secret)).toBeGreaterThan(row.t.indexOf(MASK));
+        }
+      }
+    });
+  }
+
+  it('none outside stored/', () => {
+    for (const [name, generator] of Object.entries(GENERATORS)) {
+      if (name.startsWith('stored/')) continue;
+      expect(
+        generator(mulberry32(7), 50).some((row) => row.stored === true),
+        name,
+      ).toBe(false);
+    }
+  });
+});
+
+describe('the long rows and the neighbors (reviews on #1619)', () => {
+  const rows = (name: string, n = 2_000) => (GENERATORS[name] as Generator)(mulberry32(7), n);
+
+  it('long/values: a value of 3,500 characters or more, after a head longer than 8', () => {
+    const long = rows('long/values');
+    expect(long.length).toBe(6);
+    for (const row of long) {
+      const [secret] = row.req ?? [];
+      expect(secret?.length).toBeGreaterThanOrEqual(3_500);
+      expect(row.t.indexOf(secret as string)).toBeGreaterThan(8);
+    }
+    // Past the stream's bound as well, in the rows a run reads.
+    const lengths = [7, 8].flatMap((seed) =>
+      (GENERATORS['long/values'] as Generator)(mulberry32(seed), 6).map(
+        (row) => row.req?.[0]?.length ?? 0,
+      ),
+    );
+    expect(Math.max(...lengths)).toBeGreaterThan(STREAM_HOLD_MAX_CHARS);
+  });
+
+  it('long/pem: a key body of 1,600 characters or more, from BEGIN to END', () => {
+    for (const row of rows('long/pem')) {
+      const [[start, end]] = row.spans as [[number, number]];
+      expect(end - start).toBeGreaterThanOrEqual(1_600);
+      expect(row.t.lastIndexOf('-----BEGIN', start)).toBeGreaterThanOrEqual(0);
+      expect(row.t.indexOf('-----END', end)).toBeGreaterThan(end - 1);
+    }
+  });
+
+  it('credentials/neighbors: what an edit left of a secret counts, 6 characters or more', () => {
+    const neighbors = rows('credentials/neighbors');
+    for (const row of neighbors) {
+      for (const fragment of row.req ?? []) {
+        expect(fragment.length).toBeGreaterThanOrEqual(6);
+        expect(row.t).toContain(fragment);
+      }
+    }
+    // Only whole secrets counted left more than half the rows measuring nothing (review on #1619).
+    const empty = neighbors.filter((row) => (row.req ?? []).length === 0).length;
+    expect(empty / neighbors.length).toBeLessThan(0.1);
+  });
 });
 
 /** Every string a JSON value holds, at any depth. */

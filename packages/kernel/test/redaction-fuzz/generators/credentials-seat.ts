@@ -818,22 +818,56 @@ const NB_ALPHA = [
   'api_key\\": ',
 ];
 
+/** The shortest stretch of a secret an edit left that still counts as the secret shown. */
+const NB_FRAGMENT_MIN = 6;
+
 /** `neighbors`: one of #1600's hard rows with one to three inserts, deletes or replacements from a
- *  small alphabet; a quarter written in a JSON string, a tenth in two. */
+ *  small alphabet; a quarter written in a JSON string, a tenth in two. An edit often lands inside a
+ *  secret, where the rows probe hardest (the quote right against it): what is left of it counts —
+ *  each stretch of at least `NB_FRAGMENT_MIN` of its characters still in order, tracked through the
+ *  edits beside the text (review on #1619: only whole secrets counted left half the rows unread). */
 const neighbors = (r: Rng): Row => {
-  const edit = (s: string) => {
-    const at = int(r, s.length + 1);
+  const seed = pick(r, NB_SEEDS);
+  // Beside each character: which secret it is of (0 for none) and its place in it.
+  let chars = [...seed];
+  let marks: [number, number][] = chars.map(() => [0, 0]);
+  [F, G].forEach((secret, k) => {
+    for (let at = seed.indexOf(secret); at >= 0; at = seed.indexOf(secret, at + 1)) {
+      for (let i = 0; i < secret.length; i += 1) marks[at + i] = [k + 1, i];
+    }
+  });
+  for (let k = 1 + int(r, 3); k > 0; k -= 1) {
+    const at = int(r, chars.length + 1);
     const x = r();
-    if (x < 0.45) return s.slice(0, at) + pick(r, NB_ALPHA) + s.slice(at);
-    if (x < 0.7) return s.slice(0, at) + s.slice(at + 1);
-    return s.slice(0, at) + pick(r, NB_ALPHA) + s.slice(at + 1);
-  };
-  let t = pick(r, NB_SEEDS);
-  for (let k = 1 + int(r, 3); k > 0; k -= 1) t = edit(t);
+    const take = x < 0.45 ? 0 : 1;
+    const put = x < 0.45 || x >= 0.7 ? [...pick(r, NB_ALPHA)] : [];
+    chars = [...chars.slice(0, at), ...put, ...chars.slice(at + take)];
+    marks = [
+      ...marks.slice(0, at),
+      ...put.map((): [number, number] => [0, 0]),
+      ...marks.slice(at + take),
+    ];
+  }
+  const fragments = new Set<string>();
+  for (let i = 0; i < chars.length; ) {
+    const [secret, place] = marks[i] as [number, number];
+    let j = i + 1;
+    while (
+      secret !== 0 &&
+      j < chars.length &&
+      marks[j]?.[0] === secret &&
+      marks[j]?.[1] === place + (j - i)
+    ) {
+      j += 1;
+    }
+    if (secret !== 0 && j - i >= NB_FRAGMENT_MIN) fragments.add(chars.slice(i, j).join(''));
+    i = j;
+  }
+  let t = chars.join('');
   const w = r();
   if (w < 0.25) t = `{"cmd": ${JSON.stringify(t)}}`;
   else if (w < 0.35) t = `{"body": ${JSON.stringify(`{"cmd": ${JSON.stringify(t)}}`)}}`;
-  return { t, req: [F, G].filter((s) => t.includes(s)) };
+  return { t, req: [...fragments] };
 };
 
 const of =

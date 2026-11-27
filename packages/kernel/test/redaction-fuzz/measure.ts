@@ -81,6 +81,32 @@ export function shownThrough(
   return out;
 }
 
+/** The shortest piece of a secret `shownInRuns` looks for. */
+const RUN_CHARS = 8;
+
+/** Which secret characters of `row` an output shows, read without lining it up: a character is
+ *  shown where some `RUN_CHARS` of its secret's characters around it (all of a shorter secret) are
+ *  in the output as written. For the stored rows (`Row.stored`), whose rewrite is not its input
+ *  with stretches masked — `repairSplitQuotedMasks` writes `\"[redacted]\"` where it read
+ *  `[redacted]"…\"` — and which `shown` would count as showing every one. */
+export function shownInRuns(row: Row, places: Uint8Array, output: string): Uint8Array {
+  const out = new Uint8Array(row.t.length);
+  for (let start = 0; start < places.length; ) {
+    if (!places[start]) {
+      start += 1;
+      continue;
+    }
+    let end = start;
+    while (end < places.length && places[end]) end += 1;
+    const width = Math.min(RUN_CHARS, end - start);
+    for (let at = start; at + width <= end; at += 1) {
+      if (output.includes(row.t.slice(at, at + width))) out.fill(1, at, at + width);
+    }
+    start = end;
+  }
+  return out;
+}
+
 /** Some secret character `now` shows that `before` did not: hidden before, shown now. */
 export function showsMore(now: Uint8Array, before: Uint8Array): boolean {
   for (let i = 0; i < now.length; i += 1) if (now[i] && !before[i]) return true;
@@ -142,13 +168,25 @@ export function readerOf(values: ValuesModule, stream: StreamModule): Reader {
   };
 }
 
-/** Where a row is cut for the stream reading: `sets` sets of 1–6 cuts, from the row's own seed. */
+/** The most characters between two cuts of a row's dense set. */
+export const DENSE_STEP_MAX = 4;
+
+/** Where a row is cut for the stream reading, from the row's own seed: `sets` sets of 1–6 cuts
+ *  anywhere, then — `sets` above 0 — one dense set, a cut every 1–`DENSE_STEP_MAX` characters, as
+ *  a Turn's `textDelta`s come (review #493 on #1619: with 1–6 cuts a row, what the stream holds
+ *  back and the text it looks back into were barely read). */
 export function cutsFor(seed: number, text: string, sets: number): number[][] {
   const r: Rng = mulberry32(rowSeed(seed, text));
   const out: number[][] = [];
   for (let s = 0; s < sets; s += 1) {
     const n = 1 + int(r, 6);
     out.push(Array.from({ length: n }, () => int(r, text.length + 1)).sort((a, b) => a - b));
+  }
+  if (sets > 0) {
+    const dense: number[] = [];
+    const step = () => 1 + int(r, DENSE_STEP_MAX);
+    for (let at = step(); at < text.length; at += step()) dense.push(at);
+    out.push(dense);
   }
   return out;
 }
@@ -166,11 +204,17 @@ export interface Comparison {
     /** Each one's whole reading read again by itself. */
     readonly reread: number;
   };
+  /** Rows where some stream reading's text is not the same one's whole text, for each (the design's
+   *  I-R3 (b), §8): `now` gated by `acceptance.ts`. A stream that hides more than its whole reading
+   *  counts here, and in no column above: those count only what shows (review #493 on #1619, the
+   *  quote-blanks hold). */
+  readonly streamDiffers: { readonly now: number; readonly before: number };
   /** Reported, not gated. */
   readonly info: {
-    /** Rows where any secret character shows, for each, in its whole reading. */
+    /** Rows where any secret character shows, for each, in its whole reading — a stored row's
+     *  (`Row.stored`) in its stored reading, by `shownInRuns`. */
     readonly showing: { readonly now: number; readonly before: number };
-    /** Secret characters shown in all, for each, in its whole reading. */
+    /** Secret characters shown in all, for each, in the same reading. */
     readonly shownChars: { readonly now: number; readonly before: number };
     /** Rows where `now` hides a secret character `before` showed. */
     readonly hidesMore: number;
@@ -187,13 +231,14 @@ export interface Comparison {
     /** Rows an output of `now` could not be lined up with its input (counted as showing all). */
     readonly unaligned: number;
   };
-  /** Up to `examples` rows for each gated reading, to read. */
+  /** Up to `examples` rows for each gated reading, to read; `streamNotWhole`: rows whose stream
+   *  `now` is not its whole text and `before`'s is — `now` the stream's text, `before` the whole's. */
   readonly examples: Record<string, { t: string; now: string; before: string }[]>;
 }
 
 export interface CompareOptions {
   readonly seed: number;
-  /** Stream cut sets per row (default 2). */
+  /** Stream cut sets per row (default 2), and the dense one (`cutsFor`). */
   readonly cutSets?: number;
   readonly examples?: number;
 }
@@ -216,7 +261,14 @@ export function compare(
     countDisagrees: 0,
     unaligned: 0,
   };
-  const examples: Comparison['examples'] = { whole: [], stream: [], stored: [], reread: [] };
+  const streamDiffers = { now: 0, before: 0 };
+  const examples: Comparison['examples'] = {
+    whole: [],
+    stream: [],
+    stored: [],
+    reread: [],
+    streamNotWhole: [],
+  };
   const keep = options.examples ?? 3;
   const note = (kind: keyof typeof gate, t: string, a: string, b: string) => {
     gate[kind] += 1;
@@ -226,6 +278,23 @@ export function compare(
 
   for (const row of rows) {
     const places = secretPlaces(row);
+    if (row.stored === true) {
+      // A row an earlier release stored: rewritten on upgrade by each, and nothing else.
+      const stNow = now.stored(row.t).value;
+      const stBefore = before.stored(row.t).value;
+      const sNow = shownInRuns(row, places, stNow);
+      const sBefore = shownInRuns(row, places, stBefore);
+      if (any(sNow)) info.showing.now += 1;
+      if (any(sBefore)) info.showing.before += 1;
+      info.shownChars.now += count(sNow);
+      info.shownChars.before += count(sBefore);
+      if (stNow !== stBefore) info.differs += 1;
+      if (showsMore(sNow, sBefore)) note('stored', row.t, stNow, stBefore);
+      if (showsMore(sBefore, sNow)) info.hidesMore += 1;
+      if (now.stored(stNow).value !== stNow) info.storedChangesOwn.now += 1;
+      if (before.stored(stBefore).value !== stBefore) info.storedChangesOwn.before += 1;
+      continue;
+    }
     const wNow = now.whole(row.t);
     const wBefore = before.whole(row.t);
     if (keptChars(row.t, wNow.value) === undefined) info.unaligned += 1;
@@ -243,9 +312,19 @@ export function compare(
     let streamMore = false;
     let nowOverWhole = false;
     let beforeOverWhole = false;
+    let nowNotWhole = false;
+    let beforeNotWhole = false;
     for (const cuts of cutsFor(options.seed, row.t, options.cutSets ?? 2)) {
       const a = now.stream(row.t, cuts);
       const b = before.stream(row.t, cuts);
+      if (a !== wNow.value && !nowNotWhole) {
+        nowNotWhole = true;
+        const list = examples.streamNotWhole as { t: string; now: string; before: string }[];
+        if (b === wBefore.value && list.length < keep) {
+          list.push({ t: `${row.t}  (cuts ${cuts.join(',')})`, now: a, before: wNow.value });
+        }
+      }
+      if (b !== wBefore.value) beforeNotWhole = true;
       const shownA = shown(row, places, a);
       const shownB = shown(row, places, b);
       if (!streamMore && showsMore(shownA, shownB)) {
@@ -255,6 +334,8 @@ export function compare(
       if (showsMore(shownA, sNow)) nowOverWhole = true;
       if (showsMore(shownB, sBefore)) beforeOverWhole = true;
     }
+    if (nowNotWhole) streamDiffers.now += 1;
+    if (beforeNotWhole) streamDiffers.before += 1;
     if (nowOverWhole) info.streamShowsMoreThanWhole.now += 1;
     if (beforeOverWhole) info.streamShowsMoreThanWhole.before += 1;
 
@@ -285,5 +366,5 @@ export function compare(
       note('reread', row.t, rNow, rBefore);
     }
   }
-  return { rows: rows.length, showsMore: gate, info, examples };
+  return { rows: rows.length, showsMore: gate, streamDiffers, info, examples };
 }

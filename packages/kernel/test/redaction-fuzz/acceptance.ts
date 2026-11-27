@@ -18,6 +18,10 @@ import { CORPUS, readsCiSample, settings } from './settings.js';
  * 2. The real-format corpus (I-R5): what this checkout shows of the values the formats wrote, held
  *    to `corpus-baseline.json` — no more rows and no more characters than when it was taken. The
  *    design's threshold, 0 characters, is where stage 1b and stage 2 take it; each lowers the file.
+ * 3. Rows whose stream is not their whole text (I-R3 b), a stream that hides more included — which
+ *    1 does not see, as it counts only what shows: held to `stream-baseline.json`, taken on main.
+ *    The design holds it to the last release; main has more than v0.70.1 since legacy 948 (#1600),
+ *    all of them hiding more, so it is held to main's until a release carries 948 (README.md).
  *
  * Run by `run.mjs` (README.md), which puts the release's sources where `readers.ts` reads them.
  */
@@ -25,6 +29,12 @@ import { CORPUS, readsCiSample, settings } from './settings.js';
 export interface Result extends Comparison {
   readonly generator: string;
   readonly seed: number;
+}
+
+/** `stream-baseline.json`: per generator, on CI's sample, rows whose stream was not its whole. */
+interface StreamBaseline {
+  readonly note: string;
+  readonly generators: Record<string, { readonly rows: number; readonly atRelease: number }>;
 }
 
 /** `corpus-baseline.json`: per format, on CI's sample, what this checkout's whole reading showed. */
@@ -49,6 +59,7 @@ const COLUMNS: [string, number, (r: Result) => string][] = [
   ['w/s/st/rr', 10, (r) => Object.values(r.showsMore).join('/')],
   ['show n:b', 11, (r) => `${r.info.showing.now}:${r.info.showing.before}`],
   ['hides', 6, (r) => String(r.info.hidesMore)],
+  ['str≠w', 11, (r) => `${r.streamDiffers.now}:${r.streamDiffers.before}`],
   ['differ', 7, (r) => String(r.info.differs)],
   [
     'str>w',
@@ -66,7 +77,8 @@ const cell = (text: string, width: number) =>
 /** The table a run prints: gated columns first, then what it reports. */
 export function table(tag: string, results: readonly Result[]): string {
   return [
-    `against ${tag}: w/s/st/rr = rows shown now, hidden then (whole/stream/stored/reread), gated at 0.`,
+    `against ${tag}: w/s/st/rr = rows shown now, hidden then (whole/stream/stored/reread), gated at 0;`,
+    'str≠w = rows whose stream is not their whole text now:then, now held to stream-baseline.json.',
     'Reported: rows showing a secret now:then; hiding more now; whole output differs; stream showing',
     'more than its own whole reading now:then; reread changing; stored rewrite changing its own;',
     'count and text disagreeing; outputs not lined up with their input (counted as showing all).',
@@ -137,6 +149,32 @@ export async function acceptance(group: string, part = 1, parts = 1): Promise<vo
       }
     });
   }
+
+  const streamRecorded = (
+    JSON.parse(
+      readFileSync(join(import.meta.dirname, 'stream-baseline.json'), 'utf8'),
+    ) as StreamBaseline
+  ).generators;
+  describe(`${label}: rows whose stream is not their whole text (I-R3 b), held to stream-baseline.json`, () => {
+    for (const name of names) {
+      it.skipIf(before === undefined || !readsCiSample(run))(name, () => {
+        const mine = results.filter((result) => result.generator === name);
+        const rows = mine.reduce((n, result) => n + result.streamDiffers.now, 0);
+        const line = streamRecorded[name];
+        expect(line, `${name} has no line in stream-baseline.json`).toBeDefined();
+        expect
+          .soft(
+            rows,
+            `${name}: rows whose stream is not their whole text; some that ${run.tag} streams as its whole:\n${JSON.stringify(
+              mine.flatMap((result) => result.examples.streamNotWhole ?? []),
+              null,
+              2,
+            )}`,
+          )
+          .toBeLessThanOrEqual(line?.rows ?? 0);
+      });
+    }
+  });
 
   afterAll(() => {
     if (results.length === 0) return;

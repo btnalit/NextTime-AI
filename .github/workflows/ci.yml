@@ -296,12 +296,34 @@ jobs:
           TMPDIR: /dev/shm
         run: pnpm --no-bail -r test
 
-      - name: Redaction acceptance against the last release (redaction-boundary design §7 stage 1a)
-        # Not part of `pnpm -r test`: it reads the last release's own sources, which run.mjs fetches
-        # by tag and puts under packages/kernel/test/redaction-fuzz/.baseline/ (README.md there).
-        # CI's sample — 2,000 rows a generator, two seeds — gated at 0 rows shown now and hidden
-        # in the release; the seats run the full set.
-        if: ${{ !cancelled() }}
+  redaction:
+    name: redaction
+    # The redaction acceptance against the last release (redaction-boundary design §7 stage 1a).
+    # Not part of `pnpm -r test`: it reads the last release's own sources, which run.mjs fetches
+    # by tag and puts under packages/kernel/test/redaction-fuzz/.baseline/ (README.md there). CI's
+    # sample — 2,000 rows a generator, two seeds, each row streamed in a cut every 1–4 characters
+    # as well — gated at 0 rows shown now and hidden in the release; the seats run the full set.
+    # Its own job beside `test`, which it does not need (no Postgres): about four minutes, off
+    # `test`'s path (review #488 on #1619). pr-gate.mjs holds a merge on any check run not green.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Redaction acceptance against the last release
         run: node packages/kernel/test/redaction-fuzz/run.mjs
 
   guards:

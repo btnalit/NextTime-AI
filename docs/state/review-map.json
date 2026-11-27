@@ -23,6 +23,7 @@
       ],
       "paths": [
         "packages/kernel/src/**/redaction/**",
+        "packages/kernel/test/redaction-fuzz/**",
         "packages/kernel/src/governance/**",
         "packages/kernel/src/application/gateway/**",
         "packages/kernel/src/application/gates/**",

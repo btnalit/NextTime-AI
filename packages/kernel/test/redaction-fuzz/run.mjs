@@ -13,13 +13,16 @@
  *   --cut-sets <n>          stream cut sets per row (default 2)
  *   --report <dir>          write the results there as JSON, one file a group
  *   --write-corpus-baseline rewrite corpus-baseline.json from this run (CI's sample only)
+ *   --write-stream-baseline rewrite stream-baseline.json from this run (CI's sample, every generator)
  *   --mutations [a,b,…]     apply each patch in mutations/ in turn and run: each must fail the run
  *   --list                  name the generators and the mutations
  *
  * It puts the release's kernel and shared sources under .baseline/<tag>/ (gitignored) with
  * `git archive`, fetching the tag from origin first when this clone does not have it, and runs
  * Vitest with vitest.config.ts beside this file. Exit status: Vitest's; with --mutations, 0 only
- * when every mutation failed the run.
+ * when every mutation failed the run — type-checked, every test file loaded, the harness passed,
+ * and an acceptance test failed on an assertion; a patch that does not apply is stale, one that
+ * breaks the build or the harness is broken, and both count as not failing it.
  */
 import { spawnSync } from 'node:child_process';
 import {
@@ -75,6 +78,9 @@ function parse(argv) {
         break;
       case '--write-corpus-baseline':
         options.writeCorpusBaseline = true;
+        break;
+      case '--write-stream-baseline':
+        options.writeStreamBaseline = true;
         break;
       case '--mutations': {
         const next = argv[i + 1];
@@ -152,16 +158,67 @@ function baseline(tag) {
   return dir;
 }
 
-function vitest(env) {
+/** A package's bin, as the kernel resolves the package. */
+function binOf(pkg, name) {
   const require = createRequire(join(KERNEL, 'package.json'));
-  const manifest = require.resolve('vitest/package.json');
-  const bin = join(dirname(manifest), JSON.parse(readFileSync(manifest, 'utf8')).bin.vitest);
+  const manifest = require.resolve(`${pkg}/package.json`);
+  const { bin } = JSON.parse(readFileSync(manifest, 'utf8'));
+  return join(dirname(manifest), typeof bin === 'string' ? bin : bin[name]);
+}
+
+/** The run, with `json` a file for Vitest's JSON report of it. */
+function vitest(env, json) {
+  const report =
+    json === undefined
+      ? []
+      : ['--reporter=default', '--reporter=json', `--outputFile.json=${json}`];
   const result = spawnSync(
     process.execPath,
-    [bin, 'run', '--config', join(HERE, 'vitest.config.ts')],
+    [binOf('vitest', 'vitest'), 'run', '--config', join(HERE, 'vitest.config.ts'), ...report],
     { cwd: KERNEL, stdio: 'inherit', env: { ...process.env, ...env } },
   );
   return result.status ?? 1;
+}
+
+/** Whether the sources and this tool type-check as they stand (`tsconfig.json` beside this file
+ *  reads the kernel sources it imports). */
+function typechecks() {
+  const result = spawnSync(
+    process.execPath,
+    [binOf('typescript', 'tsc'), '-p', join(HERE, 'tsconfig.json')],
+    { cwd: KERNEL, encoding: 'utf8' },
+  );
+  if (result.status !== 0) console.error(`${result.stdout}${result.stderr}`.trim());
+  return result.status === 0;
+}
+
+/** What a run under a mutation shows, from its JSON report: caught only when the harness passed,
+ *  every file loaded, and an acceptance test failed on an assertion — a file that did not load, or
+ *  a harness that failed, is a broken patch, not one the gate caught (review #493 on #1619). */
+function verdict(status, json) {
+  if (status === 0) return 'SURVIVED: the run passed';
+  if (!existsSync(json)) return 'broken: no report (the run did not start)';
+  const { testResults = [] } = JSON.parse(readFileSync(json, 'utf8'));
+  const unloaded = testResults.filter(
+    (file) => file.status === 'failed' && (file.assertionResults ?? []).length === 0,
+  );
+  if (unloaded.length > 0) {
+    return `broken: ${unloaded.map((file) => relative(HERE, file.name)).join(', ')} did not load`;
+  }
+  const harness = testResults.filter((file) => file.name.endsWith('harness.test.ts'));
+  if (harness.length === 0 || harness.some((file) => file.status !== 'passed')) {
+    return 'broken: the harness did not pass';
+  }
+  const caught = testResults.some(
+    (file) =>
+      /acceptance-[\w-]+\.test\.ts$/.test(file.name) &&
+      (file.assertionResults ?? []).some(
+        (test) =>
+          test.status === 'failed' &&
+          (test.failureMessages ?? []).some((message) => /AssertionError/.test(message)),
+      ),
+  );
+  return caught ? 'failed the run' : 'broken: no acceptance test failed on an assertion';
 }
 
 function patches(selected) {
@@ -188,11 +245,17 @@ function mutate(names, env) {
       continue;
     }
     git(['apply', patch]);
-    let status = 1;
+    const scratch = mkdtempSync(join(tmpdir(), 'redaction-fuzz-mutation-'));
     try {
       console.error(`\n=== mutation ${name}`);
-      status = vitest(env);
+      if (!typechecks()) {
+        outcome[name] = 'broken: does not type-check';
+      } else {
+        const json = join(scratch, 'report.json');
+        outcome[name] = verdict(vitest(env, json), json);
+      }
     } finally {
+      rmSync(scratch, { recursive: true, force: true });
       const back = git(['apply', '-R', patch]);
       if (!back.ok) {
         // The sources are left mutated: stop here, before anything else reads them.
@@ -200,21 +263,22 @@ function mutate(names, env) {
         process.exit(3);
       }
     }
-    outcome[name] = status === 0 ? 'SURVIVED: the run passed' : 'failed the run';
   }
   console.log('\nmutations:');
   for (const [name, result] of Object.entries(outcome)) console.log(`  ${name}: ${result}`);
   return Object.values(outcome).every((result) => result === 'failed the run') ? 0 : 1;
 }
 
+/** Whether a report's settings are CI's sample. */
+const ciSample = (settings) =>
+  settings.rows === Number(CI_SAMPLE.rows) &&
+  settings.cutSets === Number(CI_SAMPLE.cutSets) &&
+  settings.seeds.join(',') === CI_SAMPLE.seeds;
+
 /** corpus-baseline.json from a run's formats report: what the whole reading showed, per format. */
 function writeCorpusBaseline(report, tag) {
   const { settings, results } = JSON.parse(readFileSync(join(report, 'formats.json'), 'utf8'));
-  const sample =
-    settings.rows === Number(CI_SAMPLE.rows) &&
-    settings.cutSets === Number(CI_SAMPLE.cutSets) &&
-    settings.seeds.join(',') === CI_SAMPLE.seeds;
-  if (!sample)
+  if (!ciSample(settings))
     throw new Error(
       "--write-corpus-baseline: only from CI's sample (rows, seeds, cut sets as default)",
     );
@@ -231,6 +295,36 @@ function writeCorpusBaseline(report, tag) {
   };
   writeFileSync(join(HERE, 'corpus-baseline.json'), `${JSON.stringify(file, null, 2)}\n`);
   console.error('corpus-baseline.json rewritten');
+}
+
+/** stream-baseline.json from a run's reports: per generator, rows whose stream was not its whole
+ *  text, this checkout's and the release's on the same rows. Every generator: a partial run would
+ *  drop the lines of those it did not read. */
+function writeStreamBaseline(report, tag, generators) {
+  if (generators !== undefined)
+    throw new Error('--write-stream-baseline: every generator (no --generators)');
+  const lines = {};
+  for (const file of readdirSync(report)
+    .filter((name) => name.endsWith('.json'))
+    .sort()) {
+    const { settings, results } = JSON.parse(readFileSync(join(report, file), 'utf8'));
+    if (!ciSample(settings))
+      throw new Error(
+        "--write-stream-baseline: only from CI's sample (rows, seeds, cut sets as default)",
+      );
+    for (const result of results) {
+      lines[result.generator] ??= { rows: 0, atRelease: 0 };
+      lines[result.generator].rows += result.streamDiffers.now;
+      lines[result.generator].atRelease += result.streamDiffers.before;
+    }
+  }
+  const recorded = Object.fromEntries(Object.entries(lines).sort(([a], [b]) => a.localeCompare(b)));
+  const file = {
+    note: `Per generator, on CI's sample (${CI_SAMPLE.rows} rows, seeds ${CI_SAMPLE.seeds}): rows where a stream reading's text is not this checkout's whole text (rows), and the same count for ${tag} on the same rows (atRelease). Written by run.mjs --write-stream-baseline; a change may only lower rows.`,
+    generators: recorded,
+  };
+  writeFileSync(join(HERE, 'stream-baseline.json'), `${JSON.stringify(file, null, 2)}\n`);
+  console.error('stream-baseline.json rewritten');
 }
 
 function main() {
@@ -253,7 +347,7 @@ function main() {
   baseline(tag);
   const report =
     options.report ??
-    (options.writeCorpusBaseline
+    (options.writeCorpusBaseline || options.writeStreamBaseline
       ? mkdtempSync(join(tmpdir(), 'redaction-fuzz-report-'))
       : undefined);
   const env = {
@@ -267,6 +361,7 @@ function main() {
   if (options.mutations !== undefined) return mutate(patches(options.mutations), env);
   const status = vitest(env);
   if (options.writeCorpusBaseline) writeCorpusBaseline(report, tag);
+  if (options.writeStreamBaseline) writeStreamBaseline(report, tag, options.generators);
   return status;
 }
 
