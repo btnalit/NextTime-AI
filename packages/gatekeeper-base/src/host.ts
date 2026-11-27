@@ -386,10 +386,13 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
   // ---- build -------------------------------------------------------------------------------
   async function buildInstance(instance: HostedInstance): Promise<void> {
     const { definition } = instance;
+    // Legacy 961: a masked echo of the instance's own credential is logged with the instance.
+    const echoLog = (line: string) =>
+      log(JSON.stringify({ level: 'warn', msg: line, gateId: instance.gateId }));
     const transport: Transport =
       definition.transportKind === 'http'
-        ? new HttpTransport({ baseUrl: definition.target, fetchImpl: targetFetch })
-        : new McpTransport({ endpoint: definition.target, fetchImpl: targetFetch });
+        ? new HttpTransport({ baseUrl: definition.target, fetchImpl: targetFetch, log: echoLog })
+        : new McpTransport({ endpoint: definition.target, fetchImpl: targetFetch, log: echoLog });
     const resolver = new HostedCredentialResolver(instance.store, definition.credentialMode);
     let operations: Operation[];
     if (definition.preset !== undefined) {

@@ -28,23 +28,28 @@ const GATE_REDIRECT_ADVICE: RedirectAdvice = {
 };
 
 /** The readable failure for a redirect `response` to `requestUrl` (`label`: what was being
- *  called, e.g. `mcp transport: tools/list`). */
+ *  called, e.g. `mcp transport: tools/list`; `scrub`: as `describeRedirect`'s). */
 export function redirectRefusalMessage(
   label: string,
   response: Pick<Response, 'status' | 'headers'>,
   requestUrl: string | URL,
   advice: RedirectAdvice = GATE_REDIRECT_ADVICE,
+  scrub?: (shown: string) => string,
 ): string {
-  return describeRedirect(label, response, requestUrl, advice);
+  return describeRedirect(label, response, requestUrl, advice, scrub);
 }
 
-/** Throws a `TransportInvokeError` naming the redirect when `response` is one; returns otherwise. */
+/** Throws a `TransportInvokeError` naming the redirect when `response` is one; returns otherwise.
+ *  `scrub` runs on where it pointed before it is shown (legacy 961: the target writes it). */
 export async function refuseRedirect(
   label: string,
   response: Response,
   requestUrl: string | URL,
+  scrub?: (shown: string) => string,
 ): Promise<void> {
   if (!isRedirectStatus(response.status)) return;
   await response.body?.cancel().catch(() => {});
-  throw new TransportInvokeError(redirectRefusalMessage(label, response, requestUrl));
+  throw new TransportInvokeError(
+    redirectRefusalMessage(label, response, requestUrl, GATE_REDIRECT_ADVICE, scrub),
+  );
 }
