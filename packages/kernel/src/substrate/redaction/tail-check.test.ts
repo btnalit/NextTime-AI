@@ -343,6 +343,42 @@ describe('TailReader — a stream read as the whole text is (design §8, I-R3 a)
     }
   });
 
+  it('the long lines the acceptance run reads only a few of (long/), in two at every offset', () => {
+    // The acceptance run's long/ generators read six and eight rows a seed (a stream reading of
+    // one takes a second or two), so the check alone is cut at every offset of each kind here
+    // (review #493 on #1619): values around the bound L, around the stream's 4,096 and past it,
+    // bare and quoted, after a head longer than eight characters, and PEM keys broken with a
+    // line break, CRLF and `\n` written in a string.
+    const value = (length: number) => `FAKE${'aB3+/'.repeat(length)}`.slice(0, length);
+    const lines = (length: number) => value(length).match(/.{1,64}/g) ?? [];
+    const texts = [
+      ...[TAIL_VALUE_MAX_CHARS, TAIL_VALUE_MAX_CHARS + 1, 4_096, 5_000].map(
+        (length) => `2026-11-27T10:14:03Z INFO deploy: password=${value(length)} done`,
+      ),
+      // An escaped quote's close at the bound and past it, one and three backslashes deep, in a
+      // value and in a string of a container: cut inside the close, the text has not yet said
+      // whether it starts within the bound.
+      ...[-4, -3, -2, -1, 0].flatMap((d) => [
+        `log="starting with API_TOKEN=\\"${value(TAIL_VALUE_MAX_CHARS + d)}\\" exit=0"`,
+        String.raw`echo 'config: password=\\\"${value(TAIL_VALUE_MAX_CHARS + d)}\\\" ok'`,
+        String.raw`{\"cmd\": \"run \"api_key\": {\"a\": \"${value(TAIL_VALUE_MAX_CHARS - 6 + d)}\"}} ok`,
+      ]),
+      `{"level":"info","msg":"api_key: '${value(4_100)}'"} ok`,
+      `[worker-3] step 4/7: --password ${value(4_200)}\nnext token=${FAKE}`,
+      ...['\n', '\r\n', '\\n'].map(
+        (nl) =>
+          `{"private_key": "-----BEGIN PRIVATE KEY-----${nl}${lines(4_200).join(nl)}${nl}-----END PRIVATE KEY-----"} ok`,
+      ),
+    ];
+    for (const text of texts) {
+      const whole = wholly(text);
+      for (let at = 0; at <= text.length; at += 1) {
+        const got = streamed(text, [at]);
+        if (got !== whole) expect({ at, got }).toEqual({ at, got: whole });
+      }
+    }
+  }, 60_000);
+
   it('readLine read in parts gives the marks of the line read whole', () => {
     const line = `say "token=${FAKE}" and password: 'a'.`;
     const whole = readLine(line, 0, LINE_START, true);

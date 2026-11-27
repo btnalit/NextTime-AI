@@ -277,6 +277,16 @@ function cleanAfter(
   return key === undefined ? undefined : !key;
 }
 
+/** Where a close written as `slashes` backslashes and a quote may yet start, the text having
+ *  come only as far as its end: at the run of backslashes it ends with when that run is no longer
+ *  than the close's, as a whole text reads its bound at the close's first backslash; at its end
+ *  otherwise. */
+function closeMayStart(text: string, slashes: number): number {
+  let run = 0;
+  while (run <= slashes && text.charAt(text.length - 1 - run) === '\\') run += 1;
+  return run > 0 && run <= slashes ? text.length - run : text.length;
+}
+
 /** Where the container that opens at `from` closes (the index after its last bracket); `-1` when
  *  it does not close on its line within the bound, or holds a backslash outside a string;
  *  `undefined` while the line may still close it. A string in it is delimited by `"` or `'`,
@@ -327,7 +337,11 @@ function containerEnd(line: Line, from: number, slashes: string): number | undef
           j += 1;
         }
       }
-      if (end === -1) return line.ended || j - from > TAIL_VALUE_MAX_CHARS ? -1 : undefined;
+      if (end === -1) {
+        if (line.ended) return -1;
+        const at = slashes === '' ? j : closeMayStart(text, slashes.length);
+        return at - from > TAIL_VALUE_MAX_CHARS ? -1 : undefined;
+      }
       i = end;
       continue;
     }
@@ -369,7 +383,13 @@ function readValue(line: Line, from: number, quotes: number, keySlashes: string)
     let i = from + open;
     let closed = -1;
     while (i < text.length) {
-      if (i - from > TAIL_VALUE_MAX_CHARS) return TAIL;
+      if (i - from > TAIL_VALUE_MAX_CHARS) {
+        // Past the bound inside the backslashes the text ends with: a close that starts within the
+        // bound may still come.
+        const waits =
+          !line.ended && slashes > 0 && closeMayStart(text, slashes) - from <= TAIL_VALUE_MAX_CHARS;
+        return waits ? MORE : TAIL;
+      }
       const char = text.charAt(i);
       if (slashes === 0) {
         if (char === '\\') {
@@ -390,7 +410,11 @@ function readValue(line: Line, from: number, quotes: number, keySlashes: string)
         i += 1;
       }
     }
-    if (closed === -1) return line.ended || i - from > TAIL_VALUE_MAX_CHARS ? TAIL : MORE;
+    if (closed === -1) {
+      if (line.ended) return TAIL;
+      const at = slashes === 0 ? i : closeMayStart(text, slashes);
+      return at - from > TAIL_VALUE_MAX_CHARS ? TAIL : MORE;
+    }
     const content = text.slice(from + open, closed - open);
     if (content.includes(MASK) && content !== MASK) return TAIL;
     if (holdsAName(content, 0, content.length, { text: content, ended: true }, 0)) return TAIL;
