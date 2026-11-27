@@ -11,6 +11,7 @@ import { BUDGET_HINT_TEXT, BudgetTracker } from './budget.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
 import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
 import { paramNames, renderToolResult } from './tool-result.js';
+import { renderRelevantFacts, renderVocabulary } from './vocabulary.js';
 import { ToolCallReporter } from './worker-tool-calls.js';
 
 /**
@@ -120,7 +121,7 @@ function buildGateTool(
 }
 
 // -------------------------------------------------------------------------------------------
-// context injection: Task input, related Facts, Skills placeholder (S2.14).
+// context injection: Task input, ontology vocabulary, related Facts (S2.14, legacy 968).
 // -------------------------------------------------------------------------------------------
 
 interface WorkerTaskContext {
@@ -130,6 +131,8 @@ interface WorkerTaskContext {
   readonly outputSchema?: unknown;
   /** S11 GO5d-1: the attempt this one redoes (`get_task`'s `reworkOf`), when it is a rework. */
   readonly reworkOf?: unknown;
+  /** Legacy 968: what its `factsToAssert` may use (`get_task`'s `ontologyVocabulary`). */
+  readonly ontologyVocabulary?: unknown;
 }
 
 /** At most this much of a refused output goes back into a rework's context. */
@@ -239,9 +242,9 @@ function renderWorkerContext(ctx: WorkerTaskContext): string {
     `### Task input\n${renderTaskInput(ctx.taskInput)}`,
     renderOutputContract(ctx.outputSchema),
     renderPreviousAttempt(ctx.reworkOf),
-    ctx.facts.length > 0
-      ? `### Relevant facts\n${ctx.facts.map((fact) => `- ${JSON.stringify(fact)}`).join('\n')}`
-      : undefined,
+    // Legacy 968: each at most 4,000 characters (vocabulary.ts).
+    renderVocabulary(ctx.ontologyVocabulary),
+    renderRelevantFacts(ctx.facts),
   ].filter((section): section is string => section !== undefined);
   return ['## NextTime worker context', ...sections].join('\n\n');
 }
@@ -352,7 +355,11 @@ function renderRejections(rejections: StoredResultRejections): string[] {
     const expected = Array.isArray(fact.expected)
       ? ` — expected ${JSON.stringify(fact.expected)}`
       : '';
-    lines.push(`- ${where}${linkType}: ${String(fact.reason)}${detail}${expected}`);
+    // Legacy 968: for an undeclared LinkType, what is declared between the two types instead.
+    const declared = Array.isArray(fact.declaredBetween)
+      ? ` — declared between these types: ${JSON.stringify(fact.declaredBetween)}`
+      : '';
+    lines.push(`- ${where}${linkType}: ${String(fact.reason)}${detail}${expected}${declared}`);
   }
   for (const proposal of rejections.proposedOperationsRejected) {
     const gatekeeperId =
@@ -486,7 +493,9 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
       'Report this Task’s final result contract back to the platform ' +
       '({summary, output?, findings?, factsToAssert?, evidence?, artifacts?, proposedSkill?, ' +
       'proposedOperations?}). When the worker context has an "Output contract", put the ' +
-      'structured result in `output` — it must meet that schema. Call this once, when you are ' +
+      'structured result in `output` — it must meet that schema. When it has an "Ontology ' +
+      'vocabulary", every factsToAssert entry uses a LinkType listed there between Objects of its ' +
+      'types; a conclusion it cannot express goes in findings. Call this once, when you are ' +
       'done — the platform answers immediately (accepted, or why it was rejected) and the agent ' +
       'loop ends after an accepted call.',
     parameters: toToolParameters(WorkerResultContractSchema),
@@ -619,6 +628,7 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
           outputSchema?: unknown;
           reworkOf?: unknown;
           callerCapabilities?: unknown;
+          ontologyVocabulary?: unknown;
           tokenBudget?: unknown;
           tokensUsed?: unknown;
         }>('get_task', {
@@ -650,6 +660,7 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
           facts,
           outputSchema: task.outputSchema,
           reworkOf: task.reworkOf,
+          ontologyVocabulary: task.ontologyVocabulary,
         };
       } catch (error) {
         // A failed get_task must degrade to "no injected context", never break the turn — and

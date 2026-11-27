@@ -108,12 +108,15 @@ export {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  MAX_DECLARED_BETWEEN,
+  declaredBetween,
   evaluateLink,
   getType,
   listOntologyVersions,
   listTypes,
   loadPublishedLinkTypeFamilies,
   loadPublishedLinkTypes,
+  loadPublishedOntology,
   loadVisibleOntology,
   proposeOntologyChange,
   publishOntologyDraft,
@@ -132,3 +135,14 @@ export type {
   ValidateLinkResult,
   VisibleOntologyFamily,
 } from './registry.js';
+export {
+  MAX_VOCABULARY_LINK_TYPES,
+  MAX_VOCABULARY_OBJECT_TYPES,
+  typesTouchedBy,
+  workerVocabulary,
+} from './vocabulary.js';
+export type {
+  VocabularyLinkType,
+  VocabularyObjectType,
+  WorkerVocabulary,
+} from './vocabulary.js';

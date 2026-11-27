@@ -61,6 +61,17 @@ export interface OntologyViolationDetails {
   readonly targetType: string;
   /** Every `domain -> range` signature the LinkType does declare; empty when it declares none. */
   readonly expected: readonly string[];
+  /** Legacy 968, `undeclared_link_type` only: the signatures declared between the two endpoint
+   *  types, either way round, as `name: domain -> range` (`declaredBetween`, at most 20). */
+  readonly declaredBetween?: readonly string[];
+}
+
+/** What an undeclared LinkType's refusal says the writer could have named instead. */
+function declaredBetweenText(details: OntologyViolationDetails): string {
+  const declared = details.declaredBetween ?? [];
+  return declared.length > 0
+    ? `; declared between these types: ${declared.map((signature) => boundedEcho(signature)).join(', ')}`
+    : '; no LinkType is declared between these types';
 }
 
 /** A Link write that the workspace's published ontology does not license, in `reject` mode.
@@ -72,7 +83,7 @@ export class OntologyViolationError extends Error {
   constructor(details: OntologyViolationDetails) {
     super(
       details.reason === 'undeclared_link_type'
-        ? `ontology_violation: LinkType ${quotedName(details.linkType)} is not declared by any published ontology version of this workspace (${boundedEcho(details.sourceType)} -> ${boundedEcho(details.targetType)})`
+        ? `ontology_violation: LinkType ${quotedName(details.linkType)} is not declared by any published ontology version of this workspace (${boundedEcho(details.sourceType)} -> ${boundedEcho(details.targetType)})${declaredBetweenText(details)}`
         : `ontology_violation: LinkType ${quotedName(details.linkType)} does not permit ${boundedEcho(details.sourceType)} -> ${boundedEcho(details.targetType)} (allowed: ${details.expected.join(', ')})`,
     );
     this.name = 'OntologyViolationError';
@@ -123,6 +134,9 @@ export async function enforceOntologyOnLinkWrite(
     sourceType,
     targetType,
     expected: evaluation.kind === 'domain_range_violation' ? evaluation.expected : [],
+    ...(evaluation.kind === 'undeclared_link_type'
+      ? { declaredBetween: evaluation.declaredBetween }
+      : {}),
   };
 
   const policy = await client.query<{ ontology_enforcement: OntologyEnforcement }>(

@@ -91,6 +91,36 @@ export const RejectedOutputWireSchema = z
   .strict();
 export type RejectedOutputWire = z.infer<typeof RejectedOutputWireSchema>;
 
+/** Legacy 968: one ObjectType of a Worker's vocabulary (`TaskWireSchema.ontologyVocabulary`). */
+export const VocabularyObjectTypeWireSchema = z
+  .object({
+    name: z.string(),
+    /** `null` when the ObjectType declares no identity key. */
+    identityKey: z.array(z.string()).nullable(),
+    relevant: z.boolean(),
+  })
+  .strict();
+
+/** Legacy 968: one LinkType signature of a Worker's vocabulary; `*` at an end accepts any type. */
+export const VocabularyLinkTypeWireSchema = z
+  .object({
+    name: z.string(),
+    domain: z.string(),
+    range: z.string(),
+    relevant: z.boolean(),
+  })
+  .strict();
+
+export const WorkerVocabularyWireSchema = z
+  .object({
+    objectTypes: z.array(VocabularyObjectTypeWireSchema),
+    linkTypes: z.array(VocabularyLinkTypeWireSchema),
+    omittedObjectTypes: z.number().int().nonnegative(),
+    omittedLinkTypes: z.number().int().nonnegative(),
+  })
+  .strict();
+export type WorkerVocabularyWire = z.infer<typeof WorkerVocabularyWireSchema>;
+
 /** S11 GO5d-1: the attempt of the same goal step this one redoes — one that ended without an
  *  accepted result (`no_result`): its Task, its number and the last report its output contract
  *  refused (`null` when it reported none). Recorded when the attempt starts, so the Worker reads
@@ -160,6 +190,14 @@ export const TaskWireSchema = z
      *  scope. Absent for every other caller, from `list_tasks` (which shares this shape), and
      *  from kernels before legacy 761. */
     callerCapabilities: z.array(z.string()).optional(),
+    /** Legacy 968: likewise only for one of this Task's own WorkerRun Handles — the vocabulary its
+     *  `factsToAssert` are written with: the workspace's published ObjectTypes (with the identity
+     *  key an `{objectType, identity}` ref names an Object by) and LinkType signatures, less the
+     *  platform meta-ontology a Handle may not write; `relevant` ones first, those an Operation the
+     *  Handle may call reads or writes (`*`, any type, counts as one); at most 100 ObjectTypes and
+     *  200 signatures, the rest counted in `omitted*`. `null` when the workspace has published no
+     *  ontology, so no Link it writes is checked. */
+    ontologyVocabulary: WorkerVocabularyWireSchema.nullable().optional(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;
@@ -200,6 +238,10 @@ export const ReportedFactRejectionWireSchema = z
     sourceType: z.string().optional(),
     targetType: z.string().optional(),
     expected: z.array(z.string()).optional(),
+    /** Legacy 968, `undeclared_link_type` only: the LinkType signatures the workspace's published
+     *  ontology declares between the two endpoint types, either way round, as
+     *  `name: domain -> range` (at most 20) — what the entry could have named instead. */
+    declaredBetween: z.array(z.string()).optional(),
     detail: z.string().optional(),
   })
   .strict();

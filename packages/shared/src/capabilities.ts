@@ -2812,7 +2812,9 @@ const taskCapabilities = [
       'to (outputSchema), the last report that schema refused (rejectedOutput: the output and ' +
       'each problem’s place) and, when it redoes an attempt that ended without an accepted ' +
       'result, that attempt (reworkOf). Read by the Task’s own WorkerRun Handle, it also lists ' +
-      'the capabilities that Handle holds (callerCapabilities).',
+      'the capabilities that Handle holds (callerCapabilities) and the vocabulary its ' +
+      'factsToAssert may use (ontologyVocabulary: the published ObjectTypes with their identity ' +
+      'keys and LinkType signatures it may write, those its Operations read or write first).',
   },
   {
     // S2.9 addition (task brief: "add a small kernel capability/endpoint if none exists — e.g.
