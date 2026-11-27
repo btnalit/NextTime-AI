@@ -12,7 +12,10 @@
  *   envelope around it (`status`, `observedFactCount`, an ActionRequest's `id`) is kept as it is —
  *   a model tells a pending approval from a refusal by `status`. First every string longer than
  *   `LONG_STRING_CHARS` keeps its head and its tail (the newest lines of a log) with the count of
- *   what was left out between them, cut at code points. Then, while it is still over, the last
+ *   what was left out between them, cut at code points. The tail is whole lines only (`tailStart`):
+ *   the kernel redacts the text a model is shown, a value by the name before it, and a tail that
+ *   began inside a line could hold a value whose name was left out (review #501 on #1629). Then,
+ *   while it is still over, the last
  *   item of the array with the most characters of its own goes (`ownChars`: its serialized length
  *   less the arrays inside its items, which count on their own; a tie goes to the path first in
  *   code-unit order): what is left of each array is a prefix of it, and the body still parses.
@@ -35,6 +38,7 @@
  */
 
 import { TOOL_RESULT_NOTE_SEPARATOR } from '@nexttime/shared';
+import { gateToolParameters } from '../tool-schema.js';
 
 const DEFAULT_GATE_TOOL_RESULT_MAX_CHARS = 16_000;
 
@@ -78,17 +82,22 @@ export interface RenderOptions {
   readonly narrowingParams?: readonly string[];
 }
 
-/** The property names of an Operation's `params_schema`, as `RenderOptions.narrowingParams`. */
-export function paramNames(paramsSchema: Record<string, unknown> | undefined): string[] {
-  const properties = paramsSchema?.properties;
-  return properties !== null && typeof properties === 'object' ? Object.keys(properties) : [];
+/** The parameter names of an Operation's gate tool, as `RenderOptions.narrowingParams`: read from
+ *  the parameters the tool declares (`gateToolParameters`), so a name offered is one the model can
+ *  pass (review #501 on #1629). */
+export function paramNames(paramsSchema: unknown): string[] {
+  const { properties } = gateToolParameters(paramsSchema) as { properties?: unknown };
+  return properties !== null && typeof properties === 'object' && !Array.isArray(properties)
+    ? Object.keys(properties)
+    : [];
 }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 interface Cut {
   readonly path: string;
-  readonly kind: 'items' | 'chars';
+  /** `chars`: a long string's start and end; `start`: its start only (no line began in its tail). */
+  readonly kind: 'items' | 'chars' | 'start';
   kept: number;
   readonly of: number;
 }
@@ -152,6 +161,32 @@ function plainKey(key: string, place: number): string {
   return IDENTIFIER.test(key) ? `.${key}` : `.<key ${place + 1}>`;
 }
 
+/**
+ * Where a long string's kept tail starts: at most `STRING_TAIL` code points before its end, and
+ * only at the start of a line — a value's name is on its own line before it (`password=…`,
+ * `Authorization: Bearer …`, a JSON object in a string), so a tail that begins inside a line could
+ * show a value without the name the kernel's redaction finds it by. No line starts there: no tail.
+ * And no tail begins inside a PEM block whose `-----BEGIN` line was left out: it starts after the
+ * block's `-----END` line instead (the kernel finds a private key by its BEGIN line).
+ */
+function tailStart(value: string): number {
+  let at = retreat(value, STRING_TAIL);
+  if (at > 0 && value.charCodeAt(at - 1) !== 0x0a) {
+    const newline = value.indexOf('\n', at);
+    if (newline === -1) return value.length;
+    at = newline + 1;
+  }
+  for (;;) {
+    const end = value.indexOf('-----END', at);
+    if (end === -1) return at;
+    const begin = value.indexOf('-----BEGIN', at);
+    if (begin !== -1 && begin < end) return at;
+    const newline = value.indexOf('\n', end);
+    if (newline === -1) return value.length;
+    at = newline + 1;
+  }
+}
+
 /** The long strings of `value`, kept head and tail; the cuts made, in order. */
 function cutLongStrings(value: Json, path: string, cuts: Cut[], depth: number): Json {
   if (depth > MAX_DEPTH) throw new TooDeep();
@@ -160,10 +195,11 @@ function cutLongStrings(value: Json, path: string, cuts: Cut[], depth: number): 
     const total = codePoints(value);
     if (total <= LONG_STRING_CHARS) return value;
     const head = value.slice(0, advance(value, 0, STRING_HEAD));
-    const tail = value.slice(retreat(value, STRING_TAIL));
-    const omitted = total - STRING_HEAD - STRING_TAIL;
-    cuts.push({ path, kind: 'chars', kept: STRING_HEAD + STRING_TAIL, of: total });
-    return `${head} [... ${omitted} characters omitted ...] ${tail}`;
+    const tail = value.slice(tailStart(value));
+    const kept = STRING_HEAD + codePoints(tail);
+    cuts.push({ path, kind: tail === '' ? 'start' : 'chars', kept, of: total });
+    const marker = `${head} [... ${total - kept} characters omitted ...]`;
+    return tail === '' ? marker : `${marker} ${tail}`;
   }
   if (Array.isArray(value)) {
     return value.map((item, i) => cutLongStrings(item, `${path}[${i}]`, cuts, depth + 1));
@@ -308,9 +344,9 @@ function shown(path: string): string {
 }
 
 function described(cut: Cut): string {
-  return cut.kind === 'items'
-    ? `${shown(cut.path)}: ${cut.kept} of ${cut.of} items`
-    : `${shown(cut.path)}: ${cut.kept} of ${cut.of} characters (start and end)`;
+  if (cut.kind === 'items') return `${shown(cut.path)}: ${cut.kept} of ${cut.of} items`;
+  const where = cut.kind === 'chars' ? 'start and end' : 'start';
+  return `${shown(cut.path)}: ${cut.kept} of ${cut.of} characters (${where})`;
 }
 
 /** The note line: `head`, which paths are cut (at most `NOTE_MAX_PATHS`, as many as fit), the

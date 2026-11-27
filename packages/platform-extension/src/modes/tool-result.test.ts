@@ -68,6 +68,9 @@ describe('renderToolResult: within the cap', () => {
     ]);
     expect(paramNames({ type: 'object' })).toEqual([]);
     expect(paramNames(undefined)).toEqual([]);
+    // The tool's own parameters: a schema that is not an object's is offered as `value`.
+    expect(paramNames({ type: 'string' })).toEqual(['value']);
+    expect(paramNames({ properties: { since: {} } })).toEqual(['since']);
   });
 });
 
@@ -122,13 +125,58 @@ describe('renderToolResult: long strings', () => {
     const logs = (JSON.parse(json) as { data: { logs: string } }).data.logs;
     expect(logs.startsWith('line 1\nline 2\n')).toBe(true);
     expect(logs.endsWith('line 3999\nline 4000')).toBe(true);
+    // The tail is the whole lines that fit in the last 1,200 characters.
+    const tail = logs.slice(logs.indexOf(' ...] ') + ' ...] '.length);
+    expect(lines.endsWith(`\n${tail}`)).toBe(true);
+    expect(tail.length).toBeLessThanOrEqual(1_200);
+    expect(tail.length).toBeGreaterThan(1_200 - 'line 4000\n'.length);
     const total = [...lines].length;
-    expect(logs).toContain(` [... ${total - 1_600} characters omitted ...] `);
-    expect(note).toContain(`data.logs: 1600 of ${total} characters (start and end)`);
+    const kept = 400 + tail.length;
+    expect(logs).toContain(` [... ${total - kept} characters omitted ...] `);
+    expect(note).toContain(`data.logs: ${kept} of ${total} characters (start and end)`);
+  });
+
+  it('keep only whole lines in their tail, so no value is shown without the name before it (review #501 on #1629)', () => {
+    const fake = 'FAKE-not-a-real-secret';
+    const shownText = (text: string) => {
+      const out = renderToolResult(envelope({ text }), { maxChars: 3_000 });
+      const { json, note } = split(out);
+      return { text: (JSON.parse(json) as { data: { text: string } }).data.text, note };
+    };
+
+    // One long line: its name falls in the part left out, its value in the last 1,200 characters.
+    // No line starts there, so no tail is kept.
+    const oneLine = `${'a'.repeat(1_500)} password=${'v'.repeat(1_500)}${fake}`;
+    const line = shownText(oneLine);
+    expect(line.text).not.toContain(fake);
+    expect(line.text).toBe(
+      `${'a'.repeat(400)} [... ${oneLine.length - 400} characters omitted ...]`,
+    );
+    expect(line.note).toContain(`data.text: 400 of ${oneLine.length} characters (start).`);
+
+    // The last 1,200 characters begin inside a header line: the tail starts on the line after it.
+    const header = `${'log line\n'.repeat(150)}Authorization: Bearer ${'t'.repeat(1_000)}${fake}\n${'after\n'.repeat(100)}`;
+    const cutHeader = shownText(header);
+    expect(cutHeader.text).not.toContain(fake);
+    expect(cutHeader.text.endsWith(` ...] ${'after\n'.repeat(100)}`)).toBe(true);
+    expect(cutHeader.note).toContain(
+      `data.text: 1000 of ${header.length} characters (start and end)`,
+    );
+
+    // They begin inside a private key whose BEGIN line was left out: the tail starts after its END.
+    const keyBody = `${'K'.repeat(63)}\n`.repeat(40);
+    const pem = `${'log line\n'.repeat(150)}-----BEGIN PRIVATE KEY-----\n${keyBody}-----END PRIVATE KEY-----\n${'after\n'.repeat(10)}`;
+    const cutPem = shownText(pem);
+    expect(cutPem.text).not.toContain('KKKK');
+    expect(cutPem.text.endsWith(` ...] ${'after\n'.repeat(10)}`)).toBe(true);
+    // A key whose BEGIN line is in the tail stays whole there, for the kernel to find.
+    const whole = `${'log\n'.repeat(700)}-----BEGIN PRIVATE KEY-----\nKKKK\n-----END PRIVATE KEY-----\nend`;
+    expect(shownText(whole).text).toContain('-----BEGIN PRIVATE KEY-----\nKKKK\n-----END');
   });
 
   it('are cut at code points: no half of a surrogate pair is left, and the count is in code points', () => {
-    const emoji = '😀'.repeat(3_000);
+    // 60 lines of 49 emoji: 3,001 code points, the last 1,200 of them exactly 24 whole lines.
+    const emoji = `${'😀'.repeat(49)}\n`.repeat(60);
     const value = envelope({ text: `a${emoji}` });
     const out = renderToolResult(value, { maxChars: 5_000 });
     expect(LONE_SURROGATE.test(out)).toBe(false);
@@ -343,7 +391,7 @@ function generate(r: () => number, depth: number, budget: { left: number }): Jso
     const n = LONG_STRING_CHARS - 200 + Math.floor(r() * 2_000);
     budget.left -= n;
     return Array.from({ length: n }, (_, i) =>
-      i % 97 === 0 ? '😀' : i % 13 === 0 ? '§' : 'l',
+      i % 151 === 150 ? '\n' : i % 97 === 0 ? '😀' : i % 13 === 0 ? '§' : 'l',
     ).join('');
   }
   if (pick < 0.65) {
@@ -357,9 +405,21 @@ function generate(r: () => number, depth: number, budget: { left: number }): Jso
   return out;
 }
 
+/** The tail a long string keeps: the longest end of it, at most 1,200 code points, that starts a
+ *  line (none when no line starts there). The generated strings hold no PEM block. */
+function tailOf(original: string): string {
+  const points = [...original];
+  for (let n = Math.min(1_200, points.length - 1); n > 0; n -= 1) {
+    if (points[points.length - n - 1] === '\n') return points.slice(-n).join('');
+  }
+  return '';
+}
+
 function stringCut(original: string): string {
   const points = [...original];
-  return `${points.slice(0, 400).join('')} [... ${points.length - 1_600} characters omitted ...] ${points.slice(-1_200).join('')}`;
+  const tail = tailOf(original);
+  const marker = `${points.slice(0, 400).join('')} [... ${points.length - 400 - [...tail].length} characters omitted ...]`;
+  return tail === '' ? marker : `${marker} ${tail}`;
 }
 
 /** `shown` is `original` with arrays cut to prefixes and long strings cut to head and tail. */
@@ -438,7 +498,7 @@ describe('renderToolResult: the design properties on 400 generated results', () 
         return;
       }
       if (note.includes(' items')) seen.items += 1;
-      if (note.includes('(start and end)')) seen.strings += 1;
+      if (note.includes('characters (start')) seen.strings += 1;
 
       // Within the cap, parses, the envelope verbatim, every array a prefix of the whole.
       expect(json.length).toBeLessThanOrEqual(max - NOTE_ROOM);
@@ -452,11 +512,10 @@ describe('renderToolResult: the design properties on 400 generated results', () 
       // Every number the note gives is right.
       const which = note.slice(note.indexOf('fit:') + 4, note.indexOf(' Do not count'));
       for (const part of which.split('; ')) {
-        const match = /^\s?(.*): (\d+) of (\d+) (items|characters \(start and end\))\.?$/.exec(
-          part,
-        );
+        const match =
+          /^\s?(.*): (\d+) of (\d+) (items|characters \((?:start and end|start)\))\.?$/.exec(part);
         if (!match || match[1]?.includes('...')) continue;
-        const [, path = '', kept, of, kind] = match;
+        const [, path = '', kept, of, kind = ''] = match;
         const before = at(value, path);
         const after = at(shown, path);
         if (kind === 'items') {
@@ -464,7 +523,9 @@ describe('renderToolResult: the design properties on 400 generated results', () 
           expect(Array.isArray(after) && after.length).toBe(Number(kept));
         } else {
           expect(typeof before === 'string' && [...before].length).toBe(Number(of));
-          expect(Number(kept)).toBe(1_600);
+          const tail = typeof before === 'string' ? tailOf(before) : '';
+          expect(Number(kept)).toBe(400 + [...tail].length);
+          expect(kind.includes('end')).toBe(tail !== '');
         }
       }
     });
