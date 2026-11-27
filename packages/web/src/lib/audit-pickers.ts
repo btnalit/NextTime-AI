@@ -503,6 +503,8 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'platform.llm_provider_models_listed',
   'platform.llm_provider_models_probed',
   'user.identity_claimed',
+  // Legacy 965: a self-service password change.
+  'user.password_changed',
   'principal.user_rebound',
   // Legacy 719: `merge_user` of a disabled user, one row per membership that is usable again.
   'platform.membership_restored',

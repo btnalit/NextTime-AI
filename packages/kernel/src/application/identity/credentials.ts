@@ -17,6 +17,7 @@
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { readPlatformSettings } from '../platform/settings.js';
 import { revokeAllUserSessions } from './console-session.js';
@@ -233,6 +234,12 @@ export type ChangeOwnPasswordOutcome =
  * console sessions, membership API keys, `mcp_session` and entry Handles — except for the console
  * session making the change and the user's running Workers (`keepWorkerRuns`): a person changing
  * their own password must not see their Tasks lose LLM access mid-run.
+ *
+ * Legacy 965: the change is a platform audit row (`user.password_changed`), written in the same
+ * transaction as the change and the revocation, as the administrator's reset is recorded
+ * (`reset_user_password`, audited by its dispatch). Attributed to the user; it records what the
+ * change revoked, in counts, and never a password. A wrong current password writes none (the
+ * login lockout counts it).
  */
 export async function changeOwnPassword(
   pool: PoolLike,
@@ -255,10 +262,27 @@ export async function changeOwnPassword(
        where id = $1`,
       [user.id, passwordHash],
     );
-    return revokeUserCredentials(client, user.id, {
+    const revocation = await revokeUserCredentials(client, user.id, {
       keepConsoleSessionId: input.consoleSessionId,
       keepWorkerRuns: true,
     });
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId: user.id,
+      action: 'user.password_changed',
+      resourceType: 'user',
+      resourceId: user.id,
+      payload: {
+        login: user.login,
+        // The change the account was told to make (`must_change_password`: a reset's or another
+        // temporary password), or one the person chose to make.
+        required: user.mustChangePassword,
+        consoleSessionsRevoked: revocation.consoleSessionIds.length,
+        membershipsRevoked: revocation.principalIds.length,
+      },
+    });
+    return revocation;
   });
   const updated = await findUserById(pool, user.id);
   if (!updated) throw new IdentityError('user_not_found', 'user not found');

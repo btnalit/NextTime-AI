@@ -2682,6 +2682,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '一个 API key 身份被认领为平台登录账号。',
     enHint: 'An API-key identity was claimed as a platform login.',
   },
+  // Legacy 965: `POST /api/auth/password` (`application/identity/credentials.ts`).
+  'user.password_changed': {
+    zh: '本人修改密码',
+    en: 'Own password changed',
+    zhHint:
+      '用户自己改了登录密码：这个人的其他控制台会话、各工作区成员身份的 API key 与入口凭证随之吊销，正在运行的 Worker 不受影响。',
+    enHint:
+      "A user changed their own password: their other console sessions and every membership's API key and Handles were revoked; running Workers kept theirs.",
+  },
   'principal.user_rebound': {
     zh: '成员身份已转移',
     en: 'Membership moved',
