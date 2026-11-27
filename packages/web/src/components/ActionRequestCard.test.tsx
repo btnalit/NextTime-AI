@@ -120,8 +120,8 @@ describe('ActionRequestCard', () => {
       }),
     });
     const draft = screen.getByTestId('action-card-definition').textContent ?? '';
-    expect(draft).toContain('按未发布过的定义');
-    expect(draft).toContain('比如按草稿发起');
+    expect(draft).toContain('按一份未发布过的定义（比如草稿，');
+    expect(draft).not.toContain('比如按草稿发起');
     expect(draft).toContain('现在发布的 v3 不同');
   });
 

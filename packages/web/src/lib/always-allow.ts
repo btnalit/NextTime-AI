@@ -30,7 +30,10 @@ function requestDefinitionName(published: PublishedDefinition, t: Translate): st
         ` v${published.requestVersion} 的定义（${short}）`,
         `the definition of v${published.requestVersion} (${short})`,
       )
-    : t(`未发布过的定义（${short}）`, `a definition never published as a version (${short})`);
+    : t(
+        `一份未发布过的定义（比如草稿，${short}）`,
+        `a definition never published as a version (a draft, for example; ${short})`,
+      );
 }
 
 /** Whether the definition named is one the gate never published as a version. */
@@ -92,12 +95,7 @@ export function alwaysAllowStaleRequestText(
   const made =
     name === null
       ? t('这条请求是按旧定义发起的', 'This request was made under an earlier definition')
-      : neverPublished(published)
-        ? t(
-            `这条请求是按${name}发起的（比如按草稿发起）`,
-            `This request was made under ${name} (made against a draft, say)`,
-          )
-        : t(`这条请求是按${name}发起的`, `This request was made under ${name}`);
+      : t(`这条请求是按${name}发起的`, `This request was made under ${name}`);
   return t(
     `${made}，门上现在发布的是 v${publishedVersion}，所以这里不能选「总是允许」：它只能给你看过的定义。在 v${publishedVersion} 的请求上再选，工作区所有者也可以在「模型与配额」的策略表里确认。`,
     `${made}, and the gate now publishes v${publishedVersion}, so “Always allow” is not offered here: it covers only a definition you have seen. Choose it on a request made under v${publishedVersion}; the workspace owner can also confirm it in the policy table under Models & Quotas.`,
@@ -136,8 +134,8 @@ export function requestDefinitionText(
   }
   return neverPublished(published)
     ? t(
-        `按${name}发起（比如按草稿发起），与门上现在发布的 v${published.version} 不同。`,
-        `Made under ${name} (made against a draft, say), which differs from the v${published.version} the gate publishes now.`,
+        `按${name}发起，与门上现在发布的 v${published.version} 不同。`,
+        `Made under ${name}, which differs from the v${published.version} the gate publishes now.`,
       )
     : t(
         `按${name}发起，门上现在发布的是 v${published.version}。`,
