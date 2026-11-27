@@ -17,7 +17,7 @@ const MAP = {
   default: { name: 'other', risk: 'R1', seats: ['kernel'] },
 };
 const run = (name, conclusion = 'success', status = 'completed') => ({ name, status, conclusion });
-const GREEN = [run('guards'), run('quality'), run('test'), run('changes'), run('changes')];
+const GREEN = [run('guards'), run('quality'), run('test'), run('redaction'), run('changes'), run('changes')];
 const verdict = (seat, head = HEAD.slice(0, 8), v = 'pass') => `review text\n<!-- review-verdict seat=${seat} head=${head} verdict=${v} -->`;
 const pr = (over = {}) => ({
   state: 'open',
@@ -105,6 +105,11 @@ test('checkProblems: required checks must have run; nothing failed or still runn
   assert.deepEqual(checkProblems(docsOnly, ['guards', 'quality', 'test']), []);
   assert.deepEqual(checkProblems(docsOnly, ['guards', 'quality', 'test'], ['quality']), ['quality is skipped']);
   assert.deepEqual(checkProblems([run('guards')], ['guards', 'quality']), ['quality has not run']);
+  // The redaction acceptance (ci.yml `redaction`) is required like `test`: missing is not green.
+  assert.deepEqual(
+    checkProblems([run('guards'), run('quality'), run('test')], ['guards', 'quality', 'test', 'redaction']),
+    ['redaction has not run'],
+  );
   assert.deepEqual(checkProblems([...GREEN, run('web-e2e', 'failure')], ['guards']), ['web-e2e is failure']);
   assert.deepEqual(checkProblems([run('guards', null, 'in_progress')], ['guards']), ['guards is in_progress']);
   // The same name twice: one red run is red.
@@ -121,6 +126,8 @@ test('mergeChecks: draft, behind, red checks and a closed pull request each fail
   assert.deepEqual(failed(merge({ pr: pr({ draft: true }) })), ['ready']);
   assert.deepEqual(failed(merge({ behindBy: 2 })), ['up-to-date']);
   assert.deepEqual(failed(merge({ runs: [...GREEN, run('quality', 'failure')] })), ['checks']);
+  // The redaction acceptance must have run (host-ci on #1619).
+  assert.deepEqual(failed(merge({ runs: GREEN.filter((r) => r.name !== 'redaction') })), ['checks']);
   assert.deepEqual(failed(merge({ pr: pr({ state: 'closed', merged: true }) })), ['open']);
   assert.match(render(merge({ pr: pr({ draft: true }), behindBy: 1 })), /RESULT failed=ready,up-to-date$/);
 });

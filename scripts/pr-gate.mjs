@@ -25,7 +25,9 @@ import { pathToFileURL } from 'node:url';
 import { REPO_ROOT, STATUS, isReleaseBlocker, parseLegacyTable } from './guards/loop-ledger.mjs';
 import { pullFiles, readMap, repoSlug, route } from './review-route.mjs';
 
-const REQUIRED_CHECKS = ['guards', 'quality', 'test'];
+// `redaction`: the redaction acceptance against the last release (ci.yml, redaction-boundary
+// design §7), same `changes` condition as `test`, so a docs-only change skips both.
+const REQUIRED_CHECKS = ['guards', 'quality', 'test', 'redaction'];
 const NOTES = ['升级须知', '这一版是什么', '已知问题', '回滚'];
 const HANDOFF = /合入后.*写入的状态/;
 const VERDICT = /<!--\s*review-verdict\s+seat=([\w-]+)\s+head=([0-9a-f]{7,40})\s+verdict=(pass|block)\s*-->/g;
