@@ -3055,9 +3055,9 @@ describe('a value with an escaped quote closed right against more of its word (l
       2,
     ],
     [
-      'a `\\\\\\"…\\\\\\"` value a JSON string crosses, what is left of its quote kept',
+      'a `\\\\\\"…\\\\\\"` value a JSON string crosses, its closing run kept whole',
       `"api_key": "token=\\\\\\"a\\\\\\"${FAKE}`,
-      `"api_key": "${REDACTED}"${REDACTED}\\"${REDACTED}`,
+      `"api_key": "${REDACTED}"${REDACTED}\\\\\\"${REDACTED}`,
       2,
     ],
   ])(
@@ -3119,7 +3119,11 @@ describe('a value with an escaped quote closed right against more of its word (l
   // closing quote, read on to the end of its word, was crossed by no such pair (`quotedValue`); a
   // `"…\"` read on, its word closed short of no pair (`closedShortOfAPair`); and a `'…'` value
   // closed by its own quote, where one inside it stopped, reads no pair after it as inside that one
-  // (`endsWhereALeftOutValueStopped`). Each kept what main hid, found by the generators.
+  // (`endsWhereALeftOutValueStopped`). Each kept what main hid, found by the generators. So too
+  // with a backslash right before that pair's name, read as an escape with it (`\password=…`), and
+  // a run of backslashes the word stopped in, which left a quote that closed the JSON string it is
+  // written in, though not an even run of them before a quote, read whole as main reads it (review
+  // #501 on #1600).
   it.each([
     [
       "a pair inside it, its '…' value holding the closing quote",
@@ -3144,6 +3148,36 @@ describe('a value with an escaped quote closed right against more of its word (l
       `apikey:'token=\\"' password:'TOKEN="'\\"'${FAKE}`,
       `apikey:'${REDACTED}' password:'${REDACTED}'${REDACTED}"${REDACTED}`,
       4,
+    ],
+    [
+      "a pair inside it right after a backslash, its '…' value holding the closing quote",
+      `token:"\\password='\\"'"n'${FAKE}`,
+      `token:"${REDACTED}"'${REDACTED}`,
+      2,
+    ],
+    [
+      'a pair inside it right after a backslash in a path',
+      `apikey="C:\\TOKEN='\\"'"x'${FAKE} y`,
+      `apikey="${REDACTED}"'${REDACTED}`,
+      2,
+    ],
+    [
+      'a run of backslashes more of the word is written up to, two strings deep',
+      `\\"password\\":\\"APIKEY=TOKEN=\\\\\\"\\\\\\"y\\\\\\"${FAKE}`,
+      `\\"password\\":\\"${REDACTED}`,
+      2,
+    ],
+    [
+      'an even run of backslashes more of the word is written up to, then a quote',
+      `"password":\\"'}my.token="--token "x\\\\",${FAKE}', y`,
+      `"password":\\"${REDACTED}my.token="${REDACTED}"${REDACTED}`,
+      2,
+    ],
+    [
+      'an even run of backslashes after an empty value, then a quote',
+      `api_key = \\"x', --password=""C:\\\\"' "${FAKE}.`,
+      `api_key = \\"${REDACTED} --password="${REDACTED}"${REDACTED}`,
+      2,
     ],
   ])('hides what main hides where a pair crosses it: %s', (_label, text, hidden, values) => {
     expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);

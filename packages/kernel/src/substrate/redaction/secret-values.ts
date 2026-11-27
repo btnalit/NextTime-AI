@@ -422,11 +422,17 @@ const UNCLOSED_AFTER_A_QUOTED_KEY = String.raw`(?<="[^"\\\r\n]{1,128}"[ \t]{0,8}
  *  ends before a secret's name and its separator (`SECRET_NAME_AND_SEPARATOR`: `token="x"api_key:
  *  …`): that pair is read by its own rule, from where it starts, as after any value; read in, it
  *  was inside the value of a pair that crossed this one, read on past where this one ended, and
- *  its own value was kept. Written as the two it is (`redactedValue`). */
+ *  its own value was kept. A run of backslashes is read whole, and where a quote comes after it,
+ *  only if it is even, the backslashes escaping each other and the quote a quote, as main reads
+ *  `\\"`. An odd one is not read at all: it escapes that quote, and read two at a time, the word
+ *  stopped inside a `\\\"`, and the `\"` left closed the JSON string it is written in, as the
+ *  rules after these read it, which kept what came after
+ *  (`\"password\":\"APIKEY=TOKEN=\\\"\\\"y\\\"<密钥>`, where main hid it; review #501 on
+ *  #1600). Written as the two it is (`redactedValue`). */
 const restOfTheWord = (notInIt: string): string => String.raw`(?:${moreOfTheWord(notInIt)})?`;
 /** `restOfTheWord`, of at least one character. */
 const moreOfTheWord = (notInIt: string): string => {
-  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
+  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\+(?!["\\])|(?:\\\\)+(?="))`;
   return String.raw`(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+`;
 };
 /** A `QUOTED` value, closed where a string's closing quote is (`CLOSES_QUOTED`) or right against
@@ -436,8 +442,10 @@ const moreOfTheWord = (notInIt: string): string => {
  *  pair inside it (`NEXT_SECRET_PAIR`), not even one whose `'…'` value `QUOTED` reads past: that
  *  value holds the closing quote, and read on to the end of the word, the value was crossed by no
  *  such pair, and what the pair's value held past the word was kept (`apikey="TOKEN='\"'"x'<密钥>`,
- *  where main hid it). Read to the first `"`, as main reads it, that pair crosses it. */
-const QUOTED_WITH_NO_PAIR_IN_IT = String.raw`"(?:(?!${NEXT_SECRET_PAIR})[^"\\\r\n]|\\[^\r\n])*"`;
+ *  where main hid it). Read to the first `"`, as main reads it, that pair crosses it. Nor one right
+ *  after a backslash, which an escape read whole took in with it (`token:"\password='\"'"n'<密钥>`;
+ *  review #501 on #1600). */
+const QUOTED_WITH_NO_PAIR_IN_IT = String.raw`"(?:(?!${NEXT_SECRET_PAIR})[^"\\\r\n]|\\(?!${NEXT_SECRET_PAIR})[^\r\n])*"`;
 const quotedValue = (notInIt: string): string =>
   String.raw`${QUOTED}${CLOSES_QUOTED}|${QUOTED_WITH_NO_PAIR_IN_IT}${moreOfTheWord(notInIt)}`;
 const quotedWord = (notInIt: string): string =>
