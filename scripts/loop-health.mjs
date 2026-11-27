@@ -118,7 +118,7 @@ export function assess(input) {
       '协调线程',
       `主机在 ${cfg.host.version}（${cfg.host.appliedOn} 起，${days} 天），之后已发 ${ahead.length} 个版本，最新 ${latest}`,
       late
-        ? `确认现行升级简报是给 ${latest} 的（node scripts/host-brief.mjs --from ${cfg.host.version} --to ${latest}）、staging 演练是绿的，然后提醒维护者一次；升不升由维护者决定`
+        ? `确认现行升级简报是给 ${latest} 的（node scripts/host-upgrade-brief.mjs --from ${cfg.host.version} --to ${latest}）、staging 演练是绿的，然后提醒维护者一次；升不升由维护者决定`
         : '',
     );
   }
@@ -182,7 +182,7 @@ export function assess(input) {
         '协调线程',
         `近 7 天遗留：新登记且仍开放 ${f.registered} 条（P3 ${f.registeredP3}），关闭 ${f.closed} 条，净 ${f.net >= 0 ? '+' : ''}${f.net}`,
         over
-          ? `新 P3 超过每周 ${cfg.legacy.weeklyNewP3Soft} 条：本周其余新发现默认进挂起档；同一类问题第三次出现就不再逐条登记，改开一个设计决定（dev-loop.md §4）`
+          ? `新 P3 超过每周 ${cfg.legacy.weeklyNewP3Soft} 条：本周其余新发现默认进挂起档；同一类问题第三次出现就归并成一条「类」遗留，并开一个设计决定（dev-loop.md §4）`
           : '',
       );
     }
