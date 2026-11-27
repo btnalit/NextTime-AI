@@ -1,5 +1,7 @@
 # P3 视觉重构规格 — 设计审查结论 + 实施切片（2026-09-26）
 
+> **历史文档**（2026-11-27 标注）：S8 P3 视觉重构的规格与切片，实施记录见 `status-history.md`；控制台现行标准见 `console-usability-dod.md`。现状以 `STATUS.md` 为准，文档地图见 `README.md`。
+
 输入：CI 截图基线 `packages/web/e2e/00-gates/__screenshots__/*-1440.png`（87 张，1440/1280/768）对照
 已获维护者认可的设计稿 v1（2026-09-18，十块画板：DesignSystem / Sidebar / Chat / Approvals / Integrations /
 Main / Workspaces / Audit / Catalog / Models；设计稿是维护者的私有 artifact，链接只记在 `docs/private/`，
