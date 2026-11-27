@@ -43,13 +43,15 @@ test('sortSections: by host-step line; untagged sections are only screened', () 
     tagged(224, '窗口内；维护者本人：否'),
     { n: 133, title: 'old a', body: '只改控制台文案' },
     { n: 134, title: 'old b', body: '升级后由维护者轮换 key' },
+    { n: 135, title: 'old c', body: '升级前只读核对：用 psql -U nexttime 跑' },
   ]);
   const ids = (list) => list.map((s) => s.n);
   assert.deepEqual(ids(sorted.none), [222]);
   assert.deepEqual([ids(sorted.steps.窗口前), ids(sorted.steps.窗口内), ids(sorted.steps.应用后)], [[223], [224], [223]]);
   assert.deepEqual(ids(sorted.maintainer), [223]);
-  assert.deepEqual(ids(sorted.untagged), [133, 134]);
+  assert.deepEqual(ids(sorted.untagged), [133, 134, 135]);
   assert.deepEqual(ids(sorted.screened), [134]);
+  assert.deepEqual(ids(sorted.prechecks), [135]);
 });
 
 const DATA = {
@@ -64,7 +66,9 @@ const DATA = {
   migrations: { core: ['0054', '0055', '0057'], worker: ['0014'] },
   composeChanged: false,
   envChanged: true,
-  sections: [{ n: 133, title: 'old', body: 'x' }, tagged(222, '无；维护者本人：否'), tagged(224, '窗口内；维护者本人：是')],
+  applyChanged: true,
+  deployChanged: 3,
+  sections: [{ n: 133, title: 'old', body: '升级前预检' }, tagged(222, '无；维护者本人：否'), tagged(224, '窗口内；维护者本人：是')],
   staging: undefined,
   slug: 'owner/repo',
   warnings: [],
@@ -83,6 +87,8 @@ test('renderBrief: counts, ranges, the gap, and the dispatch command when no reh
   assert.match(brief, /\*\*窗口内\*\*要做的 1 节/);
   assert.match(brief, /\*\*维护者本人\*\*在场或决定，下发前先告诉他：§3\.224/);
   assert.match(brief, /1 节是加主机步骤行之前写的（§3\.133）/);
+  assert.match(brief, /1 节提到升级前、预检、主机动作或 psql，多半有窗口前的只读核对：§3\.133/);
+  assert.match(brief, /`scripts\/apply-release\.sh`：\*\*有改动\*\*.*`deploy\/`：3 个文件有改动/);
   assert.match(brief, /inputs\[from\]=v0\.63\.0' -f 'inputs\[to\]=v0\.70\.1'/);
 });
 

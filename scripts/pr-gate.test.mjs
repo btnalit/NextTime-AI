@@ -1,7 +1,7 @@
 // Unit tests for scripts/pr-gate.mjs's checks, on fixtures (the command itself reads GitHub).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkProblems, latestVerdicts, mergeChecks, releaseChecks, render, verdictCovers } from './pr-gate.mjs';
+import { bringsOnly, checkProblems, latestVerdicts, mergeChecks, releaseChecks, render, trustedBodies, verdictCovers } from './pr-gate.mjs';
 
 const HEAD = 'abcdef1234567890abcdef1234567890abcdef12';
 const MAP = {
@@ -36,7 +36,7 @@ const merge = (over = {}) =>
     behindBy: 0,
     files: ['packages/kernel/src/a.ts'],
     commits: [{ sha: HEAD, parents: ['p0'] }],
-    onBase: (sha) => sha.startsWith('main'),
+    isBaseMerge: (c) => c.parents.length === 2 && c.parents[1].startsWith('main'),
     comments: [verdict('kernel')],
     map: MAP,
     steward: false,
@@ -52,20 +52,50 @@ test('latestVerdicts: the last line of each seat wins', () => {
   ]);
 });
 
+test('trustedBodies: only the owner, members and collaborators can write a verdict', () => {
+  const pass = (seat) => `<!-- review-verdict seat=${seat} head=${HEAD} verdict=pass -->`;
+  const block = (seat) => `<!-- review-verdict seat=${seat} head=${HEAD} verdict=block -->`;
+  const bodies = trustedBodies([
+    { at: '2026-11-27T03:00:00Z', body: pass('credentials'), association: 'NONE' }, // a passer-by, last
+    { at: '2026-11-27T01:00:00Z', body: block('credentials'), association: 'OWNER' },
+    { at: '2026-11-27T02:00:00Z', body: pass('kernel'), association: 'CONTRIBUTOR' },
+    { at: '2026-11-27T02:30:00Z', body: pass('ux'), association: 'COLLABORATOR' },
+    { at: '2026-11-27T02:40:00Z', body: pass('docs') }, // no association given
+  ]);
+  const verdicts = latestVerdicts(bodies);
+  assert.equal(verdicts.get('credentials').verdict, 'block'); // the outsider's pass does not replace it
+  assert.equal(verdicts.has('kernel'), false);
+  assert.equal(verdicts.has('docs'), false);
+  assert.equal(verdicts.get('ux').verdict, 'pass');
+  // In time order whatever the order of the two lists.
+  const later = trustedBodies([
+    { at: '2026-11-27T05:00:00Z', body: pass('kernel'), association: 'OWNER' },
+    { at: '2026-11-27T04:00:00Z', body: block('kernel'), association: 'MEMBER' },
+  ]);
+  assert.equal(latestVerdicts(later).get('kernel').verdict, 'pass');
+});
+
+test('bringsOnly: a merge may change only the files its second parent brought', () => {
+  assert.equal(bringsOnly(['a.ts', 'b.ts'], ['a.ts', 'b.ts', 'c.ts']), true);
+  assert.equal(bringsOnly([], ['a.ts']), true);
+  assert.equal(bringsOnly(['a.ts', 'mine.ts'], ['a.ts']), false); // an edit slipped into the merge
+  assert.equal(bringsOnly(['a.ts'], ['a.ts'], 1), false); // a list at the API cap is not trusted
+});
+
 test('verdictCovers: the head itself, or only merges of main after it', () => {
-  const onBase = (sha) => sha.startsWith('main');
+  const isBaseMerge = (c) => c.parents.length === 2 && c.parents[1].startsWith('main');
   const commits = [
     { sha: 'aaaaaaa1', parents: ['p0'] },
     { sha: 'bbbbbbb2', parents: ['aaaaaaa1'] },
     { sha: 'ccccccc3', parents: ['bbbbbbb2', 'main1'] },
   ];
-  assert.equal(verdictCovers('bbbbbbb', commits, onBase), true); // then a merge of main only
-  assert.equal(verdictCovers('ccccccc', commits, onBase), true);
-  assert.equal(verdictCovers('aaaaaaa', commits, onBase), false); // bbbbbbb2 is a later change
-  assert.equal(verdictCovers('ddddddd', commits, onBase), false); // not a commit of this pull request
+  assert.equal(verdictCovers('bbbbbbb', commits, isBaseMerge), true); // then a merge of main only
+  assert.equal(verdictCovers('ccccccc', commits, isBaseMerge), true);
+  assert.equal(verdictCovers('aaaaaaa', commits, isBaseMerge), false); // bbbbbbb2 is a later change
+  assert.equal(verdictCovers('ddddddd', commits, isBaseMerge), false); // not a commit of this pull request
   // A merge of some other branch is a change like any other.
   const other = [...commits.slice(0, 2), { sha: 'ccccccc3', parents: ['bbbbbbb2', 'feature1'] }];
-  assert.equal(verdictCovers('bbbbbbb', other, onBase), false);
+  assert.equal(verdictCovers('bbbbbbb', other, isBaseMerge), false);
 });
 
 test('checkProblems: required checks must have run; nothing failed or still running', () => {

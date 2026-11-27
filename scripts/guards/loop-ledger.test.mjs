@@ -175,6 +175,9 @@ test('lintHostVersion: a tag no newer than the checkout; no tags is a failure on
   assert.match(lintHostVersion('v0.64.0', '0.70.1', tags, true)[0], /not a release tag/);
   assert.match(lintHostVersion('v0.71.0', '0.70.1', [...tags, 'v0.71.0'], true)[0], /newer than this checkout/);
   assert.deepEqual(lintHostVersion('v0.63.0', '0.70.1', [], false), []);
+  // A checkout with only some of the tags is not held to it unless tags are required.
+  assert.deepEqual(lintHostVersion('v0.63.0', '0.70.1', ['v0.70.1'], false), []);
+  assert.match(lintHostVersion('v0.72.0', '0.70.1', [], false)[0], /newer than this checkout/);
   assert.match(lintHostVersion('v0.63.0', '0.70.1', [], true)[0], /no release tags/);
 });
 

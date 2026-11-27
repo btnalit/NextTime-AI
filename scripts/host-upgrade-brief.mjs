@@ -7,7 +7,7 @@
 //   - the release.md §3 sections to read: every `### 3.N` heading the target tag has and the
 //     starting tag does not, with gaps in the numbering called out, and which of them name a
 //     step only the maintainer does;
-//   - whether compose or .env.example changed;
+//   - whether compose, .env.example, scripts/apply-release.sh or deploy/ changed;
 //   - the staging rehearsal of this exact path (`--staging-run <id>`): checked on GitHub to be
 //     green and to be this from -> to, or the command that dispatches it.
 //
@@ -30,21 +30,27 @@ import {
 import { repoSlug } from './review-route.mjs';
 
 const MIGRATIONS = 'packages/kernel/migrations';
-// Sections written before the host-step line existed are only screened by these words.
+// Sections written before the host-step line existed are only screened by these words: the
+// first for steps only the maintainer does, the second for checks to run before the window.
 const MAINTAINER_WORDS = /victor|维护者|在控制台|轮换/;
+const PRECHECK_WORDS = /升级前|预检|主机动作|psql/;
+// Paths whose change between the two tags changes what the window does.
+const WINDOW_PATHS = ['docker-compose.yml', '.env.example', 'scripts/apply-release.sh', 'deploy'];
 
 /**
  * Sorts the sections of an upgrade by their host-step line: `{ none, steps: { 窗口前: […], … },
- * maintainer, untagged, screened }`. `untagged` have no line (older sections); `screened` are the
- * untagged ones that mention the maintainer or the console — a rough screen, not a classification.
+ * maintainer, untagged, screened, prechecks }`. `untagged` have no line (older sections); of those,
+ * `screened` mention the maintainer or the console and `prechecks` mention a check before the
+ * upgrade, a host action or psql — rough screens, not a classification.
  */
 export function sortSections(list) {
-  const out = { none: [], steps: { 窗口前: [], 窗口内: [], 应用后: [] }, maintainer: [], untagged: [], screened: [] };
+  const out = { none: [], steps: { 窗口前: [], 窗口内: [], 应用后: [] }, maintainer: [], untagged: [], screened: [], prechecks: [] };
   for (const s of list) {
     const tag = hostStepTag(s.body);
     if (!tag) {
       out.untagged.push(s);
       if (MAINTAINER_WORDS.test(s.body)) out.screened.push(s);
+      if (PRECHECK_WORDS.test(s.body)) out.prechecks.push(s);
     } else if (tag.host.includes('无')) out.none.push(s);
     else {
       for (const h of tag.host) out.steps[h].push(s);
@@ -110,7 +116,8 @@ export function renderBrief(d) {
       add(`  - ${dir}：${runs(list.map(Number)).map((r) => span(r.map((n) => String(n).padStart(4, '0')))).join('、')}（${list.length} 个）`);
     }
   }
-  add(`- \`docker-compose.yml\`：${d.composeChanged ? '**有改动**，窗口前先看 diff' : '没有改动'}；\`.env.example\`：${d.envChanged ? '**有改动**，对照主机的 .env' : '没有改动'}。`, '');
+  add(`- \`docker-compose.yml\`：${d.composeChanged ? '**有改动**，窗口前先看 diff' : '没有改动'}；\`.env.example\`：${d.envChanged ? '**有改动**，对照主机的 .env' : '没有改动'}。`);
+  add(`- \`scripts/apply-release.sh\`：${d.applyChanged ? '**有改动**，窗口内的步骤可能不同，用目标 tag 的这份跑' : '没有改动'}；\`deploy/\`：${d.deployChanged > 0 ? `${d.deployChanged} 个文件有改动（\`git diff --stat ${d.from} ${d.to} -- deploy\`）` : '没有改动'}。`, '');
 
   add(`## 3. 要读的 ${RELEASE_MD} 小节`, '');
   if (d.sections.length === 0) add(`- ${d.to} 相对 ${d.from} 没有新增的 §3 小节。`);
@@ -134,6 +141,9 @@ export function renderBrief(d) {
         `- ${sorted.untagged.length} 节是加主机步骤行之前写的（${refs(sorted.untagged)}），没有分类，要通读。按关键词粗筛，其中 ${sorted.screened.length} 节提到维护者或控制台操作（可能漏，也可能多）：`,
         ...names(sorted.screened),
       );
+      if (sorted.prechecks.length > 0) {
+        add(`- 同样按关键词粗筛，其中 ${sorted.prechecks.length} 节提到升级前、预检、主机动作或 psql，多半有窗口前的只读核对：${refs(sorted.prechecks)}。`);
+      }
     }
   }
   add('');
@@ -176,7 +186,7 @@ function main() {
 
   const show = (tag, file) => git(['show', `${tag}:${file}`]);
   const [fromMd, toMd] = [show(from, RELEASE_MD), show(to, RELEASE_MD)];
-  const diff = git(['diff', '--name-status', from, to, '--', MIGRATIONS, 'docker-compose.yml', '.env.example']);
+  const diff = git(['diff', '--name-status', from, to, '--', MIGRATIONS, ...WINDOW_PATHS]);
   if (fromMd === undefined || toMd === undefined || diff === undefined) {
     fail(`cannot read the trees of ${from} and ${to} (shallow clone?): git fetch --depth 1 origin tag ${from} tag ${to}`);
   }
@@ -222,6 +232,8 @@ function main() {
       migrations: migrationsAdded(diff),
       composeChanged: /\tdocker-compose\.yml$/m.test(diff),
       envChanged: /\t\.env\.example$/m.test(diff),
+      applyChanged: /\tscripts\/apply-release\.sh$/m.test(diff),
+      deployChanged: diff.split('\n').filter((l) => /\tdeploy\//.test(l)).length,
       sections: newSections(fromMd, toMd),
       staging,
       slug,

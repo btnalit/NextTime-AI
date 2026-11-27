@@ -24,7 +24,9 @@ git show vX.Y.Z:scripts/apply-release.sh > docs/private/upgrade-vX.Y.Z/apply-rel
 
 1. **流程以目标 tag 的 `release.md` 为准。** 简报只说读哪些节、什么时候做；SQL 和命令照节里的原文执行。
    简报与手册不一致时以 `release.md` 为准，并告诉维护者。
-2. **只读，除非步骤写明要改。** SQL 的执行方式、用哪个数据库角色，见 `release.md` §3 开头「本节命令的执行方式」。
+2. **只读，除非步骤写明要改。** SQL 的执行方式见 `release.md` §3 开头「本节命令的执行方式」。
+   预检 SQL 用表属主跑（`psql -U nexttime`）：应用角色 `nexttime_app` 受行级安全限制，会读到 0 行，
+   读出来就成了「没有受影响的行」。
 3. **不碰项目目录之外的任何东西**，不碰主机上其他既有服务。会话自己不在项目目录外写文件；
    `apply-release.sh` 运行时在系统临时目录放一份自身的副本并在结束时删掉，是它的设计，不算例外之外的改动。
 4. **结果记进 `docs/private/`**（新文件，带日期）：每条查询的计数、每一步的 `RESULT` 行、日志文件名、审计 id。
@@ -38,6 +40,13 @@ git show vX.Y.Z:scripts/apply-release.sh > docs/private/upgrade-vX.Y.Z/apply-rel
 8. **破坏性验收只在维护者当场明确同意后跑**，不同意就记「staging 代替，主机未跑」。
 9. **三条底线**：agent 和内核进程不持凭证；有凭证的动作都要审批；隔离与审计只增不减。
    任何一步要绕过其中一条，停下问维护者。
+10. **会锁表的迁移在窗口前说。** 读这次要跑的迁移 SQL 和各节的说明，把会拿表级排他锁的迁移和涉及的表
+    在阶段 3 就告诉维护者，不等到窗口内。
+11. **回滚只能整版做**：代码、worker-runtime 镜像、worker-supervisor 一起回，不单独回某一个
+    （运行时契约，`release.md` §3.156）。回滚前先看 `release.md` §5 的前置条件：先排空 Worker；
+    回滚 worker-supervisor 前先终止 §5 点名的那类 Task 容器。
+12. **不手动清镜像和包。** 不删旧的 `nexttime-mirror-*` 包与镜像；镜像保留由 `apply-release.sh` 自己做。
+13. **应用后核对内核容器里 `/app` 的属主**（`release.md` §3.193 那次的问题），和各节的核对一起记。
 
 ## 3. 阶段
 
@@ -47,7 +56,7 @@ git show vX.Y.Z:scripts/apply-release.sh > docs/private/upgrade-vX.Y.Z/apply-rel
 |---|---|---|
 | 1 起点确认（只读） | `git describe --tags --exact-match` 等于简报的起点；数 `schema_migrations`；`scripts/check-backup-freshness.sh`；记下在跑的服务与镜像 tag | 起点不符、备份不新鲜 |
 | 2 核对演练 | 打开简报里的 staging run，确认是这条路径、是绿的；简报标「staging 未覆盖」的项记下来，留到主机上看 | 没有这条路径的绿演练 |
-| 3 窗口前 | `--prefetch` 预拉并验签；简报里「窗口前」的小节逐节照原文做只读预检 | 有会挡住升级的结果：交维护者处理完再进窗口 |
+| 3 窗口前 | `--prefetch` 预拉并验签；简报里「窗口前」的小节和粗筛出有预检的小节逐节照原文做只读预检；说明哪些迁移会锁表（规则 10） | 有会挡住升级的结果：交维护者处理完再进窗口 |
 | 4 窗口内 | 先告诉维护者被拦下会停、哪些表会被锁；后台跑 `--pull` 并跟日志；不另跑构建，不单独重启服务 | `RESULT` 不是 `ok`：按规则 6 |
 | 5 应用后 | 简报里「应用后」的小节逐节核对，结果记 `docs/private/` | 核对不符 |
 | 6 维护者本人步骤 | 把要他做和要他决定的事列成清单交给他，等他做完后复核只读的部分 | — |

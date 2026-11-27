@@ -300,10 +300,13 @@ export function lintHostVersion(hostVersion, packageVersion, tags, requireTags) 
   if (compareVersions(hostVersion, packageVersion) > 0) {
     problems.push(`${LOOP_STATE}: host.version ${hostVersion} is newer than this checkout (${packageVersion})`);
   }
+  // Without --require-tags a checkout that lacks tags (a shallow or partial clone) is not held to
+  // this: CI fetches every tag and is where a host version that is no release fails.
+  if (!requireTags) return problems;
   if (tags === undefined || tags.length === 0) {
-    if (requireTags) problems.push('no release tags in this checkout (--require-tags): fetch tags first');
+    problems.push('no release tags in this checkout (--require-tags): git fetch origin --tags');
   } else if (!tags.includes(hostVersion)) {
-    problems.push(`${LOOP_STATE}: host.version ${hostVersion} is not a release tag`);
+    problems.push(`${LOOP_STATE}: host.version ${hostVersion} is not a release tag (if the checkout lacks tags: git fetch origin --tags)`);
   }
   return problems;
 }

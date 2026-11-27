@@ -10,11 +10,13 @@
 //       a release-please PR · required checks green · not behind main · the hand-written notes
 //       are in the body · no open legacy row marked 「发版前必须关闭」 · `pnpm audit` clean
 //
-// A review seat passes a head by a comment or review on the pull request carrying one line (it is
-// bookkeeping against a missed review, not authentication — every thread posts as the same user):
+// A review seat passes a head by a comment or review on the pull request carrying one line:
 //   <!-- review-verdict seat=<seat> head=<commit sha, 7+ hex> verdict=pass|block -->
-// The latest line of a seat counts. It covers the head while every later commit of the pull
-// request only merges main in; any other push needs a new verdict.
+// Only comments and reviews by the repository's owner, members and collaborators are read: the
+// repository is public, and anyone can comment. Among those it is bookkeeping against a missed
+// review, not authentication — every thread posts as the same user. The latest line of a seat
+// counts. It covers the head while every later commit of the pull request only merges the base
+// branch in (isBaseMerge); any other push needs a new verdict.
 //
 // Last line: `RESULT ok` or `RESULT failed=<check>[,<check>…]`. A check that was skipped
 // (--skip-audit) is a failure: a skipped step is never `RESULT ok`.
@@ -27,6 +29,33 @@ const REQUIRED_CHECKS = ['guards', 'quality', 'test'];
 const NOTES = ['升级须知', '这一版是什么', '已知问题', '回滚'];
 const HANDOFF = /合入后.*写入的状态/;
 const VERDICT = /<!--\s*review-verdict\s+seat=([\w-]+)\s+head=([0-9a-f]{7,40})\s+verdict=(pass|block)\s*-->/g;
+
+// Who may write a verdict line: GitHub's author_association of the comment or review.
+const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * Bodies of the comments and reviews that may carry a verdict, oldest first. `items` is
+ * `[{ at, body, association }]` from both lists; anything not written by the owner, a member or
+ * a collaborator is dropped, whatever it says.
+ */
+export function trustedBodies(items) {
+  return items
+    .filter((c) => TRUSTED_ASSOCIATIONS.includes(c.association))
+    .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''))
+    .map((c) => c.body);
+}
+
+/**
+ * Whether what a merge commit changed is only what its second parent brought in: `changed` are
+ * the files that differ between the first parent and the merge, `brought` the files the second
+ * parent changed since the two parents diverged. A list at the compare API's cap is not trusted.
+ * A hand edit inside a file the base also changed (a conflict resolution) is not seen here.
+ */
+export function bringsOnly(changed, brought, cap = 300) {
+  if (changed.length >= cap || brought.length >= cap) return false;
+  const from = new Set(brought);
+  return changed.every((f) => from.has(f));
+}
 
 /** The latest verdict of each seat, from comment bodies in the order they were posted. */
 export function latestVerdicts(commentBodies) {
@@ -61,13 +90,12 @@ export function checkProblems(runs, required, mustSucceed = []) {
  * Whether a verdict given on `verdictHead` still covers the pull request's head: it does when
  * every commit after it only merges the base branch in (the steward's update-branch before a
  * merge). `commits` is the pull request's own commits, oldest first: `[{ sha, parents: [sha…] }]`;
- * `onBase(sha)` says whether a commit is on the base branch. A merge counts when one of its
- * parents is — a merge of some other branch does not. What a merge commit changes by hand while
- * resolving conflicts is not seen here.
+ * `isBaseMerge(commit)` says whether a commit is such a merge (main() asks GitHub: two parents,
+ * the second on the base branch, and bringsOnly).
  */
-export function verdictCovers(verdictHead, commits, onBase) {
+export function verdictCovers(verdictHead, commits, isBaseMerge) {
   const at = commits.findIndex((c) => c.sha.startsWith(verdictHead));
-  return at >= 0 && commits.slice(at + 1).every((c) => c.parents.length >= 2 && c.parents.some(onBase));
+  return at >= 0 && commits.slice(at + 1).every((c) => isBaseMerge(c));
 }
 
 const check = (name, problems, pass) => ({ name, ok: problems.length === 0, detail: problems.length === 0 ? pass : problems.join('; ') });
@@ -80,8 +108,8 @@ function commonChecks(pr, runs, behindBy, required, mustSucceed) {
   ];
 }
 
-/** Merge checks. `input`: { pr, runs, behindBy, files, commits, onBase, comments, map, steward }. */
-export function mergeChecks({ pr, runs, behindBy, files, commits, onBase, comments, map, steward }) {
+/** Merge checks. `input`: { pr, runs, behindBy, files, commits, isBaseMerge, comments, map, steward }. */
+export function mergeChecks({ pr, runs, behindBy, files, commits, isBaseMerge, comments, map, steward }) {
   const routed = route(map, files);
   const needsUx = routed.seats.includes('ux');
   const checks = commonChecks(pr, runs, behindBy, needsUx ? [...REQUIRED_CHECKS, 'web-e2e'] : REQUIRED_CHECKS, needsUx ? ['web-e2e'] : []);
@@ -93,7 +121,7 @@ export function mergeChecks({ pr, runs, behindBy, files, commits, onBase, commen
     const v = verdicts.get(seat);
     if (!v) missing.push(`${seat}: no verdict`);
     else if (v.verdict !== 'pass') missing.push(`${seat}: ${v.verdict}`);
-    else if (!verdictCovers(v.head, commits, onBase)) {
+    else if (!verdictCovers(v.head, commits, isBaseMerge)) {
       missing.push(`${seat}: passed ${v.head}, but the head ${pr.head.sha.slice(0, 8)} has later changes`);
     }
   }
@@ -173,16 +201,21 @@ function main() {
       behindBy,
       files: pullFiles(slug, number),
       commits: pages(`repos/${slug}/pulls/${number}/commits`).map((c) => ({ sha: c.sha, parents: c.parents.map((p) => p.sha) })),
-      // On the base branch: the base is not behind it. Asked only for the parents of merge commits
-      // pushed after a verdict.
-      onBase: (sha) => JSON.parse(gh(`repos/${slug}/compare/${pr.base.ref}...${sha}`)).ahead_by === 0,
+      // Asked only for commits pushed after a verdict. The second parent is on the base branch
+      // when the base is not behind it.
+      isBaseMerge: (c) => {
+        if (c.parents.length !== 2) return false;
+        const [mine, theirs] = c.parents;
+        const compare = (a, b) => JSON.parse(gh(`repos/${slug}/compare/${a}...${b}`));
+        if (compare(pr.base.ref, theirs).ahead_by !== 0) return false;
+        const names = (r) => (r.files ?? []).map((f) => f.filename);
+        return bringsOnly(names(compare(mine, c.sha)), names(compare(mine, theirs)));
+      },
       // A seat may answer in a comment or in a review body; the latest of either counts.
-      comments: [
-        ...pages(`repos/${slug}/issues/${number}/comments`).map((c) => ({ at: c.created_at, body: c.body })),
-        ...pages(`repos/${slug}/pulls/${number}/reviews`).map((c) => ({ at: c.submitted_at, body: c.body })),
-      ]
-        .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''))
-        .map((c) => c.body),
+      comments: trustedBodies([
+        ...pages(`repos/${slug}/issues/${number}/comments`).map((c) => ({ at: c.created_at, body: c.body, association: c.author_association })),
+        ...pages(`repos/${slug}/pulls/${number}/reviews`).map((c) => ({ at: c.submitted_at, body: c.body, association: c.author_association })),
+      ]),
       map: readMap(),
       steward: flags.includes('--steward'),
     });

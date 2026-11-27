@@ -8,25 +8,47 @@
     "docs": "文档与流程",
     "ux": "控制台 UX 验收"
   },
-  "stewardOnly": ["docs/STATUS.md", "docs/development-tasks.md", "docs/status-history.md"],
+  "stewardOnly": [
+    "docs/STATUS.md",
+    "docs/development-tasks.md",
+    "docs/status-history.md"
+  ],
   "rules": [
     {
       "name": "脱敏、凭据与门（内核）",
       "risk": "R3",
-      "seats": ["credentials", "kernel"],
+      "seats": [
+        "credentials",
+        "kernel"
+      ],
       "paths": [
         "packages/kernel/src/**/redaction/**",
         "packages/kernel/src/governance/**",
         "packages/kernel/src/application/gateway/**",
         "packages/kernel/src/application/gates/**",
         "packages/kernel/src/application/identity/**",
-        "packages/kernel/migrations/governance/**"
+        "packages/kernel/migrations/governance/**",
+        "packages/kernel/src/interfaces/internal-auth/**",
+        "packages/kernel/src/interfaces/source-binding/**",
+        "packages/kernel/src/adapters/outbound-target/**",
+        "packages/shared/src/address-credential*",
+        "packages/shared/src/gate-host-token*",
+        "packages/shared/src/handle-binding*",
+        "packages/shared/src/handle-token*",
+        "packages/shared/src/internal-token*",
+        "packages/shared/src/llm-admin-token*",
+        "packages/shared/src/net-address*",
+        "packages/shared/src/outbound-target*",
+        "packages/shared/src/secret-field-name*",
+        "packages/shared/src/tool-call-secrets*"
       ]
     },
     {
       "name": "凭据代理、门与出网",
       "risk": "R3",
-      "seats": ["credentials"],
+      "seats": [
+        "credentials"
+      ],
       "paths": [
         "packages/llm-proxy/**",
         "packages/gatekeeper-base/**",
@@ -44,7 +66,10 @@
     {
       "name": "控制台的凭据入口",
       "risk": "R3",
-      "seats": ["credentials", "ux"],
+      "seats": [
+        "credentials",
+        "ux"
+      ],
       "paths": [
         "packages/web/src/components/handles/**",
         "packages/web/src/components/connect/**",
@@ -54,13 +79,34 @@
     {
       "name": "隔离与部署边界",
       "risk": "R3",
-      "seats": ["host-ci", "credentials"],
-      "paths": ["docker-compose.yml", "packages/worker-supervisor/**", "deploy/worker-runtime/**", "deploy/caddy/**"]
+      "seats": [
+        "host-ci",
+        "credentials"
+      ],
+      "paths": [
+        "docker-compose.yml",
+        "packages/worker-supervisor/**",
+        "deploy/worker-runtime/**",
+        "deploy/caddy/**"
+      ]
+    },
+    {
+      "name": "守脱敏的日志检查",
+      "risk": "R3",
+      "seats": [
+        "credentials",
+        "host-ci"
+      ],
+      "paths": [
+        "scripts/check-caddy-log-redaction*"
+      ]
     },
     {
       "name": "CI、发版与供应链",
       "risk": "R3",
-      "seats": ["host-ci"],
+      "seats": [
+        "host-ci"
+      ],
       "paths": [
         ".github/workflows/**",
         ".github/CODEOWNERS",
@@ -77,13 +123,19 @@
         "scripts/release-channel.mjs",
         "scripts/apply-release.sh",
         "**/Dockerfile",
-        "pnpm-lock.yaml"
+        "pnpm-lock.yaml",
+        "deploy/ci/**",
+        "scripts/validate-compose.mjs",
+        "scripts/check-kernel-purity.sh",
+        "scripts/check-pi-version-consistency.sh"
       ]
     },
     {
       "name": "仓库与构建配置",
       "risk": "R2",
-      "seats": ["host-ci"],
+      "seats": [
+        "host-ci"
+      ],
       "paths": [
         "package.json",
         "pnpm-workspace.yaml",
@@ -100,51 +152,126 @@
     {
       "name": "pi 运行时",
       "risk": "R2",
-      "seats": ["pi"],
-      "paths": ["pi.version", "packages/agent-host/**", "packages/platform-extension/**"]
+      "seats": [
+        "pi"
+      ],
+      "paths": [
+        "pi.version",
+        "packages/agent-host/**",
+        "packages/platform-extension/**"
+      ]
     },
     {
-      "name": "迁移、线上契约与本体",
+      "name": "迁移",
       "risk": "R2",
-      "seats": ["kernel"],
-      "paths": ["packages/kernel/migrations/**", "docs/contracts/**", "packages/shared/**", "ontology/**", "packs/**"]
+      "seats": [
+        "kernel",
+        "host-ci"
+      ],
+      "paths": [
+        "packages/kernel/migrations/**"
+      ]
+    },
+    {
+      "name": "线上契约与本体",
+      "risk": "R2",
+      "seats": [
+        "kernel"
+      ],
+      "paths": [
+        "docs/contracts/**",
+        "packages/shared/**",
+        "ontology/**",
+        "packs/**"
+      ]
     },
     {
       "name": "流程规则",
       "risk": "R2",
-      "seats": ["docs"],
-      "paths": ["CLAUDE.md", "docs/state/**", "docs/runbooks/dev-loop.md", ".github/PULL_REQUEST_TEMPLATE.md"]
+      "seats": [
+        "docs"
+      ],
+      "paths": [
+        "CLAUDE.md",
+        "docs/state/**",
+        "docs/runbooks/dev-loop.md",
+        ".github/PULL_REQUEST_TEMPLATE.md"
+      ]
+    },
+    {
+      "name": ".github 的其余文件",
+      "risk": "R1",
+      "seats": [
+        "host-ci"
+      ],
+      "paths": [
+        ".github/**"
+      ]
     },
     {
       "name": "内核",
       "risk": "R1",
-      "seats": ["kernel"],
-      "paths": ["packages/kernel/**"]
+      "seats": [
+        "kernel"
+      ],
+      "paths": [
+        "packages/kernel/**"
+      ]
     },
     {
       "name": "控制台",
       "risk": "R1",
-      "seats": ["ux"],
-      "paths": ["packages/web/**", "design-system/**"]
+      "seats": [
+        "ux"
+      ],
+      "paths": [
+        "packages/web/**",
+        "design-system/**"
+      ]
     },
     {
-      "name": "发版手册里随 PR 写的主机步骤",
-      "risk": "R0",
-      "seats": [],
-      "paths": ["docs/runbooks/release.md"]
+      "name": "发版手册（主机会话照原文执行）",
+      "risk": "R1",
+      "seats": [
+        "host-ci"
+      ],
+      "paths": [
+        "docs/runbooks/release.md"
+      ]
     },
     {
       "name": "主机脚本、部署与手册",
       "risk": "R1",
-      "seats": ["host-ci"],
-      "paths": ["scripts/**", "deploy/**", "docs/runbooks/**", "Makefile", "collectors/**", "connectors/**", "explorer/**", "config/**"]
+      "seats": [
+        "host-ci"
+      ],
+      "paths": [
+        "scripts/**",
+        "deploy/**",
+        "docs/runbooks/**",
+        "Makefile",
+        "collectors/**",
+        "connectors/**",
+        "explorer/**",
+        "config/**"
+      ]
     },
     {
       "name": "文档",
       "risk": "R0",
       "seats": [],
-      "paths": ["docs/**", "*.md", "LICENSE"]
+      "paths": [
+        "docs/**",
+        "*.md",
+        "LICENSE"
+      ]
     }
   ],
-  "default": { "name": "未归类", "risk": "R1", "seats": ["kernel"] }
+  "default": {
+    "name": "未归类",
+    "risk": "R1",
+    "seats": [
+      "kernel"
+    ]
+  }
 }
