@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.70.1](https://github.com/btnalit/NextTime-AI/compare/v0.70.0...v0.70.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **kernel:** read a bare value on past a next pair whose value opens with a secret's key (legacy 930, 931) ([#1589](https://github.com/btnalit/NextTime-AI/issues/1589)) ([4b2774c](https://github.com/btnalit/NextTime-AI/commit/4b2774c85badbbfcd1c18df18a572fedb77a95b6))
+* **kernel:** read a quoted value on to the end of the word closed right against it (legacy 937) ([#1597](https://github.com/btnalit/NextTime-AI/issues/1597)) ([45a1c0c](https://github.com/btnalit/NextTime-AI/commit/45a1c0c06b80e145881020f32c8c6e699a13a07d))
+* **kernel:** read every text with v0.70.0's rules as well, as a floor (legacy 939) ([#1595](https://github.com/btnalit/NextTime-AI/issues/1595)) ([3be2483](https://github.com/btnalit/NextTime-AI/commit/3be248353e1c4d37816bcabcbb82f4e4012e97c3))
+* **kernel:** read the JSON pairs with the name rules on the text as written (legacy 930) ([#1593](https://github.com/btnalit/NextTime-AI/issues/1593)) ([901884a](https://github.com/btnalit/NextTime-AI/commit/901884a7bc8ed45e6dac078a756fc592e432f3c4))
+* **kernel:** read the name, --flag and env rules together on the text as written (legacy 928, 929) ([#1586](https://github.com/btnalit/NextTime-AI/issues/1586)) ([7bbb27a](https://github.com/btnalit/NextTime-AI/commit/7bbb27a5c420957cbaa8a880a3445663215d26c4))
+* **kernel:** read the pair that starts inside a value and goes on past it (legacy 934) ([#1591](https://github.com/btnalit/NextTime-AI/issues/1591)) ([1abbb25](https://github.com/btnalit/NextTime-AI/commit/1abbb25beccfda89e850b9e4d6b1f3811dfce677))
+
 ## [0.70.0](https://github.com/btnalit/NextTime-AI/compare/v0.69.2...v0.70.0) (2026-11-21)
 
 
