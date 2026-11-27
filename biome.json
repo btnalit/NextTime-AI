@@ -12,7 +12,8 @@
       "**/*.tsbuildinfo",
       "**/coverage/**",
       "packages/web/dist/**",
-      "**/styles/tailwind.css"
+      "**/styles/tailwind.css",
+      "**/redaction-fuzz/.baseline/**"
     ]
   },
   "organizeImports": {

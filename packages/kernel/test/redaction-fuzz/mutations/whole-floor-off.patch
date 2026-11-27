@@ -1,0 +1,11 @@
+diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
+index d0f458dd..f61dc703 100644
+--- a/packages/kernel/src/substrate/redaction/secret-values.ts
++++ b/packages/kernel/src/substrate/redaction/secret-values.ts
+@@ -1889,5 +1889,5 @@ export function withFloor(
+   const own = readWith(text, ownPasses(patterns, readFrom));
+   const old = readWith(text, releasedPasses(floor, readFrom));
+-  if (old.value === text || old.value === own.value) return own;
++  if (old.value === text || old.value === own.value || own === own) return own;
+   const runs = runsOf(text, own);
+   const hidden = shownOnlyBy(keptOf(runs), keptOf(runsOf(text, old)));

@@ -51,3 +51,6 @@ Thumbs.db
 # Playwright output (local and CI runs of packages/web/e2e)
 packages/web/test-results/
 packages/web/playwright-report/
+
+# 脱敏验收读上一发布版的源码，run.mjs 按 tag 取到这里（packages/kernel/test/redaction-fuzz/README.md）
+packages/kernel/test/redaction-fuzz/.baseline/

@@ -1,0 +1,33 @@
+{
+  "note": "Per format, on CI's sample (2000 rows, seeds 7,8): the rows where this checkout's whole reading shows a value's character, and how many it shows. Written by run.mjs --write-corpus-baseline (compared with v0.70.1); a change may only lower it.",
+  "formats": {
+    "formats/env": {
+      "rowsShowing": 944,
+      "shownChars": 16015
+    },
+    "formats/yaml": {
+      "rowsShowing": 904,
+      "shownChars": 15377
+    },
+    "formats/ini": {
+      "rowsShowing": 2095,
+      "shownChars": 39051
+    },
+    "formats/json": {
+      "rowsShowing": 0,
+      "shownChars": 0
+    },
+    "formats/json-in-string": {
+      "rowsShowing": 0,
+      "shownChars": 0
+    },
+    "formats/shell": {
+      "rowsShowing": 0,
+      "shownChars": 0
+    },
+    "formats/arrow": {
+      "rowsShowing": 4000,
+      "shownChars": 134080
+    }
+  }
+}

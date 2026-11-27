@@ -296,6 +296,14 @@ jobs:
           TMPDIR: /dev/shm
         run: pnpm --no-bail -r test
 
+      - name: Redaction acceptance against the last release (redaction-boundary design §7 stage 1a)
+        # Not part of `pnpm -r test`: it reads the last release's own sources, which run.mjs fetches
+        # by tag and puts under packages/kernel/test/redaction-fuzz/.baseline/ (README.md there).
+        # CI's sample — 2,000 rows a generator, two seeds — gated at 0 rows shown now and hidden
+        # in the release; the seats run the full set.
+        if: ${{ !cancelled() }}
+        run: node packages/kernel/test/redaction-fuzz/run.mjs
+
   guards:
     name: guards
     runs-on: ubuntu-latest

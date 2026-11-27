@@ -1,0 +1,11 @@
+diff --git a/packages/kernel/src/governance/redaction/secret-stream.ts b/packages/kernel/src/governance/redaction/secret-stream.ts
+index f483cbc8..9823455b 100644
+--- a/packages/kernel/src/governance/redaction/secret-stream.ts
++++ b/packages/kernel/src/governance/redaction/secret-stream.ts
+@@ -214,5 +214,5 @@ function safeCut(raw: string, context: string): number {
+   for (const valueAt of [...openValueStarts(line), line.length]) {
+     const nameAt = secretNameStart(line.slice(0, valueAt));
+-    if (nameAt !== undefined) cut = Math.min(cut, lineFrom + nameAt);
++    if (nameAt !== undefined && nameAt < 0) cut = Math.min(cut, lineFrom + nameAt);
+   }
+   const lastQuote = line.lastIndexOf('"');
