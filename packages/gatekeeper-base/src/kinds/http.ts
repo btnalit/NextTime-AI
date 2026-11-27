@@ -6,6 +6,11 @@ import {
   TransportInvokeError,
 } from '../errors.js';
 import { failedAfterAnswer, failedBeforeAnswer } from './call-failure.js';
+import {
+  UNCHECKED_ANSWER,
+  credentialEchoLine,
+  injectedCredentialMask,
+} from './injected-credential.js';
 import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
@@ -25,6 +30,9 @@ export interface HttpTransportOptions {
   readonly fetchImpl?: typeof fetch;
   /** Request timeout in ms (default 10s). */
   readonly timeoutMs?: number;
+  /** Where the line saying this gate masked its own credential in an answer goes (legacy 961);
+   *  defaults to stderr. */
+  readonly log?: (line: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -391,6 +399,10 @@ export class HttpTransport implements Transport {
     this.options = options;
   }
 
+  private log(line: string): void {
+    (this.options.log ?? ((text: string) => console.error(text)))(line);
+  }
+
   private async request(
     operation: Operation,
     params: unknown,
@@ -471,10 +483,18 @@ export class HttpTransport implements Transport {
     const what = `http transport: ${method} ${url.pathname}`;
     // Built before the call (review of #586, #501 P2-2): a failure here sent nothing, and must not
     // read as a call that failed on the way.
+    const injected = credentialHeaders(ctx.credential);
     const headers = {
       ...(body ? { 'content-type': 'application/json' } : {}),
       ...headerParams,
-      ...credentialHeaders(ctx.credential),
+      ...injected,
+    };
+    // Legacy 961: what the target writes back leaves the gate with this call's credential masked.
+    const mask = injectedCredentialMask(injected);
+    const masked = <T>(value: T): T => {
+      const result = mask.apply(value);
+      if (result.masked > 0) this.log(credentialEchoLine(what, result.masked));
+      return result.value;
     };
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();
@@ -504,7 +524,7 @@ export class HttpTransport implements Transport {
       // goes with the failure, so an observe Operation that declares it means "does not exist"
       // answers as absent (`GatekeeperBase.observe`); the body is never read, so nothing the
       // target writes in it can say so.
-      await refuseRedirect(what, response, url);
+      await refuseRedirect(what, response, url, masked);
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
         throw new TransportInvokeError(`${what} responded ${response.status}`, {
@@ -517,7 +537,15 @@ export class HttpTransport implements Transport {
       } catch (err) {
         throw failedAfterAnswer(what, response.status, 'its answer could not be read', err);
       }
-      const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
+      // Parsed first: JSON escapes in the answer are undone before the mask reads its strings.
+      const parsed: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
+      let data: unknown;
+      try {
+        data = masked(parsed);
+      } catch (err) {
+        // Nested past what the mask can walk: it does not leave unread (legacy 961).
+        throw failedAfterAnswer(what, response.status, UNCHECKED_ANSWER, err);
+      }
       return { data };
     } finally {
       clearTimeout(timeout);

@@ -2,6 +2,11 @@ import type { Operation } from '@nexttime/shared';
 import { ResponseBodyTooLargeError, readBodyWithin } from '../bounded-body.js';
 import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
 import { failedAfterAnswer, failedBeforeAnswer } from './call-failure.js';
+import {
+  UNCHECKED_ANSWER,
+  credentialEchoLine,
+  injectedCredentialMask,
+} from './injected-credential.js';
 import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 import { boundUntrustedText } from './untrusted-text.js';
@@ -21,6 +26,8 @@ export interface McpTransportOptions {
   readonly endpoint: string;
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
+  /** As `HttpTransportOptions.log` (legacy 961). */
+  readonly log?: (line: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -46,6 +53,10 @@ export class McpTransport implements Transport {
     this.options = options;
   }
 
+  private log(line: string): void {
+    (this.options.log ?? ((text: string) => console.error(text)))(line);
+  }
+
   /** `maxAnswerBytes`: read at most that much of the answer (`readBodyWithin`); unset, the whole
    *  answer is read. */
   private async call<T>(
@@ -56,7 +67,16 @@ export class McpTransport implements Transport {
   ): Promise<T> {
     const what = `mcp transport: ${method}`;
     // Built before the call (review of #586, #501 P2-2): a failure here sent nothing.
-    const headers = { 'content-type': 'application/json', ...credentialHeaders(credential) };
+    const injected = credentialHeaders(credential);
+    const headers = { 'content-type': 'application/json', ...injected };
+    // Legacy 961: as in `http.ts`, the answer leaves with this call's credential masked — its
+    // result, and the error text before `boundUntrustedText` cuts it, which would leave half a token.
+    const mask = injectedCredentialMask(injected);
+    const masked = <V>(value: V): V => {
+      const result = mask.apply(value);
+      if (result.masked > 0) this.log(credentialEchoLine(what, result.masked));
+      return result.value;
+    };
     const requestBody = JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params });
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();
@@ -83,23 +103,28 @@ export class McpTransport implements Transport {
       }
       // The server's own answers — a redirect, a non-2xx status, a JSON-RPC `error` — are plain
       // failures; an answer that cannot be read as JSON-RPC is "outcome unknown".
-      await refuseRedirect(what, response, this.options.endpoint);
+      await refuseRedirect(what, response, this.options.endpoint, masked);
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
         throw new TransportInvokeError(`${what} responded ${response.status}`);
       }
-      let body: JsonRpcResponse<T> | null;
+      let parsed: unknown;
       try {
-        body = (
+        parsed =
           maxAnswerBytes === undefined
             ? await response.json()
-            : JSON.parse(await readBodyWithin(response, maxAnswerBytes, 'its answer'))
-        ) as JsonRpcResponse<T> | null;
+            : JSON.parse(await readBodyWithin(response, maxAnswerBytes, 'its answer'));
       } catch (err) {
         if (err instanceof ResponseBodyTooLargeError) {
           throw failedAfterAnswer(what, response.status, err.message, err);
         }
         throw failedAfterAnswer(what, response.status, 'its answer is not JSON', err);
+      }
+      let body: JsonRpcResponse<T> | null;
+      try {
+        body = masked(parsed) as JsonRpcResponse<T> | null;
+      } catch (err) {
+        throw failedAfterAnswer(what, response.status, UNCHECKED_ANSWER, err);
       }
       if (body === null || typeof body !== 'object') {
         throw failedAfterAnswer(what, response.status, 'its answer is not a JSON-RPC response');

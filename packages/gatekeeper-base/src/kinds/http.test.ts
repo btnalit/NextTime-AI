@@ -6,6 +6,7 @@ import {
   ParamsSchemaInvalidError,
   ParamsValidationError,
   TransportInvokeError,
+  TransportOutcomeUnknownError,
 } from '../errors.js';
 import { assertParamsValid } from '../params-validation.js';
 import { mapGatekeeperError } from '../server.js';
@@ -1127,6 +1128,130 @@ describe('HttpTransport', () => {
       .catch((err: unknown) => err);
     expect((thrown as Error).message).toContain('responded 304');
     expect((thrown as Error).message).not.toContain('redirect');
+  });
+
+  // Legacy 961: a target that echoes the request (an echo endpoint, a debug body, `whoami`) never
+  // hands the agent the credential this gate put on it. FAKE values only.
+  describe("the answer leaves without this gate's own credential (legacy 961)", () => {
+    const TOKEN = 'FAKE-gate-token-0123/abc+def=';
+    const answering = (body: string, init?: ResponseInit) =>
+      vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) => new Response(body, init),
+      );
+
+    it('masks the echoed header, the token alone, its percent-encoding and a key named by it; logs only the count', async () => {
+      const log = vi.fn();
+      const fetchImpl = answering(
+        JSON.stringify({
+          headers: { Authorization: `Bearer ${TOKEN}` },
+          url: `https://example.test/stock/X1?access_token=${encodeURIComponent(TOKEN)}`,
+          [TOKEN]: 'as a key',
+          qty: 3,
+        }),
+      );
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl, log });
+      const result = await transport.invoke(
+        observeOperation,
+        { id: 'X1' },
+        { credential: { token: TOKEN } },
+      );
+      const [, init] = fetchImpl.mock.calls[0] as NonNullable<(typeof fetchImpl.mock.calls)[0]>;
+      expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
+      expect(result.data).toEqual({
+        headers: { Authorization: '[redacted]' },
+        url: 'https://example.test/stock/X1?access_token=[redacted]',
+        '[redacted]': 'as a key',
+        qty: 3,
+      });
+      expect(JSON.stringify(result.data)).not.toContain('FAKE-gate-token');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0]?.[0]).toBe(
+        "http transport: GET /stock/X1: the target's answer held this gate's own credential 3 times; masked before the answer left the gate (legacy 961)",
+      );
+    });
+
+    it('masks it after JSON escapes are undone, and in an answer that is not JSON', async () => {
+      const escaped = JSON.stringify({ echo: TOKEN }).replace('/', '\\/');
+      expect(escaped).toContain('\\/');
+      for (const [body, expected] of [
+        [escaped, { echo: '[redacted]' }],
+        [`plain text: x-api-key=${TOKEN}`, 'plain text: x-api-key=[redacted]'],
+      ] as const) {
+        const transport = new HttpTransport({
+          baseUrl: 'https://example.test',
+          fetchImpl: answering(body),
+          log: () => {},
+        });
+        const result = await transport.invoke(
+          observeOperation,
+          { id: 'X1' },
+          { credential: { apiKey: TOKEN } },
+        );
+        expect(result.data).toEqual(expected);
+      }
+    });
+
+    it('masks each value of a header credential', async () => {
+      const transport = new HttpTransport({
+        baseUrl: 'https://example.test',
+        fetchImpl: answering(JSON.stringify({ seen: 'FAKE-signature-value', other: 'kept' })),
+        log: () => {},
+      });
+      const result = await transport.invoke(
+        observeOperation,
+        { id: 'X1' },
+        { credential: { headers: { 'X-Tenant-Signature': 'FAKE-signature-value' } } },
+      );
+      expect(result.data).toEqual({ seen: '[redacted]', other: 'kept' });
+    });
+
+    it('masks it where a redirect pointed, before the shown target is cut', async () => {
+      const fetchImpl = answering('', {
+        status: 302,
+        headers: { location: `/login/${encodeURIComponent(TOKEN)}/next?sig=s3cr3t` },
+      });
+      const log = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl, log });
+      const thrown = await transport
+        .invoke(observeOperation, { id: 'X1' }, { credential: { token: TOKEN } })
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportInvokeError);
+      expect((thrown as Error).message).toContain('a redirect to "/login/[redacted]/next"');
+      expect((thrown as Error).message).not.toContain('FAKE-gate-token');
+      expect(log).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves an answer as it was when the call carried no credential, or one too short to mask', async () => {
+      const body = JSON.stringify({ echo: `Bearer ${TOKEN}`, short: 'abc' });
+      for (const ctx of [{}, { credential: { token: 'abc' } }]) {
+        const log = vi.fn();
+        const transport = new HttpTransport({
+          baseUrl: 'https://example.test',
+          fetchImpl: answering(body),
+          log,
+        });
+        const result = await transport.invoke(observeOperation, { id: 'X1' }, ctx);
+        expect(result.data).toEqual({ echo: `Bearer ${TOKEN}`, short: 'abc' });
+        expect(log).not.toHaveBeenCalled();
+      }
+    });
+
+    it('refuses an answer nested past what the mask can walk rather than hand it back unread', async () => {
+      const depth = 200_000;
+      const body = `${'['.repeat(depth)}"${TOKEN}"${']'.repeat(depth)}`;
+      const transport = new HttpTransport({
+        baseUrl: 'https://example.test',
+        fetchImpl: answering(body),
+        log: () => {},
+      });
+      const thrown = await transport
+        .invoke(observeOperation, { id: 'X1' }, { credential: { token: TOKEN } })
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportOutcomeUnknownError);
+      expect((thrown as Error).message).toContain(
+        "its answer is nested too deep to check for this gate's credential",
+      );
+    });
   });
 
   // R-22 (review 2026-10-02): a path parameter can never climb out of its template.
