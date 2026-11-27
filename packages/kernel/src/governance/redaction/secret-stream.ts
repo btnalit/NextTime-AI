@@ -173,21 +173,22 @@ const isQuote = (char: string): boolean => char === '"' || char === "'";
  *  after it; `-1` where none does. Such a value reads on past its quote as the rest of its word
  *  (`restOfTheWord` in `secret-values.ts`), unless that rest is text up to another quote with a
  *  `:` or `=` after it, a key's (`token="x"x,passwordx": …`), which the text before the cut would
- *  not see: the cut falls in that text while more of it may come, or after its quote and up to
- *  eight blanks while what comes is the `:` or `=` or nothing yet. Linear: it reads back over one
- *  word. */
+ *  not see: the cut falls in that text, or after its quote and up to eight blanks while what
+ *  comes is the `:` or `=` or nothing yet (a `'`'s: `safeCut` holds the blanks after a `"` itself,
+ *  and the cut is then right after that quote). In that text, it is never right before the blank
+ *  that ends it: a cut falls after the last blank, or where a match, a name, a quote or a run of
+ *  backslashes starts (review #493 on #1597). Linear: it reads back over one word. */
 function wordToComeAt(raw: string, cut: number): number {
   const next = raw.charAt(cut);
   let end = cut;
   while (end > 0 && cut - end < 8 && (raw.charAt(end - 1) === ' ' || raw.charAt(end - 1) === '\t'))
     end -= 1;
   const afterItsQuote = isQuote(raw.charAt(end - 1));
-  if (afterItsQuote ? next !== ':' && next !== '=' && next !== '' : end < cut || /\s/.test(next)) {
-    return -1;
-  }
+  if (afterItsQuote ? next !== ':' && next !== '=' && next !== '' : end < cut) return -1;
   let at = afterItsQuote ? end - 1 : end;
   while (at > 0 && !/[\s'"]/.test(raw.charAt(at - 1))) at -= 1;
-  return isQuote(raw.charAt(at - 1)) && (afterItsQuote || at < end) ? at : -1;
+  // After its quote, `at` is before `end`; in that text, only where some of it came before the cut.
+  return isQuote(raw.charAt(at - 1)) && at < end ? at : -1;
 }
 
 /** Blanks, or nothing: what may stand between a value still open and a pair read as inside it. */

@@ -406,9 +406,11 @@ const UNCLOSED_AFTER_A_QUOTED_KEY = String.raw`(?<="[^"\\\r\n]{1,128}"[ \t]{0,8}
  *  `token="x"api_key: …`): that pair is read by its own rule, from where it starts, as after any
  *  value; read in, it was inside the value of a pair that crossed this one, read on past where
  *  this one ended, and its own value was kept. Written as the two it is (`redactedValue`). */
-const restOfTheWord = (notInIt: string): string => {
+const restOfTheWord = (notInIt: string): string => String.raw`(?:${moreOfTheWord(notInIt)})?`;
+/** `restOfTheWord`, of at least one character. */
+const moreOfTheWord = (notInIt: string): string => {
   const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
-  return String.raw`(?:(?<!\\["'])(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+)?`;
+  return String.raw`(?<!\\["'])(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+`;
 };
 const quotedWord = (notInIt: string): string =>
   String.raw`${PLAIN_QUOTED}${restOfTheWord(notInIt)}|'[^'\r\n]*'${restOfTheWord(notInIt)}`;
@@ -699,6 +701,44 @@ const NAMED_VALUES: ValuePatternsReadTogether = {
   together: [ENV_PAIR, NAME_PAIR, FLAG_PAIR, ESCAPED_JSON_NAME_PAIR, JSON_NAME_PAIR],
 };
 
+/** `NOT_ALREADY_REDACTED`, but where the mask an earlier release wrote for a `"…"` or `'…'` value
+ *  has more of its word right against its closing quote, which that release kept as written
+ *  (`TOKEN="[redacted]"<密钥>`, written for `TOKEN="x"<密钥>` or `TOKEN=""<密钥>`; legacy 937,
+ *  review #493 on #1597): there the value is read again, as the quoted value and the rest of its
+ *  word that it is, and hidden. Not where that rest is a mask already, as the rules write such a
+ *  value now (`"[redacted]"[redacted]`), nor where they read no rest at all (`moreOfTheWord`: a
+ *  `，` after the quote, a key's quote and `:`, a secret's name): a row written from now on is not
+ *  rewritten again. For rows already stored only (`STORED_NAMED_VALUES`). */
+const notAlreadyRedactedInStore = (notInIt: string): string => {
+  const more = String.raw`(?!\[redacted\])${moreOfTheWord(notInIt)}`;
+  return String.raw`(?!(?!"\[redacted\]"${more}|'\[redacted\]'${more})(?:\\+"|["'])?\[redacted\])`;
+};
+
+/** `rule` with its value read as in `notAlreadyRedactedInStore`. */
+function readingStoredMasks(rule: ValuePattern, notInIt: string, value: string): ValuePattern {
+  if (rule.value === undefined) return rule;
+  return {
+    ...rule,
+    pattern: new RegExp(rule.pattern.source, rule.pattern.flags),
+    value: {
+      names: rule.value.names,
+      pattern: new RegExp(`${notAlreadyRedactedInStore(notInIt)}${value}`, 'y'),
+    },
+  };
+}
+
+/** `NAMED_VALUES` over rows already stored: the env-line, name and `--flag` rules also read a
+ *  mask an earlier release left with more of its word (`notAlreadyRedactedInStore`). */
+const STORED_NAMED_VALUES: ValuePatternsReadTogether = {
+  together: [
+    readingStoredMasks(ENV_PAIR, '', ENV_VALUE),
+    readingStoredMasks(NAME_PAIR, '&', VALUE),
+    readingStoredMasks(FLAG_PAIR, '&', VALUE),
+    ESCAPED_JSON_NAME_PAIR,
+    JSON_NAME_PAIR,
+  ],
+};
+
 /** Applied in order to every string. Exported for `secret-stream.ts`, which must know where a
  *  match starts and ends (`secretMatches`). */
 export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
@@ -741,10 +781,13 @@ export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
  * bytes in base64url, so masking it there would lose every digest and public key in that history for
  * good: such a value is counted by row id instead (`PLATFORM_KEY_SHAPE_PATTERNS`), for the keys
  * still valid among them to be found and rotated. What is written from now on is masked by the full
- * set.
+ * set. Its name rules read one thing more, which only rows an earlier release wrote hold: a quoted
+ * value's mask with the rest of its word kept after it (`STORED_NAMED_VALUES`; legacy 937).
  */
 export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
-  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY);
+  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY).map(
+    (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
+  );
 
 /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
  *  counts. */

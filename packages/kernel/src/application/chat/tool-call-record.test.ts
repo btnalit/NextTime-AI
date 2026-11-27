@@ -538,6 +538,30 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
       }
     });
 
+    // Legacy 937 (review #493 on #1597): an earlier release hid a quoted value to its closing
+    // quote and kept the rest of its word, written right against that quote, as it was.
+    it.each([
+      ['plain text', (text: string) => text],
+      ['a JSON string', (text: string) => JSON.stringify({ stdout: text })],
+    ])('hides the rest of the word an earlier release kept after a quoted value: %s', (_l, as) => {
+      const live = record({
+        result: textResult(as(`run TOKEN="x"${SECRET} now`)),
+        hasResult: true,
+      });
+      const now = as(`run TOKEN="${REDACTED}"${REDACTED} now`);
+      expect(live.result?.text).toBe(now);
+      const text = as(`run TOKEN="${REDACTED}"${SECRET} now`);
+      const once = rescrubStoredToolCallResult(stored(text));
+      expect(once).toEqual({
+        value: { ...stored(text), result: { text: now }, redactedValues: 2 },
+        redactedValues: 1,
+      });
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
+    });
+
     it.each([
       ['masks and quotes', `{"a":"${`${REDACTED}"x`.repeat(15_000)}"}`],
       ['a mask, then text', `{"a":"${REDACTED}"${'x'.repeat(200_000)}`],

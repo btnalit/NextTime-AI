@@ -478,6 +478,13 @@ const SHAPES = [
   `token="x"x,"api_key": "${FAKE}"`,
   `{"token": ""x"password": "${FAKE}"}`,
   `\`API_TOKEN="${FAKE}"\` x`,
+  // A `'…'` key's quote and blanks, then its `:` or `=`, which the cut after them waits for, past
+  // more than one blank; and a quote nine blanks before a `:`, no key's (reviews #493 and #501 on
+  // #1597).
+  `token='x'a'\t: 1`,
+  `--token 'x'a' =  1`,
+  `token='x'y'  = 1`,
+  `TOKEN=""${FAKE}"         : 1`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,

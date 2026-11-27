@@ -311,11 +311,18 @@ describe('a platform API key standing alone (legacy 168)', () => {
     expect(
       scrubSecretValues(stored, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
     ).toBe(1);
-    // Every other pattern is kept, in order.
+    // Every other pattern is kept, in order; the name rules read as they do, and one thing more
+    // (legacy 937: a mask an earlier release left with more of its word).
     expect(STORED_REWRITE_SECRET_PATTERNS).toHaveLength(SECRET_VALUE_PATTERNS.length - 1);
+    const [shape, named, ...others] = SECRET_VALUE_PATTERNS.filter(
+      (p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p),
+    );
+    expect([shape]).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
+    expect(others).toEqual([]);
+    expect(named !== undefined && 'together' in named).toBe(true);
     expect(
-      SECRET_VALUE_PATTERNS.filter((p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p)),
-    ).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
+      STORED_REWRITE_SECRET_PATTERNS.filter((p) => !SECRET_VALUE_PATTERNS.includes(p)),
+    ).toEqual([expect.objectContaining({ together: expect.any(Array) })]);
   });
 
   it('platformKeyShapes gives the values the shape-only scrub replaces, as written and in order', () => {
@@ -2781,6 +2788,14 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
     ['a --flag', `--token "x"${FAKE}`, `--token "${REDACTED}"${REDACTED}`, 1],
     ['to a `&`', `password="a"${FAKE}&x=1`, `password="${REDACTED}"${REDACTED}&x=1`, 1],
     ['to the next quote', `password="x"${FAKE}" y`, `password="${REDACTED}"${REDACTED}" y`, 1],
+    // A key's quote has at most eight blanks before its `:` (`restOfTheWord`, as `wordToComeAt` in
+    // secret-stream.ts holds the cut for): with nine, the quote is no key's (review #493 on #1597).
+    [
+      'to a quote nine blanks before a `:`',
+      `TOKEN=""${FAKE}"         : 1`,
+      `TOKEN="${REDACTED}"${REDACTED}"         : 1`,
+      1,
+    ],
     // The way it was found: the pair inside a `\"…\"` value, whose `\"…` stopped at its quote.
     [
       'inside a `\\"…\\"` value',
@@ -2843,6 +2858,30 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
     expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
+  // Each of these reads otherwise with one guard taken away (review #501 on #1597): a JSON string's
+  // value has no rest of a word to read, and read with one, the value after it was kept, which
+  // main hid; a backslash is in the word, and the rest of it after one was kept; and a value a pair
+  // in it crosses goes on past that pair's closing quote only when it is before the value's end.
+  it.each([
+    [
+      "a JSON string's value",
+      `"passwordx":"\\"${FAKE} token:e"${FAKE}`,
+      `"passwordx":"${REDACTED}`,
+      3,
+    ],
+    ['a backslash in the word', `token="x"a\\b${FAKE}`, `token="${REDACTED}"${REDACTED}`, 1],
+    [
+      "a pair in it, the word after it up to a `'`",
+      `token="token:x"${FAKE}'`,
+      `token="${REDACTED}"${REDACTED}'`,
+      1,
+    ],
+  ])('reads the rest of its word only where it is one: %s', (_label, text, hidden, values) => {
+    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    expectFloored(text);
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
+
   it('writes the quote that closed it where it stands, for the JSON rule that reads the text after it', () => {
     // The JSON rule reads the text the name rules rewrote. Written `"[redacted]` for `""x`, one
     // quote for two, the key's opening quote was read as the one that closed the mask, and a key
@@ -2858,6 +2897,68 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
         redactedValues: 2,
       });
     }
+  });
+
+  describe('in rows already stored (review #493 on #1597)', () => {
+    const stored = (text: string) =>
+      scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+
+    // An earlier release hid the quoted part and kept the rest of the word as written
+    // (`TOKEN="[redacted]"<密钥>`). The rewrite of stored rows at each upgrade reads that mask
+    // again as the value it is, and writes it as the rules write that value now. The rules for
+    // what is written from now on read it as before: only rows an earlier release wrote hold it.
+    it.each([
+      `TOKEN=""${FAKE}""`,
+      `TOKEN="x"${FAKE}`,
+      `token='x'${FAKE} y`,
+      `token: ""${FAKE}`,
+      `--token "x"${FAKE}`,
+      `password="a"${FAKE}&x=1`,
+      `TOKEN="a"b&${FAKE}`,
+      `{"token": "x"${FAKE}}`,
+      `TOKEN=""${FAKE}"         : 1`,
+      `APIKEY=\\"TOKEN=""${FAKE}""\\"`,
+    ])('hides the rest of the word an earlier release kept: %s', (text) => {
+      const written = released.scrubSecretValues(text).value;
+      expect(written).toMatch(/\[redacted\]["']/);
+      expect(fakesIn(written)).toBe(1);
+      expect(fakesIn(scrubSecretValues(written).value)).toBe(1);
+      const now = scrubSecretValues(text);
+      expect(stored(written)).toEqual(now);
+      expect(stored(now.value)).toEqual({ value: now.value, redactedValues: 0 });
+    });
+
+    // Where the rules read no rest of the word, or read it and wrote it a mask too, a row written
+    // from now on is not rewritten again at the next upgrade.
+    it.each([
+      `see token="x" ok`,
+      `token="x"token=${FAKE}`,
+      `token="x"x,passwordx": "${FAKE}"`,
+      `token='x'x,api_key': '${FAKE}'`,
+      `token="x"x,"api_key": "${FAKE}"`,
+      `token="x"api_key: ${FAKE}`,
+      `set \`API_TOKEN="${FAKE}"\` first`,
+      `把 API_TOKEN="${FAKE}"，写进去`,
+      `token="x"a&${FAKE}`,
+      `TOKEN=""${FAKE}""`,
+      `token='x'${FAKE} y`,
+    ])('leaves a row written from now on as it is: %s', (text) => {
+      const now = scrubSecretValues(text).value;
+      expect(stored(now)).toEqual({ value: now, redactedValues: 0 });
+    });
+
+    // But one: a value closed by a quote a backslash escapes, text right against that quote
+    // (`password="a\"b"c`). Hidden to that quote, the backslash goes with it, and what is left
+    // reads as an earlier release's mask for `password="x"b"c`, whose `b` it kept: that `b` is
+    // hidden as well, once.
+    it('rewrites once a value closed by an escaped quote, text right against it', () => {
+      const now = scrubSecretValues(`password="a\\"b"c ok`).value;
+      expect(now).toBe(`password="${REDACTED}"b"c ok`);
+      expect(released.scrubSecretValues(`password="x"b"c ok`).value).toBe(now);
+      const once = `password="${REDACTED}"${REDACTED}"c ok`;
+      expect(stored(now)).toEqual({ value: once, redactedValues: 1 });
+      expect(stored(once)).toEqual({ value: once, redactedValues: 0 });
+    });
   });
 });
 
