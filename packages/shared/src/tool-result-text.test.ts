@@ -5,7 +5,10 @@ describe('tool result text (legacy 967)', () => {
   const note = '[The result was shortened to fit: data.items: 3 of 18 items.]';
 
   it('splits compact JSON from its note line', () => {
-    expect(splitToolResultNote(`{"a":[1,2,3]}\n\n${note}`)).toEqual({ json: '{"a":[1,2,3]}', note });
+    expect(splitToolResultNote(`{"a":[1,2,3]}\n\n${note}`)).toEqual({
+      json: '{"a":[1,2,3]}',
+      note,
+    });
     expect(splitToolResultNote('{"a":1}')).toEqual({ json: '{"a":1}', note: undefined });
     // A blank line that does not start a note is part of the text (a pending approval's sentence).
     expect(splitToolResultNote('{"a":1}\n\npending approval')).toEqual({
