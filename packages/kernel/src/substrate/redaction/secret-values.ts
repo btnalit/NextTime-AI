@@ -422,19 +422,28 @@ const UNCLOSED_AFTER_A_QUOTED_KEY = String.raw`(?<="[^"\\\r\n]{1,128}"[ \t]{0,8}
  *  ends before a secret's name and its separator (`SECRET_NAME_AND_SEPARATOR`: `token="x"api_key:
  *  …`): that pair is read by its own rule, from where it starts, as after any value; read in, it
  *  was inside the value of a pair that crossed this one, read on past where this one ended, and
- *  its own value was kept. A run of backslashes is read whole, and where a quote comes after it,
- *  only if it is even, the backslashes escaping each other and the quote a quote, as main reads
- *  `\\"`. An odd one is not read at all: it escapes that quote, and read two at a time, the word
- *  stopped inside a `\\\"`, and the `\"` left closed the JSON string it is written in, as the
- *  rules after these read it, which kept what came after
- *  (`\"password\":\"APIKEY=TOKEN=\\\"\\\"y\\\"<密钥>`, where main hid it; review #501 on
- *  #1600). Written as the two it is (`redactedValue`). */
+ *  its own value was kept. Its backslashes are read two at a time, a last one only where no quote
+ *  comes after it, as main reads them. Written as the two it is (`redactedValue`). */
 const restOfTheWord = (notInIt: string): string => String.raw`(?:${moreOfTheWord(notInIt)})?`;
+const wordOf = (char: string): string =>
+  String.raw`(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+`;
 /** `restOfTheWord`, of at least one character. */
-const moreOfTheWord = (notInIt: string): string => {
-  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\+(?!["\\])|(?:\\\\)+(?="))`;
-  return String.raw`(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+`;
-};
+const moreOfTheWord = (notInIt: string): string =>
+  wordOf(String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`);
+/** `moreOfTheWord` after a `\"…\"` value (`ESCAPED_QUOTED`), which main reads no further. A run of
+ *  backslashes is read whole, and where a quote comes after it, only if it is even, the
+ *  backslashes escaping each other and the quote a quote, as main reads `\\"`. An odd one is not
+ *  read at all: it escapes that quote, and read two at a time, the word stopped inside a `\\\"`,
+ *  and the `\"` left closed the JSON string the value is written in, as the rules after these read
+ *  it, which kept what came after (`\"password\":\"APIKEY=TOKEN=\\\"\\\"y\\\"<密钥>`, where main
+ *  hid it; review #501 on #1600). Not after a `"…"` or `'…'` value, read on as main reads it: there
+ *  an odd run left whole ended in a `\\\"` that closed the `\\\"…\\\"` value around it, which main
+ *  reads on past (`--passwd \\\"TOKEN='\\\\\\\"'x\\\\\\\"'<密钥> y`, where main hid it; review #493 on
+ *  #1600). */
+const moreOfTheEscapedWord = (notInIt: string): string =>
+  wordOf(String.raw`(?:[^\s'"${notInIt}\\]|\\+(?!["\\])|(?:\\\\)+(?="))`);
+const restOfTheEscapedWord = (notInIt: string): string =>
+  String.raw`(?:${moreOfTheEscapedWord(notInIt)})?`;
 /** A `QUOTED` value, closed where a string's closing quote is (`CLOSES_QUOTED`) or right against
  *  more of its word (`password="a\"b"<密钥>`). Read to the first `"`, as only `PLAIN_QUOTED` reads
  *  it, the value ended at the `\"` inside it, and the rest of the word after its own closing quote
@@ -443,15 +452,27 @@ const moreOfTheWord = (notInIt: string): string => {
  *  value holds the closing quote, and read on to the end of the word, the value was crossed by no
  *  such pair, and what the pair's value held past the word was kept (`apikey="TOKEN='\"'"x'<密钥>`,
  *  where main hid it). Read to the first `"`, as main reads it, that pair crosses it. Nor one right
- *  after a backslash, which an escape read whole took in with it (`token:"\password='\"'"n'<密钥>`;
- *  review #501 on #1600). */
-const QUOTED_WITH_NO_PAIR_IN_IT = String.raw`"(?:(?!${NEXT_SECRET_PAIR})[^"\\\r\n]|\\(?!${NEXT_SECRET_PAIR})[^\r\n])*"`;
+ *  after a backslash, which an escape read whole took in with it (`token:"\password='\"'"n'<密钥>`). */
+const NO_PAIR_HERE = String.raw`(?!${NEXT_SECRET_PAIR})`;
+/** Nor, past the value's first `\"`, a secret's name at all, whatever its value is
+ *  (`SECRET_NAME_AND_SEPARATOR`, which `NEXT_SECRET_PAIR` begins with). Main reads the value to that
+ *  `\"`, and what follows on its own: a key written there with an escaped quote and the value after
+ *  it, or a name and its value, went on past the closing quote and hid what came after
+ *  (`token:"\"apikey,\"=\" token:="e <密钥>`, `"token": "x\"api-key\" = \"note: y token: x, "TOKEN\""x
+ *  <密钥>`, `api_key: "\"secretx\": \"a --token x y"x <密钥>`). Read on to the end of the word, that
+ *  pair was inside the value, crossing nothing, and what main hid was kept (review #501 on #1600).
+ *  A name before it is read on (`api_key: "apikey:\""<密钥>`), and one right after a backslash past
+ *  it (`token:"\"x\token:e"<密钥>`), both kept by main. */
+const NO_NAME_HERE = String.raw`(?!${SECRET_NAME_AND_SEPARATOR})`;
+/** The `"…"` value `quotedValue` reads on: its first `\"` read apart, an escape before it escapes
+ *  anything else. */
+const QUOTED_WITH_NO_PAIR_IN_IT = String.raw`"(?:${NO_PAIR_HERE}[^"\\\r\n]|\\(?!")${NO_PAIR_HERE}[^\r\n])*(?:\\"(?:${NO_NAME_HERE}[^"\\\r\n]|\\${NO_PAIR_HERE}[^\r\n])*)?"`;
 const quotedValue = (notInIt: string): string =>
   String.raw`${QUOTED}${CLOSES_QUOTED}|${QUOTED_WITH_NO_PAIR_IN_IT}${moreOfTheWord(notInIt)}`;
 const quotedWord = (notInIt: string): string =>
   String.raw`${PLAIN_QUOTED}${restOfTheWord(notInIt)}|'[^'\r\n]*'${restOfTheWord(notInIt)}`;
-const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}${restOfTheWord('')}|${quotedValue('')}|${quotedWord('')}|${UNCLOSED}|${bareValue('')})`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}${restOfTheWord('&')}|${quotedValue('&')}|${quotedWord('&')}|${UNCLOSED}|${UNCLOSED_AFTER_A_QUOTED_KEY}|${bareValue('&')})`;
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}${restOfTheEscapedWord('')}|${quotedValue('')}|${quotedWord('')}|${UNCLOSED}|${bareValue('')})`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}${restOfTheEscapedWord('&')}|${quotedValue('&')}|${quotedWord('&')}|${UNCLOSED}|${UNCLOSED_AFTER_A_QUOTED_KEY}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;
@@ -747,6 +768,8 @@ const NAMED_VALUES: ValuePatternsReadTogether = {
  *  the quote, a key's quote and `:`, a secret's name): a row written from now on is not rewritten
  *  again. For rows already stored only (`STORED_NAMED_VALUES`). */
 const notAlreadyRedactedInStore = (notInIt: string): string => {
+  // Only whether there is more: its first character is never a backslash, so after a `\"…\"` mask
+  // too, either reading of a run (`moreOfTheEscapedWord`) finds the same, and the value read reads it.
   const more = String.raw`(?!\[redacted\])${moreOfTheWord(notInIt)}`;
   // `\"`, `\\\"` … as `ESCAPED_QUOTED` reads them, spelled out: a group here would move the value's.
   const escaped = [1, 3, 5, 7]

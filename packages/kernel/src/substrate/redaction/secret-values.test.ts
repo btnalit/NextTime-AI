@@ -3055,9 +3055,57 @@ describe('a value with an escaped quote closed right against more of its word (l
       2,
     ],
     [
-      'a `\\\\\\"…\\\\\\"` value a JSON string crosses, its closing run kept whole',
+      'a key written in a "…" value with an escaped quote, its value ending inside it',
+      `token="\\"api_key\\": x"${FAKE} y`,
+      `token="${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      "a secret's name and an escaped quote, the closing quote right after it",
+      `api_key: "apikey:\\""${FAKE} y`,
+      `api_key: "${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      'a key written in a "…" value with an escaped quote, its own value a "…" one',
+      `I_TOKEN="x.api_key\\"\t:\t"${FAKE} ,k: v`,
+      `I_TOKEN="${REDACTED}"${REDACTED} ,k: v`,
+      1,
+    ],
+    [
+      'a key written in a "…" value with an escaped quote, its own "…" value with a blank in it',
+      `my.token="secret\\"  :"${FAKE} y";`,
+      `my.token="${REDACTED}"${REDACTED} y";`,
+      1,
+    ],
+    [
+      'a key written in a "…" value with an escaped quote, its `\\"…\\"` value with a blank in it',
+      `password="\\"api_key\\": \\"a b\\""${FAKE} y`,
+      `password="${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      'a key written with an escaped quote before the first one, its value with a blank in it',
+      `token="x api_key\\"=\\"a b\\""${FAKE} y`,
+      `token="${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      'a name right after a backslash, past the first escaped quote',
+      `token:"\\"x\\token:e"${FAKE} y`,
+      `token:"${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      'a key written in a "…" value with an escaped quote, its `\\"…\\"` value with no blank in it',
+      `password="\\"api_key\\":\\"ab\\""${FAKE} y`,
+      `password="${REDACTED}"${REDACTED} y`,
+      1,
+    ],
+    [
+      'a `\\\\\\"…\\\\\\"` value a JSON string crosses, what is left of its quote kept',
       `"api_key": "token=\\\\\\"a\\\\\\"${FAKE}`,
-      `"api_key": "${REDACTED}"${REDACTED}\\\\\\"${REDACTED}`,
+      `"api_key": "${REDACTED}"${REDACTED}\\"${REDACTED}`,
       2,
     ],
   ])(
@@ -3084,6 +3132,14 @@ describe('a value with an escaped quote closed right against more of its word (l
     ['a `,`', `token=\\"x\\",x`, `token=\\"${REDACTED}\\",x`, 1],
   ])('reads on no further than its word: %s', (_label, text, hidden, values) => {
     expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+  });
+
+  // After a `"…"` or `'…'` value, the backslashes of its word are read two at a time, as main reads
+  // them; a run is read whole only after a `\"…\"` one (`moreOfTheEscapedWord`; review #493 on #1600).
+  it('reads the backslashes of the word after a "…" value as main reads them', () => {
+    const hidden = `TOKEN="${REDACTED}"${REDACTED}\\"& y`;
+    expect(scrubSecretValues(`TOKEN=""C:\\\\\\"& y`)).toEqual({ value: hidden, redactedValues: 1 });
     expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
@@ -3122,8 +3178,10 @@ describe('a value with an escaped quote closed right against more of its word (l
   // (`endsWhereALeftOutValueStopped`). Each kept what main hid, found by the generators. So too
   // with a backslash right before that pair's name, read as an escape with it (`\password=…`), and
   // a run of backslashes the word stopped in, which left a quote that closed the JSON string it is
-  // written in, though not an even run of them before a quote, read whole as main reads it (review
-  // #501 on #1600).
+  // written in, though not an even run of them before a quote, read whole as main reads it; and
+  // with a secret's name past the first `\"` in it, where main closed it (review #501 on #1600).
+  // After a `"…"` or `'…'` value a run is read two at a time, as main reads it: read whole, an odd
+  // one ended in a `\\\"` that closed the value around it (review #493 on #1600).
   it.each([
     [
       "a pair inside it, its '…' value holding the closing quote",
@@ -3179,6 +3237,72 @@ describe('a value with an escaped quote closed right against more of its word (l
       `api_key = \\"${REDACTED} --password="${REDACTED}"${REDACTED}`,
       2,
     ],
+    [
+      "an odd run of backslashes after a '…' value, before a quote",
+      `{"cmd": "--passwd \\\\\\"TOKEN='\\\\\\\\\\\\\\"'x\\\\\\\\\\\\\\"'${FAKE} y"}`,
+      `{"cmd": "--passwd \\\\\\"${REDACTED}\\\\\\"'${REDACTED}`,
+      2,
+    ],
+    [
+      "an odd run of backslashes after a '…' value, two strings deep",
+      `{"log": "{\\"cmd\\": \\"token: \\\\\\"TOKEN='\\\\\\\\\\\\\\"'x\\\\\\\\\\\\\\"'${FAKE} y\\"}"}`,
+      `{"log": "{\\"cmd\\": \\"token: \\\\\\"${REDACTED}\\\\\\"'${REDACTED}`,
+      2,
+    ],
+    [
+      "an odd run of backslashes after a '…' value, before a '&'",
+      `{"log": "{\\"cmd\\": \\"--passwd \\\\\\"TOKEN='\\\\\\\\\\\\\\"'x\\\\\\\\\\\\\\"&${FAKE}'\\"}"}`,
+      `{"log": "{\\"cmd\\": \\"--passwd \\\\\\"${REDACTED}\\\\\\"'${REDACTED}`,
+      2,
+    ],
+    [
+      'a key written with an escaped quote, its value with a blank in it',
+      `token: "a b\\"'x.api_key\\" = \\"x y token: x' \\"TOKEN\\" = "note: ${FAKE} token: x"\\"}`,
+      `token: "${REDACTED}"'x.api_key\\" = \\"${REDACTED}token: ${REDACTED}\\"}`,
+      3,
+    ],
+    [
+      'a key written with an escaped quote at the start, its value with a blank in it',
+      `token:"\\"apikey\\"=\\" token:="e ${FAKE}`,
+      `token:"${REDACTED}"apikey\\"=\\"${REDACTED}token:${REDACTED}`,
+      3,
+    ],
+    [
+      'a key written with an escaped quote, its `\\"…\\"` value closed by an escaped quote',
+      `token:"\\"apikey\\"=\\" token:N\\""x ${FAKE}`,
+      `token:"${REDACTED}"apikey\\"=\\"${REDACTED}token:${REDACTED}`,
+      3,
+    ],
+    [
+      'a key written with an escaped quote, its `\\"…\\"` value closed by two escaped quotes',
+      `token:"\\"apikey\\"=\\" token:N\\"\\""x ${FAKE}`,
+      `token:"${REDACTED}"apikey\\"=\\"${REDACTED}token:${REDACTED}`,
+      3,
+    ],
+    [
+      'a name past an escaped quote, its bare value run into the closing quote',
+      `token:"\\"apikey,\\"=\\" token:="e ${FAKE}`,
+      `token:"${REDACTED}"apikey,\\"=\\"${REDACTED}token:${REDACTED}`,
+      3,
+    ],
+    [
+      'a name past an escaped quote, its bare value with an escape in it',
+      `token:"\\"apikey\\"=\\" token:N\\'"x ${FAKE}`,
+      `token:"${REDACTED}"apikey\\"=\\"${REDACTED}token:${REDACTED}`,
+      3,
+    ],
+    [
+      'a `--flag` past an escaped quote, its value with a blank in it',
+      `api_key: "\\"secretx\\": \\"a --token x y"x ${FAKE}`,
+      `api_key: "${REDACTED}"secretx\\": \\"${REDACTED}--token ${REDACTED}`,
+      3,
+    ],
+    [
+      'a key written with an escaped quote, two strings deep',
+      `"token": "x\\"api-key\\" = \\"note: y token: x, "TOKEN\\""x ${FAKE}\\"\\": 1`,
+      `"token": "${REDACTED}"api-key\\" = \\"${REDACTED}token: ${REDACTED}`,
+      3,
+    ],
   ])('hides what main hides where a pair crosses it: %s', (_label, text, hidden, values) => {
     expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);
     expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
@@ -3191,6 +3315,18 @@ describe('a value with an escaped quote closed right against more of its word (l
   it.each([
     [`TOKEN=\\"x\\"${FAKE}`, `TOKEN=\\"${REDACTED}\\"${REDACTED}`],
     [`TOKEN=\\\\\\"x\\\\\\"${FAKE} y`, `TOKEN=\\\\\\"${REDACTED}\\\\\\"${REDACTED} y`],
+    [
+      `TOKEN=\\\\\\\\\\"x\\\\\\\\\\"${FAKE} y`,
+      `TOKEN=\\\\\\\\\\"${REDACTED}\\\\\\\\\\"${REDACTED} y`,
+    ],
+    [
+      `TOKEN=\\\\\\\\\\\\\\"x\\\\\\\\\\\\\\"${FAKE} y`,
+      `TOKEN=\\\\\\\\\\\\\\"${REDACTED}\\\\\\\\\\\\\\"${REDACTED} y`,
+    ],
+    [
+      `{"cmd":"TOKEN=\\\\\\\\\\"x\\\\\\\\\\"${FAKE} y"}`,
+      `{"cmd":"TOKEN=\\\\\\\\\\"${REDACTED}\\\\\\\\\\"${REDACTED} y"}`,
+    ],
   ])('hides the rest of the word an earlier release kept: %s', (text, hidden) => {
     const written = released.scrubSecretValues(text).value;
     expect(fakesIn(written)).toBe(1);
