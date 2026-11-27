@@ -1,7 +1,7 @@
 [
   {
     "name": "containers.list",
-    "description": "List the containers on this host (running and stopped), with id, name, image, and current state. The platform's own agent containers are never listed.",
+    "description": "List the containers on this host, running and stopped (all: false for running ones only), each with id, name, image, state, status, and its compose project and service. One container's labels: container.inspect. The platform's own agent containers are never listed.",
     "binding": { "kind": "cli", "command_template": "docker ps --all --format json" },
     "params_schema": {
       "type": "object",
@@ -24,7 +24,7 @@
   },
   {
     "name": "container.inspect",
-    "description": "Read one container's full configuration and current runtime state by id.",
+    "description": "Read one container by id, id prefix or name: id, name, image, state, status, and every label.",
     "binding": { "kind": "cli", "command_template": "docker inspect {id}" },
     "params_schema": {
       "type": "object",
@@ -48,7 +48,7 @@
   },
   {
     "name": "compose.ls",
-    "description": "List the containers belonging to one docker-compose project.",
+    "description": "List the docker-compose projects on this host with their containers (id, name, image, state, status, compose service); project for one project only.",
     "binding": {
       "kind": "cli",
       "command_template": "docker ps --all --filter label=com.docker.compose.project={project} --format json"

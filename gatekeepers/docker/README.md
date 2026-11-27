@@ -31,9 +31,9 @@ only; it is never executed.
 
 | Operation | mode | blast_radius | auto_approvable | await_decision | notes |
 |---|---|---|---|---|---|
-| `containers.list` | observe | low | true | false | → `Container` facts (all containers except agent containers, see below; `all:false` filters to running only) |
-| `container.inspect` | observe | low | true | false | → one `Container` fact |
-| `compose.ls` | observe | low | true | false | groups containers by `com.docker.compose.project` label |
+| `containers.list` | observe | low | true | false | → `Container` facts (all containers except agent containers, see below; `all:false` filters to running only); each container as a list item (below) |
+| `container.inspect` | observe | low | true | false | → one `Container` fact; the one Operation that returns a container's labels |
+| `compose.ls` | observe | low | true | false | groups containers by `com.docker.compose.project` label (`project` for one); each a list item without its project |
 | `container.logs_tail` | observe | low | true | false | de-multiplexed stdout+stderr text |
 | `container.restart` | execute | medium | **false** | **false** | `simulate` returns the target container; idempotent `apply`; queued per container (`target`, see below) |
 | `compose.up` | execute | high | **false** | true | starts existing stopped containers in the named project (see below) |
@@ -41,6 +41,15 @@ only; it is never executed.
 
 `reads`/`writes` on every Operation carry `Container` — the S2.6 meta-ontology `reads`/`writes`
 LinkTypes this Gatekeeper's Operation objects expose.
+
+### What a result carries per container (legacy 966)
+
+Every Operation but `container.inspect` returns each container as a list item: `id`, `name`,
+`image`, `state`, `status`, and its compose `project` and `service` (each left out when the
+container has no such label). Labels are `container.inspect`'s alone: a compose container carries a
+dozen or more, and with them a list of eighteen containers ran past what a Worker's tool result
+shows. `src/payload-budget.test.ts` holds the lists to 320 compact JSON characters a container on a
+host of 40; a field that would break it goes into `container.inspect`.
 
 ### Queue target of `container.restart` (S11 GO12)
 

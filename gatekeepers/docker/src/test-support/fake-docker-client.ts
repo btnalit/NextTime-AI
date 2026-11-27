@@ -12,6 +12,8 @@ export interface FakeContainerSeed {
   readonly image: string;
   readonly running?: boolean;
   readonly labels?: Readonly<Record<string, string>>;
+  /** Docker's status line while running (default `Up 1 minute`). */
+  readonly status?: string;
 }
 
 export interface FakeDockerClient extends DockerClient {
@@ -24,28 +26,28 @@ export interface FakeDockerClient extends DockerClient {
   setRunning(id: string, running: boolean): void;
 }
 
-function toSummary(state: {
+interface FakeContainer {
   id: string;
   name: string;
   image: string;
   running: boolean;
   labels: Record<string, string>;
-}): ContainerSummary {
+  status: string | undefined;
+}
+
+function toSummary(state: FakeContainer): ContainerSummary {
   return {
     id: state.id,
     name: state.name,
     image: state.image,
     state: state.running ? 'running' : 'exited',
-    status: state.running ? 'Up 1 minute' : 'Exited (0) 1 minute ago',
+    status: state.running ? (state.status ?? 'Up 1 minute') : 'Exited (0) 1 minute ago',
     labels: state.labels,
   };
 }
 
 export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = []): FakeDockerClient {
-  const containers = new Map<
-    string,
-    { id: string; name: string; image: string; running: boolean; labels: Record<string, string> }
-  >();
+  const containers = new Map<string, FakeContainer>();
   for (const seed of seeds) {
     containers.set(seed.id, {
       id: seed.id,
@@ -53,6 +55,7 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
       image: seed.image,
       running: seed.running ?? true,
       labels: { ...(seed.labels ?? {}) },
+      status: seed.status,
     });
   }
 

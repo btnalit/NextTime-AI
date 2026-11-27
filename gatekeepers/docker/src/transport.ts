@@ -10,7 +10,13 @@ import {
   networkFailureDelivery,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
-import type { ContainerSummary, DockerClient, ListContainersOptions } from './docker-client.js';
+import {
+  COMPOSE_PROJECT_LABEL,
+  COMPOSE_SERVICE_LABEL,
+  type ContainerSummary,
+  type DockerClient,
+  type ListContainersOptions,
+} from './docker-client.js';
 
 /**
  * DockerodeTransport: this gate's own `Transport` implementation (design doc §7.5's "binding.kind
@@ -42,6 +48,11 @@ import type { ContainerSummary, DockerClient, ListContainersOptions } from './do
  * container with `OperationRefusedError` (403 `operation_refused`), and then acts on the resolved
  * full id — never on the caller's name or id prefix. The platform's service containers (kernel,
  * postgres, caddy, …) stay visible and operable.
+ *
+ * What a result carries per container (legacy 966): `container.inspect` returns the container
+ * with every label; every other Operation returns `ContainerListItem` (`listItemOf`) — its compose
+ * project and service, no other label (`compose.ls` leaves out the project it lists the container
+ * under).
  */
 
 const OBSERVE_ALL_DEFAULT = true;
@@ -54,6 +65,43 @@ const AGENT_ROLE_LABEL = 'nexttime.role';
 
 function isAgentContainer(container: ContainerSummary): boolean {
   return container.labels[AGENT_ROLE_LABEL] !== undefined;
+}
+
+/**
+ * Legacy 966: one container as every Operation but `container.inspect` returns it — the lists
+ * (`containers.list`, `compose.ls`, `compose.up` / `compose.down` and their `simulate`) and
+ * `container.restart`. Every label went with each container before: a compose container carries a
+ * dozen or more (the config hash, the image digest, the compose file's path and working
+ * directory, the image's own OCI labels), so a list of eighteen ran to tens of thousands of
+ * characters, past what a Worker's tool result shows (`truncateToolResult`), and cost its budget
+ * on every later model call that re-read it. The compose project and service stay: they say what
+ * a container belongs to, and `compose.up` / `compose.down` take the project. One container's
+ * labels are a `container.inspect` away. A key is left out when the container has no such label.
+ */
+export interface ContainerListItem {
+  readonly id: string;
+  readonly name: string;
+  readonly image: string;
+  readonly state: string;
+  readonly status: string;
+  /** Its `com.docker.compose.project` label. */
+  readonly project?: string;
+  /** Its `com.docker.compose.service` label. */
+  readonly service?: string;
+}
+
+export function listItemOf(container: ContainerSummary): ContainerListItem {
+  const project = container.labels[COMPOSE_PROJECT_LABEL];
+  const service = container.labels[COMPOSE_SERVICE_LABEL];
+  return {
+    id: container.id,
+    name: container.name,
+    image: container.image,
+    state: container.state,
+    status: container.status,
+    ...(project !== undefined ? { project } : {}),
+    ...(service !== undefined ? { service } : {}),
+  };
 }
 
 function asRecord(params: unknown): Record<string, unknown> {
@@ -250,7 +298,7 @@ async function invokeOperation(
     case 'containers.list': {
       const all = optionalBoolean(params, 'all', OBSERVE_ALL_DEFAULT);
       const items = await listServedContainers(client, { all });
-      return { data: items };
+      return { data: items.map(listItemOf) };
     }
     case 'container.inspect': {
       const id = requireContainerRef(params, operation.name);
@@ -260,12 +308,15 @@ async function invokeOperation(
     case 'compose.ls': {
       const project = optionalString(params, 'project');
       const items = await listServedContainers(client, { all: true, project });
-      const byProject = new Map<string, ContainerSummary[]>();
+      // Each container without the project it is listed under (legacy 966: a fortieth of the
+      // answer on a host of forty).
+      const byProject = new Map<string, Omit<ContainerListItem, 'project'>[]>();
       for (const item of items) {
-        const key = item.labels['com.docker.compose.project'] ?? '';
+        const key = item.labels[COMPOSE_PROJECT_LABEL] ?? '';
         if (!key) continue;
+        const { project: _project, ...listed } = listItemOf(item);
         const existing = byProject.get(key) ?? [];
-        existing.push(item);
+        existing.push(listed);
         byProject.set(key, existing);
       }
       const projects = [...byProject.entries()].map(([name, containers]) => ({
@@ -288,21 +339,33 @@ async function invokeOperation(
       const target = await resolveServedContainer(client, operation.name, id);
       await effect(effects, 'restart', () => client.restart(target.id, timeoutSeconds));
       const item = await client.inspectContainer(target.id);
-      return { data: item };
+      return { data: listItemOf(item) };
     }
     case 'compose.up': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, true);
       for (const target of targets) await effect(effects, 'start', () => client.start(target.id));
       const containers = await listServedContainers(client, { all: true, project });
-      return { data: { project, started: targets.map((t) => t.id), containers } };
+      return {
+        data: {
+          project,
+          started: targets.map((t) => t.id),
+          containers: containers.map(listItemOf),
+        },
+      };
     }
     case 'compose.down': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, false);
       for (const target of targets) await effect(effects, 'stop', () => client.stop(target.id));
       const containers = await listServedContainers(client, { all: true, project });
-      return { data: { project, stopped: targets.map((t) => t.id), containers } };
+      return {
+        data: {
+          project,
+          stopped: targets.map((t) => t.id),
+          containers: containers.map(listItemOf),
+        },
+      };
     }
     default:
       throw new TransportInvokeError(`docker transport: unknown operation "${operation.name}"`);
@@ -329,7 +392,7 @@ async function simulateOperation(
       const item = await resolveServedContainer(client, operation.name, id);
       return {
         description: `would restart container "${item.name}" (${item.id})`,
-        detail: { containers: [item] },
+        detail: { containers: [listItemOf(item)] },
       };
     }
     case 'compose.up': {
@@ -337,7 +400,7 @@ async function simulateOperation(
       const targets = await composeTargets(client, project, true);
       return {
         description: `would start ${targets.length} stopped container(s) in compose project "${project}"`,
-        detail: { containers: targets },
+        detail: { containers: targets.map(listItemOf) },
       };
     }
     case 'compose.down': {
@@ -345,7 +408,7 @@ async function simulateOperation(
       const targets = await composeTargets(client, project, false);
       return {
         description: `would stop ${targets.length} running container(s) in compose project "${project}"`,
-        detail: { containers: targets },
+        detail: { containers: targets.map(listItemOf) },
       };
     }
     default:
