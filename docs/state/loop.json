@@ -14,7 +14,7 @@
     "CLAUDE.md": { "ceiling": 8000, "target": 8000 },
     "docs/STATUS.md": { "ceiling": 360000, "target": 120000 },
     "docs/development-tasks.md": { "ceiling": 510000, "target": 200000 },
-    "docs/runbooks/release.md": { "ceiling": 440000, "target": 150000 }
+    "docs/runbooks/release.md": { "ceiling": 230000, "target": 150000 }
   },
   "release": {
     "hostStepTagFromSection": 222
