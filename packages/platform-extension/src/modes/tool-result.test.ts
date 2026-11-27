@@ -392,7 +392,7 @@ function at(value: Json, path: string): Json | undefined {
   for (const [, place, key, index] of path.matchAll(
     /\.?<key (\d+)>|\.?([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g,
   )) {
-    if (here === null || typeof here !== 'object' || here === undefined) return undefined;
+    if (here === null || typeof here !== 'object') return undefined;
     if (index !== undefined) here = Array.isArray(here) ? here[Number(index)] : undefined;
     else if (Array.isArray(here)) return undefined;
     else here = here[key ?? (Object.keys(here)[Number(place) - 1] as string)];
