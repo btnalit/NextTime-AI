@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DISPLAY_NAME_MAX_LENGTH, LOGIN_MAX_LENGTH } from '@nexttime/shared';
+import { DISPLAY_NAME_MAX_LENGTH, LOGIN_MAX_LENGTH, maskSecretFields } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
@@ -1347,6 +1347,29 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       }
 
+      /** Legacy 965: the platform audit rows of `who`'s own password changes. */
+      async function passwordChangedRows(who: string) {
+        return (
+          await withAdminClient(pool, (client) =>
+            client.query<{
+              actor_user_id: string | null;
+              actor_principal_id: string | null;
+              resource_type: string | null;
+              resource_id: string | null;
+              payload: Record<string, unknown>;
+              user_id: string;
+            }>(
+              `select a.actor_user_id, a.actor_principal_id, a.resource_type, a.resource_id::text,
+                      a.payload, u.id as user_id
+                 from audit_records a join users u on u.login = $1
+                where a.workspace_id is null and a.action = 'user.password_changed'
+                  and a.resource_id = u.id`,
+              [who],
+            ),
+          )
+        ).rows;
+      }
+
       it('a new password under the platform minimum is refused (400 weak_password), the same rule the reset applies', async () => {
         const previous = await withAdminClient(pool, (client) => readPlatformSettings(client));
         await withAdminClient(pool, (client) =>
@@ -1355,6 +1378,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         try {
           const app = appWithKeys();
           const cookie = await loginAs(app, login, password);
+          const rowsBefore = (await passwordChangedRows(login)).length;
           const response = await changePassword(
             app,
             cookie,
@@ -1363,6 +1387,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
           expect(response.statusCode).toBe(400);
           expect(response.json()).toMatchObject({ ok: false, error: { code: 'weak_password' } });
+          // Legacy 965: refused before anything changes, so no row (review #493 on #1627).
+          expect(await passwordChangedRows(login)).toHaveLength(rowsBefore);
         } finally {
           await withAdminClient(pool, (client) =>
             updatePlatformSettings(
@@ -1411,6 +1437,21 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: {},
         });
         expect(keyBefore.statusCode).toBe(200);
+        // Every console session of the user's still live — `other` and any an earlier test here
+        // left signed in — but the one making the change.
+        const otherConsoleSessions =
+          Number(
+            (
+              await withAdminClient(pool, (client) =>
+                client.query<{ n: string }>(
+                  `select count(*)::text as n from user_sessions s join users u on u.id = s.user_id
+                  where u.login = $1 and s.revoked_at is null and s.expires_at > now()`,
+                  [login],
+                ),
+              )
+            ).rows[0]?.n,
+          ) - 1;
+        expect(otherConsoleSessions).toBeGreaterThanOrEqual(1);
 
         const response = await changePassword(
           app,
@@ -1419,6 +1460,28 @@ describe.runIf(DATABASE_URL !== undefined)(
           'correct horse battery staple, changed',
         );
         expect(response.statusCode).toBe(200);
+
+        // Legacy 965: one platform row, the user's own, with what the change revoked in counts —
+        // the other console sessions and the one membership — and no password.
+        const rows = await passwordChangedRows(login);
+        expect(rows).toHaveLength(1);
+        const [row] = rows;
+        expect(row).toMatchObject({
+          actor_user_id: row?.user_id,
+          actor_principal_id: null,
+          resource_type: 'user',
+          resource_id: row?.user_id,
+        });
+        expect(row?.payload).toMatchObject({
+          login,
+          required: false,
+          consoleSessionsRevoked: otherConsoleSessions,
+          membershipAccessRevoked: 1,
+        });
+        expect(JSON.stringify(row?.payload)).not.toContain('correct horse');
+        // No field reads as a secret's: the audit pages and the kernel's reads mask by name, and a
+        // count under `…Credentials…` showed as `[redacted]` (web-e2e on #1627).
+        expect(maskSecretFields(row?.payload)).toEqual(row?.payload);
 
         expect((await me(app, making)).statusCode).toBe(200);
         expect((await me(app, other)).statusCode).toBe(401);
@@ -1456,6 +1519,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const locked = await changePassword(app, cookie, password, `${password} new`);
         expect(locked.statusCode).toBe(423);
         expect(locked.json()).toMatchObject({ ok: false, error: { code: 'locked' } });
+        // Legacy 965: a refused change changed nothing and writes no row (the lockout counts it).
+        expect(await passwordChangedRows(user)).toEqual([]);
       }, 30_000);
     });
 
