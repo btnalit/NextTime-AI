@@ -3048,6 +3048,18 @@ describe('a value with an escaped quote closed right against more of its word (l
       `password: '${REDACTED}'${REDACTED} y`,
       1,
     ],
+    [
+      'a `\\"` in a "…" value a pair crosses, its quote kept where that pair leaves off',
+      `api_key='password="a\\"b'"${FAKE}`,
+      `api_key='${REDACTED}'"${REDACTED}`,
+      2,
+    ],
+    [
+      'a `\\\\\\"…\\\\\\"` value a JSON string crosses, what is left of its quote kept',
+      `"api_key": "token=\\\\\\"a\\\\\\"${FAKE}`,
+      `"api_key": "${REDACTED}"${REDACTED}\\"${REDACTED}`,
+      2,
+    ],
   ])(
     'hides the rest of the word, which main and v0.70.0 kept: %s',
     (_label, text, hidden, values) => {
