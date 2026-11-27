@@ -15,3 +15,7 @@ c09e53aa57a177781658c44d47f10ab2abfd6c05:packages/kernel/src/application/admin-a
 # commit renamed them (`ECHOED` / `hidden`), which the generic-api-key rule does not match.
 99e9b775d663686cb8be5730054f56ca03b1277a:packages/llm-proxy/src/proxy.test.ts:generic-api-key:1864
 99e9b775d663686cb8be5730054f56ca03b1277a:packages/shared/src/redirect.test.ts:generic-api-key:47
+#
+# #1629 (legacy 967): a synthetic private-key block in the tool-result tail test of the PR's
+# eighth commit; the next commit spelled the BEGIN / END markers from a word.
+2ecb078f8ff72971963f091f238826726071ff0b:packages/platform-extension/src/modes/tool-result.test.ts:private-key:168
