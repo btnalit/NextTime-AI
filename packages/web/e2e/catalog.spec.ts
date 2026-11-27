@@ -47,6 +47,14 @@ test.describe('catalog editors', () => {
     const row = page.getByTestId('catalog-row').filter({ hasText: name });
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row.locator('[data-status="published"]')).toBeVisible();
+    // Legacy 539: the published version says what it was published on — here, no evaluation.
+    await page
+      .getByRole('list', { name: 'Skills', exact: true })
+      .getByRole('button', { name: new RegExp(name) })
+      .click();
+    const published = page.getByTestId('catalog-detail');
+    await expect(published.getByText('发布依据', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(published.getByText('发布时这份内容没有评测过。')).toBeVisible();
 
     await page.goto('/#/me/agent');
     const skillsField = page.getByTestId('agent-profile-skills');
