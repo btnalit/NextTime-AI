@@ -298,7 +298,7 @@ function safeCut(raw: string, context: string): number {
 /** `text` up to `cut`, scrubbed as the whole text scrubs it. Cut right after a `"`, the text
  *  before reads as if it ended at that quote, where any `"` closes a `"…"` value with escaped
  *  quotes in it; in the whole text what follows may keep it from closing one (`password="a\"b"` of
- *  `password="a\"b"c`, of `… "api_key" : …`; #493, #501 on #1579). So it is read with a character
+ *  `password="a\"b":c`, of `… "api_key" : …`; #493, #501 on #1579). So it is read with a character
  *  that keeps the quote from closing one, as what follows does, and the character is taken off
  *  again — unless a value took it in (one opened by that quote, or a bare one that ends with an
  *  escaped quote), when the text is read on its own. */
@@ -312,8 +312,12 @@ function scrubbedBefore(text: string, cut: number, context: string): Scrubbed<st
     ? { value: read.value.slice(0, -1), redactedValues: read.redactedValues }
     : scrubSecretValues(text.slice(0, cut), options);
 }
-/** A character no value ends with once hidden, and that `endsAQuotedValue` refuses. */
-const KEEPS_A_QUOTE_OPEN = 'x';
+/** A character no value ends with once hidden, that `endsAQuotedValue` refuses, and that no word
+ *  starts with after a value's closing quote (`restOfTheWord` in `secret-values.ts`): a backtick.
+ *  An `x` was read as that word, where the quote closes a `"…"` value with escaped quotes in it
+ *  (`password="a\"b"x`; legacy 948): hidden with it, the text was read on its own, where the
+ *  quote closed that value, and more was hidden than the whole text hides. */
+const KEEPS_A_QUOTE_OPEN = '`';
 
 /** What `push` emits: scrubbed text, and whether the stream paused with it. */
 export interface StreamPiece extends Scrubbed<string> {
