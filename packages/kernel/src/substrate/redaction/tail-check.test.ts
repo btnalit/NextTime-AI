@@ -379,6 +379,44 @@ describe('TailReader — a stream read as the whole text is (design §8, I-R3 a)
     }
   }, 60_000);
 
+  it('keeps at most a pending pair of a long line, and nothing of an open tail but a trailing \\r', () => {
+    // Kept whole, a line with an open tail grew with every piece and was copied each time it was
+    // read: 400,000 characters in pieces of seven took 5 s in the reader alone, against 4 ms now.
+    const B = '\\';
+    const bound = TAIL_VALUE_MAX_CHARS + 256;
+    for (const unit of [
+      `token=${B}"x${B}"y `,
+      `password: '${B}'a `,
+      'password: "a b ',
+      `password: "${'a'.repeat(3_500)}" `,
+      `{"api_key": "${'b'.repeat(3_000)}", `,
+      `password="a${B}"b"`,
+      'token: x\n',
+    ]) {
+      const text = unit.repeat(Math.ceil(30_000 / unit.length)).slice(0, 30_000);
+      const reader = new TailReader();
+      let most = 0;
+      for (let at = 0; at < text.length; at += 7) {
+        reader.push(text.slice(at, at + 7));
+        most = Math.max(most, reader.held);
+      }
+      expect({ unit, most: most <= bound }).toEqual({ unit, most: true });
+    }
+
+    const tailed = new TailReader();
+    tailed.push('run token="a"x');
+    for (let i = 0; i < 5_000; i += 1) {
+      tailed.push(i % 2 === 0 ? 'abcdefg' : 'abcdef\r');
+      expect(tailed.held).toBe(i % 2 === 0 ? 0 : 1);
+    }
+    tailed.push('\nnext');
+    tailed.end();
+    expect(tailed.marksFrom(0)).toEqual([
+      { start: 'run token='.length, end: 'run token="a"x'.length + 5_000 * 7 - 1, tail: true },
+    ]);
+    expect([tailed.tails, tailed.tailChars]).toEqual([1, 5_000 * 7 - 1 + 4]);
+  });
+
   it('readLine read in parts gives the marks of the line read whole', () => {
     const line = `say "token=${FAKE}" and password: 'a'.`;
     const whole = readLine(line, 0, LINE_START, true);

@@ -636,6 +636,12 @@ export class TailReader {
     return this.safeAt;
   }
 
+  /** How many characters of the current line it keeps: at most a pending pair as above, and of
+   *  an open tail nothing but a trailing `\r`. */
+  get held(): number {
+    return this.text.length;
+  }
+
   push(piece: string): void {
     let from = 0;
     for (
@@ -699,14 +705,14 @@ export class TailReader {
   private readOn(): void {
     const shown = this.text.endsWith('\r') ? this.text.length - 1 : this.text.length;
     if (this.tailAt !== -1) {
-      this.safeAt = this.textAt + shown;
+      this.passTail(shown);
       return;
     }
     const read = readLine(this.text.slice(0, shown), this.resume - this.textAt, this.state, false);
     this.keep(read.hide);
     if (read.tailAt !== -1) {
       this.openTail(this.textAt + read.tailAt);
-      this.safeAt = this.textAt + shown;
+      this.passTail(shown);
       return;
     }
     this.safeAt = this.textAt + read.safe;
@@ -716,6 +722,16 @@ export class TailReader {
     const keepAt = Math.max(this.lineAt, this.resume - 1);
     this.text = this.text.slice(keepAt - this.textAt);
     this.textAt = keepAt;
+  }
+
+  /** The line's tail is open: all of it from `tailAt` on is hidden and nothing of it is read
+   *  again, so of the text only a trailing `\r` is kept (whether it ends the line is not known
+   *  yet). Kept whole, the line would grow with every piece and be copied each time it is read:
+   *  a long line in short pieces took time growing with the square of its length. */
+  private passTail(shown: number): void {
+    this.safeAt = this.textAt + shown;
+    this.text = this.text.slice(shown);
+    this.textAt += shown;
   }
 
   private keep(hide: readonly (readonly [number, number])[]): void {
