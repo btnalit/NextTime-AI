@@ -1,0 +1,3533 @@
+# development-tasks 归档：E、R、S1–S9（2026-11-27 移出）
+
+> 2026-11-27 从 `../development-tasks.md` 原文搬来，节号与标题不变，内容未改一字。文中的相对链接以原文件所在的 `docs/` 为基准。这些阶段都已完成；原文件里同名标题仍在，下面只留一行指向这里。
+
+## 1. E — 环境准备（目标主机）
+
+### E1 验证 gVisor
+- 验收：`docker run --rm --runtime=runsc alpine:3.20 true; echo $?` 为 0；失败则 `.env` 里 `WORKER_RUNTIME=runc`。
+- 执行者：Claude Code@host。批准：否。
+
+### E2 目录树与密钥目录
+- 目标：`${NEXTTIME_DATA}/{pgdata,workspaces,secrets,config,artifacts,backups,caddy}`；`secrets/` 0700；`workspaces/<uid>/` 只挂给该用户的入口容器，`workspaces/tasks/<task_id>/` 只挂给该 Task 的 Worker（I15）。
+- 验收：`stat -c '%a %n' ${NEXTTIME_DATA}/secrets` 为 `700 …`；七个子目录齐全。
+- 执行者：Claude Code@host。批准：否。
+
+### E3 代码检出与 `.env`
+- 目标：clone 到 `<CODE_DIR>`；从 `.env.example` 生成 `.env`（`NEXTTIME_DATA / KERNEL_BIND_ADDR / NEXTTIME_SUBNET_* / WORKER_RUNTIME`）。
+- 验收：`docker compose config >/dev/null && echo ok`。依赖：R1、E1。批准：否。
+
+### E4 Postgres
+- 验收：`docker compose up -d postgres && docker compose exec postgres pg_isready -U nexttime`；`create extension if not exists vector` 成功。依赖：E2、E3、R1。批准：否。不做：不发布 5432。
+
+### E5 Docker 日志轮转与 live-restore
+- 已决定不做（2026-09-01）。发现保留在 `docs/private/`。
+
+### E6 收敛 0.0.0.0 端口
+- 已决定不做（2026-09-01）。
+
+### E7 平台备份定时器
+- 暂不做；设计 §13 的库损坏恢复依赖它，S3 完成后重评。届时交付 `deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`。
+- 实现说明（2026-10-01，收尾波次 C10，STATUS 遗留 6 关闭）：不交付 systemd timer——S1.12 的 compose
+  `backup` 服务就是这个定时器（`deploy/backup/backup.sh` 循环睡到 `BACKUP_TIME`，dump + 打包 + 轮换 +
+  写 `last-success`），主机上一直在跑。C10 改补三处缺口：
+  1. **恢复路径**：主机 `drill-restore.sh` 实测 `restore.sh` 失败——#188 起 postgres `read_only: true`，
+     Docker 拒绝向只读 rootfs 容器 `docker compose cp`（即使目标是 tmpfs）。改为
+     `docker compose exec -T postgres sh -c "cat > /tmp/…" < dump`（pg_restore 仍读可寻址文件，不走管道）。
+     主机用当日 dump 恢复：public 39 张表与活库一致，行数差恰为 dump 之后清掉的 11 个验收工作区。
+     `drill-restore.sh` 在恢复失败 / 解析失败 / 表数为 0 时删掉本次的 `nexttime_restore_<ts>`（只认这个名字形状）。
+  2. **新鲜度**：`scripts/check-backup-freshness.sh`（只读；`backup` 服务在跑、`last-success` ≤ 26 h 按分钟
+     比较、它指向的 dump 仍在），发版应用的第一步（`runbooks/release.md` §3"备份三件事"）。
+  3. **发版前 dump**：`backups/pre-upgrade/` 应用通过后只保留最新 3 份（维护者）。
+  未做（待维护者决定，STATUS 遗留 102 / 103）：异地副本；`observations` 无保留策略的增长。
+
+### E8 caddy TLS 与静态服务
+- 目标：`caddy` 容器是唯一公网面：TLS（内网 CA 或自签）、`/` 服务 `packages/web/dist`、`/explorer` 服务 Explorer 构建、反代 `/api` `/ws` `/mcp` `/llm` 到 kernel。
+- 交付物：`deploy/caddy/Caddyfile`；compose `caddy` 服务；`.env` 增 `KERNEL_PUBLIC_URL`。
+- 验收：`curl -k https://${KERNEL_BIND_ADDR}:8443/api/health` 200；kernel 不对主机发布任何端口（`docker port` 为空）。
+- 依赖：S1.6。执行者：Codex 写，Claude Code@host 部署。批准：否。
+- 实现（分支 `task/e8-caddy-tls`）：`/api` `/ws` `/mcp` `/llm` 按本条文字反代到 `kernel:8080`；
+  `/llm` 未按设计 §7.7 转给独立的 `llm-proxy` 服务——本条验收文字与 §7.7 的分工不一致，未擅自
+  改动，见对应 PR 说明。`/` `/explorer` 在 S1.8 / S3 落地前挂占位静态根（`deploy/caddy/{placeholder,
+  explorer-placeholder}`），切换步骤见 `docs/runbooks/host-caddy.md`。caddy 容器以镜像默认的
+  root 用户运行（官方 `caddy:2.10` 镜像的 `/config` 卷 root-owned，非 root 需自定义 Dockerfile，
+  超出本任务范围）。
+
+---
+
+## 2. R — 仓库骨架
+
+### R1 monorepo 骨架
+- 交付物：`pnpm-workspace.yaml`、根 `package.json`、`tsconfig.base.json`、`biome.json`、`vitest.base.ts`；`packages/{kernel,agent-host,worker-supervisor,platform-extension,web,gatekeeper-base,llm-proxy,egress-proxy,shared}` 各有 `package.json` / `src/index.ts` / 一个测试；`.dependency-cruiser.cjs`（设计 §7.10 的六层单向依赖与模块契约：`chat` / `web` 不得 import `approval` / `task`，模块不得 import 他模块内部文件）；`packages/kernel/Dockerfile`、`packages/agent-host/Dockerfile`、`packages/worker-supervisor/Dockerfile`（多阶段、非 root）；`docker-compose.yml`（设计 §10.2）；`.env.example`；`Makefile`（`lint test build migrate up down gen-models`）；`scripts/test-db.sh`。
+- 验收：`pnpm install && pnpm -r lint && pnpm -r test && pnpm -r build` 通过；`docker compose config` 通过；三个镜像 build 成功。
+- 执行者：Codex。批准：否。不做：业务表。
+
+### R2 迁移机制与连接池
+- 交付物：`packages/kernel/src/adapters/db/{migrate,pool}.ts`（每请求设置 `app.workspace_id` 与 `app.principal_id` 会话变量）、`packages/kernel/src/cli/migrate.ts`（迁移 CLI 入口）、`migrations/0000_extensions.sql`。
+- 验收：`make migrate` 两次，第二次 no-op。依赖：R1。（`make migrate` 需要目标机器装了 Node/corepack；没装的主机用容器化等价命令 `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`——所有 host 脚本〔`scripts/accept_s1.sh`/`scripts/accept_s2.sh`〕和 `docs/runbooks/operations.md` §4.1 都用这个形式。）
+
+### R3 CI
+- 交付物：`.github/workflows/ci.yml`：Biome + Vitest（`services: postgres`）+ gitleaks + 内网 IP 守门（`grep -rE '10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.'` 命中即失败）+ `dependency-cruiser` 违规即失败 + 内核纯度守门 `scripts/check-kernel-purity.sh`（`grep -rniE -f scripts/system-names.txt packages/kernel/src --exclude-dir=__fixtures__ --exclude='*.test.ts'`，清单初始为 `docker|ragflow|routeros|erp|oa|semantica|hermes`，命中即失败）。
+- 验收：故意放一个 `10.0.0.1` 的提交被拦。依赖：R1。
+
+### R4 领域类型、转移表、capability 注册表
+- 交付物：`packages/shared/src/{enums,transitions,capabilities,events,action-description}.ts`；转移表覆盖 Fact 生命周期、Conflict、Decision、ActionRequest、Task、WorkerRun、EntryAgent session、OntologyVersion / WorkerDefinition、Grant；capability 注册表含名字、模式、通道（human / handle）、所需角色、参数 Zod schema。
+- 验收：转移表穷举测试；`proposed → executing` 抛错；注册表中每个 capability 有且只有一个通道声明。依赖：R1。
+
+---
+
+## 3. S1 — 一个用户能聊，每轮入图
+
+### S1.1 核心表迁移（含隔离列）
+- 交付物：`packages/kernel/migrations/core/0001_core.sql`：`workspaces / principals(api_key_hash, role) / sessions(kind, on_behalf_of) / ontology_versions / objects / activities(kind, chat_id, sequence, status) / sources(owner_principal_id, visibility) / observations / links / conflicts / decisions / evidence / chats / audit_records`；RLS：workspace 匹配且（`visibility='workspace'` 或 owner = 当前 principal）；触发器：已发布本体只读、links 内容列不可改、audit 只增。
+- 验收：`packages/kernel/src/substrate/` 下的 `test_invariants_db`：I1、I3、I4、I12、audit 不可删；用户 B 的会话读不到用户 A 的 `chats` 与私有 `sources`。
+- 依赖：R2、R4。
+- **R-29 更正（2026-10-02 复审；同类 P3 L4-11、L4-12 第 1–2 条一并收）——数据库按设计假设的那样约束写入**：原来 `nexttime_app` 握着一批没有任何路径使用的 `DELETE` / `UPDATE` 授权，吊销不是单调的，`workspaces` / `platform_settings` 没有 RLS——任一工作区处理器里的 bug 或注入，不越过任何数据库检查就能删掉已验证 Fact 背后的 Evidence、把已吊销的 Handle 复活、改写注入每个 agent 提示词的 `instanceInstructions`、停用别的租户的工作区。迁移 core `0035_db_write_confinement.sql`：①回收 `objects` / `activities` / `sources` / `observations` / `evidence` / `conflicts` / `decisions` / `chats` / `sessions` / `outbox` 的 `DELETE` 与 `sources` / `observations` / `evidence` / `decisions` / `outbox` 的 `UPDATE`（逐表核对了全部写入点：只有清除级联删除这些行，它与 outbox 派发器都跑在登录角色上；`workspace_gate_links` 的 `DELETE` 同样没人用，但门关联正另行改动（L4-13），留给那次一起收）；②三张平台表开 RLS，与 0023 给 `connectors` / `gate_instances` 的模型一致：所有事务可读、只有平台事务可写；唯一的兼容放行是工作区事务改**自己**工作区的 `ontology_enforcement`（策略限行、`workspaces_platform_only_update` 触发器限列）——没有产品路径这样做，只为 v0.38.0 的集成套件在可逆性探针里照常通过，本版的 `ontology-guard` / `worker-result` 集成测试已改在登录角色上设置；③四个 security definer 函数撤 PUBLIC 执行权，`lookup_user_by_login` 补 `pg_temp`；④`links` 一条 UPDATE 不能同时 superseded 与 invalidated，`deprecated` 本体版本的定义不可改。迁移 governance `0015_monotonic_revocation.sql`：`capability_handles.revoked_at` 置上后不能清空（再吊销保留首次时间），grant 的 `revoked` / `expired` 是终态，对所有角色生效。没有用户可见的变化。测试：`adapters/db/write-confinement.integration.test.ts`（被回收的每一项 permission denied；Evidence 删不掉；Handle / grant 不能复活，再吊销不报错；跨租户改 `workspaces` 0 行、改自己的其他列被拒、平台事务与登录角色照常；工作区事务读得到平台设置但改不了、写不进历史表；函数 ACL 与 `search_path`；L4-12 两条；CLI 清除级联照常删光含已吊销 Handle / grant 的工作区）。未收：L4-11 里 security definer 函数信任调用方给的 `p_workspace_id`（需要逐个审调用方再绑 `app_workspace()`）、L5-16 "每个 human principal 都有 user" 的 CHECK（大量既有集成测试直接插入无 user 的 human principal，会让可逆性探针失败）。
+
+### S1.2 graph store 最小实现
+- 交付物：`packages/kernel/src/graph/{store,sql-store}.ts`：`upsert_object / assert_fact / supersede_fact / invalidate_fact / get_object / neighbors / traverse(≤3) / state_at`；`epistemic_status` 由调用方 Principal 类型决定。
+- 验收：`state_at(t0)` 在 supersede 后仍返回旧值；事务失败无半条记录。依赖：S1.1。
+- **W5 实现说明（`search` 分页，PR #132）**：`SearchInput` 加 `limit`/`cursor` 参数，keyset
+  分页建在 `(updated_at, id)` 上（`queries.ts` 的 `encodeSearchCursor`/`decodeSearchCursor`，
+  base64url 编码，恶意/畸形游标一律按"无游标"处理，不抛错）；`MAX_SEARCH_LIMIT = 200` 截断
+  过大的 `limit`，能力结果标 `truncated: true`。`GraphStore` 新增 `searchPage` 方法与原来的
+  裸数组 `search` 并存——`search` 保留给它现有的调用方（explorer-read-service 的批量取、
+  find-means），新调用方要游标就用 `searchPage`；MCP `search_graph` 别名（`interfaces/mcp/
+  reference-tool-aliases.ts`）现在把 `limit` 也转发给 `search` 能力。
+
+### S1.3 gateway human 通道 + audit + explain
+- 交付物：`gateway/auth.ts`（API key → Principal，创建 `web` 会话）、`audit/{writer,reconstruct}.ts`、`epistemic/explain.ts`（Fact / Decision / Turn → Observation → Activity → Source + Principal）。
+- 验收：无 key 401；`member` 调 `grant_capability` 403；任一 Fact / Turn 的 `explain` 到 Source 与 Principal；audit 写失败整体回滚。依赖：S1.2。
+
+### S1.4 chat 模块与 WS RPC
+- 交付物：`chat/{service,ws}.ts`：`list_chats / new_chat / send_chat_message / stop_agent / get_chat_history / subscribe_chat`；Turn = `activities(kind='agent_turn')`；推送事件 `chat.message / chat.stream / chat.metadata`；同一 Chat 只允许一个进行中 Turn；`outbox` 派发器（写入侧 `substrate/outbox/enqueue.ts` 已随 S1.2 落地——同事务写入、唯一写路径；本任务补 application 层的派发器：进程内派发、重启重放、消费者幂等）；`host-bridge` 定义 `AgentRuntime` 接口并把 pi 的 RPC 事件翻译为平台事件词表，chat 只消费平台事件。
+- 验收：WS 客户端先 `subscribe_chat` 再 `get_chat_history`，用脚本在翻页期间注入事件，不丢不重；进行中再发消息被拒。依赖：S1.3。
+- 实现说明（S1.4 PR，2026-09）：
+  - 落地路径与设计文档草案不同：`application/chat/{service,event-sink,push,recovery,index}.ts`（`chat/{service,ws}.ts` 中的 `ws.ts` 部分实际落在 `interfaces/ws/{server,rpc,index}.ts`，遵循 §7.10 的六层分层——`interfaces` 只依赖 `application` 服务接口）；`application/outbox/{dispatcher,index}.ts`；`application/host-bridge/{agent-runtime,fake-runtime,turn-started-consumer,index}.ts`。
+  - `chat_messages` 落在新迁移 `migrations/core/0008_chat_messages.sql`（`turn_id` 可空，`sequence bigint` 由 `application/chat` 按 `(workspace_id, chat_id)` 分配，advisory lock 序列化并发写；一 Chat 一进行中 Turn 由该文件新增的 `activities_one_running_turn_per_chat_uidx` 部分唯一索引强制）。
+  - `AGENT_RUNTIME` 环境变量（默认 `fake`，唯一实现是 `FakeAgentRuntime`）由 `packages/kernel/src/index.ts` 的 `main()` 读取。
+  - 已知偏离：`send_chat_message` 在已有进行中 Turn 时抛 `TurnAlreadyRunningError`；`interfaces/http/**` 不在本任务所有权范围内，其固定的错误映射表无法识别这个新错误类，因此经 HTTP 该情形回退为 `500`（非文档设想的 `409`）——WS 传输（本任务所有权范围内）正确映射为独立的 JSON-RPC 错误码 `-32010`。`get_entry_context`/`report_turn` 的 S1 范围只含最近 Fact（`pendingApprovals`/`tasks`/`precedents` 恒为空数组，等 S2 的 approval/task 模块落地后再填充）；"上轮中断" 尚未注入 `get_entry_context`（S1.4 交付物 7 已实现启动时扫描并标记 `interrupted` + 推送 `chat.metadata`，但把这个信号读进下一轮 `context` 留给 S1.5，详见 `application/chat/recovery.ts` 的模块注释）。
+  - **lane-4 P1 修订（2026-09，chat/linkage/WS 可靠性专项）**：`interruptStaleRunningTurns`（S1.4 交付物 7）原来只扫描"运行超过 `TURN_INTERRUPT_TIMEOUT_MS`（默认 15 分钟）"的 `running` Turn——内核重启后一个刚好在 15 分钟内的旧 Turn 会被放过，`send_chat_message` 对它所在的 Chat 持续抛 `TurnAlreadyRunningError`，直到超时窗口过去，Chat 事实上被"焊死"长达 15 分钟。这个年龄阈值本身就是错的：该函数唯一调用点是 `index.ts` 的 `createBackgroundServices().start()`，在 outbox 派发器与任何请求流量之前跑一次（该函数自己的模块注释原话），意味着**这个进程此刻绝不可能已经启动过任何 Turn**——找到的每一条 `running` 行，不论多"新"，都必然是前一个（已死）进程留下的。修复：去掉 `timeoutMs`/`DEFAULT_STALE_TURN_TIMEOUT_MS`，`interruptStaleRunningTurns` 现在无条件标记*每一条* `running` 的 `agent_turn` Activity；`TURN_INTERRUPT_TIMEOUT_MS` 环境变量与 `turnInterruptTimeoutMs` 选项随之从 `index.ts` 移除。
+  - **W8 修订（2026-09-11，PR #159，STATUS 遗留 27）**：`OutboxDispatcher` 的 `onError` 在生产接线里一直是默认 no-op，消费者异常只体现为该行 `attempts` 递增到 dead-letter，日志里没有任何痕迹（#152 的非 uuid 作用域 bug 因此几周后才由 e2e 发现）。现在 `createBackgroundServices` 接受 `onOutboxError`（`main()` 传 `app.log.error`，与各 reaper 钩子同形），claim 之后的投递失败以 `OutboxDeliveryError` 抛出/上报：outbox id、workspace、事件类型、本次之后的 `attempts`、是否已达 `maxAttempts`（dead-letter），消费者原始错误在 `cause`。dispatcher 的重试与隔离语义不变。
+  - **lane-4 P1 修订（同专项）**：`stop_agent`（`application/gateway/handlers.ts`）对一个 `AgentRuntime` 完全不知道的 Turn（内核/agent-host 重启后遗留、`stopTurn` 无法送达也不会有任何异步 `turnEnded` 回报）过去会返回 `{stopped:true}`，但对应的 Activity 永远停在 `running`，同样把 Chat 焊死。`AgentRuntime.stopTurn`（`application/host-bridge/agent-runtime.ts`）改为返回 `Promise<boolean | void>`——`true`/`false` 表示这个运行时是否知道这个 Turn（每个具体实现都返回真实的 `boolean`；`void` 只是为了结构兼容一个早于这次修改、不关心这个区分的调用方类型标注）。`application/chat` 新增 `endUnknownRuntimeTurn`（`turn-recovery.ts`）——`stopTurn` 返回 `false` 时应调用它，效果等价于 `event-sink.ts` 的 `turnEnded` 处理（`endActivity('interrupted')` + enqueue `TurnCompleted` + 推 `chat.metadata`），条件 UPDATE（`status='running'`）保证幂等。**已知未完成**：`stopAgentHandler`（`application/gateway/handlers.ts`）把 `stopTurn` 的返回值判断为 `false` 时调用 `endUnknownRuntimeTurn` 这一处一行级别的接线，因为 `application/gateway/**` 不在本次修订的文件所有权范围内（并发开发中的另一条 lane 所有）——`endUnknownRuntimeTurn` 已实现并单测覆盖，接线留给该 lane 或后续任务。
+  - **lane-4 P2 修订（同专项）**：`AgentHostRuntime.startTurn`（`application/host-bridge/agent-host-runtime.ts`）原来要等 agent-host 的 `turnAccepted`/`turnRejected`（至多 `turnAcceptedTimeoutMs`，默认 30s）才 resolve；但这个调用发生在 outbox 派发器单行事务内部（`application/host-bridge/turn-started-consumer.ts` → `application/outbox/dispatcher.ts` 的 `processOneRow`），阻塞它就等于阻塞同一批次里排在后面的所有其他 outbox 事件（审批卡片、Task 卡片……）最多 30 秒。修复：`startTurn` 现在只等命令帧真正发出（`sendStartTurnFrame`）就 resolve；accept/reject/超时的结果改为异步处理（`.then()` 链，不阻塞调用方），失败时仍然只产生一次 `turnEnded{status:'failed'}` 事件，只是时机变了。`AgentRuntime.startTurn` 的港口契约注释同步更新。
+  - **R-55 更正（2026-10-02 复审）——Turn 终态不可覆盖、停止后不再启动**：原来一个已停止、已中断或已失败的 Turn 仍可能启动或"完成"——Stop 落在 `TurnStarted` 投递之前时 agent 照样启动（自动批准的工具一并执行），随后 `completed` 覆盖 `interrupted`；`turnAccepted` 超时（30s）恰等于 agent-host 的起容器预算（30s），内核判 `failed` 却不发 `stopTurn`，agent 照答，状态翻成 `completed`；崩溃留下的未投递 `TurnStarted` 在启动恢复把 Turn 标 `interrupted` 之后照样重放。现在：①`@nexttime/shared` 新增 `TURN_STATUS_VALUES` 与 `TURN_TRANSITIONS`（`running → completed | interrupted | failed`，终态无出边），替换从未被任何代码驱动的 `ENTRY_AGENT_SESSION_TRANSITIONS`（内核的 `entry` 会话行没有生命周期，常驻容器状态在 agent-host/worker-supervisor）；②`application/chat` 的 `endTurn`（`turn-recovery.ts`）是 Turn 终态唯一写入者——事件 sink 的 `turnEnded`、`stop_agent` 的 `endUnknownRuntimeTurn`、`report_turn` 都经它：条件 UPDATE（只从表里允许的源状态，即 `running`），只有真的移动了才 enqueue `TurnCompleted` 并推 `chat.metadata`；内核代码不再经 `endActivity`（无条件 UPDATE）改 Turn 状态；③停止意图落库：`stop_agent` 先 `requestTurnStop`（`metadata.stopRequestedAt`）再通知运行时，`endTurn` 把这种 Turn 上的 `completed` 记为 `interrupted`——扩展的 `report_turn` 与 agent-host 的 `turnEnded` 在 abort 后谁先到都一样（与 agent-host 自己的 `stopRequested ? 'interrupted' : 'completed'` 同一规则）；④`TurnStarted` 消费者先读 Turn 状态，非 `running` 直接确认不启动（`index.ts` 注入的 `isTurnRunning`，同一 RLS 上下文）；⑤`AgentHostRuntime`：`startTurn` 一进来就登记 Turn，`stopTurn` 对未发出的 Turn 只置标记（`startTurn` 不发帧、以 `interrupted` 结束），对完全未知的 turnId 记入有界集合（`stop_agent` 随即自己结束它，稍后到达的 `startTurn` 什么都不做）；未登记 turnId 的运行时帧一律丢弃；accept 超时发 `stopTurn`，被停止的 Turn 的拒绝/超时记 `interrupted`；默认 accept 超时 = `AGENT_HOST_SPAWN_TIMEOUT_MS + AGENT_HOST_TURN_STARTUP_MS`（60s，agent-host 的 supervisor 客户端默认超时取同一常量）。另：`chat/recovery.ts` 与本节 lane-4 P1 条说"恢复扫描在任何请求流量之前"不对——`main()` 先 `app.listen` 再启后台服务；扫描窗口里新建的 Turn 会被一并标 `interrupted`，其 `TurnStarted` 由④跳过。无迁移。测试：`gateway/turn-terminal.integration.test.ts`（Stop 先于投递 agent 不启动且保持 `interrupted`；`failed`/`interrupted` 之后迟到的 `completed` 与 `report_turn` 不覆盖、`TurnCompleted` 只一条；Stop 后 `report_turn` 抢先仍为 `interrupted`；恢复后未投递的 `TurnStarted` 不重放）、`host-bridge/agent-host-runtime.test.ts`（accept 超时发 `stopTurn` 且丢弃迟到帧等）、`turn-started-consumer.test.ts`、`chat/turn-recovery.test.ts`。
+  - **R-56 更正（2026-10-02 复审）——agent-host → 内核的帧在 WS 抖动中不再丢失，Chat 不再卡住**：原来 `kernel-link.ts` 在链路断开时直接丢帧（只记一行日志），写进半开连接的帧则无声消失；Turn 的最后一条回答与 `turnEnded` 一丢，内核 `activeTurns` 永远留着这个 Turn，`stop_agent` 的 `stopTurn` 照样返回 `true` 而 agent-host 对未知 Turn 什么也不做，Chat 一直 `TurnAlreadyRunningError` 到内核重启。现在（设计 §13"事件桥重连并从最后确认的事件续读"）：①协议（`agent-host-protocol.ts`）——除 `hello` 外的 agent-host → 内核帧带可选 `seq`（进程内从 1 递增），内核 → agent-host 新增累计确认 `ack {seq}`，agent-host → 内核新增 `turnUnknown {turnId}`；②agent-host 保留未确认的帧，每次重连发完 `hello` 按序重发；每个 Turn 最多保留 256 帧（超出先丢最早的流式增量、再丢最早的 `message`，`turnEnded`/`turnAccepted`/`turnRejected`/`turnUnknown` 不因单 Turn 上限丢弃），另有 4096 帧的总上限防内核永不确认；每 15 秒 ping 内核，上一个 ping 未回 pong 即断开重连（内核侧不加周期 ping——#411 的拒绝即探测已覆盖内核侧半开）；③内核 `AgentHostRuntime` 按 `seq` 去重并逐帧回 `ack`，新 `instanceId` 时计数归零；`turnUnknown` 把仍在跟踪且已发出的 Turn 以 `interrupted` 结束；同一 agent-host 重连 `hello` 后把所有已请求停止的 Turn 的 `stopTurn` 再发一次（断链期间发不出去的停止不再丢失）；`startTurn` 用发帧那一刻注册的链路而不是开头看到的那条；④agent-host 对没有记录的 Turn 的 `stopTurn` 回 `turnUnknown`。**比 §13 少的部分**：只覆盖同一 agent-host 进程内的断线重连——agent-host 进程重启会丢掉保留的帧，内核仍按 `instanceId` 变化把这些 Turn 标 `interrupted`；内核 → agent-host 方向没有确认与重放（丢失的 `startTurn` 由 accept 超时兜底并发 `stopTurn`，丢失的 `stopTurn` 在重连后重发）；单 Turn 超过上限时被丢弃的流式增量（极端情况下较早的 `message`）不再补发。协议改动是加法、`seq` 可选，但 kernel 与 agent-host 须同版本部署（旧内核的 strict schema 会拒收带 `seq` 的帧）。测试：`agent-host/src/kernel-link.test.ts`（断链期间与写进断链的未确认帧在重连后按序重发、已确认的不重发、单 Turn 上限、无 pong 断开重连）、`host.test.ts`（未知 Turn 的停止回 `turnUnknown`）、内核 `agent-host-runtime.test.ts`（抖动后重放的最后回答与 `turnEnded` 只落一次且 Turn 清除、`turnUnknown`、断链期间的停止重连后重发、新进程 `seq` 归零、换链路后 `startTurn` 走新链路）、`gateway/turn-terminal.integration.test.ts`（真库：抖动后 Turn 结束、回答入库、Chat 能发下一条）。
+  - **outbox pruneDispatched 接入组合根 reaper（fix/invoke-worker-wait-and-outbox-prune，2026-09）**：`OutboxDispatcher.pruneDispatched`（PR #76）落地时没有任何调用方；`index.ts` 的 `createBackgroundServices`/`main()` 现在新增一个定时 tick（`OUTBOX_PRUNE_DAYS` 可调，默认 7 天，`0` 禁用；`OUTBOX_PRUNE_INTERVAL_MS` 可调，默认 6 小时；首次运行在 `start()` 后不久，而非等满一个完整周期），与既有的审批 reaper 同一种"组合根持有定时器句柄，`start()`/`stop()` 成对"模式，成功时以 info 级别记录 `{ deleted }`。
+  - **收尾波次（2026-10-04）——`/ws` 在认证前有界：1 MiB 帧、10 s 认证期限、有上限的认证前队列（#472；2026-10-02 复审 L1-16 / L5-12(b) 认证前部分，#471 的 P3 复核升为 P2）**：`packages/kernel/src/interfaces/ws/server.ts` 原来以默认选项注册 `@fastify/websocket`：单帧可达 100 MiB（`ws` 的默认 `maxPayload`）；从不认证的 socket 永不超时；带 `Authorization` 头时，头解析完成前到达的帧进无上限的 `pendingFrames`，没带头时在第一次解析未完成期间每个 `authenticate` 帧都各自发起一次凭证查询。失败方式：能连到控制台的任何人不登录就开很多 socket，每个发约 100 MiB 或慢速涓流而不认证，内核堆耗尽、进程被 OOM kill，所有工作区的 chat、审批、Task 与门执行停摆，且每次重启后可重复。现在：①单条消息上限 **1 MiB**（`payload-limits.ts` 的 `WS_MAX_PAYLOAD_BYTES = 1_048_576`，作为插件 `options.maxPayload` 传入，也是共享注册上所有路由的缺省），帧头声明更大时 `ws` 在缓冲前就以 **1009** 关闭；选 1 MiB 是因为与 HTTP 侧一致（`/api/cap/*` 用 Fastify 缺省 `bodyLimit` 1 MiB，`/mcp` 显式设 1 MiB），控制台 → 内核最大的合法帧是只带 `{chatId, text}` 的 `send_chat_message`（线上没有附件）；②认证期限 **10 s**（`WS_AUTH_TIMEOUT_MS`，自升级起算到采纳调用者），超时以 **1008** `authentication timeout` 关闭，且同样终止仍在解析中的凭证；③认证前队列 **32 帧 / 1 MiB**（`WS_PENDING_FRAMES_MAX`、`WS_PENDING_BYTES_MAX`），超限以 **1008** `too many frames before authentication` 关闭；④`/internal/agent-host` 仍是 **100 MiB**（`AGENT_HOST_MAX_PAYLOAD_BYTES`，与之前一致），由 `agent-host.ts` 对自己的 socket 用 `setSocketMaxPayload` 抬高。**为何不按路由拆插件**：`ws` 对每个 `WebSocketServer` 只有一个 `maxPayload`，`@fastify/websocket` 每个 Fastify 实例只建一个，`/ws` 与 `/internal/agent-host` 共用；二次注册会让两份都监听 HTTP server 的 `upgrade` 事件、把每次升级路由两遍，所以共享注册带**安全**上限，将来任何新 WebSocket 路由自动继承；agent-host 路由在升级前已过内部平面守卫，由它为自己的 socket 抬高——`ws` 没有公开的逐 socket 设置器，`setSocketMaxPayload` 改的是 Receiver 的 `_maxPayload`，在路由处理器里（`@fastify/websocket` 在升级回调内同步调用，早于 socket 读任何帧）运行；将来 `ws` 挪动该字段时它返回 `false`、内核记 error，`agent-host.test.ts` 的 4 MiB 帧测试在 CI 里失败。**凭证解析单飞（队列上限的一部分）**：凭证解析期间（升级时的头，或首帧 `authenticate`），后续帧进同一个有界队列、解析完后按序处理；否则可以不带头、在一次 TCP burst 里发成千上万个 `authenticate` 帧，每个各发一次 DB 查询，绕过上限。**关闭语义与控制台客户端（R-16）**：既有的认证失败先发 JSON-RPC 错误再无状态码 `close()`；新限制以 1008 加原因关闭，**不**先发 `-32001` 帧——`lib/ws-client.ts` 在重连时把 `id: null` 的 `-32001` 读作"会话已永久结束"并登出用户，而内核只是回 `authenticate` 慢时这样做是错的。裸关闭下：重连路径里 `authenticate` 以"connection closed"拒绝，`reconnect()` 的 catch 调 `scheduleReconnect()`，沿用既有带抖动的指数退避（1 s 翻倍到 30 s；认证失败不重置尝试计数），没有热循环；首次连接（`useSessionMachine`）里 `authenticate` 拒绝、调用方退到错误或登录状态，不自动重试。**顺手修的迟到调用者泄漏**：socket 在凭证解析期间已关闭（新期限或客户端离开）时，旧代码仍会在 `close` 处理器已跑完之后把调用者订阅到 principal-push 与 kick 总线，这些监听器永远不会被移除；`adoptCaller` 现在拒绝非 OPEN 的 socket，且正在关闭的 socket 不再处理任何帧（该检查移进 `message` 处理器；R-05 已在派发路径上做过）。语义：无线上形状、错误码或注册表变化，`contract:check` 干净；设计文档 §9.4 仍成立（连接**处理**的第一帧必须是 `authenticate`），唯一放宽：在 `authenticate` 之后、其应答之前发的帧现在等应答、再被处理，而此前即便认证本会成功也会以"must authenticate first"被拒并关闭 socket——控制台从不流水线发送（它 await `authenticate`），不受影响；`/internal/agent-host` 行为不变，L5-12(a)（在 agent-host 桥里截断 `toolCallEnded.result`）仍是独立车道，落地后该路由上限可再降。无迁移、无配置，回滚即还原。设计文档 §9.4 补了一段威胁说明与当前上限。未做：L5-17 注册表文本字段的 `.max()` 限制、L5-12(a) 桥截断、已认证 socket 的逐 socket 帧**速率**限制（`rate-limiter.ts` 头注释仍说 WS 层没有）、按对端的连接数限制（交给 caddy / 操作系统层）。测试（不需 `DATABASE_URL`，始终运行；用假的 `PoolLike`，其 `connect()` 可被挂住以让凭证保持解析中）：`server.test.ts` 的"/ws pre-auth limits"——从不认证的 socket → 1008 `authentication timeout` 且之前没有 JSON-RPC 帧（可注入 `authTimeoutMs`）；期限也终止仍在解析的凭证（头路径被挂住）；已认证 socket 活过期限、略小于 1 MiB 的帧仍被服务；头解析期间发的帧在解析后按序服务；首帧 `authenticate` 单独解析（`connect()` 调一次、另两帧等待，随后三个按序应答）；33 帧入队 → 1008、入队字节 > 1 MiB → 1008；`createServer` 组合：恰好 1 MiB 的帧被接受（PARSE_ERROR 应答）、1 MiB + 1 字节 → **1009**，之后 `/api/health` 仍 200、新 `/ws` socket 仍有应答；`agent-host.test.ts`——经 `createServer`，4 MiB 的 `runtimeEvent` 到达 sink 且链路保持 OPEN。变异检查：去掉插件上限 1009 测试失败，去掉单飞首帧与字节上限测试失败，跳过 agent-host 抬高 4 MiB 测试失败。
+
+### S1.5 每用户一个常驻入口容器：agent 镜像、supervisor 最小实现、agent-host 事件桥
+- 交付物：`worker-runtime/Dockerfile`（node:24-bookworm-slim、pi 0.84.4、平台扩展、工具链 git / curl / python3 / pip / build-essential / ripgrep；非 root；只读根，`/workspace` 与 `/tmp` 可写）；`packages/worker-supervisor` 的常驻模式：`spawnResident(user)` 以 `--runtime ${WORKER_RUNTIME}`、`--cap-drop ALL`、挂载 `${NEXTTIME_DATA}/workspaces/<uid>` 到 `/workspace`（含 `--session-dir` 与 `PI_CODING_AGENT_DIR`）、只读挂载 `models.json`，env 只含 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / NEXTTIME_MODE=entry / HTTP_PROXY / HTTPS_PROXY / NO_PROXY`，**不继承宿主 env**，容器内 `pi --mode rpc --system-prompt <入口定义> -e platform-extension`，**内置工具全开**；`packages/agent-host/src/{host,bridge}.ts`：向 supervisor 申请 / 停止入口容器、向内核申请入口 Handle、把容器 stdout 的 JSONL 事件桥到内核 `host-bridge`、写回 `prompt / stop`；崩溃自动重拉；空闲超时停容器。
+- 验收：两个用户各自容器、各自 `workspaces/<uid>`；`docker kill` 某用户入口容器后再发消息，对话可续且历史完整；容器 env 无任何 `*_API_KEY`；容器内能 `curl https://example.com`（经代理）、能 `pip install requests`、能写 `/workspace`；`curl http://postgres:5432` 与任一内网地址失败。依赖：S1.4、S1.7、S1.9、S1.11。
+- 不做：不给入口 Handle 任何门的 execute 能力；不在宿主进程内跑 pi。
+- 实现说明（S1.5a PR，2026-09；本任务拆成两半——前半为 agent 镜像 + supervisor 常驻模式，后半
+  agent-host 事件桥 + 内核真正的 `AgentRuntime` 是后续任务）：
+  - 落地路径与本条文字不同：Dockerfile 在 `deploy/worker-runtime/Dockerfile`（非仓库根
+    `worker-runtime/`，设计文档 §10.1 未同步，只同步了 §10.2 的 compose 片段）。
+  - pi 0.84.4 没有 `--system-prompt-file` flag（本条文字与设计文档均未提及具体 flag 名，实现时
+    验证得出）；用 `--system-prompt <path>`（`resource-loader.ts` `resolvePromptInput`
+    在路径存在时按文件内容读取，效果等价），路径 `/workspace/.nexttime/system-prompt.md`，
+    entrypoint.sh 首次运行时写入一份 S1 stopgap 默认文案（S2.6 的 WorkerDefinition 发布版本
+    替换前占位）。**S2.6 更新**：这份静态文案现在是 fallback——`worker-supervisor` 在 spawn 前把
+    已发布 entry WorkerDefinition 的 `systemPrompt` 写进这个路径，entrypoint.sh 本身文字不变
+    （文件不存在才写），只是通常这个文件已经被提前放好了；仅当工作区从未发布过 entry
+    WorkerDefinition，或内核/supervisor 链路解析失败时，这份静态文案才真正生效。
+  - env 清单在本条文字的基础上多一个 `WORKSPACE_ID`：`@nexttime/platform-extension` 的
+    `index.ts` 用 `readRequiredEnv('WORKSPACE_ID')`，缺它会直接抛错，且 platform-extension
+    不在本任务所有权范围内。
+  - `worker-supervisor` 常驻模式用 Fastify（与 kernel 同栈，且任务验收要求 `Fastify inject`
+    路由测试）+ `dockerode`（Docker Engine API 客户端，只用 unix socket，不用其可选的 ssh
+    传输——`pnpm-workspace.yaml` 因此把 `cpu-features`/`ssh2` 的构建脚本标 `false`）：
+    `POST /resident/spawn|stop`、`GET /resident/:principalId`、
+    `POST /resident/:principalId/touch`、`GET /healthz`；崩溃/kill/空闲停止后下次 spawn 一律
+    整个重建容器（非同容器 `docker start`），`nexttime.restarts` label 记数，跨 supervisor 重启
+    存活；`workers` 网络名不写死 `${project}_workers`，按 Compose 打的
+    `com.docker.compose.network=workers` 标签在启动时解析（可用 `NETWORK_WORKERS` 覆盖）。
+  - egress-proxy 没有注册用的 admin 端点（只有 `GET /healthz`）：按设计文档 §7.9 与该包
+    `source-map.ts` 自己的文档，直接读写 `SOURCE_MAP_FILE`（`config/egress-sources.json`），
+    `sourceId` 编码为 `entry:<workspaceId>:<principalId>`（该包把 `sourceId`
+    当作不透明字符串，`report.ts` 自己的注释也说明"把它变回 workspaceId/activityId 是内核
+    host-bridge 的事"——留给后半任务解析这个格式）。
+  - pi 的会话目录落在各用户工作区内（`/workspace/.pi/sessions`，即 `workspaces/<uid>/.pi/sessions`），
+    一个用户只有一个挂载点（I15）。原设计里的顶层 `${NEXTTIME_DATA}/sessions` 目录、kernel 与
+    worker-supervisor 对它的挂载、以及备份里的 `sessions/` 都已在 S1.5a 之后的清理 PR 中去掉
+    （2026-09-02 决定）；将来若需要内核读会话 JSONL，走 `workspaces/*/.pi/sessions/` 的只读挂载。
+  - 主机验收（在目标主机上实测，非本地）暴露并修了四个之前没预料到的问题——细节均在
+    `docs/runbooks/host-worker-runtime.md` §10：(1) `worker-supervisor` 以非 root 运行连
+    docker.sock 要主机 docker 组 gid，`docker-compose.yml` 加 `group_add`；(2) bind-mount
+    `models.json` 会让 Docker 以 root 建出 `.pi/`，非 root 入口容器建不了兄弟目录
+    `.pi/sessions`——`resident-service.ts` 改成 supervisor 自己先建好这个目录；(3) egress 登记
+    写文件失败不应该拖垮 spawn，改成 best-effort；(4) plain `http://` 请求只认小写
+    `http_proxy`（"httpoxy" 规避的历史遗留），额外注入了小写三件套。
+  - 主机验收还发现一个**不是代码 bug、但会让 `curl https://example.com` 验收失败**的环境问题：
+    目标主机的 DNS 把公网域名解析到该主机自己网络的一个内网段（那个内网段确实可达，像是一层
+    透明网关代理），`egress-proxy` 的私网判定（I10 防 DNS rebinding 的既有设计）因此正确地把它
+    当私有地址拒绝——这是主机网络本身的特性，不是这几个服务的缺陷，未做任何"放宽私网判定"来
+    迁就这一台主机。详见 `docs/runbooks/host-worker-runtime.md` §10。
+  - **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.15）**：这个 Dockerfile 里
+    `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4` 一行的版本号，
+    现在从仓库根目录 `pi.version` 文件读取（`COPY pi.version /tmp/pi.version` +
+    `RUN PI_VERSION="$(cat /tmp/pi.version)" && npm install -g ... @earendil-works/pi-coding-
+    agent@${PI_VERSION}`），不再是这里硬编码的字面量——单一版本源，见
+    `docs/runbooks/pi-upgrade.md` §3。`packages/platform-extension/package.json` 的两个版本号
+    字段（S1.6 说明见该节）仍是各自独立的字面量（pnpm/npm 不支持从外部文件读依赖版本号），
+    但三处是否一致由新增的 `scripts/check-pi-version-consistency.sh` 校验（`pnpm ci:guards`）。
+- 实现说明（S1.5b PR，2026-09；本任务的后半——agent-host 事件桥、内核真正的 `AgentRuntime`、假
+  LLM 上游、S1.5a 遗留的一处 WS 竞态修复）：
+  - 落地路径：`packages/agent-host/src/{host,bridge,supervisor-client,container-io,kernel-link,
+    index}.ts`；`packages/kernel/src/application/host-bridge/agent-host-runtime.ts`
+    （`AgentHostRuntime`）；`packages/kernel/src/interfaces/ws/agent-host.ts`
+    （`GET /internal/agent-host`）；`packages/shared/src/agent-host-protocol.ts`（kernel⇄
+    agent-host 共享的 zod 协议——同 `handle-token.ts` 已有的"kernel 与另一进程共享一份 wire schema"
+    先例）；`deploy/fake-llm/{Dockerfile,server.mjs}`；
+    `config/llm-providers.fake.example.yaml`；`packages/llm-proxy/src/cli/gen-models.ts`。
+  - `AGENT_RUNTIME=agent-host` 现在是 `docker-compose.yml` 里 `kernel` 服务的默认值（原来只有
+    `fake`）；`fake` 仍可用 `.env` 的 `AGENT_RUNTIME=fake` 选回来。
+  - kernel⇄agent-host 协议、pi 事件→平台事件映射表、agent-host 自身的编排规则（每 principal 至多
+    一个 in-flight Turn；容器 stdio 崩溃处理；`hello` 的 `instanceId` 如何区分"重连"与"进程重启"）
+    详见 `docs/runbooks/host-agent-host.md` §2；主机验收记录见该 runbook §3 与 PR body。
+  - `deploy/fake-llm/server.mjs` 是纯 ESM JavaScript、零依赖（不是 TypeScript+构建）——这个目录
+    不在 pnpm workspace（`pnpm-workspace.yaml` 只 glob `packages/*`），为一个文件单独搭一套 TS
+    构建链，比直接用 `node` 跑源码更违背"no deps beyond node"的字面意思。
+  - `make gen-models` 改成经容器化的 `llm-proxy` 镜像跑（新增
+    `packages/llm-proxy/src/cli/gen-models.ts`），不再需要本机 corepack/node——目标主机没有这些
+    （`docs/runbooks/host-worker-runtime.md` §10 已经点出这个缺口）；根目录既有的
+    `scripts/gen-models-json.ts` 未删除，仍是本机开发时的一条独立可用路径。**后续更新
+    （fix/runtime-hardening，lane-6 review P3，2026-09）**：该 recipe 原来把 `docker compose run` 的
+    stdout 直接 `>` 重定向进 `${NEXTTIME_DATA}/config/models.json`——这个文件被只读挂进每个入口/
+    Worker 容器，重定向一开始就会截断真实文件，`docker compose run` 中途任何失败都会留下一个
+    截断/无效的 `models.json` 挡住后续所有 spawn。改成先写 `.tmp` 兄弟文件，成功才 `mv`（同文件系统，
+    原子）覆盖过去，失败则删掉 `.tmp`。
+  - 顺手修的既有 bug（S1.4 遗留，本任务 item 6，`packages/kernel/src/interfaces/ws/server.ts`）：
+    `subscribe_chat` 的实时推送去重原来用"目前见过的最大 sequence"做单调水位线，但同一个 Chat 的
+    `chat.message` 推送并不保证按 sequence 升序到达——用户自己那条消息由
+    `interfaces/ws/server.ts` 的 `publishSentMessagePush` 在其请求 resolve 之后推送，助手回复由
+    `application/chat/event-sink.ts` 独立地在 outbox 派发器的轮询节拍上推送，两条路径互不同步
+    （虽然两者的 DB 提交顺序仍然保证正确）。若助手回复的推送先于用户自己那条消息的推送抵达监听器，
+    旧的水位线逻辑会把后到达的、sequence 更小的用户消息误判成"已经发过"而直接丢弃——从未真正发送、
+    也从未被 replay 补上。改成按精确 sequence 成员判定的 `Set`（`shouldDeliver`），不再假设到达顺序
+    单调。`interfaces/ws/server.test.ts` 的既有并发测试补了一次确定性的收尾扫描（同一个 gap 也会让
+    并发 paging 循环本身在最后一条消息提交前后有类似的、与推送无关的覆盖不全风险）与一条独立断言
+    "仅靠推送本身也必须覆盖全部 sequence"，把这个 bug 单独钉死，而不是被 paging 的兜底覆盖悄悄遮盖。
+  - 已知偏离（详见 PR body "假设与偏离"）：容器 stdio attach 放在 agent-host 自己（只读挂载
+    `DOCKER_SOCKET_PATH`），没有给 `worker-supervisor` 新增附着端点，保持它自 S1.5a 主机验收后完全
+    不动；入口 `sessions` 行的 `principal_id` 就是人类 Principal 自己（未铸造单独的
+    `kind='agent'` Principal 代表"入口 agent 实例"）；`agent-host` 每个用户任一时刻只处理一个
+    Turn（pi 一个进程一次只能跑一个 prompt）——同一用户第二个 Chat 并发发消息被直接
+    `turnRejected`，多 Chat 共享一个入口容器的并发模型不在本任务范围内解决。
+  - **实现说明补充（fix/runtime-hardening，lane-6 review P1-3/P2-5/P2-6，2026-09）**：
+    ① `worker-supervisor` 的 `POST /task/spawn` 与全部 `/resident/*` 此前完全不鉴权（"trusted
+    caller"只是约定）——新增 `src/internal-auth.ts`（与 kernel/agent-host/llm-proxy 同一份
+    `@nexttime/shared` internal-plane token 契约，`docker-compose.yml` 的 `worker-supervisor` 服务块
+    现在也挂 `internal_token` secret），`agent-host` 的 `supervisor-client.ts` 相应带上
+    `Authorization`。**后续补上**（同一分支，协调者复审发现"kernel 未带这个头会导致主机上每一次
+    Task spawn 都 401"是合并阻塞项，2026-09）：`packages/kernel/src/adapters/supervisor-client`
+    （`TaskSupervisorClient`）现在也在 `spawn`/`terminate`/`status` 三个调用上都带
+    `Authorization`——复用 `index.ts` `main()` 已经为 kernel 自己 `/internal/*` 守卫加载过的同一份
+    token（`internalAuthorizationHeader(internalAuth.token)`），不额外读第二份文件。同一批顺手删掉了 `skills[].hostPath`（S2.8 曾经的只读挂载
+    机制，其允许路径覆盖了整个 `${NEXTTIME_DATA}/` 而不只是 skills 目录，含
+    `secrets/handle.key`；S2.14 的 `skillsInline` 上线后从未被任何调用方发送过，整个删除而非收紧）。
+    ② `resident-service.ts` 的 `spawn()` 现在给入口容器打上 `nexttime.handle-jti` label——一个正在
+    跑的容器收到 jti 不同的新 Handle（Handle 重签/新 Grant）会被优雅停止、重建，不再原样复用一个持有
+    旧 Handle 的容器直到它自己超时。③ `agent-host` 的 `host.ts` `handleStartTurn` 把
+    `activeTurns.set(...)` 挪到 `await ensureAttachment(...)` 之前（同步进行，关闭了两个几乎同时到达
+    的 `startTurn` 都通过"是否已有进行中 Turn"检查、都触发 `ensureAttachment` 的竞态——旧代码下会
+    重复 attach、后完成的 `set()` 悄悄覆盖先完成的 Turn 记录，先到的 Turn 从此再也匹配不上任何
+    `handleLine` 事件）。
+
+### S1.6 platform-extension `entry` 模式
+- 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
+- 验收：`pnpm --filter platform-extension test`；fake kernel 收到带 `turn_id` 的回传。依赖：R4。
+- **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.15）**：`package.json` 的
+  `dependencies["@earendil-works/pi-coding-agent"]` 与 `devDependencies["@earendil-works/
+  pi-ai"]` 两个版本号字段本身未改（仍是字面量 `0.84.4`，pnpm/npm 没有"从文件读版本号"的语法），
+  但现在由 `scripts/check-pi-version-consistency.sh` 校验它们与仓库根目录 `pi.version`
+  一致——升级 pi 时漏改任一处会在 `pnpm ci:guards`/CI `guards` job 挂红，而不是留到运行时才发现
+  类型定义和容器里装的版本不一致。见 `docs/runbooks/pi-upgrade.md`。
+
+### S1.7 `llm-proxy` 独立服务
+- 目标：按 provider 透传；provider key 只在这里；内核进程零外部凭证（I9）。
+- 交付物：`packages/llm-proxy`（读 `${NEXTTIME_DATA}/config/llm-providers.yaml`；入站 Handle 从该 provider `auth` 指定的头读取，用内核公钥 EdDSA **本地**验签与过期检查，撤销表按 `jti` 周期同步不逐请求回调；换真实 key；模型白名单；SSE 原样；OpenAI 兼容与 Anthropic 两种 `usage` 解析；用量与 80% 预算警告经 `POST /internal/llm-usage` 上报内核，失败本地队列重放）；内核 `llm-usage` 模块与 `migrations/llm-usage/0001.sql`；`scripts/gen-models-json.ts`。
+- 验收：无 Handle 401；过期 / 撤销 Handle 401；白名单外 403；流式逐块转发且与直连 fake upstream 逐字节一致；`llm_usage` 记 provider / model / tokens / turn_id；内核容器 env 与文件系统中不存在任何 provider key；杀掉内核后代理仍能转发并在内核恢复后补报用量。依赖：S1.3、S1.9。
+- 补注（S1.7 `turn_id` 归因 PR，2026-09）：`llm_usage.turn_id` 此前恒为 NULL——`governance/llm-usage/service.ts` 的
+  `recordUsage` 一直留有 `resolveTurnId` 钩子（默认恒返回 `null`），但从未有调用方注入过真实实现，且该模块本身不能
+  import `application`（§7.10 分层：governance 不依赖 application）。本补丁把 S1.10 egress 已有的归因规则——
+  principal 当前 `running` 的 `agent_turn`，否则取 5 分钟内最近一次（任意状态）——从
+  `application/host-bridge/egress-observations.ts` 抽成同目录 `turn-attribution.ts` 的 `findAttributableTurn`
+  （已解析 principalId 版，egress 复用，行为不变）与 `findAttributableTurnForSession`（先按 `sessionId` 查
+  `sessions.principal_id` 再归因，`llm-usage` 专用，因为上报只带 `sessionId`）；`interfaces/http/internal/
+  llm-usage.ts`——已经依赖 application 与 governance 的合法分层位置——在 `recordUsage` 所在的同一事务 `client`
+  上构造 `resolveTurnId` 闭包传入，governance 侧代码不改一行，只是终于有人喂了真实实现。局限：①落在归因窗口外
+  （既无 running 也无 5 分钟内的 Turn——例如 S2 前还不存在的 Worker session，或代理重放上报延迟超窗）时
+  `turn_id` 记为 NULL 并 debug 级日志，从不因此拒绝上报；②`llm_usage` 的
+  `on conflict (workspace_id, jti, started_at) do nothing` 保证重放不会覆盖已写入行的 `turn_id`；③一次批量上报可
+  跨多个 session/principal，外层 `withWorkspace` 只用首条记录的 `sessionId` 当占位符，而 `activities_visibility`
+  这条 RLS 按 `app.principal_id` 收窄可见的 Chat/Activity——`findAttributableTurnForSession` 因此在查
+  `activities` 前用 `set_config('app.principal_id', ..., true)`（事务级，同 `withWorkspace` 自身机制）把它重新
+  指向刚解析出的 principal，否则归因查询会因看不到该 principal 的 Turn 而总是落到"无归因"分支。
+- **实现说明补充（fix/runtime-hardening，lane-6 review P1-2，2026-09）**：`proxy.ts` 此前对任何已通过
+  Handle 校验的 `method`/`path`（`/<provider>/…` 下）都原样透传给上游、带真实 key——多段文件上传、
+  files/fine-tuning/batches 端点、`DELETE` 皆可达，等于拿这份 Handle 换到了 provider 账号的完整权限，
+  而不只是聊天补全。新增 `ACTION_PATH_BY_API`：每个 `api` 种类只保留唯一一条可转发的
+  `(method, path)`（`openai-completions`→`POST /v1/chat/completions`、`openai-responses`→
+  `POST /v1/responses`、`anthropic-messages`→`POST /v1/messages`），`GET /v1/models` 继续走既有的
+  白名单合成路径；其余一律 404/405，请求体连读都不读，更不会转发到上游。同时把"非 JSON 请求体静默
+  透传、不做 model 校验"的口子堵上——请求体现在必须是合法 JSON 对象且带非空字符串 `model`，否则 400。
+- **R-30 更正（2026-10-02 复审，维护者决定 D-29）——供应商侧工具不再是出网通道**：`proxy.ts` 原来除一张短的剥离表外
+  原样转发入站头，请求体只校验 `model`：agent 声明一个供应商执行的工具（MCP 连接器指向攻击者 `server_url`、web
+  fetch / search、代码执行）再配上对应的 `anthropic-beta`，供应商就替它出网——绕过 egress-proxy 与 WorkerDefinition
+  的出网清单，记成一次 LLM 调用而不是出网；`openai-organization` / `openai-project` 头能把花费挪到同一 key 的别的
+  项目。现在由新模块 `outbound-policy.ts` 在这一处收窄：①入站头改白名单——`accept`，Anthropic 另加
+  `anthropic-version` 与按值白名单的 `anthropic-beta`（恰为 pi 0.99 API key 鉴权会发的六个值；其余值丢弃并记日志，
+  pi 升级发新值时能在日志里看到），`content-type`、`accept-encoding: identity` 与供应商鉴权头由代理自己设；其余
+  （任何 agent 自带鉴权、`x-*`、org / project、逐跳头、关联 id）一律不转发。②查询串只留 SDK 会发的参数（Anthropic
+  的 `beta=true`）。③请求体里的工具只留客户端工具（两种 OpenAI 种类 `function` / `custom`，Anthropic 无 `type` 或
+  `custom`），其余类型一律剥离，嵌在 `messages[]` / Responses `input[]` 里的工具表同样过滤；另剥离不带工具条目就能
+  打开供应商侧工具的参数（`web_search_options`、`plugins`、`enable_search`、`search_parameters`、`mcp_servers`、
+  `container`）。剥离而不是拒绝：请求照常执行，只是没有供应商侧工具；每次收窄记一行 warn（剥掉的工具类型、参数、
+  beta 值，带 workspace / session / jti / 关联 id）。什么都没剥的请求仍按原字节转发。**D-29 的按 WorkerDefinition
+  开启（opt-in）未做**：llm-proxy 只看得到 Handle，其 claims 里没有任何 WorkerDefinition 关于供应商工具的信息；要承载
+  开关需要给 WorkerDefinition 加字段、并让内核在签发入口 / WorkerRun Handle 时把它写进 scope（无需迁移，但改领域
+  schema 与 Handle 签发），留作后续；在那之前一律剥离。无迁移。测试：`outbound-policy.test.ts`（每种 api 的头白名单、
+  beta 值、查询串、工具与参数剥离、pi 形状的请求原样不动、日志值有界）、`proxy.test.ts` 的 R-30 组（三种 api 端到端：
+  假上游收到的头 / 查询串 / 请求体、剥离日志；只有客户端工具的请求逐字节转发且不记日志；上游重定向 502）。
+- **R-14 更正（2026-10-02 复审）——吊销同步分页**：`GET /internal/handle-revocations` 原来一次最多回 5000 行就静默截断，llm-proxy 随即把 `since` 移到内核的 `now`；冷启动时若吊销但未过期的 Handle 超过 5000 条，最新的吊销永远同步不到，那些 Handle 在 llm-proxy 一直可用到过期。现在按 `(revoked_at, jti)` 稳定排序分页：满页时回 `hasMore: true` 与 `nextCursor`，调用方带同一个 `since` 加 `cursor` 取下一页；不满页 `hasMore: false`。游标里的 `revoked_at` 精确到微秒（不是线上 `revokedAt` 的毫秒）——一次 `revokeSession` 给它吊销的所有 Handle 同一个 `revoked_at`，毫秒游标会让这样的整页无限重放。llm-proxy 的 `revocation.ts` 一次同步把所有页取完（上限 1000 页，游标不前进即停）；走完最后一页才前移 `lastSyncAt`，且前移到**第一页**的 `now`（后面的页是更晚的快照，期间提交、`revoked_at` 更早的吊销排在游标之前，重叠窗口要从第一页的时钟算起）；中途失败则保留已收到的 `jti`，只前移到实际收到的最后一行的 `revokedAt`，绝不前移到 `now`。#411 给这条路由加的 llm-proxy 专用凭证不变。线上只多了可选字段与参数：旧 llm-proxy 忽略 `hasMore`，新 llm-proxy 遇到不带 `hasMore` 的旧内核按一页处理。测试：`handle-revocations.test.ts`（游标往返保留微秒、非法游标 400）、`handle-revocations.integration.test.ts`（真库：同一瞬间吊销的 7 个 Handle 在页大小 3 下各出现一次、三页后 `hasMore: false`）、llm-proxy `revocation.test.ts`（翻完所有页、下次从第一页的 `now` 起、中途失败只前移到最后收到的行、游标不前进即停、旧内核一页）。
+- **R-67 / R-68 更正（2026-10-02 复审，L6-13、L1-11）——用量上报按"每个上游请求"去重，并按工作区分组各自成败（#459）**：上面的上报幂等（`on conflict (workspace_id, jti, started_at) do nothing`）与批量上报有两个缺口。①R-67：内核按 `(workspace_id, jti, started_at)` 去重，llm-proxy 的 `startedAt` 是毫秒精度，而一个容器发的每个请求都带同一个 Handle `jti`，所以同一毫秒开始的并发请求在 `llm_usage` 里塌成一行；供应商按每个都计费，工作区的日成本 / token 求和与 per-Task 预算熔断（I18）却只数一个，带 bash 的 agent 用并行 `curl` 就能故意触发。②R-68：`POST /internal/llm-usage` 在一个 `try` 里循环各工作区分组，第一个抛错的分组让整个请求 500、后面的分组根本没试过，llm-proxy 随后重发整批；若队列里还有已被清除的工作区的用量，每次 flush 都因 23503（FK 到 `sessions` / `capability_handles`）失败，此后所有工作区的用量都写不进去，I18 求和在全平台变盲，直到约 1000 条更新的记录把毒记录挤出队列（那些也丢了）。**R-67 修复**：llm-proxy（`proxy.ts`）在每个上游请求开始调用上游的那一刻铸 `requestId = randomUUID()`，绝不取自调用方（不是客户端可控的关联 id），写进记录并在每次重试原样重发；内核 `governance/llm-usage/service.ts` 的 `LlmUsageRecordSchema` 增可选 `requestId`（uuid），`recordUsage` 按它去重：同一 `requestId` 重放跳过，两个不同的 id 是两行；没有 `requestId` 的记录来自早于 R-67 的 llm-proxy（两者同版本发布，只可能出现在滚动升级窗口），仍按 0001 的键 `(workspace_id, jti, started_at)` 去重、冲突即重放。迁移 `llm-usage 0002`：加 `llm_usage.request_id uuid`（可空）与部分唯一索引 `(workspace_id, request_id) where request_id is not null`。**为什么保留 0001 的唯一键**：v0.40.0 的插入写 `on conflict (workspace_id, jti, started_at)`，Postgres 只能从这三列上**非部分**的唯一索引推断该目标，删掉或收窄这个键会让代码回滚后每次用量插入都 42P10；所以同一 Handle 的第二个请求落在已被占用的毫秒时，内核把它存到该毫秒内偏后几微秒处（多一次查询算出越过该毫秒内所有行的下一个空闲偏移，`MAX_SLOT_ATTEMPTS = 8`，用尽则抛，使该分组走 `retry`）；该行仍在上报的毫秒之内，低于 llm-proxy 的测量精度，所以在上报精度上时刻不变。待没有回滚目标再需要这个键时，后续迁移可删 0001 的键（`llm_usage_workspace_id_jti_started_at_key`）与这个微秒位移。`recordUsage` 逐条（`insertUsageRecord`）：`INSERT_USAGE_SQL`（`insert … select … where exists session and exists Handle … on conflict do nothing`）→ 未插入则 `CLASSIFY_SKIPPED_USAGE_SQL` 返回 `replayed`、`references_exist`、`next_offset_micros` → 结果为 `duplicate`（重放或旧键冲突）、`rejected`（引用缺失）或下一个微秒偏移。**R-68 修复**（`interfaces/http/internal/llm-usage.ts`）：每个工作区分组是自己的事务、有自己的结果——`recorded`（带 `inserted` 与 `rejected` 计数；session 或 Handle 已不存在即工作区被清除的记录计 `rejected` 并跳过、`warn` 级日志，不再抛 23503 中止事务）；`rejected`（`reason: 'workspace_not_found'`，覆盖竞态：检查与插入之间清除提交了，分组仍撞 FK 违规，而新事务里读到工作区行已不在——永久拒绝，确认、记日志、不重试；`workspaceExists` 查询本身失败按"存在"算，分组走 `retry`）；`retry`（其它任何错误，回滚、按瞬时处理）。响应：任一分组为 `retry` → 500 `{ ok: false, error: { code: 'internal_error', message, details: { groups } } }`，否则 200 `{ ok: true, result: { inserted, groups } }`，从不回显原始错误；`LlmUsageGroupResult` 从该文件导出，llm-proxy `report.ts` 里镜像一份。llm-proxy `report.ts`（`LlmUsageReporter.flush`，`readGroupResults` / `logRejected`）从两种响应体读 `groups`：只把 `retry` 分组与响应里没提到的工作区重新入队，丢弃 `rejected` 分组与 `rejected` 记录并打 warn；没有分组结果的响应（旧内核、非 JSON、网络错误）照旧整批重新入队。**不变式**：滚动升级兼容——旧 llm-proxy → 新内核：无 `requestId` 走显式回退、忽略分组结果、500 让旧代理重发全部（已记录的分组重放为空操作，安全）；新 llm-proxy → 旧内核：旧 schema 是 `.strict()`，对 `requestId` 回 400，新代理重新入队并退避重试直到内核升级（队列有界如前），两个服务一起在一次 `compose up` 里发；记录插入后从不被改，`nexttime_app` 对 `llm_usage` 仍只有 SELECT / INSERT、无授权变化；不重复计数——`onRecordInserted`（per-Task 预算）仍只对真正的新行运行，重放与被拒记录不触发；RLS——新的引用检查在该分组的工作区里以 `nexttime_app` 运行，`sessions` 与 `capability_handles` 都只有工作区策略，所以检查看到的与 FK 看到的一致。回滚性：`0002` 是一个无默认值的可空列（只改目录）加一个在所有现有行里为 null 的列上的部分唯一索引，构建只读一次 `llm_usage`、不写；只回滚代码即可——v0.40.0 的插入显式列出列、从不写 `request_id`（即写 null，落在部分索引之外），其 `on conflict` 仍能推断保留下来的 0001 键，新代码写下的行在那三列上也互不相同，读路径用显式列；回滚后行为退回到 R-67 本身，已写的行保留且照常计数；`release.md` §6 加一行（排在 #458 的 0039 行之后）。测试：`governance/llm-usage/service.test.ts`（DB）——同一 Handle、同一毫秒 `startedAt`、不同 `requestId` 的三条记录（一次调用两条、之后对已提交行再来一条）成为三行且各有自己的 token、偏移都在 [0, 1000) µs，三条全部重放插入 0；一批里混有活记录、未知 Handle、未知 session、以及未知 Handle 的旧式记录得 `{ inserted: 1, rejected: 3 }` 且不抛错；原有的无 `requestId` 旧键幂等测试不变、仍覆盖回退。`interfaces/http/internal/llm-usage.integration.test.ts`（DB、真实路由）——首个分组属于已不存在的工作区的批次回 200，该分组 `recorded` 且 `rejected: 1`，活的分组已记录；既有测试现在断言 `groups` 字段。`interfaces/http/internal/llm-usage.test.ts`（路由，`recordUsage` 打桩）——中间分组失败：三个分组都试了，响应 500 带逐分组 `details`（recorded / retry / recorded）且无原始错误文本；23503 时已消失的工作区得 200 `rejected` 分组、仍存在的得 `retry`；被拒计数透传；`requestId` 被接受、非 uuid 得 400。`llm-proxy/src/report.test.ts`——带分组详情的 500 只重新入队 `retry` 分组与未回应的工作区，并记录被拒工作区的两条被丢弃记录；200 里 recorded 分组内含 `rejected` 时批次结清并记日志；无分组的 500 全部重新入队。`llm-proxy/src/proxy.test.ts`——每个请求的记录带 v4 UUID `requestId`，同一 Handle 下三个请求（其中两个并发）互不相同。
+
+### S1.8 web：登录与对话
+- 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
+- 验收：Playwright：登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整。依赖：S1.4。
+- 实现说明（S1.8 PR，2026-09）：
+  - `packages/web/src/lib/ws-client.ts`：`WsClient`（`connect` / `authenticate` / `call` / `subscribeChat` / `sendChatMessage` / `stopAgent`）是唯一封装"先 `subscribe_chat` 再 `get_chat_history` 翻页"规则的地方——`subscribeChat` 用一个按 `sequence` 去重的 `Set` 同时吃掉初次翻页与翻页期间到达的实时推送，socket 意外断开后自动重连并以最后已知 `sequence` 重新 `subscribe_chat`。`-32010`（`TURN_ALREADY_RUNNING`，`interfaces/ws/rpc.ts`）映射成 `TurnAlreadyRunningError`（`RpcError` 子类）而非裸错误消息。页面层（`ChatPage.tsx`）把持久消息（`chat.message`）与当前 Turn 的临时态（`chat.stream`/`chat.metadata`，`lib/streaming-reducer.ts`）分成两份独立 state，互不污染。
+  - 页面：`LoginPage`（API key 存 `sessionStorage`，绝不进 `localStorage`/cookie）、`ChatListPage`（`list_chats`/`new_chat`）、`ChatPage`（消息列表、流式文本、工具调用行、`TurnStatusBadge`、`stop_agent` 按钮），`App.tsx` 用 URL hash（`#/chats/<id>`）而非路由库记住当前会话，刷新页面后能定位回同一个 Chat 并从 `startAfter=0` 重新走一遍"先订阅再翻页"。
+  - 依赖：`react`/`react-dom`（沿用 R1 骨架版本）；新增 `@nexttime/shared`（`devDependencies`，只做 `import type` 取 `ChatStreamPayload` 等类型，`verbatimModuleSyntax` 下编译期整体擦除，不进产物体积——`pnpm --filter @nexttime/web build` 产物约 156KB / gzip 50KB）与 `@playwright/test`（`devDependencies`，仅 `e2e` 脚本用，不进 `pnpm -r test`）。未引入 UI 框架或路由库。
+  - 已知偏离（详见 `packages/web/README.md`"假设与偏离"）：human 通道没有可读能力判断"这个 Chat 当前是否有 Turn 在跑"（`get_entry_context` 只在 Handle 通道，S1 范围）——对话页打开时 composer 默认可用，靠 `send_chat_message` 的 `-32010` 响应被动发现已有 Turn 在跑，`stop_agent` 不需要知道 `turnId`（服务端按 chatId 自己找那个唯一在跑的 Turn），因此 Stop 按钮始终可点，不依赖本页是否是发起者。
+  - `packages/web/e2e/chat.spec.ts` + `playwright.config.ts`：显式 opt-in（`pnpm --filter @nexttime/web e2e`，需要 `WEB_E2E_BASE_URL` + `WEB_E2E_API_KEY`，且要求目标内核以 `AGENT_RUNTIME=fake` 启动，验收流程依赖 fake runtime 回显 `echo: <prompt>` 的确定性），不在 `pnpm test`/CI 里跑；S1.10 的 `scripts/accept_s1.sh` 预期用同样的两个环境变量把它接进验收链，见 README 的对应小节。
+  - `docs/runbooks/host-caddy.md` §E8.5：补了一段确认构建命令与产物目录的说明，并顺手把原文里不精确的 `pnpm --filter web build`（缺 `@nexttime/` 前缀，`--filter` 按精确包名匹配会找不到包）改成 `corepack pnpm --filter @nexttime/web build`。
+  - **R-63 更正（2026-10-02 复审）——WS 重连后治理读重新对账（#448）**：上面说 socket 意外断开后自动重连并重新 `subscribe_chat`、重翻页，但只覆盖了对话；`action.pending` / `action.updated` / `task.updated` 这类按 Principal 推送只投递一次、从不重放，内核重启、笔记本休眠或网络抖动之后，待我审批徽标和审批队列漏掉断线期间新提的请求，别人已决的请求仍可点（Approve → 409 `illegal_transition`），任务列表停在旧状态。现在 `WsClient.onResynced(handler)` 在重连的 `authenticate` 成功后触发一次（内核在应答 `authenticate` 之前就订阅了该 Principal 的推送，所以此刻发起的读不会漏、之后的变化走推送）；首次连接、`close()` 之后、内核已结束的会话（R-16）都不触发；先于（且独立于）对话重翻页发出，监听器抛错被隔离。`PushSource.onResynced`（`lib/clients.ts`，`SILENT_PUSH_SOURCE` 为空操作）。消费端：`useCapability` / `useCapabilityList` 在设置了 `reloadOn` 时重读（如 `LinkedApprovals`）；`usePendingCount` 重读，并在"请求刷新时已有读在飞"时在其结束后再跑一次（P3 L7a-16：否则 resync 那次刷新可能被排在旧的在飞读后面丢掉）；`useApprovalQueue` 重读 `list_pending`，并对打开的请求与本会话已决的请求逐个 `get_action`，不再是 `pending_approval` 的移入已决集合，详情显示真实状态且无 Approve / Reject；`TasksPage` 整表重读。不伪造推送，只触发页面本来就会做的读。无内核 / 线上形状变更。测试：`ws-client.test.ts`（重连认证后触发一次、首连与被拒的重连不触发、抛错监听器隔离、取消订阅）、`useCapability.test.tsx`、新增 `usePendingCount.test.tsx`、`ApprovalQueuePage.test.tsx`、`TasksPage.test.tsx`。
+
+### S1.9 Handle 最小实现（入口 Handle）
+- 交付物：`capability/{model,handles}.ts`：EdDSA JWT，含 `workspace / session / on_behalf_of / scope / exp / jti`；撤销表；agent-host 在申请入口容器前向内核申请入口 Handle（能力上限 = 入口 WorkerDefinition 固定集合）；内核公钥导出到 `${NEXTTIME_DATA}/config/handle.pub` 供 `llm-proxy` 本地验签。
+- 验收：过期 / 撤销 / 篡改 401；请求体带 `on_behalf_of` 被拒（I13）。依赖：S1.1。
+
+### S1.10 S1 验收脚本
+- 交付物：`scripts/accept_s1.sh`：建 workspace、两个用户、发布入口 WorkerDefinition、各自对话、杀容器续聊、`explain(turn)`、隔离断言、出网代理断言（公网通、内网不通、目标域名出现在 Activity）。
+- 验收：退出 0 打印 `S1 OK`。
+- 实现说明（S1.10 PR，2026-09）：
+  - 落地路径：`scripts/accept_s1.sh`（POSIX sh，一次性 kernel 镜像容器跑每一次 JSON-RPC 交互——
+    宿主机没有 node/corepack；挂载只读的 `deploy/accept/driver.mjs` 驱动脚本，见其自身头注释）；
+    `docs/runbooks/accept-s1.md`。
+  - **"发布入口 WorkerDefinition"未做，如实 `SKIP entry-worker-definition (S2.6)`**：
+    WorkerDefinition 注册表是 S2.6 的交付物；S1 阶段入口定义是烧进 `worker-runtime` 镜像的静态
+    system prompt（S1.5a 实现说明），S1.10 派发文字本身也认了这一点（"WorkerDefinitions land in
+    S2.6 ... Print SKIP ... do not fake it"）。
+  - **kernel 侧补的一个缺口**：`POST /internal/egress`（见 S1.11 条目下的补注）——脚本要断言"目标
+    域名出现在 Activity"，但 `egress-proxy`（S1.11）上报的 `${KERNEL_URL}/internal/egress` 此前
+    在内核侧没有路由接收。
+  - `bootstrap.js` 增加 `add-principal --workspace <id> --name <name> [--role <role>]` 子命令
+    （`packages/kernel/src/cli/bootstrap.ts`）：`create-workspace` 只造第一个（owner）用户，脚本
+    需要在同一 workspace 里再造一个 `member` 用户（bob）验证隔离，同样的"打印一次 API key，只存
+    hash"约定。
+  - 已知偏离（详见 `docs/runbooks/accept-s1.md` "已知缺口"）：出网域名落进 Activity 的断言用直接
+    `psql` 读，不经某个 capability（`audit_query` 看不到这次服务间写入；`explain` 的投影不含原始
+    `metadata`）；"send 后立即 curl" 是顺序执行，不是真正的后台并发（内核侧新增的"最近一个 Turn"
+    回退归因窗口让这一步的时机不再关键）。
+
+### S1.11 出网代理
+- 目标：agent 容器上公网必经代理；公网放行、内网与平台内部服务拒绝；按来源容器套用 WorkerDefinition 的允许 / 拒绝清单；记录目标域名与字节数到该次 Activity（I10）。
+- 交付物：`packages/egress-proxy`（Node CONNECT / HTTP 转发代理，或 tinyproxy + 策略脚本；挂在 `control` 与 `workers` 网络；来源 ip → WorkerRun / 入口会话由 supervisor 注册表解析；拒绝 RFC1918、链路本地、`postgres` / `kernel` 等服务名；日志经内核 `host-bridge` 写 Activity `metadata.egress[]`）；compose 服务；`workers` 网络保持 `internal: true`。
+- 验收：容器内 `curl https://example.com` 200；`curl http://10.0.0.1` 与 `curl http://postgres:5432` 被拒；Activity 记录含 `example.com`；WorkerDefinition 加 `deny: [example.com]` 后被拒。依赖：R1。
+- 不做：不解密 TLS；不做内容过滤。
+- 补注（S1.10 PR，2026-09）：`packages/egress-proxy` 自 S1.11 落地起就已经在向
+  `${KERNEL_URL}/internal/egress` 上报（`packages/egress-proxy/src/report.ts` 的
+  `EgressReporter`），但"Activity 记录含 example.com"这条验收此前无法兑现——内核侧一直没有这个
+  路由接收上报。S1.10 补上：`packages/kernel/src/interfaces/http/internal/egress.ts`（路由，同
+  `/internal/llm-usage` 一样 `control` 网络内无额外鉴权）+
+  `packages/kernel/src/application/host-bridge/egress-observations.ts`（解析
+  `sourceId=entry:<workspaceId>:<principalId>`——格式定义在 `packages/worker-supervisor/src/
+  egress-map.ts`——找该 principal 当前在跑的 Turn 或最近 5 分钟内的 Turn 作回退，追加进
+  `activities.metadata.egress`，有界 200 条，发 `EgressObserved` 领域事件）。
+- 补注（feat/egress-definition-lists，2026-09）：definition-level egress lists now wired
+  end-to-end——本条验收原文"WorkerDefinition 加 `deny: [example.com]` 后被拒"此前一直没有
+  producer：`egress-proxy`（`policy.ts`）的每来源 `allow`/`deny` 判定早已实现且有完整单测（本任务
+  未改动那部分策略逻辑），缺的只是"谁把 WorkerDefinition 的 `egressDeny` 写进
+  `SOURCE_MAP_FILE`"。现在 kernel（entry 会话：`application/host-bridge/agent-host-runtime.ts`
+  每次 `startTurn` 重新解析已发布入口 WorkerDefinition 的 `egressDeny` 并转发；Task/WorkerRun：
+  `application/task/spawn.ts` 转发被调用 WorkerDefinition 自己的 `egressDeny`，`egressDeny` 字段
+  也随之扩到 `kind='worker'` 内容，不再仅限 entry）→ `worker-supervisor`（`resident-service.ts` /
+  `task-service.ts` 在 spawn 时写入 `SOURCE_MAP_FILE` 的 `deny`，并把清单以逗号拼接的
+  `nexttime.egress-deny` label stamp 到容器上，供 supervisor 重启后 `reconcile()` 从容器本身恢复，
+  避免重启期间静默放宽出网）。详见该分支 PR 描述。
+- **实现说明补充（fix/runtime-hardening，lane-6 review P2-7/P3，2026-09）**：`resolveSource(clientIp)`
+  返回 `undefined`（`SOURCE_MAP_FILE` 里完全没有这个来源 IP 的登记）此前和"已登记但无
+  allow/deny 限制"的来源走同一条路径——按公网放行，`sourceId` 记 `'unknown'`，是一个 fail-open
+  的口子。`policy.ts` 新增 `denyUnknownSource`（`EGRESS_DENY_UNKNOWN_SOURCE`，代码默认 `true`，
+  fail-closed），未登记来源现在直接 403，且这一步在任何 DNS 查询之前完成。默认虽然收紧，仍留了
+  `0` 这个逃生舱——`worker-supervisor` 的 `registerEgress`/`unregisterEgress` 是 best-effort
+  （主机验收记录过真实的 EACCES 权限问题），一旦登记本身不可靠，fail-closed 会让整批容器的出网
+  直接断掉，比"少记一条来源归因"严重得多。顺手关掉了这条规则的一个绕过口子：`decideEgress` 判断
+  "目标是不是字面 IP"（决定是否有资格享受 `EGRESS_TRUSTED_RESOLVED_CIDRS` 的豁免）原来只认严格的
+  点分十进制/冒号十六进制，十进制单数（如 `2130706433`）、十六进制（`0x7f000001`）、短点分形式
+  （`a.b.c`）这类合法的 `inet_aton` 记法一概被当成"这是个主机名，得走 DNS"——短点分形式因为带点，
+  绕得过 `bare-hostname` 那道防线，能把一个信任范围内的字面地址伪装成"经解析得到"从而骗过豁免规则
+  自己写的注释（"字面 IP 目标永不豁免"）。`net-utils.ts` 新增 `parseIPv4Literal`/`isIpLiteral`/
+  `canonicalizeIpLiteral`，`policy.ts`/`proxy.ts` 都改用它们。另修了 `classifyAddress` 对 NAT64
+  （`64:ff9b::/96`）地址不解出内嵌 IPv4 就直接判 `public` 的问题，以及顺手发现的一个 `parseIPv6`
+  既有 bug（内嵌 v4 紧跟在 `::` 后时会把压缩记号吃掉一个冒号，变得不可解析）。
+
+### S1.12 最小备份（compose 内，不改主机）
+- 目标：每日 `pg_dump` + `workspaces/` 与 `config/` 的 tar 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；恢复脚本可演练。之前 E7 被暂缓，这里以 compose 内容器形式回归，理由：设计 §10.4 与 §13 的回滚依赖它，且不触碰主机上任何现有服务。
+- 交付物：`deploy/backup/backup.sh`、`scripts/restore.sh`、compose `backup` 服务（`postgres:17-alpine`）。
+- 验收：`docker compose exec backup /backup.sh` 后 `backups/` 出现当日 dump；`scripts/restore.sh --dry-run` 通过；在临时库上真实恢复一次并跑 `accept_s1.sh`。依赖：E4。需人工批准：否。
+
+---
+
+## 4. S2 — 能经审批做事，动态拉起 Worker
+
+### S2.1 治理表迁移
+- 交付物：`migrations/0003_governance.sql`：`policies / capability_grants / capability_handles(parent_jti, on_behalf_of) / action_requests(on_behalf_of, await_decision, parent_worker_run_id, actor_runtime, idempotency_key, policy_decision CHECK) / gatekeepers / worker_definitions(kind, version, status) / tasks / worker_runs(parent_worker_run_id)`。
+- 验收：I7 的 DB CHECK；`worker_definitions` 已发布只读。依赖：S1.1。
+- 实现说明（S2.1 PR，2026-09）：
+  - **文件落位**：本条文字的单文件 `migrations/0003_governance.sql` 未采用——仓库既有约定是每模块一个迁移目录（R2/S1.1 已定），本任务据此拆成四个文件：`migrations/governance/0002_policy.sql`（`policies` + `capability_grants`）、`migrations/governance/0003_action_requests.sql`（`action_requests`）、`migrations/task/0001_tasks.sql`（`tasks` + `worker_runs`）、`migrations/worker/0001_worker_definitions.sql`。`governance/0002`、`0003` 复用该模块已有的 advisory-lock key `7241000201`（锁是按模块而非按文件取的）；新增的 `task`、`worker` 模块各取一个新 key：`task` = `7241000401`，`worker` = `7241000501`（延续 core=`…101`、governance=`…201`、llm-usage=`…301` 的编号序列）。
+  - **未创建 `gatekeepers` 表**（与本条文字及本 PR 派发文字的字面要求不同，已知偏离）：设计文档 §9.2 增量 SQL 草图自己的注释写明 "`gatekeeper_instances / operations / skills / procedures` 作为平台元本体存于 `objects / links`，状态与版本在 `properties`"，§5.1.2/S2.13 也确认注册一个门产生的是 `objects` 表里的一个 `Gatekeeper` 对象（图节点），不是关系表行；`packages/shared/src/events.ts`（`ActionRequestPendingEvent.gatekeeperId` / `ConnectionCreatedEvent.gatekeeperId`）与 `capabilities.ts`（`connect_gatekeeper({gatekeeperId, principalId})`、`propose_operation({gatekeeperId, operation})`）里 `gatekeeperId` 也全部当作图对象 id 使用，从未指向一张待建的表。因此 `action_requests.gatekeeper_id` 外键直接指向 `objects(workspace_id, id)`，本迁移不建 `gatekeepers` 表。
+  - **`capability_handles` 的 `parent_jti`/`on_behalf_of` 已存在**：`governance/0001_capability_handles.sql`（S1.9 PR）建表时已含这两列并有 I13 的不可变触发器，本条文字要求的 `alter table capability_handles add column …` 是空操作，未新增任何 ALTER 迁移；`governance-schema.test.ts` 补了针对这两列的回归测试（root Handle 的 `parent_jti` 为 NULL、子 Handle 记录血缘、`on_behalf_of` 仍然 NOT NULL）而非重复造轮子。
+  - **`action_requests.policy_decision` 设为可空**，未按本条派发文字字面的 `not null`（已知偏离，DB 层判断胜过字面指示）：`packages/shared/src/transitions.ts` 的 `ACTION_REQUEST_EDGES` 有真实的 `proposed →(evaluate_policy)→ policy_evaluated` 转移，`proposed` 状态必须能在决策产生前入库——`not null` 会让这个状态完全无法插入，与 I6 冲突比它"保护"的东西更大。I7/I11 改由三条 CHECK 实现：①（I6 支持）`status = 'proposed' or policy_decision is not null`；②（I7 核心）`status not in ('executing','executed','verified','compensated') or (policy_decision is not null and policy_decision <> 'deny' and (policy_decision <> 'require_approval' or approval_decision_id is not null))`；③（协调者复核追加，PR #33，2026-09）`status not in ('approved','rejected') or approval_decision_id is not null`——`approve`/`reject`（S2.3）同事务写 Approval Decision，`approved`/`rejected` 状态在写入的那一刻就必须带上这条 Decision，不能等到执行阶段的 ② 才发现缺失；`expired`/`denied`/`auto_approved` 不涉及人工决策，不受这条约束。
+  - **`worker_definitions` 的 I12 触发器补上 `deprecated` 的内容不可变**（协调者复核追加，PR #33，2026-09）：原触发器只锁 `published` 行的内容与"只能转到 deprecated"，`deprecated` 行本身是完全可编辑的——但 `tasks.worker_definition_id`/`.worker_definition_version` 永久钉住某个 `(id, version)`，不论那个版本当前是 `published` 还是已经 `deprecated`，都必须保持可解析到当初真正跑过的内容。改为：`old.status in ('published','deprecated')` 时 `definition`/`kind` 一律不可改；`published` 只能转到 `deprecated`；`deprecated` 不允许任何 status 变化（含转回 `draft`/`published`）。
+  - **CHECK 清单**（给后续任务对齐用；标 "无 `packages/shared` 对应导出" 的需要后续任务补一个 `*_VALUES` 导出）：
+    - `action_requests.status`：`packages/shared` `ACTION_REQUEST_STATUS_VALUES`（13 态，proposed…compensated）。
+    - `action_requests.policy_decision`：`'allow' | 'require_approval' | 'deny'` —— **无 `packages/shared` 对应导出**，建议 S2.2 加一个 `POLICY_DECISION_VALUES`。
+    - `action_requests.blast_radius` 与 `policies.blast_radius`：`packages/shared` `BLAST_RADIUS_VALUES`（low/medium/high）。
+    - `capability_grants.status`：`packages/shared` `GRANT_STATUS_VALUES`（active/revoked/expired）。
+    - `tasks.status`：`packages/shared` `TASK_STATUS_VALUES`（7 态）。
+    - `worker_runs.status`：`packages/shared` `WORKER_RUN_STATUS_VALUES`（4 态）。
+    - `worker_definitions.kind`：`packages/shared` `WORKER_DEFINITION_KIND_VALUES`（entry/worker）。
+    - `worker_definitions.status`：`packages/shared` `PUBLISHABLE_STATUS_VALUES`（draft/published/deprecated）。
+    - 以上全部由 `governance-schema.test.ts` 的静态测试（读 `migrations/**` 与 `enums.ts` 比对）在 CI 每次跑，防止两边再漂移。
+  - **跨模块外键——按 `migrate.ts` 的真实模块序（`core < governance < llm-usage < task < worker`，字典序）逐一判断**：`action_requests.gatekeeper_id → objects`、`.on_behalf_of → principals`、`.approval_decision_id → decisions`（均为 core 模块，governance 之前已建表，真实 FK）；`action_requests.parent_worker_run_id → worker_runs`：**无 FK**（`task` 模块排在 `governance` 之后，此列写入时 `worker_runs` 尚不存在），referential 检查留给 S2.3/S2.7 的应用层；`tasks.on_behalf_of → principals`、`.created_by_activity_id → activities`（core，真实 FK）；`tasks.worker_definition_id`/`.worker_definition_version → worker_definitions`：**无 FK**（`worker` 模块排在 `task` 之后），同样留给应用层（S2.6/S2.7）；`worker_runs.task_id`（同模块内，真实 FK）、`.parent_worker_run_id`（自引用，真实 FK）、`.session_id → sessions`（core，真实 FK）；`worker_definitions.proposed_by`/`.published_by → principals`（core，真实 FK）。两个"无 FK"的例外均在对应迁移文件的头注释里逐字解释，不是遗漏。
+  - **`capability_grants` 用 `capability`/`scope` 而非 `action_kind`/`resource_scope` 命名**：直接照抄现有 `grant_capability` capability 的 `paramsSchema`（`{principalId, capability: z.string(), scope: jsonRecord}`，`packages/shared/src/capabilities.ts`），而不是另造一套字段名——`capability` 在用于满足 I14（审批者需持有该 `action_kind × resource_scope`）时即取值为对应的 `action_kind`，`scope` 的 `resourceScope` 键与 `action_requests.resource_scope` 做匹配，具体查询写法已作为迁移文件注释留给 S2.3。`action_requests.resource_scope` 定为 `text`（可空），不是 `jsonb`——照抄 `packages/shared/src/events.ts` 里 `ActionRequestPendingEvent.resourceScope: z.string().optional()` 的形状，与同文件里 `capability_grants.scope`（`jsonb`，照抄 `grant_capability` 的 `scope: jsonRecord`）刻意不同形。
+  - **RLS**：`policies` / `capability_grants` / `action_requests` / `tasks` / `worker_runs` / `worker_definitions` 六张表全部 workspace-only（未做按 `on_behalf_of` 的可见性收窄）——假设，理由同 `core/0002_substrate.sql` 对 `links`/`activities` 的既有选择：§5.6 没有为这几张表规定可见性规则；I14 的审批路由明确要推给"持有范围者"而不限发起人（§8.5），所以按 owner 收窄反而是错的；G4"B 看不到 A 的卡片"是 S2.10 的应用层过滤/推送问题，不是行可见性问题。`worker_definitions` 具体照抄 `ontology_versions` 的既有先例（同表形状、同生命周期）。
+  - **`worker_definitions` 不设独立 `name` 列**：`id`（稳定 UUID）+ `version` 做主键，照抄 `ontology_versions` 的既有身份约定，也与 `invoke_worker` / `publish_worker_definition` / `deprecate_worker_definition` 的 `paramsSchema`（均为 `{definitionId, version}`）一致；派发文字建议的"`(workspace_id, name, version)` 或设计隐含的等价物"，等价物就是这个。
+  - **`policies` 表把 I8 的"双信号"里工作区那一半信号做成 DB CHECK**：`check (blast_radius is distinct from 'high' or auto_approve = false)`，防止 high 影响面被工作区规则打开自动批准（S2.2 验收原话"试图为 high 开自动批准被拒"），比只靠尚未实现的 policy engine 多一层防线。
+  - **测试落位**：`packages/kernel/src/adapters/db/governance-schema.test.ts`（而非某个 `governance/src/…` 路径下）——沿用 `migrate.test.ts` 对"跨模块看整棵迁移树"这类测试的既有落位方式；`describe.runIf(DATABASE_URL)` 门控，本地无库自动跳过，CI（`pgvector/pgvector:pg17` service）跑。
+
+### S2.2 Policy 引擎
+- 交付物：`policy/engine.ts`：`evaluate → allow | require_approval | deny`；双信号（I8）；`requester_can_approve` 按 `blast_radius`，high 默认否，工作区可覆盖；高影响默认 `require_approval` 且工作区不能关闭。
+- 验收：三种判定的表驱动测试；试图为 high 开自动批准被拒。依赖：S2.1、S3.1 的 ActionType 元数据（S2 内先用平台元本体里的 docker 动作声明）。
+- 实现说明（S2.2 PR，2026-09）：
+  - **文件落位**：`policy/engine.ts` 只放纯函数（`evaluate` + 配置侧的 `assertPolicyWriteAllowed`，均无 IO）；DB 读写（`policies` 表的 `readWorkspacePolicy` / `setPolicy` / `setAutoApprovedActionKind`）落在新文件 `policy/policies.ts`，`policy/index.ts` 作为该模块唯一对外接口把两者一起导出——`engine.ts` 保持"纯，无 IO"这条 S2.2 派发文字自己给出的约束，DB 访问单独成文件。
+  - **`POLICY_DECISION_VALUES` 补上 S2.1 标记的缺口**：`packages/shared/src/enums.ts` 新增 `POLICY_DECISION_VALUES`/`PolicyDecision`/`PolicyDecisionSchema`（`'allow' | 'require_approval' | 'deny'`），`adapters/db/governance-schema.test.ts` 的静态 CHECK↔枚举比对测试同步更新（`action_requests.policy_decision` 从 `KNOWN_UNMAPPED_CHECKS` 移到 `EXPECTED_ENUM_CHECKS`）。
+  - **`deny` 的具体规则**（派发文字原话"document the exact rule you implement"）：`evaluate()` 的 `requesterScope`（调用方 Handle 的 `CapabilityScope`）在 `resources['gatekeeper']` 数组里必须包含目标 `gatekeeperId` 才算覆盖；未覆盖 → `deny`，且这条检查排在双信号判定之前（拒绝优先于自动批准/需要审批的判定）。`'gatekeeper'` 这个 resource-scope key 是本任务定义的约定（`GATEKEEPER_RESOURCE_SCOPE_KEY` 导出常量）——`handle-token.ts` 自己的注释说 key 的词表由各 capability 自行定义，S2.4/S2.7 构造 Worker 子 Handle 时应当把它衰减出的 Gatekeeper id 集合写进这个 key。
+  - **`operationAutoApprovable: false` 同时代表"未分类操作"**（I17）：不单独建一个 `classified` 字段——engine 不区分"Operation 声明了 auto_approvable=false"与"根本没有 Operation 声明"，两者都致 `require_approval`。
+  - **`assertPolicyWriteAllowed`**：`set_policy` / `set_auto_approved_action_kind` 两个 handler 落库前都调用它，抛 `HighBlastRadiusAutoApproveError`（非 DB 异常）——`policies` 表自己的 CHECK 是第二道、独立的防线，不是唯一防线。
+  - **已知偏离**：`set_auto_approved_action_kind` 的 `paramsSchema` 只有 `{actionKind}`，不带 `blastRadius`；该 action_kind 的真实 blast_radius 只存在于 S2.6 尚未落地的图上 Operation 对象里，本任务读不到——因此这个 handler 只能在"此 action_kind 之前已经被 `set_policy` 写过一条带 `blast_radius='high'` 的 `policies` 行"时才会触发拒绝；对一个从未配置过的 action_kind，`assertPolicyWriteAllowed` 收到 `blastRadius: undefined` 直接放行（不视为异常，只是信息不足）。S2.2 验收原文"试图为 high 开自动批准被拒"的测试覆盖以 `set_policy`（显式带 `blastRadius`）为主。
+  - **R-20 更正（2026-10-02 复审，维护者决定 D-15）——"总是允许"按 `(gatekeeper_id, action_kind)` 记，不再是整个工作区的裸 Operation 名（#444）**：上面的 `set_auto_approved_action_kind` 只带 `{actionKind}`，写 `policies(workspace_id, action_kind)` 一行 `auto_approve = true`——对该 Operation 名在每个门、每个请求者生效；Operation 名会跨门重名（两个 docker 门实例就够），批准一个实验室请求等于把其它门上同名 Operation 也自动批准，而控制台把它说成"这一次请求"，审批页对 `high` 也提供（永远无法生效）。现在迁移 `governance/0016` 新建 `gatekeeper_policies`（列同 `policies` 外加 `gatekeeper_id`，唯一键 `(workspace_id, gatekeeper_id, action_kind)`，RLS，同一条 I8 CHECK）；`policies` 本身不变——不把它改键，因为 v0.39.0 的 upsert 依赖 `unique (workspace_id, action_kind)` 的 `ON CONFLICT`，改键会破坏回滚，且旧的 `readWorkspacePolicy` 会在回滚后把某个门的行套到所有门上。求值走 `readEffectivePolicy(gatekeeperId, actionKind)`：门规则（整行胜出）→ 工作区规则 → 编译内默认。工作区级规则只能收紧：`setPolicy` 对无 `gatekeeperId` 的 `autoApprove: true` 报 400 `invalid_params`；`engine.ts` 把工作区级 `autoApprove: true` 视为"无意见"（`WorkspacePolicyInput.scope`，覆盖回滚窗口里旧版本写下的行），其 `autoApprove: false` 与 `requesterCanApprove` 仍生效。`set_auto_approved_action_kind` 现为 `{gatekeeperId, actionKindTag}`：Operation 必须已在该门发布（否则 `OperationNotFoundError` 404，未分类动作永不自动批准，I17），用它自己的 `blast_radius` 做规则快照，所以 `high` 在内核即被拒（`HighBlastRadiusAutoApproveError` 400），行 CHECK 守同一份快照；已有的 `requesterCanApprove`（门行，否则工作区行）带过去；**谁能写不变**（owner，或持有点名该 action kind 的 grant 的 operator）。`set_policy` 可选 `gatekeeperId`（门必须存在，404；已发布的 `high` Operation 不能开）。`PolicyWire.gatekeeperId: string | null`，`list_policies` 两种规则都返回。控制台：审批详情的勾选框点明门并写"所有请求者，不只是这一条"、`high` 隐藏，勾选批准必经 danger 确认（说明范围=该门、所有请求者、今后；其它门同名不受影响；如何关闭），请求带该行的 `gatekeeperId`；聊天卡片"总是允许"改为同类确认，只在卡片知道其门时提供；模型与配额 → 策略表加"适用范围"列，编辑器加门选择（选"所有门"时自动批准禁用并说明，编辑时门只读）。`scripts/accept_s2.sh` 两处调用传 `$GATEKEEPER_ID_SSH`，`host-accept-s2.md` 的期望 PASS 行同步。**迁移数据步骤（只会更窄）**：历史工作区级 `auto_approve = true` 行，其候选门=曾收到过该 action kind 请求的门；恰一个候选 → 规则移到该门（其它门同名 Operation 失去它）；零个或多个候选 → 无法证明批准者指的是哪个门，自动批准全部取消（下次请求重新问，新的门级"总是允许"记对门）。两种情况下工作区级行都不再自动批准：仅含自动批准则删除，否则保留并置 `auto_approve = false`（`requester_can_approve` 保留）；每行写一条 `policy.auto_approve_rescoped` 审计（原值与候选门）。不用时间戳启发式。迁移的回滚性记入 `docs/runbooks/release.md` §6：v0.39.0 用显式列表读写 `policies`，永远看不到 `gatekeeper_policies`，被重划范围的行只会让它更严。测试：`engine.test.ts`（工作区 / 门两种 scope）；新增 `auto-approval-scope.integration.test.ts`（同名两门只一门被批、`high` 拒且不落行、未发布 404、权限不变、`requesterCanApprove` 带过去，并对播种的历史行真跑 0016 的两段 do-block：单候选 / 歧义 / 孤儿 / 收窄 / 退出 / 幂等重跑）；`service-execution.integration.test.ts`；web `PolicyEditSheet.test.tsx` 与审批 / 卡片 / 模型页更新。
+
+### S2.3 ActionRequest 状态机与审批队列
+- 交付物：`approval/{service,drainer,routing}.ts`：`request_action / approve / reject / expire / mark_executed / mark_failed / compensate`；drain 每 Gatekeeper 单飞、升序、遇 pending 停；`approve` 前置 I14；**审批路由**：ActionRequest 进入所有持有该 `action_kind × resource_scope` 的 human Principal 的队列与对话，不限于发起者；同事务写 Approval Decision 并推进关联 agent Decision；`await_decision` 两种模式（模拟返回 / 等待到超时）；默认策略表：`low` 自动批准、`medium` / `high` 与未分类要人批；每次状态转移在同事务写 outbox 发布 `ActionRequestPending / ActionRequestUpdated`，chat 与 web 只订阅事件写各持有者的系统消息，`approval` 不 import `chat`。
+- 验收：转移穷举；幂等键；顺序 drain；I14：operator 无该资源范围时 403；`await_decision=true` 时 Task 进 `waiting_approval` 且超时后工具得到 `pending_approval`。依赖：R4、S2.1、S2.2。
+- 实现说明（S2.2/S2.3 合并 PR，2026-09；两个任务由同一 owner 完成，S2.3 调用 S2.2）：
+  - **`approval/` 拆成多个文件**（design doc §7.10"单文件 ≤ 600 行...超过即拆，不等重构"）：`types.ts`（`ActionRequestRow`/DB 行映射/`ActionRequestNotFoundError`/`ApprovalScopeError`）、`reads.ts`（`getActionRequest` / `listPendingForApprover`（I14）/ `listExecutableQueue`（drainer 用）/ `approverHasScope`）、`transition-log.ts`（`recordTransition`——I11 的共享落点）、`request-action.ts`（`requestAction`）、`decide.ts`（`approveActionRequest` / `rejectActionRequest` / Approval Decision 写入）、`execution.ts`（`expire*` / `startActionRequestExecution` / `markActionRequestExecuted` / `markActionRequestFailed` / `compensateActionRequest`）、`await-decision.ts`（`awaitActionRequestResolution`）；`service.ts` 仍然存在，作为对这些文件的薄 barrel（派发文字点名的文件路径因此仍然成立），`index.ts` 是模块唯一对外接口（`export * from './service.js' / './drainer.js' / './routing.js'`）。
+  - **CapabilityGrant CRUD 落在 `governance/capability/grants.ts`，不在 `approval/` 或 `policy/`**：`governance/capability/handles.ts` 自己的模块注释早就写"CapabilityGrant ... 随 S2.1/S2.3 落地，不在这个文件"——按 §7.1 模块表，Capability/CapabilityGrant/CapabilityHandle 是 `capability` 模块的三个概念，即使建表的是 S2.1 的 `governance/0002_policy.sql`（该文件同时也建了 `policy` 模块自己的 `policies` 表，只是迁移文件分组，不代表模块归属）。`grants.ts` 提供 `grantCapability` / `revokeCapabilityGrant` / `hasActiveGrant` / `listGrantHolderPrincipalIds` / `isWorkspaceOwner` / `listWorkspaceOwnerPrincipalIds`，`approval/reads.ts`（I14 前置检查）与 `approval/routing.ts`（持有者列表）都经 `governance/capability/index.ts` 这个公开接口调用它，不越过模块边界直接查表。
+  - **`request_action` 故意未接入 gateway handler**（已知缺口，非遗漏）：该 capability 的 `paramsSchema`（`{gatekeeperId, operation, params}`）不带 `blast_radius` / `auto_approvable`——这两个值只能从 Gatekeeper 已发布的接口清单（S2.4）解析出来，而"不实现 Gatekeeper 传输层"是本任务的 Must NOT 之一。`governance/approval/request-action.ts` 的 `requestAction(client, workspaceId, input)` 服务函数本身完整可用（输入是更丰富的 TS 接口，包含 `blastRadius`/`operationAutoApprovable`/`requesterScope` 等，由调用方——S2.4 的 Gatekeeper 客户端——解析后传入）；`application/gateway/handlers.ts` 与 `application/gateway/dispatch.test.ts` 都在注释里指出这一点，`dispatch.test.ts` 原本用 `approve`/`grant_capability` 作"未实现 capability"的例子，改成 `request_action`（未实现）与 `set_quota`（S2.7 范围，仍未实现，替下已被 S2.3 实现的 `grant_capability` 验证 403 场景）。
+  - **"推进关联 agent Decision" 未实现**：S2.3 派发文字"同事务写 Approval Decision 并推进关联 agent Decision"里，Approval Decision（`decide.ts` 写入 `decisions` 表、`action_requests.approval_decision_id` 指向它）已实现；但"关联 agent Decision"——即 agent 通过 `record_decision` 记录的、与本次 ActionRequest 相关的 Decision——目前没有任何列把 `action_requests` 和它关联起来（`record_decision` 是 S1.6 已注册但未实现的 capability，`action_requests` 本身也没有 `related_decision_id` 之类的字段），本任务未新增迁移去补这个关联（读first 列表允许"如果 decisions 字段不够用可以加新迁移"，但这里缺的是 `action_requests` 侧的列，且关联语义——一次 ActionRequest 应该推进哪个 agent Decision——本身依赖尚未存在的 `record_decision` 实现与调用约定，本任务不代为决定）。
+  - **`decisions.activity_id NOT NULL` 的处理**：`approve`/`reject` 各自开一个最小 Activity（`kind: 'governance.approval_decision'`，`startActivity` 起、`endActivity` 落 `completed`）来满足这个外键，而不是复用某个已存在的 Turn/Task Activity——S2.3 阶段 `action_requests` 本身不携带触发它的 Turn/Task 引用（`parent_worker_run_id` 有，但没有 `activity_id`/`turn_id`），S2.7/S2.11 落地后如果需要更精确的溯源，可以在那时把这个 Activity 换成真正的 Turn Activity。
+  - **状态持久化**：`request_action` 用一次 INSERT 直接落到策略解析后的最终状态（`auto_approved` / `pending_approval` / `denied`），不会先插入一行 `proposed` 再单独 UPDATE 到 `policy_evaluated`——转移表（`transition()`）仍然逐跳校验合法性（I6），但因为整段解析在同一次调用、同一个事务内完成，外部任何人都不可能观测到 `proposed`/`policy_evaluated` 这两个中间态，没有必要为它们单独落一行/单独写一条 audit+outbox。
+  - **审计粒度**：`approval/*` 每个转移函数（`request_action`/`approve`/`reject`/`expire`/`start_execution`/`mark_executed`/`mark_failed`/`compensate`）都自己调用 `writeAudit`+`enqueue`（`transition-log.ts` 的 `recordTransition`），不管调用方是不是 `dispatchCapability`——`expire`/`start_execution`/`mark_executed`/`mark_failed`/`compensate` 根本不经过 `dispatchCapability`（reaper 与 S2.4 的执行路径直接调用），所以只能自己写审计；`request_action`/`approve`/`reject` 因此会有两条 audit_records（`dispatch.ts` 自己那条"这次 capability 调用"的粗粒度记录，加上这里"ActionRequest 发生了哪个转移"的细粒度记录）——两者语义不同，不是重复。
+  - **`ActionRequestPendingEvent` 新增 `holderPrincipalIds`**（`packages/shared/src/events.ts`，必填字段，`events.test.ts` 对应更新）：由 `approval/routing.ts` 的 `computeActionRequestHolders`（workspace owner 并集 `governance/capability` 的匹配 grant 持有者）填充，`chat`/`web`（S2.10/S2.11，不在本任务范围）据此往每个持有者的对话/队列写系统消息——`approval` 自身从不 import `chat`。
+  - **I14**：`owner` 视为持有一切范围（跳过 grant 匹配查询）；其他角色必须在 `capability_grants` 里有一条 `status='active'`、`capability=action_kind`、`scope.resourceScope` 为空或等于目标 `resource_scope`、未过期的行，SQL 沿用 `governance/0002_policy.sql` 迁移注释里给出的匹配写法。角色层面的门槛（`operator`+）由既有的 `authorizeCapabilityCall`/`minRole` 机制挡在更前面，本任务未改动那部分。
+  - **`await_decision=true`**：`await-decision.ts` 的 `awaitActionRequestResolution(read, options)` 是与 DB/pool 完全解耦的轮询原语（注入 `read`/`now`/`sleep`，纯单元测试、无需 Postgres），满足"超时后返回仍为 `pending_approval` 的行"这条验收；把它接到真正的 Worker 工具调用等待、以及 Task 状态转 `waiting_approval`，是 S2.7（`invoke_worker`）的事——`application/task` 目前是占位模块，governance 层也不允许依赖 application 层（§7.10），本任务只交付这个原语本身。
+  - **`interfaces/http/capability-route.ts` / `interfaces/ws/rpc.ts` 补了错误映射**：`ApprovalScopeError`→403、`ActionRequestNotFoundError`/`GrantNotFoundError`→404、`IllegalTransition`（`@nexttime/shared`）→409（WS 新增错误码 `ILLEGAL_TRANSITION=-32011`）、`HighBlastRadiusAutoApproveError`/`SetPolicyValidationError`→400——这两个文件不在本任务"涉及路径"字面列表里，但派发文字要求"wired to a handler in the gateway handler map"，缺这几行映射会让这些 governed 错误全部退化成裸 500，判断为本任务应负责的最小必要改动。
+  - **组合根接入 reaper**：`packages/kernel/src/index.ts` 的 `createBackgroundServices`/`main()` 新增一个 `setInterval`（默认 5 分钟，`APPROVAL_REAPER_INTERVAL_MS` 可调）轮询调用 `expireOverduePendingApprovals(pool, {timeoutMs})`（`APPROVAL_TIMEOUT_MS` 可调，默认 24h），与既有的 outbox dispatcher 轮询、`stop_agent` 的 `AgentRuntime` 挂接走同一种"composition root 持有定时器句柄，`start()`/`stop()` 成对"模式；drain（`ApprovalDrainer`）未接入组合根——它依赖的真实 `ActionExecutor`（Gatekeeper 客户端）是 S2.4 的交付物，本任务只交付类与集成测试用的假执行器。
+  - **测试策略**：`policy/engine.test.ts`、`approval/await-decision.test.ts` 是纯单元测试（无 DB，Vitest 默认跑）；`approval/service.integration.test.ts`、`approval/drainer.integration.test.ts` 是 `describe.runIf(DATABASE_URL)` 的集成测试，跟随 `governance/llm-usage/service.test.ts` 的既有先例（该文件整个只有集成测试，没有假 SQL client 的单元测试）——本地无 `DATABASE_URL` 会自动跳过，经 CI 的 Postgres service 验证。集成测试里 `expireOverduePendingApprovals` 的用例特意把待验证的行显式改早 `requested_at`（而不是传一个负的 `timeoutMs` 让"现在减去超时"变成未来），因为这个 reaper 本身是跨 workspace 扫描——Vitest 默认并行跑测试文件，一个负超时会波及同一 Postgres 实例上其它并发测试文件刚创建的 pending 行，参考 `application/outbox/dispatcher.integration.test.ts` 自己注释里同样的"跨文件并行"顾虑。
+  - **authority-tightening 专项修订（review job 652a4abc lane2/lane3，2026-09）——六项已验证的鉴权缺陷**：
+    1. **human 通道调用 `request_action`/`observe_operation` 的真正门槛**（`request-action-handler.ts` 新增 `assertHumanGatekeeperAccess`/`resolvePrincipalRole`）：修前 `resolveRequesterScope` 对任何 human 调用者都直接合成一个覆盖目标 Gatekeeper 的 scope，等于让 `governance/policy/engine.ts` 的 `deny` 分支永远打不到——未被授权的 `member`/`auditor` API key 因此能对任意门自动执行 `low`/`auto_approvable` 动作。修复：非 owner 的 human 调用者必须持有一条对该 `gatekeeperId` 生效的 `capability='gatekeeper'` Grant（`hasActiveGrant`）；`auditor` 一律拒绝，不看是否有 grant；`resolveRequesterScope` 现在从 `listActiveGrantResourceScopes` 真实读取该 human 的 grant 集合来构造 scope（owner 视为无约束）。`request_action` 补上 `minRole:'member'`（与 `observe_operation` 一致）——文档注明这只是"已认证即可尝试"的地板，真正的门是上面这条 grant 检查，`minRole` 的角色层级本身无法表达"auditor 一律拒绝"这条规则。
+    2. **`resource_scope` 在请求时补齐、I14 匹配纳入它**：`runGovernedRequest` 现在把 `resourceScope: args.gatekeeper.gatekeeperId` 一起传给 `requestAction()`（此前这一列一直是 NULL，`capability_grants.scope.resourceScope` 因此永远匹配不上，任何 workspace 范围的 `capability=action_kind` 通配 grant 就能批准该 action_kind 在**任意**门上的请求）。决定并记录：`capability='gatekeeper'` 的 grant（`connect_gatekeeper`/S2.13 的同一约定）**也**满足该门上任意 `action_kind` 的 I14——`governance/capability/grants.ts` 的 `MATCHING_GRANT_WHERE`/`listGrantHolderPrincipalIds`，以及 `approval/reads.ts` 的 `listPendingForApprover`，三处 SQL 同步加了这条 OR 分支并互相保持一致（否则待批队列与实际能批的行会对不上）。
+    3. **持久化 `requester_can_approve`，`assertApproverScope` 拒绝自批**：新增迁移 `migrations/governance/0007_action_request_requester_can_approve.sql`；`governance/policy/engine.ts` 早就算出的 `requesterCanApprove`（`high` 默认 `false`，工作区可覆盖）此前算完即弃——`decide.ts` 的 `assertApproverScope` 现在读回它，approver 与 `on_behalf_of` 相同且该值为 `false` 时抛 `SelfApprovalNotAllowedError`（继承 `ApprovalScopeError`，`interfaces/{http,ws}` 现成的 403 映射直接生效，未改这两个文件）。
+    4. **Grant 变更对已发的入口 Handle 可见**：`grantCapability`/`revokeCapabilityGrant`（`governance/capability/grants.ts`）在改动的是 `capability='gatekeeper'` 的 grant 时，调用新增的 `revokeEntrySessionHandles`（`handles.ts`）撤销该 principal 名下所有 `kind='entry'` session 的 Handle，逼下一次 `startTurn` 重签；`agent-host-runtime.ts` 的 `ensureEntryHandle` 每次调用都重新读 `listActiveGrantResourceScopes` 并与缓存 Handle 的 `resources.gatekeeper` 比对，不一致就提前重签（此前只在 ttl 快到期时才重读，一次 Grant 变更最长可能要等 ~21.6 小时才生效）。
+    5. **`set_auto_approved_action_kind` 与 `cancel_task` 补权限检查**：前者（`handlers.ts`）此前只受 `minRole:'operator'` 限制，任何 operator 都能给任意 `action_kind` 开工作区级自动批准（无视 I14），现在非 owner 必须持有该 `action_kind` 的任意有效 grant（新增 `grants.ts` 的 `hasAnyActiveGrant`，不按 `resource_scope` 收窄——这条规则本身就是工作区级的，无法收窄到单一门）；后者此前完全没有归属校验，任何 `member`+ 都能取消任意其他 principal 的 Task，现在非 owner 必须是该 Task 的 `onBehalfOf`。
+    6. **handle 通道未对 `minRole` 生效——记录为已知缺口，未在本次修复**：`authorize.ts` 的 handle 分支只看 Handle 自身 `scope.capabilities`，不查 `minRole`（`authorize.test.ts` 早有一条测试把这一点锁定为既有设计）。具体隐患：`ENTRY_CEILING_CAPABILITIES`（`handles.ts`）把所有 `propose_*`（`minRole:'builder'`）无条件塞进入口 Handle 的 scope，与 on_behalf_of 的真实角色无关——一个 `member` 的入口 agent 因此能调 `propose_worker_definition`/`propose_skill`/`propose_procedure`/`propose_operation`/`propose_ontology_change`。未修：真正的修法是让入口 Handle 的能力上限按 on_behalf_of 的角色收窄（需要给 `HandleClaims` 加 `role`，或在签发处按角色查询后收窄 scope），这些改动落在 `packages/shared/src/handle-token.ts`、`dispatch.ts`/`resolve-caller.ts`（本任务未拥有）、`application/worker/definitions.ts`（校验 WorkerDefinition 声明的能力是否是这同一个上限的子集）——超出本任务的文件所有权范围；`authorize.ts` 顶部补了完整的问题说明与后续任务建议，`authorize.test.ts` 锁定的既有测试未改。
+  - **测试（authority-tightening 专项）**：`governance/approval/service.integration.test.ts`（第 3/4 项自批、`capability='gatekeeper'` grant 满足 I14）、`application/gateway/request-action.integration.test.ts`（第 1 项 member 无 grant/auditor 403、member 持 grant 成功、跨门 grant 不生效；第 2 项 `resource_scope` 落库校验）、`governance/capability/handles.test.ts`（`revokeEntrySessionHandles` 只撤该 principal 的 `entry` session，其余不受影响）、`application/host-bridge/agent-host-runtime.test.ts`（两次 `startTurn` 之间新增一条 Grant，ttl 仍新鲜也提前重签）均为 `describe.runIf(DATABASE_URL)`/纯单元测试，本地无 Postgres 全部经既有约定自动跳过或直接跑通（`agent-host-runtime.test.ts` 用假 pool，非 DB-gated，本地已跑通）。
+  - **R-53 更正（2026-10-02 复审，维护者决定 D-12）——派生幂等键只对在途行去重**：P1-1 让 `request_action` 在调用方不传 `idempotencyKey` 时派生 `auto:<sid|principal>:<gate>:<op>:<参数哈希>`（`action-executor.ts` 的 `deriveDefaultIdempotencyKey`），但查找与 0003 的唯一索引都不看状态，于是第一条终态行成了永久答案：`failed` / `rejected` / `expired` 之后的重试重放旧行，合法的重复（重启、检查、再重启）拿回第一次的 `executed` 结果而不再 `apply`。迁移 `governance/0014_action_request_idempotency_window.sql` 把索引拆成两个部分唯一索引：同名的 `action_requests_idempotency_key_uidx` 只管非 `auto:` 键（显式键 `explicit:<on_behalf_of>:<sid>:<key>`，任何状态，语义不变），新的 `action_requests_derived_idempotency_key_inflight_uidx` 只管 `auto:` 键且行在途（`proposed` … `executing`；`executed` 算终态——操作已执行，`verify` 只是事后核对）。`governance/approval/request-action.ts` 的 `findReplayableActionRequest` 用同一条件查找；输掉插入竞态（23505，两个索引名都认）后取该键最新的行。调用方要在第一次仍在途时刻意再做一次，就传一个新的 `idempotencyKey`。测试：`approval/service.integration.test.ts`（在途合并；`failed` / `rejected` / `expired` 后新建；显式键终态后仍重放）、`approval/concurrency.integration.test.ts`（派生键并发只出一行）、`adapters/db/governance-schema.test.ts`（两个索引的边界）、`gateway/request-action.integration.test.ts`（`executed` 后同样的调用再 `apply` 一次；待批期间重复合并）。
+  - **R-38 / R-39 / R-42 更正（2026-10-02 复审，维护者决定 D-13、D-22）——审批持有者就是审批者；门授权的连带效果说清；`get_action` 与列表同一可见性（#441）**：①R-38：上面 `computeActionRequestHolders`（`ActionRequestPending` 的 `holderPrincipalIds`）不看角色也不排除已停用 Principal，被授予门 grant 的 `member`（让其 agent 用门的常规做法）收到别人请求的"需要审批"推送与系统消息（含 action kind 与范围），却批不了（`approve` 是 `minRole: operator`），已停用的 owner / 被授权人也留在名单里。现在 `governance/approval/reads.ts` 的 `roleMayDecideActionRequests(role)` = `roleSatisfiesMinRole(role, getCapability('approve').minRole)`（与 `authorize.ts` 同一函数、同一注册表值），`approverHasScope`（`decide.ts` 的 I14 前置）与 `computeActionRequestHolders`（`routing.ts`）都用它：持有者 = (在职 owner ∪ 匹配 grant 持有者) ∩ `disabled_at is null` 且角色可审批的 Principal；`listWorkspaceOwnerPrincipalIds` / `isWorkspaceOwner`（`grants.ts`）过滤 `disabled_at is null`。请求者仍照常收到状态推送与仅状态消息。已知剩余：R-17（service Principal 不能批 high / 不可自动批准行）未折进持有者计算（该计算不读 blast radius / Operation），operator 角色且有 grant 的 service Principal 仍可能被列为持有者（推送无 socket 即无处可去）。②R-39：上面第 2 条的"`capability='gatekeeper'` grant 也满足该门任意 `action_kind` 的 I14"是个连带效果——给 operator 授门就同时让其成为该门所有动作的审批者——但授权表单、系统访问抽屉与撤销确认只说"经 Worker 写"。决定保持耦合并披露：web `lib/governance.ts` 的 `gateGrantMakesApprover(role)`（镜像内核规则；owner 为 false，因为本来就批一切）；`GrantGateForm` 的"覆盖的 Operations"提示写明此效果、选 operator 时出 warn 提示点名；`SystemAccessCard` 抽屉在"谁被授权"下加提示、operator 行加"也是审批者 / Also an approver"标签、撤销确认写明审批权同时消失（`SystemsPage` 传 `principalRole`）。③R-42：`get_action` 此前按 id 把任意 ActionRequest（含 `params`，例如 ssh 命令行）给任何 operator，而 `list_action_requests`、注册表文字和设计表都声称 I14 可见性。现在一个 SQL 谓词 `actionRequestVisibleToCallerSql` 同时用于 `list_action_requests`（`listActionRequestsForApprover`）与新的 `getActionRequestVisibleTo`（`get_action`，`application/gateway/handlers.ts`）：owner 全见；其他人见匹配自己有效 grant 的行（I14，含 gatekeeper 分支）**或自己发起的行**（`on_behalf_of`）；不可见 = 404 与未知 id 同形（无存在性探测）。为保持"单行读永不比列表多"，请求者子句同样用于列表——operator 现在在审批历史 / 任务的关联审批里也能看到自己的请求（列表的小幅放宽；`list_pending` 决策队列不变）。无迁移、无线上形状变更（`contract:check` 干净），改的是注册表描述；设计文档 §9.3 表拆分 `get_action` / `list_action_requests`，`troubleshoot-task.md` / `web-console.md` 随之更新。测试：新增 `application/linkage/approver-fanout.integration.test.ts`（在职 / 停用 owner、有 / 无 grant 的 operator、member 有 grant、停用 operator，断言 `holderPrincipalIds`、实际 `action.pending` 推送与系统消息数，及 `approverHasScope` 一致）、`reads.integration.test.ts`（列表与单行读一致）、`approval-history.integration.test.ts`（`get_action` 对无范围且非发起人的 operator 为 `ActionRequestNotFoundError`）、web `GrantGateForm.test.tsx` / `SystemsPage.test.tsx`。
+
+### S2.4 通用门：协议、基类、四种传输、接口清单、命令策略表
+- 目标：门不是逐系统写的代码。一个基类 + 四种传输种类 + 一份接口清单就能接入任意系统。
+- 交付物：`packages/gatekeeper-base`（协议 Zod schema：`describe_operations / observe / simulate / apply / revert / health`；Operation 模型：`name / binding / params_schema / mode / blast_radius / reversibility / auto_approvable / await_decision / reads / writes / result_mapping(JMESPath)`；凭证解析两种：共享 env、ConnectedAccount 本地加密存储按 `on_behalf_of`；`apply` 幂等存储）；传输实现 `kinds/{http,mcp,cli,ssh}.ts`（`http`：从 OpenAPI 导入清单草稿，GET → observe，其余 → execute 并按动词给默认影响半径；`mcp`：`tools/list` 即清单，`readOnlyHint` → observe；`cli`：命令模板；`ssh`：命令模板 + 命令策略表，正则模式 → `mode / blast_radius / auto_approvable`，未命中 → `require_approval`）；kernel `gatekeepers/{client,registry,manifest}.ts`（清单入平台元本体为 `Operation` 对象；`propose_operation` 产草稿，owner 发布）。
+- 验收：fake 系统：OpenAPI 导入后 GET 为 observe、POST 为 execute；`ssh` 门对 `show …` 自动放行、对未知命令返回 `require_approval`（I17）、对 `rm -rf` 命中高影响；重复 `apply` 只执行一次；ConnectedAccount 按 `on_behalf_of` 取到不同凭证；结果映射把响应写成 `observed` Fact。依赖：S2.3、S2.6。
+- 不做：不做 `db` / `browser`；不解析 CLI help 自动生成清单（P5）。
+- 实现说明（S2.4 PR，2026-09）：
+  - **`packages/gatekeeper-base` 是独立可运行的库 + 服务**：`GatekeeperBase`（`gatekeeper-base.ts`）是纯逻辑（校验 params、按 `mode` 路由 `observe`/`apply`、`result_mapping` → `observedFacts`、幂等 `apply`），`server.ts` 是薄 Fastify 适配层（`/gate/{describe_operations,observe,simulate,apply,revert,health}`，与内核同款 `{ok,result}`/`{ok:false,error}` 信封）；`index.ts` 的 `startGatekeeperServer()`/`main()` 是 env 驱动的单一 transport 引导（`GATE_TRANSPORT_KIND`/`GATE_TARGET_BASE_URL`/`GATE_MANIFEST_FILE`/`GATE_CREDENTIAL_MODE` 等），S2.5 的 `docker`/`ragflow` 门可以直接用它起服务，也可以绕过 `main()` 直接组 `GatekeeperBase`+`createGatekeeperServer`（`mcp`/`ssh` 或非文件清单场景）。
+  - **`ssh` 传输放弃 `ssh2`，改 `execFile('ssh', …)`**：`pnpm-workspace.yaml` 已经把 `ssh2`（`worker-supervisor` 的 dockerode 间接依赖）的原生构建脚本标记为 `false`（未使用、拒绝信任）；把它转正为直接依赖会打破这个已有决定。改用系统 `ssh` 二进制（镜像里本来就要装，`gatekeeper-base/Dockerfile` 补了 `openssh-client`），本地永远不经过 shell（`execFile`，不是 `exec`），远端命令仍是交给远端 shell 的一整条字符串——这是 ssh 协议本身的限制，不是本实现的退让；真正的治理落在命令策略表（`classifyCommand`），不是本地转义。
+  - **`cli`/`ssh` 的参数转义**：`renderCommandTemplate` 把模板按空白切 token，`{name}` 占位符整体替换为**一个** argv 元素（哪怕值本身含空格或 shell 元字符也不会被拆成两个 token）——测试 `cli.test.ts` 专门断言 `{msg}` 塞入 `"a; rm -rf / && b"` 不会产生第二条命令。
+  - **JSON Schema 校验用 `ajv`，不是 Zod**：`Operation.params_schema` 在协议里就是"JSON Schema object"（`packages/shared` 自己的注释），来自 OpenAPI/MCP/手写 YAML，运行期才知道形状；`params-validation.ts` 用 `ajv` 编译并缓存（`WeakMap`，按 schema 对象本身的引用，manifest 加载一次不会变）。`import { Ajv } from 'ajv'` 用具名导入，不是 `import Ajv from 'ajv'`——ajv 8 的 `.d.ts` 在本仓 `moduleResolution: NodeNext` + `verbatimModuleSyntax` 下走默认导入会解析到整个模块命名空间（不可构造），具名导入没有这个问题。
+  - **结果映射产出的是"候选"，内核才真正写图**：`gatekeeper-base` 的 `applyResultMapping` 只从响应算出 `{objectType, identity, properties}[]`（JMESPath 库是 `jmespath`），不接触任何图/DB——内核侧 `application/gateway/observed-facts.ts` 的 `writeObservedFacts` 才是真正落库的地方（见下）。
+  - **kernel 侧模块落位：新建 `governance/gatekeepers/`，不是 `governance/connections/`**：设计文档 §7.1 模块表把"门实例注册、清单导入草稿"划给 `connections`，但 `governance/connections/index.ts` 仍是 S2.13 的占位符——S2.13 的交付物是**人工发起**的 `request_connection` 卡片流程（人填地址/凭证 → `create_connection`/`publish_manifest`/`connect_gatekeeper`），本任务交付的是它下面那一层：注册一个 Gatekeeper 实例（端点/传输种类）、导入/发布它的 Operation 清单——这两层职责不同，且 S2.13 尚未开工，抢先把两者都塞进 `connections/` 等于替未动工的任务定了内部结构。`governance/gatekeepers/` 现在只导出服务接口（`registerGatekeeper`/`getGatekeeper`/`importManifest`/`proposeOperation`/`publishOperation`/`deprecateOperation`/`getPublishedOperation`/`getOrCreateGatekeeperServicePrincipal`），S2.13 落地时应该调用这些函数而不是重新实现，就像 `governance/approval` 调用 `governance/policy`/`governance/capability` 一样（同级模块互相调用公开接口，不互相读表）。
+  - **Gatekeeper 与 Operation 都没有专属关系表**：`design doc §9.2`"gatekeeper_instances / operations ... 作为平台元本体存于 objects / links，状态与版本在 properties"——`substrate/ontology/meta-objects.ts` 新增 `registerGatekeeperObject`（S2.6 已有，本任务加了 `name`/`endpoint` 两个 properties 字段）与 `registerOperationDraftObject`/`setOperationStatusObject`；Operation 的身份键是 `{gatekeeperId, name}`（`substrate/graph` 新增 `getObjectByIdentity`，`upsertObject` 早已支持的身份键 upsert 这次第一次有了对称的读接口），`status: draft|published|deprecated` 存在 `properties` 里，`governance/gatekeepers/manifest.ts` 负责转移表检查（`PUBLISHABLE_TRANSITIONS`）——`meta-objects.ts` 的两个新函数本身不做策略判断，纯投影（同 `registerGatekeeperObject` 已有的风格）。`Gatekeeper --exposes--> Operation` 每次 `importManifest`/`proposeOperation` 都新断一条 Fact（不去重）——Fact 是仅追加的观测事件，不是需要去重的关系表行，重复注册留下多条 `exposes` 边符合这个模型，不是 bug。
+  - **`action_kind` = Operation 自己的 `name`，不带门前缀**：没有用 `<gate>.<op>` 这种复合字符串（尽管 §7.4 的能力投影确实叫这个名字）——`action_kind` 是 `governance/policy`/`governance/capability` 早就在用的 grant/policy 匹配键（S2.2/S2.3 已实现），如果拼上门的 UUID 或人类可读名，不同门实例的同名 Operation 就没法共享一条策略/授权规则；更关键的是 Operation 名字本身允许带点（设计文档例子 `container.restart`），任何分隔符都解不开"门前缀在哪结束"。副作用是 `governance/approval` 的 `action_requests` 表新增了一个之前没有的列——见下一条。
+  - **新迁移 `migrations/governance/0004_action_request_params.sql`**：`action_requests` 原表（S2.1，已应用）没有存 Operation 调用参数的列；`ActionExecutor.execute()`/`request_action` 的内联执行路径需要在 `apply` 时把当初 `request_action` 收到的 `params` 原样传回去，而且这次 `apply` 可能发生在完全不同的事务/进程（人工批准后由 drainer 异步执行）——不能从 `action_kind` 反推。新增 `params jsonb not null default '{}'::jsonb`，`governance/approval/{types,request-action}.ts` 同步扩展 `ActionRequestRow`/`ACTION_REQUEST_ROW_COLUMNS`/`requestAction()` 的输入与写入。
+  - **`request_action` 是两阶段 capability（协调者复核，PR #42，2026-09；取代本节以下三条曾经的写法）**：`dispatchCapability`（`dispatch.ts`）把 handler 包在一个事务里，提交发生在 handler 返回**之后**。最初版本让"等待人工批准"与"auto_approved 后执行"都跑在这同一个未提交事务里，是两个真 bug 而不只是"已知代价"：① 轮询用的是同一个未提交事务里的 `client`——刚插入的 ActionRequest 行对任何其它连接都不可见，人的 `approve()`（另一个请求、另一个事务）永远看不到它，等待只能超时；② `auto_approved` 时在 ActionRequest、其 audit 行、Activity 都还未提交的情况下就调门的 `apply`（真实外部副作用）——`apply` 之后任何一步失败，这个副作用就发生了却没有留下可追溯的记录（I7/I11），而且这次 `executing` 转移对将在 `ActionRequestUpdated{auto_approved}`（提交后才发布）触发的 drain consumer 也完全不可见。修复引入 `CapabilityHandlerResult.afterCommit?: (pool) => Promise<unknown>`（`capability-handler.ts`，`dispatch.ts` 头注释有完整契约）：phase 1（`dispatchCapability` 已有事务内）只做"解析 ActionRequest"这一件事；phase 2（`afterCommit`，事务提交后才跑）做一切需要等别的连接可见、或有真实外部效果的事——且 phase 2 自己的每次 DB 写都开一个新的短事务（`createAdminWithTransaction`，与定时 tick/outbox consumer 同一个工厂函数），`apply` 调用永远不在任何事务里。这是仓库里第一个两阶段 capability；S2.7 的 `invoke_worker`（同样要长时间等待又不能占住请求自己的事务）预期用同一形状。
+  - **判定表**（R = phase 1，dispatch.ts 事务内；A = phase 2，`afterCommit`，提交后、只用短事务）：① Operation 未发布（draft 或压根不存在，I17 未分类）→ R：`requestAction` 带 `blast_radius=medium/auto_approvable=false/await_decision=true` → 恒为 `pending_approval`（`operationAutoApprovable=false` 在 `governance/policy/engine.ts` 里无条件强制 `require_approval`，不可能是 `auto_approved`/`denied`）→ 落入下面 pending_approval 那一支。② `mode=observe` → 只有 R：直接调门 `observe`（开一个 Activity），`writeObservedFacts` 落图，不产生 ActionRequest，没有 `afterCommit`（读操作没有"效果发生却没记录"的风险；哪怕这次写 Fact 失败，整个 phase-1 事务干净回滚，是正确行为）。③ `mode=execute` 解析成 `denied` → R：抛 `ActionRequestDeniedError`（403）。④ 解析成 `auto_approved` → R 返回 `{actionRequestId, status}` + `afterCommit`；A：`tryExecuteInline` 立即尝试执行。⑤ 解析成 `pending_approval` 且 `await_decision=false` → 只有 R：立刻调门 `simulate`（只读，不需要 `afterCommit`），返回 `{status:'pending_approval', actionRequestId, simulate}`。⑥ 解析成 `pending_approval` 且 `await_decision=true` → R 返回 `{actionRequestId, status}` + `afterCommit`；A：`pollAndExecute` 用短事务轮询到状态离开 `pending_approval`/`approved` 或 `awaitDecisionTimeoutMs`（默认 90s）耗尽——预算内观测到 `approved`/`auto_approved` 就执行；`rejected`/`expired` 原样返回；已经是 `executed`/`failed`（并发的 drain 抢先了）就回读存下的结果；预算耗尽仍是 `pending_approval` 就原样返回，预算耗尽那一刻已经 `approved` 但还没来得及执行就返回 `{status:'approved'}`（不再多等一次门调用，执行交给已经接好的异步 drain 路径）。
+  - **`tryExecuteInline` 与异步 drain 的竞态**：phase 2 与 outbox consumer/定时 tick 都可能对同一行调 `startActionRequestExecution`；行锁 + 条件 UPDATE（S2.3）保证只有一个赢，输的一方拿到 `IllegalTransition`——不会自己重新调一次 `apply`（一次真失败后盲目重试可能对不保证幂等的下游系统造成二次执行；只有门自己按 `actionRequestId` 做的幂等存储才被信任去重 `apply`），而是轮询到终态后从审计轨迹回读赢家的结果（`markActionRequestExecuted`/`markActionRequestFailed` 写状态转移与 `resultMetadata`/`reason` 在同一个事务，`readTerminalOutcome` 直接读回，双方都能拿到 `data`，不再是"输的一方拿不到结果"）。
+  - **组合根接线**（`packages/kernel/src/index.ts`）：新增 `buildGatekeeperExecutionDeps(pool)` 是"`GatekeeperClient` + admin 模式 `ActionExecutor`"唯一的构造逻辑（协调者复核原话"the single shared executor path"——两个独立实例行为完全一致，`ActionExecutor` 本身无内部状态，这里追求的是"只有一处定义怎么构造"，不是跨同步/异步边界共享同一个 JS 对象）。`createServer()` 用它同步调用 `setRequestActionDeps({gatekeeperClient, actionExecutor, awaitDecisionTimeoutMs})`——不等 `createBackgroundServices` 的异步 `AgentRuntime` 引导，因为构造它不需要任何异步产物，只需要已经在手的 `deps.pool`。`ApprovalDrainer`（同样用 `buildGatekeeperExecutionDeps`）、outbox consumer（`application/gateway/action-request-drain-consumer.ts`，订阅 `ActionRequestUpdated`，`status` 为 `approved`**或** `auto_approved` 都触发——后者是"没人同步等待的 `await_decision:false` 自动批准请求"兜底）、定时 tick（`GATEKEEPER_DRAIN_INTERVAL_MS`，默认 1 分钟，扫 `governance/approval` 新增的 `listDistinctExecutableGatekeepers`）都在 `createBackgroundServices` 里。三条异步触发路径、以及 phase 2 自己的每一次短事务，全部用同一个 `skipRoleSwitch:true` 的管理员事务工厂（`SYSTEM_ACTOR_PLACEHOLDER`，现已提到 `governance/gatekeepers/system-actor.ts` 一处共享定义——一个从不被当真实 Principal 解引用的占位 UUID，只满足 `withWorkspace` 的非空校验；phase 2 拿到它之后的第一件事是用它换出真正的 Gatekeeper 服务 Principal，之后的短事务改用后者）——这类跨 workspace 后台任务与既有的 outbox dispatcher/审批 reaper 是同一类角色，不复用 per-request 的 RLS 事务。
+  - **后续修复（R-49 / R-52，2026-10-02 复审）**：① `adapters/gatekeeper-client` 的超时此前只罩到响应头，`response.json()`
+    不受约束——一个先回响应头、再慢慢吐响应体的端点（工作区 owner 自连的端点就可能）能让调用和它所在的 dispatch 事务
+    （以及一条连接池连接）一直挂着，`gate/apply` 卡在响应体上还会被当成普通失败而不是"结果未知"。现在中止信号一直
+    保持到响应体读完（显式与读流竞速，不依赖 fetch 实现是否把信号接到响应体），读响应体时超时同样抛
+    `GatekeeperTimeoutError`；响应体上限 16 MiB（门自己的执行输出缓冲是 10 MiB），超出回 `response_too_large`；
+    非 JSON 响应体回 `invalid_response`（带 HTTP 状态），不再是裸 `SyntaxError`。② outbox 派发器是一个串行循环，每行
+    在一个打开的事务里投递；`ActionRequestUpdated` 的 drain 消费者此前 await 整个 drain（每个排队行一次门 `apply`，
+    最长 60 s），一次 `container.restart` 就能让所有工作区的 `TurnStarted` 停住。现在消费者只读回 Gatekeeper、启动
+    drain 就返回，drain 的错误照旧进 `onError`；进程中途崩溃由定时 drain tick 兜底。测试：gatekeeper-client 单测（响应
+    体停滞超时、超上限、非 JSON）、drain 消费者单测、派发器单测（真实消费者 + 永不结束的 drain，后面的 `TurnStarted`
+    照常投递）。
+  - **服务 Principal 承担 `observed` 归属**：`substrate/graph/store.ts` 的 `deriveEpistemicStatus` 只认 `caller.kind`，`service → observed`；但实际调用 `request_action` 的可能是 `human`（owner 调试）或 `agent`（Worker/入口）。`governance/gatekeepers/service-principal.ts` 的 `getOrCreateGatekeeperServicePrincipal` 按固定 `display_name` 懒创建一个 workspace 级共享 `service` Principal（不是每个 Gatekeeper 一个——`explain()` 靠 Fact 的 `activity_id`/`Gatekeeper --exposes--> Operation` 定位到具体门，不靠 `asserted_by`），`application/gateway/observed-facts.ts` 的 `writeObservedFacts` 用它去 `assertFact`（`Gatekeeper --observed--> target`），保证门读回来的东西落图状态是 `observed`，与真正发起调用的 Principal 无关。
+  - **human 通道的 `request_action` 直接放行 Gatekeeper 覆盖检查**：`governance/policy/engine.ts` 的 `deny` 判定读 `requesterScope.resources['gatekeeper']`，这是 Handle scope 的概念，human 通道压根没有 Handle；`resolveRequesterScope`（`request-action-handler.ts`）对 human 调用者直接合成一个覆盖目标 Gatekeeper 的 scope——派发文字本身允许"human-channel calls are allowed the same way (owner testing)"，本任务把它落实为"human 通道视为对任意它能看到的 Gatekeeper 都有覆盖"，而不是要求先给 human Principal 发一个假 Handle。
+  - **`publish_operation`/`deprecate_operation` 新增到 `packages/shared/src/capabilities.ts`**（派发文字明确允许，"in the existing style only if absent"）：`meta` 组、`channel:'human'`、无 `minRole`（与既有的 `publish_skill`/`publish_worker_definition` 同款——I16 的真正门槛是通道，不是角色），参数 `{gatekeeperId, name}`（Operation 没有独立 id 列，身份键就是这两个字段）；`HUMAN_ONLY_CAPABILITY_NAMES` 同步补上这两个名字。
+  - **已知偏离 / 未覆盖**：① `revert` 协议已实现（`GatekeeperBase.revert`/`adapters/gatekeeper-client`），但没有任何调用方——设计文档没有把"失败后自动 revert"划给 S2.4，`governance/approval` 已有的 `compensateActionRequest` 状态机也是留给未来任务接线；② `simulate` 在 `await_decision=false` 分支里每次都会真的调一次门的网络请求，没有做缓存/去重；③ `governance/gatekeepers/registry.ts` 的 `registerGatekeeper` 在没给 `systemObjectId` 时会自建一个 `ConnectedSystem` 占位 Object（本任务自己的测试与验收脚本用得到，真正的连接流程 S2.13 预期总是带着一个更完整的系统对象调用它，那时这个分支基本不会被触发）；④ ssh 传输的策略表分类（`classifyCommand`）是纯函数与传输内部行为，没有把"活分类结果"接回内核侧静态 Operation 的 `blast_radius`/`auto_approvable`——通用命令探索走观测/`propose_operation`（agent 探索后把发现的具体命令连同分类结果提议成一个具名 Operation），结构化、受策略约束的调用走已发布 Operation，两条路径故意不合并（`ssh.ts` 模块注释与 PR 说明里有更长的论证）。
+  - **测试策略**：`packages/gatekeeper-base` 全部是纯单元测试（无网络，54 个用例覆盖四种传输 + 凭证 + 幂等存储 + 结果映射 + 协议 server 的 Fastify inject）；kernel 侧新增 `adapters/gatekeeper-client/index.test.ts`（单元，假 `fetch`）与三个 `describe.runIf(DATABASE_URL)` 集成测试（`governance/gatekeepers/{registry,manifest}.test.ts`、`application/gateway/request-action.integration.test.ts`——后者起一个真正的 `@nexttime/gatekeeper-base` Fastify 服务器监听本地端口，覆盖六个场景：observe 写 Fact；auto-approve 执行一次**且门只在行对第二个连接可见之后才被调用**（`RecordingTransport` 在 `invoke()` 内部用独立连接查 `status='executing'`，不是靠推断）；`await_decision=true` 由**另一个连接**在等待期间批准，结果 `executed` 且带 `data`、门只调一次（协调者复核指出的、单阶段版本原本永远等不到的场景）；outbox consumer 会触发的 drainer 与 phase 2 自己的执行在同一行上竞态，仍只调一次门（`Promise.all([resultPromise, drainer.drainGatekeeper(...)])` 直接构造竞态）；未分类走 require_approval；draft 永不执行；本地无 `DATABASE_URL` 自动跳过，经 CI 的 Postgres service 验证。
+- 实现说明补充（draft isolation 复审，2026-09，P0）：
+  - **缺陷**：原始 `propose_operation`（Handle 通道）按 `{gatekeeperId, name}` 身份 upsert 一个 Operation 草稿，而图存储的通用 `upsertObject` 是按身份**合并 properties**、不检查现有行的状态——任何调用者都能把一个**已发布**的 Operation 重新写成 `draft`，同时改写它的 `mode`/`blast_radius`/`auto_approvable`（I17 拒服务：把一个自动放行的高危 Operation 覆盖成看似无害、或反过来把一个 observe 型 Operation 改成 execute）。更糟的是 `publish_manifest`（`governance/connections` 组，"批量发布一个 Gatekeeper 当前所有草稿，不做 diff"）会把攻击者刚写下的这份草稿原样发布——owner 一次寻常的"发布清单"操作就把被篡改的定义变成了线上生效的 Operation。
+  - **修复的契约**（`governance/gatekeepers/manifest.ts` 模块级注释、`substrate/ontology/meta-objects.ts` 的 `registerOperationDraftObject` 各有更详细的版本）：① `proposeOperation` 只能新建一个身份，或替换调用者**自己**、`origin` 为 `'agent'`/`'human'` 的草稿；任何其它情况——已发布/已弃用的行、别的 Principal 的草稿、`'import'` 草稿——一律抛 `OperationIdentityConflictError`（HTTP 409 `conflict` / WS `ILLEGAL_TRANSITION`），现有行原样不动。② `importManifest`（owner/CLI/`create_connection`）遇到已发布/已弃用的同名行不再写入，在结果的 `skipped` 里报告该名字与现有状态，写入的草稿一律打上 `origin: 'import'`。③ `publish_manifest` 只批量发布 `origin: 'import'` 的草稿——agent/human 的提案永远不会被一次无 diff 的批量发布卷入；它们各自的 `origin`/`proposedBy`/`proposedByKind` 记在草稿的 `properties` 上，要发布需要 owner 对该 Operation 单独调 `publish_operation`，其返回值带上草稿的完整定义（`operation`/`origin`/`proposedBy`），让 owner 在发布前能看清究竟要发布什么。
+  - **保证手段是数据库层的条件写，不是先读后写**：`registerOperationDraftObject` 没有复用 `graphStore.upsertObject`（那是无条件合并），改成手写 `insert ... on conflict (workspace_id, object_type, identity_key) do update ... where properties->>'status'='draft' and (仅当调用者传入 onlyOwnDraftOf 时，还要求 properties->>'proposedBy' 等于它且 origin in ('agent','human'))`——`ON CONFLICT DO UPDATE ... WHERE` 是对冲突锁定到的那一行版本求值的，两个并发的 `propose_operation` 请求在同一身份上竞争时不可能都通过同一次前置读取的检查；`manifest.ts` 里的先读（`getOperation`）只用来在错误信息里报告"现有行是什么状态"，不是真正的守卫。
+  - **接口改动**：`ImportManifestResult` 从 `readonly OperationRecord[]` 变成 `{imported, skipped}`（`SkippedOperation = {name, status}`）；调用方 `governance/connections/service.ts`（`completeConnection`）、`cli/bootstrap.ts`（`registerGatekeeperFromCli`）同步改用 `.imported`/`.skipped`，两者的对外结果类型都新增 `skippedOperationNames`；`governance/gatekeepers/index.ts` 导出新增 `publishManifest`/`OperationIdentityConflictError` 与相关类型。`interfaces/http/capability-route.ts`（`mapCapabilityError`）与 `interfaces/ws/rpc.ts`（`mapDispatchError`）各新增一支 `OperationIdentityConflictError` 分支。
+  - **测试**：`governance/gatekeepers/manifest.test.ts`（`describe.runIf(DATABASE_URL)`）新增 `draft isolation — propose/import/publish identity conflicts` 一组，覆盖完整攻击序列——import + `publish_manifest` 发布一个 `container.restart` 型 execute Operation；Handle 调用者对已发布身份重新 `propose_operation`（`mode:'observe'`）得到 `OperationIdentityConflictError`、现有行不变；同一提议者重新提议自己的草稿被允许（替换定义）、另一个 Principal 对同一草稿提议被拒；`publish_manifest` 把 agent 来源的草稿留在 `skippedDraftOperationNames` 里，只发布 `origin:'import'` 的草稿；`importManifest` 对已发布的名字返回 `skipped`、不改写现有行。`interfaces/http/capability-route.test.ts`/新增的 `interfaces/ws/rpc.test.ts` 各补一条 `mapCapabilityError`/`mapDispatchError` 单元测试，断言新分支的 409 `conflict` / `ILLEGAL_TRANSITION` 映射。
+  - **D-26 落实（2026-10-02 复审，维护者决定 D-26，L2-15）——Operation 草稿只对提议者、builder 与 owner 可见（#455）**：上面的 draft isolation 复审只隔离了写；读侧 `list_operations`、`get_gatekeeper` 与 `list_gatekeepers` 的数量把每个 Operation 草稿展示给每个成员，而注册表把 `propose_operation` 描述为"私有草稿 Operation（I16）"，Skill / Procedure / WorkerDefinition 草稿早已对其它成员隐藏。现在 `governance/gatekeepers/manifest.ts` 的 `operationVisibleTo(viewer, record)`：非草稿行对所有成员可见；草稿对其提议者、`owner` 与 `builder`（`roleSatisfiesMinRole(role, 'builder')`）可见。`list_operations` 与 `get_gatekeeper.operations[]` 用它过滤，`get_gatekeeper.operationCount` 数过滤后的行；`countOperationsByGatekeeper(…, viewer)` 在 SQL 里按同一规则取可选 viewer，所以 `list_gatekeepers.operationCount` 永不数"身份只存在于别人草稿"的那一条。三个处理器都是 human 通道，viewer 取 `ctx.principal`。**为什么 owner 与 builder 看得到全部 Operation 草稿**（D-26 (a) 原文，实现前主会话确认过）：Skill / Procedure 草稿没有 owner 覆盖，但 Operation 草稿必须有——成员的 Worker 可经 `report_task_result.proposedOperations` 提议 Operation，`proposedBy` = 该成员，而它上线的唯一路径是 owner 在目录里 `publish_operation`；对 owner 隐藏就切断了这条审阅路径。`import` 来源的草稿或无提议者的遗留草稿不是任何人的私有草稿，只有审阅者看得到。不变：I16 写规则、草稿隔离的条件写、`publish_manifest`，以及只读已发布的 agent 读（`find_operations`、`list_allowed_operations`、`getPublishedOperation`）。注册表里 `get_gatekeeper` 与 `list_operations` 的描述写明规则；design §9.3 meta 行、`runbooks/web-console.md` 目录行同步。无迁移，回滚即还原。测试同 D-21 的 `task-operation-visibility.integration.test.ts`：另一成员在 `list_operations`、`get_gatekeeper`、`list_gatekeepers` 数量里只看到已发布的 Operation，提议者还看得到自己的草稿，builder 与 owner 看得到 import 草稿与该成员的草稿。**已知缺口（范围外，已与主会话确认）**：通用图读 `search{objectType:'Operation'}`、`get_object`、`traverse.nodeDetails`、`state_at`、`explain` 仍把 Operation 草稿对象返回给任何成员与任何 agent Handle；封住它需要 `substrate/graph` 里一个元本体过滤。D-24（#460）的 `not_proposer` 拒绝形状在 Operation 草稿上引用本条。
+  - **收尾波次（2026-10-04）——通用图读也隐藏调用者看不到的 Operation 草稿（遗留 123，#467）**：D-26（#455）只在 Operation 目录（`list_operations`、`get_gatekeeper`、`list_gatekeepers.operationCount`）里让草稿只对提议者 / builder / owner 可见，通用图读仍把草稿 Operation Object（名称、描述、mode、blast radius……）返回给任何成员和任何 agent Handle：`search{objectType:'Operation'}`（引导向导以 owner 身份用它）、`get_object`、`traverse`（草稿作为其 Gatekeeper 的邻居，出现在 `nodes` / `nodeDetails` / `edges`）、`state_at`（草稿本身，以及 Gatekeeper 状态里的 `exposes` Fact）、`explain`（`exposes` Fact 上的草稿 id 与其 `operation_proposal` Activity 的 metadata）；同类的还有 `resolve_refs`（点出 Operation id）与 `get_entry_context` 的近期 Fact（agent 上下文）。**一条规则、一处实现**：`substrate/graph/operation-draft-visibility.ts` 以两种形式持有 Operation 草稿读规则——`operationDraftVisibleTo`（TS）与 `operationDraftHiddenSql` / `linkTouchesHiddenOperationDraftSql`（SQL）；`operationVisibleTo` 与 `countOperationsByGatekeeper`（`governance/gatekeepers/manifest.ts`）改为调用它，不再各带一份拷贝；该文件无任何 import，因此 `substrate/epistemic/explain.ts` 可直接引用而不造成 graph↔epistemic 环。谁算审阅者仍由治理的 `seesEveryDraft(role)` 决定——substrate 不能 import governance，所以调用方把这一位通过 `GraphReadViewer { principalId, seesEveryDraft }` 传入（与 `draftVisibilityBinds` 已产出的形状相同）。**图读接受可选 viewer**：`GraphStore.getObject` / `getObjectsByIds` / `search` / `searchPage` / `traverse` / `stateAt` / `listRecentFacts` 与 `explainByNodeId` 末尾多一个 `viewer`。有 viewer 时：Object 的草稿行在 WHERE 里被过滤（`search` 的 `limit` 与 keyset 游标只数可见行）；两端任一是隐藏草稿的 Fact 被丢弃——traverse CTE 的两项都加，所以遍历既不会走到草稿也不会穿过它，隐藏的锚点什么都不返回；隐藏草稿的 `state_at` 是 `{object: null, facts: []}`，`get_object` 是 `null`，`explain` 抛与未知 id 相同的 `ExplainNodeNotFoundError`——没有存在性旁路。没有 viewer 时查询与改前逐字节一致（不加子句、不加绑定），供必须看到真实行的内部调用方使用：I16 写路径守卫（`assert_fact` 的元本体检查、`report_task_result` 的引用检查——这里藏行会跳过守卫）、治理注册表、审计员的 `reconstruct` / `export_prov`。**处理器**：`get_object`、`traverse`、`search`、`state_at`、`explain`、`get_entry_context`、`resolve_refs` 传 `graphReadViewerOf(ctx)`；viewer 约定沿用 #462 的 `draftViewerOf`，原样从 `skill-procedure-handlers.ts` 移到新的 `application/gateway/draft-viewer.ts`，让三个文件共用（人类通道 → 解析出的 principal；Handle 通道 → Handle 的 `obo` 及该 principal 自己的工作区角色）。语义：与 `list_operations` 对每个 viewer 可见性一致——已发布 / 已弃用 → 所有人；草稿 → 其提议者 + owner + builder；无记录提议者的草稿 → 只有审阅者；没有 `status` 的行按草稿读；"记录了提议者"当且仅当该行同时有 `proposedBy` 与 `proposedByKind`（`registerOperationDraftObject` 总是成对写，`toOperationRecord` 一向把缺任一的行读作无提议者；只有 `proposedBy` 的旧行仍只对审阅者可见，#455），TS 谓词与 SQL 片段都严格如此；agent 看到的草稿从不比它代表的人多。Skill / Procedure / WorkerDefinition 的草稿不是图 Object（`projectSkillObject` / `projectProcedureObject` / `projectWorkerDefinitionObject` 只在发布时运行），它们的注册表仍用 #462 的 `draftVisibleTo`——Operation 是唯一草稿住在 `objects` 里的元本体实体；Explorer 端点本来就排除所有元本体 Object 与 Fact，不变。SQL 形状：Object 读只多一个行级谓词（用的是已选行的列，无 join 无子查询，`get_object` 仍是主键查找）；Fact 读对查询已选出的每条 Fact 最多在 `objects (workspace_id, id)` 主键上探测两次（`not exists (select 1 from objects hidden_op …)`），对 owner / builder 子查询里含一个不引用列的合取项 `not $seesEvery::boolean`，Postgres 把它当一次性过滤，完全不探测；Handle 通道每次调用多一次读 `obo` 角色的主键读（与 `list_skills` 同）。不收窄（有意）：`reconstruct` / `export_prov`（审计范围，审计看完整历史）、I16 写守卫、Explorer 契约。残余、没有被现在已隐藏的 id 就够不到：`causal_chain` / `decision_impact` 经不带 viewer 的 `explain()` 解释 Fact，对 `operation_proposal` Activity 的 `explain(activityId)` 会显示其 metadata——非审阅者已无法从任何成员读里得知这两种 id。无迁移，无线上形状或注册表变化，回滚即还原本 PR。测试：`operation-draft-visibility.test.ts`（TS 规则真值表含无 `proposedByKind` 的旧行、SQL 片段形状）；`operation-draft-visibility.integration.test.ts`（Postgres，CI）的**一致性**矩阵（status × proposedBy × proposedByKind × viewer 全组合，经 `operationDraftVisibleTo`、`getObjectsByIds`、`traverse` 三条路径答案相同，非 Operation 对照行从不被收窄）；`queries.test.ts`（带 viewer 的每个构建器追加过滤并把绑定放在自己的之后，无 viewer 不变，traverse 过滤在两项 CTE 中，search 在 `limit` 之前过滤）；`graph-draft-visibility.integration.test.ts`（Postgres，CI）：一个已发布、一个门导入（owner 提议）、一个成员提议的草稿，覆盖 search / get_object / traverse / state_at / explain / `resolve_refs` / `get_entry_context`，人类与 agent Handle 两条通道看到的与其 principal 完全一致。
+
+- 实现说明补充（fix/gate-protocol-hardening，review lane 5 复审 P1/P2/P3，2026-09；三个 ssh P0
+  已在此前单独修过，见 `kinds/ssh.ts` 的 `--`/`shellQuote`/`assertClassificationAllowed`）：
+  - **门认证（P1-1）**：`/gate/*` 每个路由现在都要求 `Authorization: Bearer <token>`（常数时间比较，
+    401 信封从不回显 token）——新增 `gate-auth.ts`（guard，仿 kernel 自己的
+    `interfaces/internal-auth`）+ `gate-token.ts`（纯校验，仿 `@nexttime/shared` 的
+    `internal-token.ts`；`gate_token` 是与 `internal_token` **不同**的独立 secret，两个信任边界不
+    共享一把钥匙）。门侧读 `GATE_KERNEL_TOKEN_FILE`（默认 `/run/secrets/gate_token`），读不到直接
+    拒绝启动；kernel 的 `HttpGatekeeperClient` 读自己的 `NEXTTIME_GATE_TOKEN_FILE`（同默认路径），
+    读不到时不发这个头（可诊断的 401，不是让整个 kernel 进程崩掉）。`docker-compose.yml` 新增顶层
+    secret `gate_token`（`${NEXTTIME_DATA}/secrets/gate.token`，`scripts/gen-handle-keys.sh` 生成）
+    挂进 `kernel` 与四个门服务（`gatekeeper-docker`/`gatekeeper-ragflow`/`accept-s2-ssh-gate`/
+    `accept-s2-http-gate`）；`scripts/validate-compose.mjs` 新增顶层 secrets 名单校验。
+  - **cli 传输参数注入（P1-2）**：`renderCommandTemplate` 现在拒绝一个**纯占位符**模板 token（如
+    `{container}`）替换出以 `-` 开头的值（"flag injection"）——`docker inspect {id}` 这类模板里
+    `id` 若被传成 `--privileged` 之类会被目标 CLI 当成选项而不是位置参数；模板 token 自己就带字面
+    前缀（`--name={container}`）的不受限制，因为前缀不是调用方能控制的。
+  - **idempotency 冲突检测 + 先占位后调用（P2-1）**：`idempotency-store.ts` 的 `IdempotencyStore`
+    接口从 `get/set` 换成 `reserve/complete`——`reserve` 在真正调用 transport **之前**原子地
+    (check-and-insert 之间无 `await`) 占住这个 key，记录 `{operation, paramsHash, onBehalfOf}`；
+    同一个 key 撞见不同 tuple，或撞见一个还在 `pending` 的占位（哪怕 tuple 相同——同一个 key 的
+    真并发重复请求），一律 409 `idempotency_conflict`（`IdempotencyConflictError`），绝不二次调用
+    transport。`GatekeeperBase.apply` 相应改写。
+  - **http/mcp 传输（P2-2/P2-3/P2-4/P2-5）**：`HttpTransport.invoke` 现在传 `redirect:'error'`（
+    `fetch` 默认的 `'follow'` 会把凭证头带去跨域重定向目标）；`importOpenApi` 现在把每个参数自己的
+    `in` 记在 `params_schema` 的 `x-in`（非标准 JSON Schema 关键字，`ajv strict:false` 容忍，且能
+    穿过 `OperationSchema` 的 `params_schema: z.record` 原样透传），`HttpTransport.request` 按
+    `x-in:'query'`/`'header'` 路由——此前非 GET 请求的每个参数无差别塞进 JSON body，`in:'query'`
+    的参数被错误路由；`McpTransport.invoke` 现在检测 `tools/call` 返回的 `isError:true`（MCP 规范
+    自己的"工具失败"信号，此前被当成成功结果持久化进幂等存储）并抛 `TransportInvokeError`；
+    `params-validation.ts` 的 `ajv.compile()` 失败（多数是未解析的 `$ref`）现在包成
+    `ParamsSchemaInvalidError`（400 `invalid_operation_schema`，此前是不透明的 500）,并且
+    `properties` 声明了但没显式给 `additionalProperties` 的 schema 默认补 `false`（此前任意多余
+    key 无 schema 约束直接透传给目标系统）。
+  - **ConnectedAccount 写队列（P2-6）**：`ConnectedAccountStore.set`/`delete` 的读-改-写不再各自
+    独立——`writeQueue`（promise 链）把它们串行化，两个并发写不再互相用后写覆盖前写（
+    Windows 上甚至会因为并发 `rename` 到同一目标路径直接 `EPERM`）。`GATE_STORE_KEY_FILE` 应当像
+    `handle_key`/`internal_token`/`gate_token` 一样进 compose `secrets:`，不是普通 bind-mount 数据
+    卷——本次未在 compose 里新增一个真正跑 `connected_account` 模式的常驻服务（只有 accept-s2 测试
+    夹具用它），因此只在 `connected-account.ts`/`index.ts` 的模块注释里记了这条，没有改 compose。
+  - **P3 一批**（均为收紧/加固，非行为新增）：`NODE_TLS_REJECT_UNAUTHORIZED=0` 从只 `console.warn`
+    改成 `assertTlsNotDisabled` 直接拒绝启动；`GATE_SSH_POLICY_FILE` 现在按**文件路径**读取（此前
+    只会 `JSON.parse` 环境变量自己的值），值以 `[` 开头时仍按内联 JSON 解析以兼容
+    `accept-s2-ssh-gate` 现有的 `GATE_SSH_POLICY_FILE: "[]"`；`GATE_SSH_PORT` 非法值（非数字/超出
+    1–65535）现在启动时报错，不再静默产出 `NaN` 拼进 `-p NaN`；manifest 加载新增
+    `parseManifestJson`（`manifest.ts`，`OperationSchema.safeParse` 逐条校验），`index.ts`/
+    `gatekeepers/docker`/`gatekeepers/ragflow` 三处 `loadManifest` 统一改用它；
+    `ConnectedAccountStore` 内部改用 `Map` 存 records（此前 `onBehalfOf` 为 `"constructor"` 等内建
+    成员名时，`file.records[onBehalfOf]` 读到原型链上的函数而不是 `undefined`）；`ssh.ts` 的
+    `describeExecFailure`/`mcp.ts` 的 `isError`/JSON-RPC 错误文本现在经 `boundUntrustedText`（新增
+    `kinds/untrusted-text.ts`）截到 2KB 并标注 `untrusted:` 前缀，此前目标系统可控的 stderr（最多
+    10MB，`maxBuffer`）/错误文本会原样进入失败原因和审计轨迹；仓库根新增 `.dockerignore`（此前
+    每个 Dockerfile 的 `COPY . .` 会把 `.env`/`secrets/`/`.git` 等一起带进 build stage 自己的镜像
+    层，即使最终 `runtime` stage 没有 `COPY --from=build` 出这些文件，那一层本身仍被本地缓存）。
+  - **测试**：`packages/gatekeeper-base` 新增/改写覆盖每一条上述行为（`gate-auth.test.ts`、
+    `manifest.test.ts`、`idempotency-store.test.ts` 的 reserve/complete + 并发不二次调用、
+    `credentials/connected-account.test.ts` 的并发写与 `constructor` 等内建键名、`kinds/*.test.ts`
+    的 redirect/x-in/isError/flag-injection、`params-validation.test.ts` 的 `$ref`/
+    `additionalProperties`、`tls.test.ts`/`index.test.ts` 的 `assertTlsNotDisabled`/
+    `parseSshPort`/`loadSshPolicyTable`）；kernel 侧 `adapters/gatekeeper-client/index.test.ts` 新
+    增 token 发送/读取覆盖，两个既有 DB-gated 集成测试（`application/gateway/{connection-flow,
+    request-action}.integration.test.ts`）改为对各自起的假门服务器与 `HttpGatekeeperClient` 都传同
+    一个测试 token（协议变化的连带修复，不是新场景）。
+  - **已知偏离 / 未覆盖**：① `document.upload`（ragflow）真实文件上传仍不支持（S2.5 已知限制，本次
+    未动）；② `GATE_STORE_KEY_FILE` 进 compose `secrets:` 只落了文档，没有新增一个真正跑
+    `connected_account` 模式的常驻门服务去验证；③ 四个 Dockerfile 镜像构建本机无 Docker，未验证
+    `.dockerignore` 生效后镜像仍能正常构建（同 S2.4/S2.5 已有的"本机无 Docker"已知限制）。
+  - **后续修复（R-48 / R-50 / R-51，2026-10-02 复审，遗留 104 的后续）**：遗留 104 把 `apply` 超时改成"结果未知、
+    行留 `executing`、由 stale-executing reaper 以同一 `actionRequestId` 重放"，复审发现门侧与内核侧都不完整。
+    - **门（R-51，维护者决定 D-11）**：`IdempotencyStore` 新增 `fail`。`JsonFileIdempotencyStore` 在 `reserve` 返回前就把
+      预留写盘；门进程调用中途退出后，这个 key 重启时载入为孤儿，此后同一 tuple 一律 409 `apply_outcome_unknown`，不再
+      释放给重放去重跑。传输失败记在 key 上（重试得到同一个 502，不再永远 409，也不二次调用）；凭证解析失败释放 key（什么
+      都没跑）。`ssh` / `cli` 加执行超时（`kinds/exec-timeout.ts`，默认 50 s，低于内核 60 s 的 apply 预算；超时 SIGKILL 子
+      进程，记为结果未知），子进程 stdin 立即 EOF，ssh 加 `-n`、`ConnectTimeout=10`、`ServerAliveInterval=15`。
+      `SshCommandRejectedError` 改为 `OperationRefusedError` 子类：403 `operation_refused` 并释放 key，此前是不透明的 500
+      且钉住 key。整文件重写串行化，旧快照不会晚于新快照落盘。Operation schema 里没有平台治理的幂等声明——只有 MCP
+      自报、不可信的 `idempotent_hint`，自动批准时还要叠加门看不到的实例 `vetted`——因此不做"声明幂等即自动重放"：只有
+      已完成的 key 回放结果，孤儿预留一律"结果未知"，不新增清单字段。
+    - **内核重放（R-48）**：新增 `ActionReplayer.replay`，reaper 只走它。它不跑拒绝名单与注册前置检查（首次调用可能已经
+      生效，只有门说了算），总是用同一 key 调幂等 `apply`：成功 → `executed`；门回答该 key 的已存失败（502）或"什么都
+      没跑"的拒绝（403 / 424）→ `failed`；409 `apply_outcome_unknown` → `failed: outcome_unknown`；其余（409
+      `idempotency_conflict` 即仍在执行、超时、不可达、其他错误）→ 行留 `executing`。每次重放前在行上计数（governance
+      0013 `replay_attempts`，重放抛异常也计，跨重启有效），到 `DEFAULT_MAX_REPLAY_ATTEMPTS`（3 次，按 5 分钟一轮约 15
+      分钟）仍无答复 → `failed: outcome_unknown`，交人对账。首次执行同样把 409 `apply_outcome_unknown` 记为
+      `failed: outcome_unknown`，把 409 `idempotency_conflict` 当结果未知（`indeterminate`）。
+    - **每门串行（R-50，D-10：这是保证）**：`listExecutableQueue` 纳入 `executing`；drainer 遇 `executing` 停（另一触发路径
+      的 apply 在途，或结果未知、等 reaper），`indeterminate` 之后也停（`DrainResult.stoppedAtExecuting`）。每处理完一行
+      重读队列，执行期间新批准的行由持有屏障的那次 drain 接着跑，不必等下一个 tick。`start_execution` 仍是条件更新，不加
+      锁（咨询锁跨不过 apply 本身）。`index.ts` 里"进程内单飞是优化"的注释改为：单飞集合只省一次多余 drain，顺序由数据库
+      屏障保证。
+    - **测试**：gatekeeper-base 单测覆盖已存失败 / 结果未知 / 重启后孤儿、凭证失败释放、真实子进程的 stdin EOF 与超时击杀、
+      ssh 拒绝走 403、server 的 409 映射；kernel 集成测试：drainer（`indeterminate` 后停、跨实例屏障并由第一个 drain 接走
+      r2）、request-action（重放超时到上限 `failed: outcome_unknown`、重放遇 409 留 `executing` 后取回已存结果、门回答
+      结果未知时首次与重放都 `failed: outcome_unknown` 且效果只跑一次）、platform-gates（Operation 被禁用后重放仍问门）。
+    - **已知边界**：首次请求根本没到门（key 从未预留）时，重放会第一次执行该效果——门协议只有 `apply` 一个查询入口，
+      Operation 已被禁用也一样；`http` / `mcp` 传输自己的超时仍按普通传输失败（502 → `failed`）记，没有改成结果未知。
+
+### S2.5 `docker` 预置清单与 `ragflow` 门实例
+- 交付物：`gatekeepers/docker`（`cli` 种类的预置清单 + dockerode 绑定；observe：`containers.list / container.inspect / compose.ls / container.logs_tail`；execute：`container.restart`（medium，`await_decision=false`，simulate 返回将影响的容器）、`compose.up / compose.down`（high）；全部 `auto_approvable=false`）；`gatekeepers/ragflow`（`http` 种类的清单：observe `kb.list / kb.documents / retrieve`，execute `document.upload`（medium）、`document.parse`（low））。
+- 验收：对自建测试容器 `apply container.restart` 生效且重复不重启。执行者：Codex 写，Claude Code@host 验收。批准：否。不做：不对现有业务容器 execute。
+- 实现说明（S2.5 PR，2026-09）：
+  - **两个门都是独立的 TS package（`pnpm-workspace.yaml` 新增 `gatekeepers/*`），不是 `@nexttime/gatekeeper-base`'s `main()` 的纯配置实例**——`main()`/`startGatekeeperServer()`（`packages/gatekeeper-base/src/index.ts`）的 `GATE_TRANSPORT_KIND=cli` 分支永远构造基类自己的 `CliTransport`（`execFile` 真的跑一个 `docker` 二进制），与任务原文"no docker CLI in the image"直接冲突；`http` 分支则硬编码 `GATE_TARGET_BASE_URL`/`SharedEnvCredentialResolver({env})`（永远读 `GATE_CREDENTIAL_DEFAULT`），无法参数化成任务原文给的 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY` 这两个更具名的变量名而不改动 `@nexttime/gatekeeper-base` 本身（不在本任务所有权范围）。两个门各自的 `src/index.ts` 因此直接组 `GatekeeperBase` + `createGatekeeperServer`——这正是基类 README 自己文档化的"需要更特殊场景时直接组装"逃生舱口，`docker` 门额外提供一个自定义 `Transport`（`transport.ts`），`ragflow` 门复用基类现成的 `HttpTransport`/`SharedEnvCredentialResolver`，只是换了构造参数。两个包各自的 README"Which build"一节有完整论证。
+  - **manifest 是数据文件（`manifest.json`），不是 TS 字面量**——匹配设计文档 §7.10/§10.1 对"接入包"的定义（`gatekeepers/<system>/manifest.yaml`，本次落地为等价的 `.json`，`OperationSchema` 本来就是从 JSON Schema/YAML 载入的运行期数据，不是编译期类型）；`src/index.ts` 用与基类 `loadManifest` 相同的方式在启动时读取，`GATE_MANIFEST_FILE` 可覆盖（不重建镜像换清单）。
+  - **`docker` 门的 dockerode 绑定**：`docker-client.ts` 是一个窄接口 `DockerClient`（`listContainers/inspectContainer/logsTail/restart/start/stop/ping`）+ 真实 dockerode 实现，风格照抄 `packages/worker-supervisor/src/docker-client.ts`（同一仓库已有的先例：接口port + 假实现，测试从不碰真 socket）；`transport.ts` 的 `createDockerTransport` 按 `operation.name` 分发到这个接口，`binding.kind` 仍声明为 `'cli'`（满足 `CliBindingSchema`、维持"清单看起来像一个 cli 门"的外部一致性），但从不被读取来决定怎么执行——`GatekeeperBase` 本来就是"一个 manifest 配一个 transport 实例"，`binding.kind` 只是每个 Operation 自己的元数据。`container.logs_tail` 需要反多路复用 Docker 日志流的 8 字节帧头（`demuxDockerLogBuffer`，单元测试覆盖含截断帧的情况）。
+  - **`compose.up`/`compose.down` 是缩水语义，已知偏离**：镜像里只有 Docker Engine API（dockerode），没有 `docker compose` 二进制（任务原文明确禁止装）、也没有实现 Compose 文件解析——`compose.up` 只启动该 `com.docker.compose.project=<project>` 标签下**已存在**的、当前非运行状态的容器，`compose.down` 只停止其中运行中的容器；不拉镜像、不创建/重建服务、不管网络/卷。S2.5 验收原文只字面要求 `container.restart` 的幂等 apply，未把 `compose.up`/`compose.down` 的真实语义纳入验收，这个简化不影响可验收范围。两个包 README 与 `docs/runbooks/host-gatekeepers.md` §11 都记了这条。
+  - **`ragflow` 清单的 REST 形状经在线核对，非凭记忆手写**（`docs/references/http_api_reference.md`，上游 `infiniflow/ragflow`）：响应统一是 `{code, data}` 信封，`result_mapping.jmes_path` 因此写成 `data[*]`/`data.docs[*]`，不是裸 `[*]`。两个已知限制：① `document.upload` 只能用 RAGFlow 的 `type=empty` 模式创建空占位文档，不支持真实文件内容——`@nexttime/gatekeeper-base` 的 `HttpTransport` 只发 JSON body，RAGFlow 真实上传要求 `multipart/form-data`，这需要给基类加 multipart 支持或给这个门单写一个自定义 Transport（同 `docker` 门那样），超出"最少代码即可"的本任务范围；② RAGFlow 自己的 `code != 0` 应用层错误对协议不可见——`HttpTransport` 只认 HTTP 状态码，一次 200 但 `code != 0` 的响应会被当成 `ok:true` 且 `observedFacts` 为空，调用方需要自己看 `data.code`/`data.message`。两条都写在 `gatekeepers/ragflow/README.md`。
+  - **`document.upload`/`document.parse`/`compose.up`/`compose.down` 的 `await_decision` 未被任务原文逐字给出**：本次实现统一设为 `true`（`container.restart` 的显式 `false` 除外）——高影响半径操作默认走同步等待批准的路径，是偏保守的工程判断，非任务原文字面要求；`document.upload`/`document.parse` 的 `auto_approvable:false` 同理沿用 `@nexttime/gatekeeper-base`'s `importOpenApi` 对新导入 execute 类 Operation 的既有默认（owner 必须先审后发布，I17）。
+  - **`bootstrap.js register-gatekeeper` 子命令**（`packages/kernel/src/cli/bootstrap.ts`）：S2.13 尚未开工，`governance/gatekeepers`（S2.4）已有的 `registerGatekeeper`/`importManifest`/`publishOperation` 服务函数还没有任何调用方——这个子命令是任务原文明确允许的"if only service functions exist, provide a … subcommand"过渡路径：拉目标端点的 `describe_operations` → 注册 Gatekeeper 实例 → 导入清单（全部落草稿，I17）→ `--publish true` 时逐个发布。`registerGatekeeperFromCli` 的 `HttpGatekeeperClient` 可通过 `options.gatekeeperClient` 注入，`bootstrap.test.ts` 用一个假 `GatekeeperClient` 覆盖它，不需要真起一个门服务。此文件不得出现 `docker`/`ragflow` 等具体系统名（`scripts/check-kernel-purity.sh`）——子命令与其 usage 文字全部用中性词汇（`--name <name> --endpoint <url>`），具体例子只出现在 runbook 里。
+  - **compose/主机脚本改动**：`docker-compose.yml` 的 `gatekeeper-docker` 新增 `${NEXTTIME_DATA}/gatekeepers/docker:/data/gate` 挂载与 `group_add: ["${DOCKER_GID:-999}"]`（非 root uid 10001 连 docker.sock 的既有模式，同 `worker-supervisor`/`agent-host`）；`gatekeeper-ragflow` 新增 `${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate`。`scripts/host-bootstrap.sh`/`scripts/host-env-init.sh` 的目录创建/chown 清单加了这两个子目录（`gatekeeper-ragflow.env` 模板同时把占位变量名从旧的 `RAGFLOW_URL`/`RAGFLOW_API_KEY`（S1.9 时代先占位，本任务给出真正形状）改成 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY`）；`deploy/backup/backup.sh` 的文件备份 tar 新增 `gatekeepers/`（两个门都只用 `SharedEnvCredentialResolver`/共享 env 凭证，没有 `ConnectedAccount` 本地加密存储，`GATE_DATA_DIR` 下只有幂等存储这类操作态数据，判定为"config-like"纳入备份，不是 `secrets/`）。
+  - **测试策略**：两个门包都是纯单元测试（无网络/无 socket）——`docker` 门：`manifest.test.ts`（清单校验 `OperationSchema` + 任务原文的分类表）、`docker-client.test.ts`（日志帧反多路复用）、`transport.test.ts`（经真实 `GatekeeperBase` + 假 `DockerClient`：`containers.list`/`container.inspect` 的 `observedFacts` 结果映射、`container.restart` 的 `simulate` 与幂等 `apply`——重复同一 `idempotencyKey` 只调一次假 dockerode 的 `restart`、`compose.up`/`compose.down` 只对目标状态不同的容器动作）、`index.test.ts`（`buildDockerGate` 装配）；`ragflow` 门同理，`result-mapping.test.ts` 用从在线文档核对出的样例响应验证映射到 `KnowledgeBase`/`Document`。kernel 侧新增 `cli/bootstrap.test.ts` 的 `registerGatekeeperFromCli` 集成测试（`describe.runIf(DATABASE_URL)`，假 `GatekeeperClient`）：不发布时清单落草稿、`--publish true` 时全部发布。`docs/runbooks/host-gatekeepers.md` 是本任务对"对自建测试容器 apply container.restart 生效且重复不重启"这条验收在真实 Docker 上的复核步骤（本机无 Docker，未在开发机验证）。
+  - **已知偏离 / 未覆盖**：① `gatekeepers/ragflow` 未针对任何真实 RAGFlow 部署做端到端验证（本机与本次主机验收都没有可用实例）——runbook §10 把这一步标为"若本机有可用的 RAGFlow 实例"的可选步骤；② `compose.ls` 未声明 `result_mapping`（任务原文只要求 `containers.list`/`container.inspect` 映射到 `Container` Fact，`compose.ls` 的分组视图没有对应的单一 ObjectType，留作纯 Observation）；③ 两个门的 `GATE_PORT` 默认统一为 `8083`（任务原文未指定；两者是不同容器/不同网络命名空间，不冲突，选一个值是为了 runbook/compose/README 三处保持一致，不是设计要求）。
+  - **fix/gate-protocol-hardening 补充（2026-09）**：两个门现在都要求 `GATE_KERNEL_TOKEN_FILE`
+    才能启动、`loadManifest` 都改用 `@nexttime/gatekeeper-base` 新增的 `parseManifestJson`（跑
+    `OperationSchema` 校验，不再是裸 `JSON.parse` 强制类型断言）——两个门自己的行为/清单内容不变，
+    只是启动前多了这两道检查；完整清单见 S2.4 小节自己的同名补充段落（认证/幂等/传输层的修复都在
+    `@nexttime/gatekeeper-base`，两个门包只是消费方）。
+
+### S2.6 平台元本体与 WorkerDefinition 注册表
+- 交付物：`ontology/platform-meta.yaml`（ObjectType：WorkerDefinition / Gatekeeper / Operation / Capability / Skill / Procedure；LinkType：exposes / reads / writes / can_act_on / requires / connects_to / uses / steps）；`ontology/entry-agent.yaml`（kind=entry，能力上限固定，system prompt 教异步模型）；`ontology/ops-runner.yaml`（kind=worker）；`worker/definitions.ts`（`propose / publish / deprecate`，publish 只 human 通道）；注册 Gatekeeper 时同步写元本体对象；I16：Handle 通道写这些类型被拒。
+- 验收：引用 draft 被拒；Handle 通道 `assert_fact(WorkerDefinition …)` 403。依赖：S2.1、S1.2。
+- 实现说明（S2.6 PR，2026-09）：
+  - **本体加载器是本任务新建的第一套机制**：`substrate/ontology/index.ts` 在 R1 之后一直是占位符（`export {}`，S3.1 尚未落地），本任务据此实现了 `substrate/ontology/loader.ts`（YAML 解析 + Zod 校验 `OntologyDefinitionSchema` + `publishOntologyVersion` 直接写 `published` 行——bootstrap 时种入，无草稿态，同 `worker_definitions` 种子一样理由：种子步骤没有第二个评审者）与 `meta-objects.ts`（`projectWorkerDefinitionObject`、`registerGatekeeperObject`，把已发布的 WorkerDefinition / 未来的 Gatekeeper 投影成图 `objects`/`links` 行——§7.1 模块表把"WorkerDefinition、Gatekeeper、Capability 对象"这部分职责划给 `ontology` 模块，不是 `application/worker`）。S3.1 预期复用这套加载器给核心领域本体，而不是另起一套。
+  - **文件布局**：`ontology/*.yaml` 用平面文件（`platform-meta.yaml` / `entry-agent.yaml` / `ops-runner.yaml`），未采用设计文档 §10.1 草图里的目录形态（`ontology/platform-meta/`）——本任务派发文字明确给的是平面文件路径，覆盖设计文档的目录草图（"design doc only where names deviate"）。
+  - **`ONTOLOGY_DIR`**：`substrate/ontology/loader.ts` 的 `resolveOntologyDir()` 默认按源文件相对路径向上 5 层解出仓库根 `ontology/`（同 `cli/migrate.ts` `defaultMigrationsDir()` 的手法，本地 `src`/`dist` 深度相同）；但 `ontology/` 是仓库根内容而非 `packages/kernel/` 自身文件，`pnpm deploy` 不会带进部署镜像——`packages/kernel/Dockerfile` runtime 阶段因此新增 `COPY --from=build .../ontology ./ontology` 与 `ENV ONTOLOGY_DIR=/app/ontology`，本地开发走相对路径回退，容器里显式覆盖。
+  - **`propose_worker_definition` 的 capability 参数 schema 做了必要扩展**（`packages/shared/src/capabilities.ts`）：原 schema 只有 `{definition: jsonRecord}`，既没有办法指定"给已存在的哪个 id 追加新版本"，也没有独立的 `kind` 字段（`worker_definitions.kind` 是与 `definition` jsonb 并列的 DB 列，不应该塞进这个不透明 blob 里再解出来两处真源）——本任务在这个属于自己所有权范围内的 capability 组上新增了 `definitionId`（可选）与 `kind`（必填）两个顶层字段，`definition` 保留为纯内容 blob。
+  - **I16 在 registry 侧几乎是"免费"的，不需要额外运行时检查**：`publish_worker_definition`/`deprecate_worker_definition` 的 `channel:'human'` 已经在 `authorizeCapabilityCall` 里被通用拦下（Handle 通道请求根本进不到 handler）；`propose` 永远 INSERT 一行新记录且 `proposed_by` 恒为调用者自身（`currentPrincipalId`），"修改他人草稿"这条路径在这组 capability 的形状下不存在。
+  - **I16 在图写入路径（`assert_fact`）上是本任务新建的一个专门 guard**：`application/gateway/meta-ontology-guard.ts` 导出 `assertMetaOntologyHandleWriteAllowed(channel, objectType)`，`MetaOntologyWriteForbiddenError extends ForbiddenError`（`interfaces/http/capability-route.ts` 新增一条更早的 `instanceof` 分支，映射到稳定的 HTTP 错误码 `meta_ontology_write_forbidden`，而非退化成通用的 `forbidden`）。`gateway/handlers.ts` 新增的 `assertFactHandler` 解析 `objectId`/`sourceId` 引用的 Object 类型，命中平台元本体类型且是 Handle 通道即 403；**已知偏离**：`assert_fact` 这个 capability 的既有 paramsSchema（`{objectId, linkType, value, sourceId?}`）与 `substrate/graph/store.ts` 的 `AssertFactInput`（`sourceObjectId/targetObjectId/activityId`，I3 要求 `activityId` 必填）形状对不上——这个缺口在本任务之前就存在，不属于 WorkerDefinition/元本体范围，本任务只做到"guard 检查完全跑通、写入本身仍是 `AssertFactWriteNotImplementedError`（501）"，不擅自改写一个不归自己所有的通用 capability 的语义。验收标准"Handle 通道 assert_fact(WorkerDefinition …) 403"因此是在真实 `dispatchCapability` 管线上验证的（不是绕开管线的纯函数单测）：先经 `publish_worker_definition`（human 通道）真的发布出一个 WorkerDefinition 图对象，再用 Handle 通道对它调 `assert_fact`，断言 403。
+  - **`publishWorkerDefinition` 顺带发现并修的一个 S1.6 既有 bug**：`governance/capability/handles.ts` 的 `entryScope()` 固定能力集漏掉了 `explain`——设计文档 §5.1.2/§7.4 明确把 `explain` 列进入口 S1 observe 组，`platform-extension` 的 entry 模式也确实把它注册成工具，但 `ENTRY_CEILING_CAPABILITIES` 的构造逻辑只用 `group==='graph'` 判定（`explain` 的 group 是 `'epistemic'`），导致入口 agent 实际调用 `explain` 时会被 Handle scope 拒绝——此前没有任何测试覆盖到这一步（`handles.test.ts` 只断言"scope 等于自身"）。已在 `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES` 补上 `explain` 并加回归断言；发现路径是本任务自己的 `entry-agent.yaml` 需要通过"capabilities ⊆ entryScope()"校验，逐项核对时发现的。
+  - **`AgentHostRuntime.startTurn` 解析已发布入口 WorkerDefinition**（`application/host-bridge/agent-host-runtime.ts` 新增 `resolveEntryDefinition`）：每次 `startTurn` 都重新查一次（发布本身很少发生，多一次读比维护一份可能过期的缓存更简单也更不容易出 bug），从未发布过时仍按没有处理（降级为不带 `systemPrompt`/`model` 的帧，`entrypoint.sh` 的写-if-missing 静态兜底与 pi 自己的默认模型选择接手）；读失败时本轮不启动（#1229，遗留 434，20097bd），五项读（个人设置、入口定义、Skill、平台说明、运行镜像）同此，管理员 agent 签 Handle 之后的读同此。`packages/shared/src/agent-host-protocol.ts` 的 `KernelStartTurnCommandSchema` 新增两个可选字段承载它们。
+  - **容器落地三层透传**：`agent-host`（`host.ts` 的 `ensureAttachment`）把 `cmd.systemPrompt`/`cmd.model` 转发进 `supervisor-client.ts` 的 `SpawnInput`；`worker-supervisor` 的 `SpawnRequestSchema`（`config.ts`）新增同名可选字段，`resident-service.ts` 的 `spawn()` 在决定复用/新建容器**之前**把 `systemPrompt` 写入 `/workspace/.nexttime/system-prompt.md`（内容不变则不覆写；无论是否复用都写，保证下一次真正重启时读到的是最新版——`entrypoint.sh` 本条文字不变，仍然是"文件不存在才写自己的静态兜底"，只是现在多数情况下这个文件已经由 supervisor 提前放好了），`model` 经 `spawn-spec.ts` 的 `buildSpawnSpec` 变成容器 `cmd: ['--model', model]`（`ContainerSpec.cmd` 字段与该机制均已由 S2.8/PR #35 落地，本任务复用，未重新发明）。
+  - **`create-workspace` 种子**：`cli/bootstrap.ts` 在与 workspace/owner 同一事务内，先 `seedPlatformMetaOntology` 再 `proposeWorkerDefinition`+`publishWorkerDefinition`（读取 `ontology/entry-agent.yaml`，`kind` 与内容分离——见该文件头注释）发布 entry v1；新增 `--entry-model <provider/id>` 覆盖种子文件里留空的 `model` 字段；两步都不吞异常，加载/校验失败直接中断 `create-workspace`（这是一次性的部署期种子操作，失败应该立刻可见，不套用别处"上报失败不阻塞"的 best-effort 惯例）。
+  - **`scripts/accept_s1.sh`**：`entry_worker_definition_step` 不再整体 SKIP——断言新 workspace 已有一条已发布的 entry WorkerDefinition，经 caddy 用 owner 的 human 通道 `propose_worker_definition`/`publish_worker_definition` 发布 v2（与既有 `explain_step` 同样的传输方式）；Handle 通道 403 这一半在主机脚本里铸造一个真 Handle 成本过高（主机无 node/corepack，也没有面向任意 shell 调用的签发 capability），改为指向 `handlers.test.ts` 里跑在真实 gateway 管线上的内核单测，如实 SKIP 并在 `docs/runbooks/accept-s1.md` 里写明——见该 runbook "已知缺口"。
+  - **补注（feat/egress-definition-lists，2026-09）**：definition-level egress lists now wired
+    end-to-end。当时 `EntryWorkerDefinitionContentSchema` 的 `egressDeny` 字段本身已经种下
+    （见本节 578 行前的字段列表），但从没有任何代码把它读出来转发给 `worker-supervisor`/
+    `egress-proxy`——`AgentHostRuntime.startTurn`（576 行提到的同一处 `resolveEntryDefinition`）
+    现在顺带解析 `egressDeny`，与 `systemPrompt`/`model` 同一帧转发到 `/resident/spawn`；同一个
+    字段也扩到 `WorkerWorkerDefinitionContentSchema`（`kind='worker'`），使 `invoke_worker` 派生的
+    Task/WorkerRun 同样能声明自己的出网拒绝清单。详见 S1.11 小节自己的同名补注、该分支 PR 描述。
+
+### S2.7 `find_workers` 与 `invoke_worker`
+- 交付物：`graph/find-means.ts`（`find_operations / find_workers / find_procedures`：元本体 traverse × 用户 Grant 交集）；`task/{service,invoke,reaper}.ts`（`invoke_worker(def@v, input, wait, timeout=90s)`；子 Handle 衰减且继承 `on_behalf_of`；`parent_worker_run_id`；超时返回 `task_id`；崩溃回队；terminate 撤销 Handle；**配额（I18）**：派生链深度 ≤ 3、每用户并发 WorkerRun、每 Task token 与时长、每工作区日成本，作为工作区策略数据，`migrations/task/0002_quotas.sql`；深度或并发超限时 `invoke_worker` 返回入口 agent 可转述的错误；预算 80% 时经 `context` 注入警告，100% 时 Task `failed: budget_exhausted`）。
+- 验收：入口 Handle 为**未获授权的门**（不在其 `resources.gatekeeper` 里，即用户没被 `connect_gatekeeper` 授予）请求含 execute 的子 Handle 被拒；**规格修正（S2.12 发现，G1 主链所迫）**：原文"入口 Handle 请求含 execute 的子 Handle 被拒"的字面实现让"对话 → 派 Worker → 卡片 → 批准 → 执行"结构上不可能——`request_action` 只创建 ActionRequest，执行权在策略（I8）或审批人（I14），所以对门的**提议权随门资源一起委派**（`handle-mint.ts`），`<gate>.<op>:execute` 仍按能力名衰减；`wait=true` 超时返回 `task_id` 不挂死；子 WorkerRun 的 ActionRequest 沿 `parent_worker_run_id` 回到父 Task；第四层派生被拒且错误可读；fake `llm-proxy` 上报 100% 后 Task 进入 `failed: budget_exhausted` 且入口 agent 下一轮 `context` 含该信息。依赖：S2.3、S2.6、S1.9、S1.7。
+- 实现说明（S2.7 PR，2026-09）：
+  - **为什么 `invoke_worker` 从不使用 `dispatchCapability` 自己开的那个事务**：这是本任务最重要的一个架构决定，不是随手的偏离。`invoke_worker` 会铸造一个 CapabilityHandle 并让刚 spawn 的 Worker 容器**立刻**用它回调内核——但 Worker 的第一次 API 调用要验签 `capability_handles`，这张表在插入所在事务提交之前，对任何其它连接都不可见（`governance/capability/handles.ts` 的 `createDbRevocationCheck` 对未知 `jti` 是 fail-closed，等同"已撤销"）。如果沿用别的 capability handler 那种"整个调用共享 `dispatchCapability` 的一个事务"的写法，`wait=true` 的轮询（默认最多 90 秒）会把这个事务一直开着——意味着刚 spawn 出来的 Worker 在整个等待窗口内完全无法通过身份验证，是一次自我造成的死锁，不只是"没做到最优"。`application/task/invoke.ts`（以及 `spawn.ts`/`lifecycle.ts`/`reaper.ts`/`service.ts`）因此自己管理若干条短的、独立提交的 `withWorkspace(deps.pool, ...)` 事务：创建阶段提交后 Handle 立刻可用，`wait=true` 的轮询只调用 supervisor 的 HTTP 状态接口（不占用任何数据库事务）。`application/gateway/handlers.ts` 的 `invokeWorkerHandler`/`cancelTaskHandler` 因此完全不使用 dispatch.ts 传入的 `client`；`dispatchCapability` 自己那条"这次 capability 被调用了"的粗粒度 audit 行仍然正常写入（在它自己的、内容基本为空的事务里）——这是一处刻意的、有文档说明的例外，不是遗漏。
+  - **`TaskRuntimeDeps`（`runtime.ts`）新增一个 `pool: PoolLike` 字段**，与既有 `agentRuntime`/`setAgentRuntimeForHandlers` 完全同构的"组合根设置一次、handler 读取"模式：`packages/kernel/src/index.ts` 的 `createBackgroundServices` 只有在拿到 `options.handleKeyPair` 时才调用 `configureTaskRuntime`——不论 `AGENT_RUNTIME`/`kind` 是什么（`invoke_worker` 铸 Handle 与 `AgentHostRuntime` 是否存在无关），也不强制要求（没有 keypair 时 `invoke_worker` 会抛 `TaskRuntimeNotConfiguredError`，但只在真被调用时才抛，从不在启动时让整个内核进程崩溃）。`main()` 因此把 `loadHandleKeyPair()` 从"只在 `kind==='agent-host'` 时读"改成"总是尝试读，读失败仅告警、不致命，除非 `kind==='agent-host'`"——目标部署的 `handle_key` secret 本来就无条件挂进 kernel 容器（compose 文件），这个改动只是让本地/测试环境在没配 Handle 密钥时也能正常起服务，只是 `invoke_worker` 不可用。
+  - **子 Handle 铸造不复用 `governance/capability/handles.ts` 的 `attenuate()`**：`attenuate()` 把子 Handle 绑定到与父 Handle **相同**的 session（"衰减不开新 session"，它自己的文档注释原话）；但一个 WorkerRun 需要**自己的**session（派发文字："sid = a new worker_run-kind session"）——`worker_runs.session_id` 以及建在它之上的出网来源归属（`worker:<workspaceId>:<workerRunId>`）都需要一个稳定、专属的 key，即使是同一 Task 下的一次 requeue 也要拿到一个全新的 session/Handle。`application/task/handle-mint.ts` 因此把 `attenuate()` 内部的子集校验单独抽成 `governance/capability/handles.ts` 新导出的 `assertScopeIsSubset(parentScope, childScope)`（`attenuate()` 自身改写为调用这个新函数，行为不变），`mintWorkerRunHandle` 自己建 session 行、再调更底层的 `issueHandle`。
+  - **"入口 Handle 请求含 execute 的子 Handle 被拒"的精确规则**（`handle-mint.ts` 的 `computeChildHandleScope`，全部逻辑都有单元测试覆盖，`handle-mint.test.ts`）：WorkerDefinition 声明的非 execute 类需求，调用方 Handle 若没有就**静默丢弃**（子 Handle 拿不到那一项，调用仍然成功——对应设计文字"capabilities ∩ definition's declared needs"的字面读法）；execute 类需求（`<gate>.<op>:execute`、`request_action`——`governance/capability/handles.ts` 新导出的 `EXECUTE_CLASS_CAPABILITY_NAMES`/`isExecuteClassCapability`）若调用方 Handle 没有，则**拒绝整次调用**（`InvokeWorkerAttenuationError`），不静默丢弃——因为静默铸造一个"干不了自己定义声称要干的事"的 Worker 是比直接报错更差的失败模式。`governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES` 结构上从不包含任何 execute 类名字，所以入口 Handle 发起、且目标定义声明了 execute 类需求的每一次 `invoke_worker` 调用，都会被这条规则拒绝——这就是验收条目"入口 Handle 请求含 execute 的子 Handle 被拒"的字面实现，不是巧合。开发过程中发现过一次真实 bug：早期实现把"execute 类缺失即拒绝"和"非 execute 类缺失即丢弃"分开判断后，仍然无条件把整份声明列表塞进 `childCapabilities`，再用一次统一的 `assertScopeIsSubset` 兜底校验——这个兜底反而把本该"静默丢弃"的非 execute 项也一起拒绝了；`handle-mint.test.ts` 的"a non-execute-class capability the parent lacks is silently dropped, not rejected"这条用例第一次跑就抓到了它，修法是让 `childCapabilities` 的构造过程本身就保证只包含"parent 持有，或 execute 类且已通过检查"的项，末尾的 `assertScopeIsSubset` 变成真正意义上的、永不应触发的第二道防线。
+  - **human 通道调用 `invoke_worker` 的授权模型（"unconstrained"）**：`invoke_worker` 注册表 `channel:'handle'`，但 `application/gateway/authorize.ts` 既有的解读允许 human 调用任何 `channel:'handle'` capability（human 信任等级 ⊇ handle）。human 调用者没有 Handle 可衰减——`handle-mint.ts` 的 `resolveParentAuthority` 因此区分：`owner` 角色 → `'unconstrained'`（跳过子集校验，因为没有东西可衰减，且 owner 是平台内最高的人类权限），任何其它角色 → `EMPTY_CAPABILITY_SCOPE`（视为持有空 scope，execute 类需求同样会被拒绝，绝不静默放行）。这条区分是必要的：`invoke_worker` 的 `minRole` 只是 `'member'`，如果"没有 parent Handle = 不做任何约束"对所有 human 角色一视同仁，任何 `member` 都能绕开整套 Handle 衰减模型直接铸造 execute 类子 Handle。
+  - **配额（I18）**：`application/task/quotas.ts` 定义 5 个 key（`task.max_depth`、`task.max_concurrent_worker_runs_per_user`、`task.default_token_budget`、`task.default_duration_limit_sec`、`task.daily_cost_budget_usd`），编译内默认值 + `migrations/task/0002_quotas.sql`（`quotas(workspace_id, key, value jsonb)`，与 §9.2 增量草图逐字一致）里的工作区覆盖，`resolveQuotas` 合并两者。`task.max_depth` 有一个不可被工作区覆盖突破的硬顶 `HARD_MAX_DEPTH = 3`（`resolveQuotas` 对读到的值再做一次 `Math.min`，`set_quota` 的 zod 校验本身也拒绝写入超过 3 的值——双重防线，理由同 §5.4 I18 本身就是不可协商的失控防护，不是普通的工作区偏好）。深度用 `worker_runs.depth`（新列，见下）反算——不做递归 CTE：调用方若持有 Handle，按其 `sid` 查自己是否对应一行 `worker_runs`（是则депth = 该行 `depth`+1，否则 0）。并发用 `worker_runs join tasks` 按 `tasks.on_behalf_of` 与未终止状态计数；日成本读 `governance/llm-usage` 新导出的 `sumTodayCostUsd`（与既有 `sumTodayTokens` 同构，只是求和列换成 `cost_usd`，之前只在 S1.7 的 token 维度做过，这是它的成本维度对照）。三种超限都在**创建任何行之前**用同一条 `withWorkspace` 事务内的读校验完成，且额外把子 Handle 的子集/execute 校验也挪到 Task 行插入之前（`computeChildHandleScope` 先干跑一次，`spawnWorkerRun` 内部再算一次同样结果——纯函数、廉价，换来的是被拒绝的调用不留下半个 Task 行）。三种错误共用 `QuotaExceededError`（`code` 字段是 `depth_exceeded`/`concurrency_exceeded`/`daily_cost_exceeded` 之一，`message` 是可读文本）——HTTP 层映射到 `429` + 该 `code` 原样透出，WS 层因为线协议没有独立字符串 code 的位置，统一映射到一个新数字码 `QUOTA_EXCEEDED`，`message` 仍然透出（入口 agent 转述用的是 `message`，两个传输层都不丢）。
+  - **`migrations/task/0003_task_worker_run_lineage.sql`**：在已应用的 `0001_tasks.sql`/`worker_definitions` 之上纯增量加列（`alter table ... add column if not exists`，从不改动已应用列的类型或约束）——`worker_runs` 加 `depth`/`activity_id`/`attempt`；`tasks` 加 `token_budget`/`duration_limit_sec`/`tokens_used`/`budget_warned_at`/`failure_reason`/`retry_count`。`worker_runs.activity_id` 就是"S2.7 在 spawn 时创建的 `kind='worker_run'` Activity"（下面 egress 归因一条）落地的地方。
+  - **`packages/shared/src/transitions.ts` 补了一条 `WorkerRun` 边**：`{from: 'provisioning', event: 'terminate', to: 'terminated'}`——原表只有 `provisioning -> running`（`start`）一条出边，但 `invoke_worker` 在拿到 WorkerRun 的 id 之后、真正调用 supervisor `/task/spawn` 之前就已经把它落库为 `provisioning`（supervisor 需要这个 id 才能起容器）；如果 spawn 调用本身失败（网络错误、镜像不在 allowlist、配额竞态），这一行必须能合法地直接转到 `terminated`，而不是卡在一个转移表都不允许离开的状态。属于本任务发现并修的一个既有小缺口，穷举测试（`transitions.test.ts`）不需要改——它按表自身的边自动覆盖新边。
+  - **Task/WorkerRun 状态表（如实现）**：
+    - `Task`：`queued`（`invoke_worker` 直接插入这个状态，从不落地 `created` 这个瞬时态——理由同 `governance/approval/request-action.ts` 的既有先例："单次 INSERT 落到已解析的最终状态"）→ `running`（spawn 成功）；`running ⇄ waiting_approval`（`reaper.ts` 的事件驱动路由，见下）；`running -> completed`（S2.9 的 `completeTaskWithResult` seam）；`running`/`queued`/`waiting_approval` -> `failed`（`failure_reason` 之一：`spawn_failed`、`no_result`、`worker_failed`、`timeout`、`budget_exhausted`）；`-> cancelled`（`terminateTask`/`cancel_task`）。
+    - `WorkerRun`：`provisioning`（行落库，Handle 还没铸）→ `running`（spawn 成功）；`provisioning -> terminated`（spawn 失败，新增的转移边）；`running -> terminated`（正常终止/超时/失败/预算耗尽/显式 terminate，`lifecycle.ts` 的 `terminateWorkerRunRow` 统一入口，幂等）。`suspended` 状态在 S2.7 未使用（设计文档把它类比 Task 的 `waiting_approval`，但 S2.7 的实现选择让 WorkerRun 在等待审批时保持 `running`——审批状态只体现在 Task 层——容器本身并没有真的暂停，这个偏离已在下面单独说明）。
+  - **`reactToSupervisorStatus`（`lifecycle.ts`）是 `invoke.ts` 的 `wait=true` 轮询与 `reaper.ts` 的 30 秒定时扫描共用的唯一反应逻辑**：`exited`（退出码 0，S2.9 还没接上结果契约）→ 若 Task 还是 `running` 就标 `failed: no_result`；`failed`（非零退出码）→ `tasks.retry_count < 1` 时requeue 一次（读回失败 WorkerRun 自己那份已经铸造好的 Handle scope 作为衰减起点，不重新解析调用方——见下一条），否则 `failed: worker_failed`；`terminated`（reason 由 supervisor 给出）→ `reason==='timeout'` 时 `failed: timeout`，否则（`requested`，通常是 `terminateTask` 已经同步处理过）只兜底确保 Task 不会永远卡在非终态。
+  - **requeue-once 的衰减起点是"失败的 WorkerRun 自己已经持有的 scope"，不是重新解析原始调用方**：`lifecycle.ts` 的 `spawnWorkerRunForRetry` 直接从 `capability_handles`（按 `session_id` 查）读回失败 WorkerRun 自己那份 `scope`/`jti`/`expires_at`，以它作为新一次 `spawnWorkerRun` 的 `parentAuthority`/`declaredCapabilities`/`declaredGates` ——requeue 语义上不是"再申请一次新的东西"，而是"用已经被批准过的同一份权限重跑一次"，因此不可能因为这条路径而意外扩大权限，也不需要原始调用方的 Handle 仍然有效（Worker 本身产生的失败与调用方是否还在线无关）。
+  - **崩溃重试按现在的授权收窄**（#1135，遗留 289，3bd14b5）：在读失败那次 Handle 的同一事务里读这个人当前的停用状态与执行授权，`retryScopeNow` 取失败那次 scope 与现在能持有的交集（能力按 `roleMayUseCapability`，门按执行授权），只收窄不放宽；停用、已不存在或不能再启动 Worker 的人不重试，Task 失败为 `worker_failed`。`waiting_approval` 期间计时不暂停（遗留 290）。
+  - **`spawnWorkerRun` 独立成 `application/task/spawn.ts`**：最初写在 `invoke.ts` 里，但 `lifecycle.ts`（requeue 需要它）要静态 import `invoke.ts`，而 `invoke.ts` 的 `wait=true` 轮询又要用 `lifecycle.ts` 的 `reactToSupervisorStatus`——`depcruise` 正确报出这是一处循环依赖（当时用一个函数体内的 `await import()` 绕开，`depcruise` 仍能探测到、只是降级成 warning 而非 error）。拆成独立的 `spawn.ts`（不依赖 `invoke.ts` 或 `lifecycle.ts`）后两者都改成静态 import，`pnpm depcruise` 回到 0 违规、0 警告——比留着一个"能过 CI 但本质是循环"的写法更干净，值得多花的这点重构成本。
+  - **`waiting_approval` 路由是事件驱动，不轮询**（`reaper.ts` 的 `registerActionRequestRoutingConsumer`）：订阅 outbox 的 `ActionRequestPending`/`ActionRequestUpdated`（`OutboxDispatcher.subscribe`，与既有 `turn-started-consumer.ts` 同一模式），从不导入 `governance/approval` 内部文件——两个事件本身不携带 `parentWorkerRunId`（`packages/shared/src/events.ts` 故意没有为此加宽这两个事件），改用它模块公开的 `getActionRequest` 按 `actionRequestId` 回读一次拿到 `parentWorkerRunId`，再用本任务新导出的 `taskForWorkerRun` 找到父 Task。**已知简化**（有文档说明，非疏漏）：`ActionRequestUpdated` 只要该事件对应的 ActionRequest 自己离开 `pending_approval` 就无条件把 Task 从 `waiting_approval` 恢复到 `running`，不检查同一 Task 下是否还有**另一条**并发 pending 的 ActionRequest——`governance/approval` 目前没有一个公开读接口能回答"这组 WorkerRun 下还有哪些 pending"，凭空发明一个不是本任务该单方面决定的事；一个 Task 同时有多条并发待批 ActionRequest 不在本任务验收范围内，被验证的单条审批流程不受这个简化影响。
+  - **egress 归因扩展到 `worker:` 前缀**（`application/host-bridge/egress-observations.ts`）：`entry:<workspaceId>:<principalId>` 之外新增 `worker:<workspaceId>:<workerRunId>`（格式定义在 `packages/worker-supervisor/src/egress-map.ts` 的 `taskSourceId()`，S2.8 已经在按这个格式登记，只是内核之前不认）。与 `entry:` 路径不同，这条路径没有"最近 N 分钟窗口"回退逻辑：`invoke_worker`（`spawn.ts`）在 spawn 时就已经建好这个 WorkerRun 专属的 `kind='worker_run'` Activity 并记在新列 `worker_runs.activity_id` 上，一次查表直接拿到，不存在"当前有没有在跑的 Turn"这种歧义。`RecordEgressObservationsResult` 新增 `attributedToWorkerRun`/`skippedNoWorkerRun` 两个计数字段（纯增量，既有 `entry:` 相关字段与语义不变；调用方 `interfaces/http/internal/egress.ts` 与两处既有测试的 `toEqual` 断言相应更新）。
+  - **I18 预算：token 计数的记账点是 `interfaces/http/internal/llm-usage.ts`，不是 `governance/llm-usage` 自己**：沿用 PR #37（S1.7 turn 归因）定的同一模式——`governance/llm-usage/service.ts` 的分层禁止它 import `application`，新增的 `onRecordInserted` 选项（`RecordUsageOptions`）因此和既有 `resolveTurnId` 完全同构：只在**真正新插入**的记录上触发（`on conflict do nothing` 吞掉的重放记录绝不重复计入预算，用真实的 `INSERT` 影响行数判断，不是"批次里有没有报错"），由 `interfaces/http/internal/llm-usage.ts`（分层上已经合法依赖两边）在同一个 client/事务上接上 `application/task` 的 `recordWorkerRunUsage` 闭包。`recordWorkerRunUsage` 对非 `worker_run` 类 session（比如 entry）直接是空操作——`worker_runs` 查不到匹配的 `session_id` 就返回，不会误伤入口会话的用量记账。≥80% 且尚未告警过（`tasks.budget_warned_at is null`）时打一次 `BudgetWarning`（`scope:'task'`）并落 `budget_warned_at`（沿用 S1.7 workspace 维度预算警告的同一边缘触发写法）；≥100% 时同一事务内把 Task 标 `failed: budget_exhausted`、终止该 Task 下所有未终止的 WorkerRun（撤销 Handle 是硬性的、在同一事务内完成；额外尝试通知 supervisor 终止容器是 best-effort——用 `getConfiguredTaskRuntime()` 包一层 try/catch，就算这一步失败，Handle 已经撤销，Worker 后续任何 API 调用都会因为 Handle 已撤销而被拒，容器本身晚一点被动物理清理不影响正确性）。
+  - **`find_workers`/`find_operations`/`find_procedures` 的"与调用者 Grant 取交集"落地方式**：`substrate/graph/find-means.ts`（新文件）只做纯文本检索（`objects` 表 `properties`/`identity_key` 的 ILIKE，按 `name`/`description`/其它 字段 分层排序），限定在 substrate 层允许的依赖范围内（不能 import `governance/capability`）——"published only"是免费的：`WorkerDefinition` 对象只会在 `publishWorkerDefinition` 时被投影进图（从不在 `propose` 时），非草稿是结构性保证，不需要额外过滤。`application/task/service.ts` 的 `findWorkers` 补上真正的调用者交集：对每个候选 WorkerDefinition 用 `computeChildHandleScope` 空跑一次（`declaredCapabilities`/`declaredGates` 来自它已发布的定义内容），能通过就保留、`InvokeWorkerAttenuationError` 就剔除——这把"这个 Worker 是不是这个调用者现在其实根本调不动"提前到 `find_workers` 阶段过滤掉，而不是让 agent 找到又在 `invoke_worker` 时被拒。`findOperations`/`findProcedures` 目前只是 `find-means.ts` 候选的直通（`Operation`/`Procedure` 对象要等 S2.4/S2.14 才会真的被投影进图，S2.7 阶段恒为空结果），函数签名已经预留了 `caller` 参数，S2.4/S2.14 落地后接入交集逻辑只需要改这一个文件。
+  - **`substrate/ontology/meta-objects.ts` 的 `projectWorkerDefinitionObject` 新增 `name`/`description` 两个可选属性**（透传自 `packages/shared/src/worker-definition.ts` 新增的同名可选字段，两种 kind 都可以声明），单纯为了给 `find_workers` 的文本检索一点可检索的内容——WorkerDefinition 的图投影此前只有 `{kind}`。`application/worker/definitions.ts` 的 `publishWorkerDefinition` 在调用图投影时顺带透传。
+  - **`create_task` 未接线**（读过它的 `paramsSchema` 后的决定，非遗漏）：注册表里 `create_task` 只有 `{input: z.unknown()}`，不带 `definitionId`/`version`；但 `tasks.worker_definition_id`/`.worker_definition_version` 是 `not null`（`migrations/task/0001_tasks.sql`），系统里唯一真正建 Task 行的路径（`invoke_worker`）总是把这两列钉死在创建那一刻（§5.5 "Task 固定引用启动时版本"）。没有办法只用这个 capability 自己的参数造出一行合法的 Task，除非编造一个 WorkerDefinition 引用或者放宽这条 `not null`（两者都不是本任务能单方面替一个形状早于本任务、注册表里已经存在的 capability 决定的事）。留空（落到 `CapabilityNotImplementedError`，501）而不是硬猜；`invoke_worker(..., wait: false)` 已经覆盖了"建一个 Task、不等它"的每一个真实调用场景。
+  - **`create_task` 于 W5 下架（PR #131，2026-09-10）**：W4 曾按"只建不跑"接线，2026-09-10 复审（`code-review-2026-09-10.md` §3.2）确认它在唯一现实路径上不可达——它在 Worker ceiling 里、不在 entry ceiling 里，而 `computeChildHandleScope` 对父 Handle 没有的非 execute 能力静默丢弃，两处入口 Handle 签发都走固定的 `entryScope()`；同时它建出的 `queued` Task 计入每 principal 并发额度，reaper 只扫有 WorkerRun 的 Task，Worker ceiling 里又没有 `cancel_task`，额度只能由人回收。下架范围：注册表条目、`createTaskHandler`、`application/task/invoke.ts` 的 `createTask`、Worker ceiling 条目、集成测试块，契约快照同步；`insertQueuedTaskWithQuotaCheck` 保留为 `invokeWorkerCreate` 的单一调用者。接线留到授权衰减模型有结论之后。
+  - **`cancel_task` 顺手接了线**（不在派发文字"Handlers wired"的明确清单里，但值得一提）：底层 `terminateTask` 本身是预算耗尽/超时路径已经需要的既有函数，接一个 5 行的 handler 薄封装成本很低，且注册表里的 `paramsSchema`（`{taskId}`）已经和这个函数的需要完全匹配——留一个已经有真实服务函数、只是没接 capability 线的能力，会是比接上它更奇怪的不一致。
+  - **给 S2.9 的 seam**：`lifecycle.ts` 导出 `completeTaskWithResult(client, workspaceId, actorPrincipalId, taskId, workerRunId, result)`——把 Task 从 `running` 转 `completed`、记录 `result`、终止对应 WorkerRun（撤销 Handle）。S2.9 的 `task/result.ts` 应该在自己的 capability/内部路由 handler 里直接调用它；调用前 Task 必须仍是 `running`（否则 `IllegalTransition`，说明 reaper 已经先一步判定为 `failed: no_result`，S2.9 侧需要自己决定如何处理这种竞态——这次没有替它做选择）。
+  - **给 S2.11 的 seam**：`getTaskWithWorkerRuns`（读 Task + 其全部 WorkerRun）、`taskForWorkerRun`；`TaskUpdated`/`WorkerRunUpdated`（新增）/`ActionRequestPending`/`ActionRequestUpdated` 四个 outbox 事件已经在每次状态转移时发出，S2.11 直接订阅即可，不需要改这个模块。`Turn --generated--> Task` 的边（Task 行的 `created_by_activity_id`）S2.7 里始终是 `null`——`invoke_worker` 的入参没有 Turn/Activity 上下文，写这条边是 S2.11 自己的职责范围。
+  - **已知偏离清单**（PR body "已知偏离"重复一遍，便于以后查）：①`WorkerRun` 的 `suspended` 状态在 S2.7 未被任何代码路径写入（等待审批时 WorkerRun 保留 `running`，只有 Task 转 `waiting_approval`）；②`ActionRequestUpdated` 恢复 Task 时不检查同一 Task 下是否有其它并发 pending 项；③`find_operations`/`find_procedures` 在 S2.4/S2.14 落地前恒为空结果；④`invoke_worker` 的注册表参数新增了可选 `gates` 字段（`packages/shared/src/capabilities.ts`），不影响任何既有调用方（新字段全程可选）。
+  - **R-58 更正（2026-10-02 复审）——崩溃重试加守卫**：`reactToSupervisorStatus` 的重试分支原来无条件终止 WorkerRun、无条件 `retry_count + 1`、随后 spawn——reaper 的定时扫描与 `wait:true` 轮询同时对同一次崩溃作出反应时两边都去自增并 spawn，只是第二个自增撞上 `tasks_retry_count_check`（`retry_count <= 1`）才没有起第二个 Worker——那次反应整笔回滚并抛错，取消若落在反应的读与写之间，重试会在已取消的 Task 下起一个新 Worker。现在：`terminateWorkerRunRow` 返回本次调用是否真的把 run 置为 `terminated`；只有它返回 `true` 且守卫自增 `update tasks set retry_count = retry_count + 1 where … and retry_count = <读到的值> and status = 'running'` 命中一行时才 spawn；终止了 run 却没赢得自增（Task 已离开 `running`）则同无重试分支一样 `failTaskRow(…, 'worker_failed')`（对已终态的 Task 是空操作）。`spawnWorkerRun` 在建任何东西、调 supervisor 之前重读 Task，已终态则抛 `IllegalTransition`（两个调用方都经 `failTaskAndReapWorkerRuns` 处理，终态 Task 原样保留）。测试：`task/invoke.integration.test.ts`（同一崩溃两个并发反应只 spawn 一次；反应前 Task 已取消则不 spawn；`spawnWorkerRun` 拒绝终态 Task 且不留 WorkerRun）、`task/lifecycle.test.ts`（`terminateWorkerRunRow` 返回值）。
+
+- 实现说明补充（入口工具注册修复 PR，2026-09，S2.12 验收脚本发现）：
+  - **缺口**：`packages/platform-extension/src/modes/entry.ts` 一直只注册 S1 的五个观察工具（`get_object/traverse/search/explain/get_task`），`find_*`/`invoke_worker`/`request_connection`/`propose_*` 以及门投影的观察工具从未注册成 pi 工具——`ontology/entry-agent.yaml` 的 `capabilities` 与系统提示描述的行为在容器里并不存在，"对话 → 找手段 → 派 Worker"主链在聊天里走不通（S2.7/S2.9 的主机验收都是从 human 通道直接调 capability，没走入口 agent）。
+  - **入口的门观察投影落成真 capability**：`packages/shared/src/capabilities.ts` 新增 `observe_operation {gatekeeperId, operation, params?}`（group gate、mode observe、channel handle），是 `<gate>.<op>` 占位行背后可派发的能力；handler（`application/gateway/request-action-handler.ts` `observeOperationHandler`）复用 `request_action` 的 observe 路径（门 `observe` + observed Facts + `gatekeeper_observe` Activity），但未发布的 Operation → 404（I17），execute 类 → 403（入口 Handle 不持有任何 execute 模式能力，`handles.test.ts` 的不变量原样保留；入口要执行只能 `invoke_worker` 委派）。入口上限 `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES` 加入 `observe_operation`；`request_action` 仍不在入口上限。
+  - **extension**：`modes/gate-tools.ts` 抽出两种模式共用的 `<gate>.<op>` 命名/清洗（工具名可由 `<gateName>.<op>` 预测，验收脚本与 fake-llm 依赖这一点）；入口模式注册 yaml 里全部能力（除 extension 自己调用的 `get_entry_context`/`report_turn`），并在 `session_start` 调 `list_allowed_operations`、只投影 observe 类 Operation，工具调用 `observe_operation`；worker 模式行为不变。
+  - **已知**：门工具在 `session_start` 注册，`connect_gatekeeper` 之后已在跑的入口容器要重启才有新工具（与 Handle 重签同一时延边界）；`observe_operation` 与 `request_action` 的 observe 路径一样不核对 `resources.gatekeeper`（S2.4 既有缺口，未在本次扩大或修复）；~~`invoke_worker(wait:true)` 受 kernel-client 30s 超时约束，系统提示应引导 `wait:false` + `get_task`~~——**已修（fix/runtime-hardening，lane-6 review P2-4，2026-09）**：不再只是"系统提示引导"，`packages/platform-extension/src/modes/entry.ts` 的 `buildCapabilityTool`（`invoke_worker` 投影工具）现在无条件把出站 `wait` 覆盖为 `false`，模型传什么都不影响这一点——kernel 侧真正的修复（客户端超时对齐 kernel 等待窗口，或按 capability 单独设超时）仍未做，超出该分支所有权范围（`packages/kernel` 不可改），留给拥有 `packages/kernel/src/adapters/supervisor-client`/`kernel-client.ts` 的 lane。Worker 现有两条观察路径（`request_action` observe 与新的 `observe_operation`）是后续要收敛的债务。
+- 实现说明补充（2026-10-02 复审 R-54，维护者决定 D-12）：
+  - **`invoke_worker` 加幂等键**：客户端超时后模型再调一次，会起第二个 Worker，自动批准的低风险操作因此跑两遍。`invoke_worker` 新增可选 `idempotencyKey`，语义与 `request_action` 相同（R-53）：显式键由 `invokeWorkerHandler` 限定为 `explicit:<on_behalf_of>:<sid>:<key>`，返回它第一次建的 Task，不论状态，换一个新键就再起一个；不传时派生 `auto:<sid|principal>:<definitionId>@<version>:<input 与 gates 的哈希>`（`wait` / `timeout` 不计入，`deriveDefaultInvokeWorkerIdempotencyKey`），只对尚未终态（`created` / `queued` / `running` / `waiting_approval`）的 Task 去重。迁移 `task/0005_task_idempotency_key.sql` 加可空列 `tasks.idempotency_key` 与同样拆分的两个部分唯一索引；查找在 `insertQueuedTaskWithQuotaCheck` 已有的按 principal 的咨询锁里做（每个键都含该 principal），命中则不查配额、不插入、不写审计，`replayExistingTask` 返回该 Task 及其最新 WorkerRun（Task 已提交而 WorkerRun 行还没提交的空档里短暂轮询）。直接调用 `invokeWorker` 不传键（测试、`fake-invoke-worker.ts`）则不去重。
+  - **客户端超时计入阶段 1**：`@nexttime/shared` 新增 `INVOKE_WORKER_SPAWN_BUDGET_SECONDS = 30`（内核 supervisor 客户端的默认超时，`adapters/supervisor-client/index.test.ts` 钉住两者相等）；platform-extension 入口与交互模式的 `resolveInvokeWorkerCallPlan` 对每次 `invoke_worker` 都给单次超时 `30s + (wait ? min(timeout ?? 90, 90) : 0) + 10s`，此前 `wait:false` 用平铺的 30s、`wait:true` 只算等待窗口。
+  - **验收脚本**：`accept_s2.sh` 第 4 步第二次 ssh 运行只等了第一次的 ActionRequest、没等第一次的 Task，现传一个新的 `idempotencyKey` 表明是刻意的第二次运行。
+  - **测试**：`task/invoke.integration.test.ts`（派生键在途返回同一 Task、终态后新建；两个同时发出的调用只起一个 Worker；显式键终态后仍返回、新键并行再起一个）、`gateway/invoke-worker-handler.integration.test.ts`（经 handler 派生：同会话同输入合并、换输入或会话不合并、`wait` 不影响合并、终止后新建）、`gateway/invoke-worker-idempotency-key.test.ts`（派生键前缀与组成）、platform-extension `modes/{entry,interactive}.test.ts`（超时计算）。
+
+### S2.8 worker-supervisor
+- 交付物：`packages/worker-supervisor` 的一次性模式（常驻模式已在 S1.5）：`spawnTask / terminate / status`；`--runtime ${WORKER_RUNTIME}` 回退 runc；`--network workers --read-only --cap-drop ALL`；挂载 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>` 到 `/workspace`；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP(S)_PROXY`、**不继承宿主 env**；只读挂载 `models.json` 与该定义 `uses` 的 Skill；注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析；Task 结束保留工作目录为 artifact，按保留策略清理。
+- 验收：非允许镜像 403；源 ip 与注册不一致的 Handle 请求被拒并撤销；容器内 env 无 `*_API_KEY`。依赖：E1。
+- 实现说明（S2.8 PR，2026-09；与常驻模式共用同一进程、同一 Fastify server、同一
+  `DockerClient`——`packages/worker-supervisor/README.md`"Task 模式"一节是这里的详细版）：
+  - 落地为 HTTP API（与常驻模式同一信任边界：`control` 网络内部、不发布端口、不做独立鉴权），不是
+    派发文字字面的 `spawnTask/terminate/status` 函数名：`POST /task/spawn`
+    `{taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle, image?, model?, skills?,
+    timeoutSec?}` → `200 {containerId, ip}` / `403`（镜像不在 allowlist）/ `400`；
+    `POST /task/:workerRunId/terminate` → `204`/`404`；`GET /task/:workerRunId` →
+    `200 {workerRunId, status, exitCode?, containerId, ip, startedAt, finishedAt?, reason?}` /
+    `404`。容器身份键是 `workerRunId`（`nexttime-task-<workerRunId>`），工作目录键是 `taskId`
+    （`workspaces/tasks/<taskId>`）——一个 Task 若未来允许多次 WorkerRun 重试，工作目录按设计延续，
+    容器各自独立。
+  - env 恰好是本条文字列出的清单加大小写代理三件套镜像（`http_proxy`/`https_proxy`/`no_proxy`，
+    理由同 S1.5a 已经记录的 "httpoxy" 规避）——**没有** `PI_CODING_AGENT_DIR`/`HOME`：对照 pi
+    0.84.4 参考项目验证，`HOME=/workspace` 已烘焙在镜像层，pi 未设
+    `PI_CODING_AGENT_DIR` 时的默认值 `join(homedir(), '.pi', 'agent')` 因此恰好落在 resident
+    模式显式设置的同一路径，不需要重复设置。
+  - `models.json` 只读挂到 `/workspace/.pi/agent/models.json`（与 resident 模式同一目标路径）；
+    每个 `skills[]` 只读挂到 `/workspace/.pi/agent/skills/<name>`——对照同一参考项目
+    `core/skills.ts` `loadSkills` 验证过是 pi 的默认全局 skills 目录，不是派发文字"验证不了就用
+    兜底路径"那句话所预期的猜测值。`skills[].name` 限定为安全的单段路径（拒绝 `.`/`..`/含 `/`），
+    防止挂载目标逃逸出 skills 目录。
+  - Task 状态 `running -> exited | terminated | failed` 的四态划分是本次实现的显式假设（派发文字
+    只写了"kill after timeoutSec ... status terminated with reason"，未逐字定义 exited 与
+    failed 的边界）：`terminated` 是本服务主动结束的（不看退出码），其余按 Docker 退出码分类
+    （`0` → `exited`，非 0 → `failed`），借鉴 Kubernetes Job 的 Complete/Failed 划分。
+  - `no-new-privileges` 加在 `docker-client.ts` 共享的 `createAndStart` 里（与
+    `--read-only`/`--cap-drop ALL`/tmpfs `/tmp` 这几项已有的做法一致——它们本来就是这个函数
+    无条件加给所有容器的，不是每个 spec 各自的字段），因此 resident 模式的入口容器现在也带这个
+    flag——纯加固，不改变任何已测行为（两种模式都已经以非 root 运行，`no-new-privileges` 只挡
+    setuid/setgid 提权）。
+  - 镜像 allowlist（`WORKER_IMAGE_ALLOWLIST`）是**追加式**：默认 `WORKER_IMAGE` 始终在 allowlist
+    里，设置这个变量不会意外把默认镜像挡在外面——派发文字未明确这一点，是本次实现偏保守的判断。
+  - `reconcile()`（supervisor 重启后按 `nexttime.role=worker` label 重新登记仍在跑的容器，参照
+    resident 模式已有的同名机制）、周期性 `reap()`（超时踢除 + 发现自然退出，30s 一次）、工作目录
+    退休 sweep（`TASK_WORKDIR_RETENTION_HOURS`，默认 72，1 小时一次）都是"Lifecycle"那段描述落地
+    成的具体机制，各自的轮询周期与失败处理（`docker.remove` 失败 best-effort、egress 登记失败
+    best-effort，都与 resident 模式已有的容错风格一致）是本次实现的选择。
+  - 已知缺口——"源 ip 与注册不一致的 Handle 请求被拒并撤销"这条验收标准跨到了 Gatekeeper/kernel
+    的门禁范围：本包只提供注册本身（egress 来源映射 `worker:<workspaceId>:<workerRunId>` 写入
+    `SOURCE_MAP_FILE`；`GET /task/:workerRunId` 按 `workerRunId` 正查 `containerId`/`ip`），没有
+    按来源 IP 反查 `workerRunId` 的端点，也没有撤销 Handle 的机制（Handle 生命周期不在本包所有权
+    范围）——如果 S2.7 的 gateway 侧确实需要这个反查方向，留给那个任务评估要不要在这里加索引，
+    详见 `docs/runbooks/host-worker-runtime.md` §11。
+  - 内核 host-bridge（`egress-observations.ts`）目前只解析 `entry:` 前缀的 sourceId；教它解析
+    `worker:` 前缀、把 Task 的出网流量记到对应 Activity 上是 S2.7/S2.11 的工作，未改动内核代码。
+  - `platform-extension` 的 `worker` 模式扩展是 S2.9 交付物，还没实现——本任务 spawn 出的容器里
+    pi 大概率因为扩展不认识 `NEXTTIME_MODE=worker` 而很快非零退出；本任务只交付
+    `worker-supervisor` 这一半（容器 spec、生命周期、状态机、注册表），端到端"Worker 真的能干活"
+    的验证要等 S2.9 落地。
+  - `docker-compose.yml`/`.env.example` 只加了 `TASK_MAX_RUNTIME_SEC`/`TASK_WORKDIR_RETENTION_HOURS`
+    的可选 passthrough（都已有内置默认值）；`WORKER_IMAGE_ALLOWLIST` 未加进 compose/.env.example
+    ——默认空（只允许 `WORKER_IMAGE`）已经安全，是更少用到的旗舰级 override，按"minimal"原则
+    留给需要时再加。
+  - 本机（Windows，无 Docker）只验证了 `typecheck`/`lint`/`test`（74 条新增用例覆盖 spawn
+    spec、状态机、终止、egress 登记增删、退休 sweep、`GET/POST /task/*` 路由、入参校验）与
+    `depcruise`/`ci:guards`/`validate-compose.mjs`；容器级行为（真实 `dockerode`、镜像构建、
+    `docker inspect` 核对 env/labels/挂载/安全选项）留给目标主机验收，步骤见
+    `docs/runbooks/host-worker-runtime.md` §10。
+  - PR review 追加（PR #35）：`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 首版只做了
+    `min(1)`——`taskId` 是 bind-mount 的 host 路径片段、`workerRunId` 是容器名，未校验时一个
+    `../../pgdata` 形状的值就能把宿主机任意目录挂进 Worker 容器；`skills[].hostPath` 同样未校验，
+    能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进容器。收紧为：四个 id 字段改
+    `z.string().uuid()`（`config.ts` `idClaim`——沿用平台既有的 UUID 约定，`packages/shared/src/
+    handle-token.ts` `uuidClaim`、`packages/kernel/src/governance/llm-usage/service.ts` 已经在用；
+    resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema` 与 `/resident/:principalId` 路径
+    参数当时仍是 `min(1)`，已在紧随其后的改动里收紧为同一条规则——`config.ts` `IdClaimSchema`）；新增 `isSkillHostPathAllowed`（同 `isImageAllowed` 的写法：纯函数 +
+    `server.ts` 逐个 skill 校验，不满足 `400`，不落到 docker 客户端）——要求绝对路径且经
+    `path.posix.normalize` 后落在 `${config.nextTimeData}/` 之下。详见
+    `packages/worker-supervisor/README.md`"POST /task/spawn"一节与本文档同一小节顶部的运行手册
+    引用。
+  - **后续更新（fix/runtime-hardening，lane-6 review P1-3，2026-09）**：上一条修的
+    `isSkillHostPathAllowed`（连同 `skills[].hostPath`/`TaskSkillSchema`/`TaskSkillMount`）已**整
+    个删除**，不再是"收紧允许路径"——S2.14 `skillsInline`（按内容写盘）上线后，这条 host-path
+    机制在这个代码库里从未被任何调用方真正发送过（kernel 只发 `skillsInline`），却仍把
+    `${config.nextTimeData}/` 全目录当允许挂载根，包含 `secrets/handle.key`。现在把 Skill 放进
+    Worker 容器只有 `skillsInline` 一条路。同一批还给 `docker-client.ts` 的 `HostConfig` 补了
+    `NanoCpus`（新 `WORKER_CPUS`，默认 2，此前 CPU 完全不限）与 `MemorySwap = Memory`（此前
+    Docker 默认给 2 倍 Memory 的 swap 余量）；新增 `Dns`（`WORKER_DNS_SINKHOLE`，未设时不变——
+    只给运维一个把出网 DNS 指到监控/sinkhole 解析器的机制，不默认开启，隔离清单"LAN: P2-8 DNS"
+    条目的部分回应）；`TASK_REAP_INTERVAL_MS` 从写死的 30s 常量挪进 `config.ts`（可配置，默认收紧到
+    10s），缩短一个已退出 Task 容器的出网登记条目变陈旧、被 Docker 复用给别的容器而张冠李戴的窗口。
+    另外 `config.ts` 的 `workerRuntime` 字段注释此前称 `runsc` 为"default"，但代码本身在
+    `WORKER_RUNTIME` 未设时一直回退 `runc`——真正默认 `runsc` 的只是 `.env.example` 里显式写的那一行
+    （已改注释说明这是本文件刻意覆盖代码回退值的选择，不是代码本身的默认）。
+
+### S2.9 `worker` 模式扩展与结果契约
+- 交付物：`entrypoint.sh` 增加 `worker` 模式自检（env 无 `*_API_KEY`；出网必经代理：直连内网失败、经代理公网通）；扩展 `modes/worker.ts`（向内核取 Handle 内允许的 Operation 列表并注册为 `<gate>.<op>` 工具，observe 直接经内核转门，execute 经 `tool_call` 拦截转 `request_action`；`context` 注入 Task 输入、相关 Fact、装载的 Skill；结束时按结果契约返回 `{summary, findings, facts_to_assert, evidence, artifacts, proposed_skill?, proposed_operations?}`；全量 JSONL 回传为私有 Source）；内核侧 `task/result.ts` 把 `facts_to_assert` 以 `inferred` 写入、证据挂 Activity、提议存草稿。镜像本身已在 S1.5 交付。
+- 验收：`pi --version` 0.84.4；带任意 `*_API_KEY` 启动退出非 0；`/model` 列表只出现白名单内的 `provider/model`；工具列表恰好等于 Handle 内的 Operation；fake kernel 返回 `pending_approval` 时工具结果带 simulate 且循环不阻塞；结果契约中的 Fact 入图为 `inferred` 且 `explain` 到该 WorkerRun。依赖：S1.5、S1.6、S2.4。
+- 实现说明（S2.9 PR，2026-09）：
+  - **Worker 写回的 Fact 是 `inferred`，靠 `asserted_by` 真的是 agent 类 principal，不再靠降级标记**（2026-09 设计决定落地，替换 PR #84 的过渡方案）：2026-09-08 的回归修复（review 修复 F8）曾让 `SqlGraphStore` 只从 `principals.kind` 派生 `epistemic_status`、忽略调用方自报的 `kind`（防止任何调用方自称 human 拿到 `asserted`）——但当时 `postWorkerResult` 的 `actorPrincipalId` 是 Task 的 `on_behalf_of` 人类（本代码库还没有 WorkerRun 自己的 agent 类 principal），派生结果把 agent 的推断记成了人类 `asserted`，`accept_s2.sh` 第 7 步失败；跟进修复给 `CallerPrincipal` 加了一个只能把状态压到 `inferred`、不能升格的 `viaAgent` 标记，`postWorkerResult` 写每条契约 Fact 时置 `true`。**本任务落地了当时记在 `docs/code-review-2026-09-04.md` §7 的根治方向**：`migrations/core/0014_worker_agent_principals.sql` 给 `principals` 加 `worker_definition_id`（每 (workspace, WorkerDefinition) 一个 agent 类 principal，唯一部分索引 + `kind='agent'` 的 CHECK），`application/task/agent-principal.ts` 的 `ensureWorkerAgentPrincipal` 在 `spawn.ts` 首次派生该 WorkerRun 时幂等创建/复用，`migrations/task/0004_worker_run_agent_principal.sql` 把解析出的 id 落在 `worker_runs.agent_principal_id` 上供 `postWorkerResult` 直接读取。`postWorkerResult` 现在用这个真实 `kind='agent'` principal 作 `asserted_by`/Activity `started_by`——`deriveEpistemicStatus` 按普通规则派生 `inferred`，`viaAgent` 降级标记随 `CallerPrincipal.viaAgent`/`epistemicStatusForCaller` 一起删除。人类 `on_behalf_of` principal 没有丢：作为 provenance 记在 `worker_result` Activity 的 `metadata.onBehalfOf` 上，`explain()` 通过新增的 `ExplainActivityRef.onBehalfOfPrincipal` 解析出来。**这里刻意保留一个不对称**：`proposedOperations`/`proposedSkill` 两类提议仍然 owned by 人类 `on_behalf_of` principal，不跟着改成 agent principal——I16 要求私有草稿必须对提议所代表的人类可见/可发布，`result.ts` 自己的模块注释把这条不对称记成"the agent asserts Facts; the human owns drafts"。
+  - **`observe`/`execute` 都经 `request_action`，不是"observe 直连、execute 经 `tool_call` 拦截"**：本条文字与设计文档 §7.4 都写的是后者，但 S2.4 落地时把 mode 路由做进了 `request_action` 自己（`application/gateway/request-action-handler.ts`：`mode==='observe'` 时只走 phase 1，直接调门 `observe`）——`worker.ts` 因此对每个 Operation 都注册**同一种**工具形状，`execute()` 无条件调用 `request_action`，让内核根据已发布 Operation 自己的 `mode` 决定要不要走审批；从未拦截 pi 自己的 `tool_call` 事件。这是遵循 S2.4 已落地机制的必然结果，不是本任务另起的偏离。
+  - **`<gate>.<op>` 是展示名，不是注册名**：pi 底层 provider（验证过 `@earendil-works/pi-coding-agent` 自带的 anthropic-messages/openai-completions/bedrock-converse 适配器）都把 tool name 校验成 `^[a-zA-Z0-9_-]{1,64}$`——不允许点号，而 Operation 名字本身允许带点（`container.restart`）。`worker.ts` 的 `sanitizeToolName` 把 `<gateName>.<opName>` 里的非法字符替换成 `_` 作为真正注册的 `name`，未净化的 `<gate>.<op>` 形式保留在 `label`（同 gateName 撞名时用 `<gatekeeperId>.<opName>` 兜底，同样净化）。**遗留 768 更新（#1275，2026-11-16）**：命名规则移进 `@nexttime/shared` 的 `allocateGateToolName`，内核 MCP 与 pi 扩展共用；兜底名也被占用时加 `_2`、`_3`…，并截到 64 个字符以内；各使用方先保留自己已有的工具名（内核 MCP 保留别名工具名，pi 的 Worker / interactive 模式保留已注册的工具名）。
+  - **`list_allowed_operations`/`report_task_result` 两个新 capability**（`packages/shared/src/capabilities.ts`，`task` 组，`channel:'handle'`）是 S2.9 新增的"Worker 基础设施"能力：`governance/capability/handles.ts` 的 `WORKER_INFRASTRUCTURE_CAPABILITY_NAMES` 把两者同时列进 `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`（否则 `application/task/handle-mint.ts` 的 `computeChildHandleScope` 会因为入口 Handle 自身没有这两个能力名而把它们从子 Handle 悄悄丢掉——`assert_fact`/`create_task` 等既有 Worker-only 能力名今天就有这个未被注意到的缺口，本任务只解决自己新增的这两个，不擅自扩大范围去顺手修那个既有缺口）和 `WORKER_CEILING_EXTRA_CAPABILITY_NAMES`，并在 `computeChildHandleScope` 顶部把它们无条件并入 `declaredCapabilities`——WorkerDefinition 作者即使显式声明了自己的 `capabilities` 列表也不可能漏掉这两个协议层能力，同时仍然经过和其它非 execute 类能力完全相同的"父 Handle 必须持有"交集检查（I13/§5.3 item 8 未被绕过：父 Handle 现在确实持有这两个名字，因为它们也在入口 ceiling 里）。
+  - **`evidence[]` 落在 Activity 的 `metadata` 上，不只是 `evidence` 表**：设计文档 §7.3 写的是"证据挂到 Activity"，但既有 `evidence` 表（`migrations/core/0002_substrate.sql`）的 `link_id not null`——按 schema 是挂在 Fact 上，不是 Activity 上。`application/task/result.ts` 的 `postWorkerResult` 因此两者都做：完整 `evidence[]` 数组总是写进 `worker_result` Activity 的 `metadata.evidence`（哪怕 `factsToAssert` 为空也不会被静默丢弃；`explain` 通过 `substrate/epistemic/explain.ts` 新增的 `ExplainActivityRef.metadata` 字段看到它），且对每条 evidence 按 `factIndex`（省略则对本次写入的所有 Fact）额外补一条真实的 `evidence` 表行。
+  - **`explain` 能到达 WorkerRun 靠 Activity `metadata`，不是新字段**：`substrate/epistemic/explain.ts` 的 `ExplainActivityRef` 新增 `metadata: Record<string, unknown>`（`fetchActivityRef` 的 SQL 补了 `metadata` 列）——`application/task/spawn.ts` 早就把 `{taskId, workerRunId}` 写进 `kind='worker_run'` Activity 的 `metadata`，`postWorkerResult` 对自己的 `kind='worker_result'` Activity 做了同样的事，`explain(factId).activity.metadata.workerRunId` 就是验收标准"explain 到该 WorkerRun"的字面实现。
+  - **`proposedSkill` 故意不落图**：S2.14（Skill 提议/发布流程）还没开工，没有"draft Skill Object"这个既有服务可调，S2.9 现在发明一个身份键/属性形状等于替 S2.14 预先做了本体决定。`postWorkerResult` 把 `proposedSkill` 原样存进 `tasks.result`（`completeTaskWithResult` 落库，人读得到），留一句注释作为 S2.14 的接缝，不生造 Skill Object。`proposedOperations[]` 相反——`governance/gatekeepers/manifest.ts` 的 `proposeOperation`（S2.4 已交付）就是现成服务，直接复用，校验用现成的 `OperationSchema`。
+  - **`report_task_result` 的身份完全来自调用方 Handle 的 `claims.sid`**：`application/gateway/worker-result-handler.ts` 从不读请求体里的 `taskId`/`workerRunId`（协议里也没有这两个字段）——用 `sid` 反查 `worker_runs.session_id`（`application/task/service.ts` 新增 `findWorkerRunBySessionId`），查不到（entry session、过期/张冠李戴的 Handle、无 Handle 的 human 调用者）一律 403，不区分"差一点点"和"完全不对"。`report_task_result` 是单阶段 capability（没有 `afterCommit`）——它做的所有写入都在这一个工作区自己的事务里，没有"必须等别的连接看见"或"外部副作用"的两阶段动机。
+  - **Worker 收到 POST 失败也总是 exit 0**：`worker.ts` 的 `agent_settled` 把 `report_task_result` 包在 try/catch 里，失败只打一行结构化日志，从不让进程以非零退出——非零退出会触发 S2.7 已有的 `reactToSupervisorStatus` 一次性 requeue，对一个"已经报过结果但网络抽了一下"的 Worker 而言，requeue 意味着重跑整段可能已经真实生效过的门动作，比"这次 Task 停在 `failed: no_result`，等 reaper 收"更差。
+  - **Worker 自驾这一轮**：worker 容器没有 agent-host 那样的 RPC `prompt` 驱动（S2.8 只 spawn 容器、看退出码），`worker.ts` 在 `session_start` 里自己拉 `list_allowed_operations`、注册门工具，再自己调 `pi.sendUserMessage(...)` 触发第一轮。`report_result` 是一个 `terminate:true` 的工具（同 pi 自带 `structured-output.ts` 例子的手法）；模型没主动调用时，`agent_settled` 用最后一句 assistant 文本兜底合成一个空列表契约，保证 Worker 总能报出点什么而不是卡死。
+  - **真实 pi SDK 测试踩到的一个坑，记录下来避免下次重踩**：`createAgentSession()`（`@earendil-works/pi-coding-agent` 的 SDK 入口）本身**不会**触发 `session_start`——那个事件是 `AgentSession.bindExtensions(bindings)` 内部才 `emit` 的（`agent-session.js`），真正的 CLI/RPC 启动流程会调它，裸用 SDK 不会。S1.6 的 `entry.sdk.test.ts` 从来没触发过这个坑，因为 entry 模式完全不订阅 `session_start`；worker 模式的整套自驾机制完全靠它，`worker.sdk.test.ts` 必须显式 `await session.bindExtensions({ mode: 'rpc' })` 才能让自驾流程真的跑起来——这不是给测试打的补丁，是这份 SDK 本身"裸构造的 session 不等于一次真实启动"的真实行为。
+  - **已知偏离 / 未覆盖**：①`assert_fact`/`create_task` 等既有 Worker-only 能力在"入口 Handle → invoke_worker → 默认声明"这条唯一现实路径下，同样会被 `computeChildHandleScope` 的父子交集悄悄丢弃（本任务发现但不修——不在 S2.9 范围，详见上文 `list_allowed_operations`/`report_task_result` 那条）；②`docs/runbooks/host-worker-runtime.md` §13 的新增小节里，`deploy/fake-llm` 的 `TOOL_TRIGGER_WORD` 硬编码成 `search`，不理解"调用 report_result"这句系统提示——主机验收因此走的是 `agent_settled` 的兜底合成路径（模型只是把提示原样 echo 回来），不是模型真的听懂了指令去调工具；两条路径在内核这一侧的写入逻辑完全相同，兜底路径已经足以验证"Task 完成并写回 `tasks.result`"这条本任务的验收终点，如果需要验证模型**主动**调用 `report_result` 走的是同一条路径，需要接一个真实 provider（经 `llm-proxy`）或者给 `fake-llm` 加第二个触发词——本任务选择前者留给主机验收自行决定，不修改 `deploy/fake-llm`（不在本任务所有权范围，且是本任务之前就有的通用测试基础设施）。
+  - **实现说明补充（fix/runtime-hardening，lane-6 review P3，2026-09）**：`entrypoint.sh` 的自检
+    （I9 无泄漏 `*_API_KEY`；I10 无直连、必经代理）此前只在 `NEXTTIME_MODE=worker` 时跑——但这两条
+    是这个镜像跑出来的**任何**容器都该满足的不变量，不是 Task 专属：入口容器共享同一套凭证/出网隔离
+    保证，而且比一次性 Worker 活得久得多（常驻，动辄几小时到几天）。条件放宽为 `worker` 或
+    `entry`；`interactive` 模式仍不检查（本地开发/测试路径，不在完整部署拓扑内）。
+  - **W8 修订（2026-09-11，PR #160，STATUS 遗留 29）**：三条自检里只有两条是不变量（I9 无 `*_API_KEY`、
+    I10 无直连），第三条"经代理公网通"是活性探测，却同样 `exit 1`。2026-09-11 主机上两次首轮 Turn
+    `interrupted`、0 次工具调用（一次真实模型 S3、一次 fake 模式 S1；后者容器日志实证 `result=fail` + exit 1，前者容器已被重建、以 egress-proxy 同型 CONNECT 记录推断）都是它：`curl --max-time 5
+    https://example.com` 经代理在弱网下超时（egress-proxy 记到 CONNECT `bytesDown:0`），入口容器
+    spawn 后 5 秒退出（exit 1），agent-host 报 stdio closed → `interrupted`，30 秒后内核的 accept
+    超时又把同一 Turn 记一次 `failed`。此前记成"冷启动 / Handle 就绪竞态"是误判。修法：该探测改为
+    `result=warn` 不退出（`no_proxy_configured` 仍致命，那是配置错误）；`AgentHostRuntime` 在
+    `turnEnded` 先于 `turnAccepted` 到达时结清 accept 等待，不再补第二个 `failed`。
+  - **W5.5 实现说明（遗留 16，PR #137）**：`postWorkerResult`（`application/task/result.ts`）现在
+    先注册一个 `worker_session` Source 并记一条 Observation 到 `worker_result` Activity 上，再断言
+    `factsToAssert`，每条 Fact 的 `observationId` 都指向这条 Observation——`assertFact` 的
+    `resolveFactOrigin` 由此按"这一次 WorkerRun"判定来源，而不是回退到每个 WorkerDefinition 共享
+    一个的 agent principal；两次运行是两个不同的 origin，矛盾断言正确开 Conflict。**可见性刻意维持
+    修复前的原样，不因为这次改动而改变**（`substrate/epistemic/sources.ts` 新增 `registerSource`，
+    显式传 `visibility`，`registerPrivateSource` 变成对它的 `visibility: 'private'` 包装）：带
+    `sessionJsonlPath` 的运行仍是 `private`（owner 是 on_behalf_of 人类，同修复前）；不带的运行此前
+    根本没有 Source、Fact 走 workspace 默认可见，所以现在给它一个 `visibility: 'workspace'` 的
+    Source（`uri` 仍为空），而不是像先前误提交版本那样一律 `private`——否则会把此前工作区可见的
+    Worker 结果意外收紧成私有，是本任务范围外的可见性收紧，不做。`SqlGraphStore.assertFact` 异源
+    分支新增判定：内容相同（`factContentEquals`，佐证 corroboration）时，先看调用方是否能看见既有
+    Fact（对 `links` 做一次普通 `select`，走调用方自己的 RLS，不是 SECURITY DEFINER 的身份判定查询）
+    ——能看见就返回既有 Fact 并置 `unchanged: true`，不再误开 Conflict；看不见（既有 Fact 的 Source
+    私有于别的 principal）则由调用方在自己的 Activity 下插入一条自己的 Fact，同样不开 Conflict（两者
+    结论一致，只是调用方读不到对方那条）。内容不同则不受影响，仍然保留两条 Fact 并开 Conflict。
+    测试：`application/gateway/worker-result.integration.test.ts`（同定义两次运行矛盾断言开一个
+    Conflict、同一 principal 前后两次一致结论是佐证而非 Conflict、无 JSONL 的运行拿到
+    `visibility: 'workspace'` 的 Source 且其 Fact 对工作区内另一 principal 可读、带 JSONL 的运行仍是
+    `private` 且对另一 principal 不可读、两个不同 principal 各自私有会话下断言相同结论时互不可见但都
+    不开 Conflict）、`substrate/epistemic/conflicts.test.ts`（同 principal 异源同内容 `unchanged`，
+    随后异源异内容仍正确开 Conflict）。
+  - **可见性决定（2026-09-10，PR #142）**：上一条"可见性刻意维持原样"的规则被产品决定取代——Worker
+    经结果契约写回的 Fact 默认 `workspace` 可见，不再取决于运行有没有落会话转录。`postWorkerResult`
+    现在注册两种 Source：每次运行一个 `worker_run`（`visibility: 'workspace'`，`uri` 空，metadata 带
+    `taskId` / `workerRunId` / `transcriptSourceId`），其 Observation 挂在 `worker_result` Activity 上，
+    Fact 的 `observationId` 指向它；有 `sessionJsonlPath` 时另注册一个 `worker_session`
+    Source（`private`，owner 是 on_behalf_of 人类，`uri` 是转录路径），其 Observation 挂在一个单独的
+    `worker_session` Activity 上（metadata 带 `resultActivityId` 与 `sourceId`，双向可查）。分开挂是
+    必须的：`link_visible_to_caller`（0013）只要 Fact 所在 Activity 观察到任一非本人的私有 Source 就把
+    整个 Activity 的 Fact 藏起来，转录若挂在结果 Activity 上，结果就会重新变成私有。测试同上文件：无转录
+    与有转录两种运行的 Fact 都对另一 principal 可读，转录 Source 只对 owner 可读；两个不同 principal
+    先后得出相同结论时第二次是佐证（返回同一 Fact id），不开 Conflict。
+
+### S2.10 审批卡片与任务视图（web）
+- 交付物：`action.pending / action.updated / task.updated` 推送；卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」（`set_auto_approved_action_kind`）、`await_decision` 时的阻塞样式；任务与 Worker 列表；「连接系统」页与连接卡片（`request_connection` → 填地址、凭证、种类 → 门实例；`http` / `mcp` 自动导入清单草稿并展示给 owner 发布）；审批卡片出现在**持有范围者**的对话与队列（可能不是发起者）。
+- 验收：Playwright：卡片出现 → 批准 → 状态更新 → 对话里出现 Worker 完成消息；用户 B 的界面看不到 A 的卡片；把 B 授予该动作范围后，卡片出现在 B 自己的对话与队列里并可批准，A 的对话里只显示状态；连接卡片建门后图里出现 `Gatekeeper` 与系统对象。依赖：S2.3、S2.13、S1.8。
+- 实现说明（S2.10 PR，2026-09）：
+  - **S2.13 未落地，`packages/shared/src/capabilities.ts` 的 `connection` 组四个 capability 只是形状**：本任务开工时 `origin/main` 没有 `governance/connections` 的实现（`create_connection`/`publish_manifest`/`connect_gatekeeper` 在 `application/gateway/handlers.ts` 里都没有注册 handler），只有 S2.1 阶段就已写好的 registry 形状。派发文字给的选项是"若 S2.13 已落地就照它的形状接，否则做成'即将推出'的禁用表单"——本任务选了中间路线：`components/ConnectionCard.tsx` 照 `create_connection` 现有形状（`{kind, target, credentials}`）把表单做成**可提交**的，而不是整体禁用；提交后必然拿到内核的 `501 not_implemented`（`CapabilityNotImplementedError`），单独识别这个 `error.code` 并展示"S2.13 尚未实现"提示而不是通用错误。理由：capability 的形状已经在 `main` 上稳定存在，禁用整个表单等于替代 S2.13 预先决定"这个形状会变"，而现有代码证据不支持这个假设；真出现 `501` 时用户看到的提示语义完全不含糊。`credentials` 字段本任务收成自由格式 JSON/字符串（`create_connection` 的 paramsSchema 本身是 `z.unknown()`）——S2.13 尚未定义"凭证种类"到具体字段的映射，本任务不替它猜。
+  - **`ws-client.ts` 的 `chatId` 过滤此前会静默丢弃这三种推送**：`interfaces/ws/server.ts` 的 `subscribeCallerToPrincipalPush` 把 `action.pending`/`action.updated`/`task.updated` 三个通知发给每个已认证连接，`params` 里从来没有 `chatId` 字段——S1.8 遗留的 `handleNotification` 先按 `activeSubscription.chatId` 过滤再进 `switch`，这三种通知的 `params.chatId` 恒为 `undefined`，永远匹配不上任何一个真实 `chatId`，此前会被这条过滤规则悄悄吃掉（原来的 `default:` 分支注释也如实写了"S2 scope, not consumed here"，这次补上）。改法：新增 `onActionPending`/`onActionUpdated`/`onTaskUpdated` 三个独立订阅方法（各自维护一个 `Set<listener>`），`handleNotification` 按 `method` 名字先分发这三种，再走原来的 `chatId` 过滤逻辑处理 `chat.*` 三种——不需要额外重连逻辑（这三个 listener 集合本身不挂在 socket 或 `activeSubscription` 上，服务端在每次 `authenticate` 成功后都会重新订阅）。
+  - **卡片数据有三个不互相包含的来源，`lib/action-card.ts` 是唯一的归一层**：`action.pending` 推送（`title`/Markdown 风格的 `description`/`simulated` 只有它有，S2.11 的 `application/linkage` 现场用 `actionKind`/`resourceScope`/`gatekeeperId` 拼出来，不落库）、持久化的 `system.action_pending` 消息 `content`（`chat-message-content.ts` 的 `SystemActionPendingContent`，只有一行 `text`、`actionKind` 是裸字符串、没有 `title`/`description`/`simulated`）、`list_pending`/`get_action` 返回的 `ActionRequestRow`（连 `text` 都没有，只有 `actionKind`/`resourceScope`/`params` 原始值）。三者在 `title`/`description` 缺失时统一用 `humanizeActionKind`（`docker.container_restart` → `docker container_restart`）合成，和内核侧 `application/linkage` 的拼接约定保持视觉一致——纯展示层格式约定的重复，不是治理决策，真正的富文案（门接口清单的 `name`/`description`）要等 S2.4/S2.13 落地后替换，和内核侧同一处"已知偏离"呼应。
+  - **`system.action_pending` 是唯一渲染成卡片的 kind**：`system.action_update`/`system.task_update` 恒为紧凑状态行（`lib/system-status.ts` + `components/SystemStatusLineView.tsx`），不受 `isHolder` 影响——`isHolder:false` 只影响 `system.action_pending` 是否画按钮，S2.11 的三个 kind 里唯独它需要"同 kind、按 isHolder 二态渲染"。
+  - **卡片状态"原位更新"靠两个互补的信号**：`ChatPage.tsx` 里一个 `actionStatusOverrides`（来自实时 `action.updated` 推送）叠加一个从当前 `messages` 派生的 `latestActionStatus`（扫描本聊天历史里更晚出现的 `system.action_update` 消息）——两者最终会收敛到同一个值，前者覆盖已经翻页完成、后者覆盖刷新页面重新走历史回放的场景；`ApprovalQueuePage` 不需要这套机制，`approve`/`reject` 成功后直接重新拉一次 `list_pending`（该 capability 只返回 `pending_approval` 行，已处理的卡片会直接从队列消失——它的"最终记录"活在对话里，不是队列里，这条在 e2e 断言里专门写了注释）。
+  - **`list_tasks`（新增内核 capability，交付物 4 明确允许的那一处）**：§9.3 从没定义过 Task 的 list 能力（只有单条 `get_task`）；`packages/shared/src/capabilities.ts` 新增 `list_tasks`（`channel:'human'`，不是 `get_task` 的 `'handle'`——这是纯 web 侧"看自己的 Task"功能，入口/Worker Handle 用不到，`get_entry_context` 已经是入口自己的摘要入口）、`minRole:'member'`、无参数。内核侧改动仅四处：capabilities.ts 注册项、`application/task/service.ts` 新增 `listTasksForPrincipal`（一次查 `on_behalf_of` 命中的 Task，一次按 `task_id = any(...)` 批量查所有 WorkerRun，应用层分组——不是 N+1）、`application/task/index.ts` 补导出、`application/gateway/handlers.ts` 新增 `listTasksHandler` 并从 `getTaskHandler` 里提出共用的 `toWireTask` 映射函数。确认过 `governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES`/`WORKER_CEILING_CAPABILITIES` 都是显式白名单（`WORKER_CEILING_EXTRA_CAPABILITY_NAMES` 手写列了 `get_task` 但没有整体按 `group === 'task'` 派生），`list_tasks` 不会意外漏进任何 Handle ceiling。`packages/shared/src/capabilities.test.ts` 的 `EXPECTED_CAPABILITY_NAMES` 同步加了这一项并注明"S2.10 addition，§9.3 没有"。**已知缺口**：没有为 `listTasksForPrincipal`/`list_tasks` 单独写内核集成测试——`getTaskWithWorkerRuns`（`list_tasks` 依赖的同一个读取范式）本身在现有代码库里也没有专门的测试文件，本任务照抄这个先例，没有额外加测试基础设施；本机（Windows，无 Docker）也确认了这一点不会被 DB-gated 套件覆盖到。
+  - **e2e 需要种子数据，且"直接 insert `action_requests`"不够**：派发文字给的选项"a pending row inserted via psql then approved through the UI is acceptable"字面上只提了一张表，但 `action_requests` 的写入从不自动产生 outbox 事件——真正把卡片写进聊天、把 `action.pending` 推给已连接前端的是 `application/linkage` 订阅 `ActionRequestPending` outbox 事件后做的事，纯 SQL insert 一张表绕不过这一层。`packages/web/README.md`"Seeding a pending ActionRequest"一节给出的做法：额外插一行 `outbox`（`event_type='ActionRequestPending'`，`payload` 是完整事件 JSON，含 `holderPrincipalIds`），插入后由已经在跑的内核（`AGENT_RUNTIME=fake`）自己的 200ms 轮询捡走、照常走 `application/linkage` 的消费者逻辑——不需要新增内核代码。`gatekeeper_id` 外键指向 `objects`，种子脚本自己插一行 `object_type:'Gatekeeper'` 满足外键，不需要真实可达的门端点（这条流程从不调它）。**本机没有 Postgres/Docker，这份 SQL 没有对真实库跑过**，README 里如实写明，请求主机验证时先核对 `migrations/governance/000{3,4}_action_requests*.sql` 的列没有漂移。
+  - **`packages/web/e2e/approvals.spec.ts` 的范围比 S2.12 `accept_s2.sh` 的完整链路窄**：种子出来的是一条裸 `ActionRequest`，没有关联的 Task/Worker（真实 `invoke_worker` 全链路留给 S2.12），所以本任务的 e2e 断言"对话里出现状态更新"（`system.action_update` 状态行 + 卡片按钮消失），不是派发文字字面写的"对话里出现 Worker 完成消息"——没有 Worker 参与，这条消息本就不会出现，如实记为偏离而非擅自达成。B 隔离场景里，授予 B 范围后卡片只会出现在 B 的**队列**（`list_pending` 实时查 `capability_grants`），不会补发到 B 的聊天——`application/linkage` 的持有者名单在 `ActionRequestPending` 事件那一刻就已经固化写进聊天消息，事后 `grant_capability` 不会让内核回头往 B 的聊天里补一张卡片；只有下一次状态变化（`ActionRequestUpdated`）才会重新计算持有者并把状态行也写进 B 的聊天——但那时通常已经决定完毕，不再有意义。这条差异也写进了 README。
+
+- 实现说明（web console redesign PR，2026-09）：
+  - **背景**：工作区所有者首次使用部署后的控制台，Approvals / Tasks / Connections 三页立即报 `capability call "list_pending" failed: Failed to execute 'fetch' on 'Window': Illegal invocation`，红字下面还挂着 "Loading…"；Connections 页文案仍说 S2.13 "not yet implemented"；整体没有产品外壳（窄居中列、下划线文字导航、原始红字错误）。本 PR 只改 `packages/web/**` 与本条说明、`docs/runbooks/web-console.md`，不动任何其他包。
+  - **① `Illegal invocation` 的根因与修法**：`lib/http-client.ts` 把全局 `fetch` 直接赋给实例属性再当方法调（`this.fetchImpl = options.fetchImpl ?? fetch` → `this.fetchImpl(...)`），浏览器原生 `fetch` 拒绝 `this === HttpClient` 的调用。改为默认值是一个在调用时才查全局的包装函数 `(input, init) => fetch(input, init)`。回归测试 `src/lib/http-client.default-fetch.test.ts`（jsdom）用 `vi.stubGlobal('fetch', function(){ 记录 this })` 走**默认** `fetch` 路径，断言接收者不是 client 实例；原有 `http-client.test.ts` 因为总是注入 `fetchImpl` 而永远测不到这条路径。审计过全包只有这一处同类写法（`ws-client.ts` 的 `new WebSocket` 在箭头函数里，不受影响）。
+  - **② 页面状态显式建模**：`hooks/useResource.ts` 是唯一的 loading / error / ready 状态机（首次失败 → `error` + Retry；就绪后再刷新失败 → 保留数据、旁边显示 `refreshError`，不闪骨架屏；请求计数器丢弃乱序响应）。每页四态对应四个原语：`Skeleton`（骨架行）、`ErrorBanner`（**稳定错误码** + 内核原文 + Retry，`lib/errors.ts` 的 `describeError` 把 HTTP `error.code` 与 JSON-RPC 数字码映射到同一套名字）、`EmptyState`（图标 + 一句话 + 主动作）、列表。`ApprovalQueuePage.test.tsx` 用假 client 走完整个 loading → error → retry → empty → ready 链，并覆盖 403 → "需要 operator 角色"专门说明、乐观审批失败回滚、`action.updated` 推送 reconcile。
+  - **③ Connections 接到真实 S2.13**：删掉 `ConnectionCard.tsx` 与"501 not_implemented"分支。(a) 连接请求区：`list_connection_requests {status?}`（owner；403 时整区替换为说明，仍可 `request_connection`），"Complete" 打开抽屉表单 → `create_connection {connectionRequestId?, kind, target, endpoint, credentialKind, credentials?, onBehalfOf?, manifestSource?}`——endpoint 必填、`shared` / `connected_account` 单选、凭证框只在 `connected_account` 下出现并在提交后（无论成败）立刻清空、`manifestSource` 只对 `http`/`mcp` 显示；400 `invalid_params` 按内核消息文本高亮对应字段（`credential` → 凭证框），502/504（`manifest_fetch_failed` / `gatekeeper_error` / `gatekeeper_timeout`）把门的原文原样放进横幅（`CompleteConnectionForm.test.tsx`）。(b) 已注册系统区：`search {query:'', objectType:'Gatekeeper'}` 与 `search {query:'', objectType:'Operation'}`（`identityKey.gatekeeperId` 分组、按 `properties.status` 用 `PUBLISHABLE_STATUS_VALUES` 顺序分 draft / published / deprecated），动作 "Publish manifest"（`publish_manifest {gatekeeperId}`）与 "Grant to principal"（`connect_gatekeeper {gatekeeperId, principalId}`，principal id 手工粘贴并在 UI 里解释原因）。
+  - **④ 产品外壳与设计令牌**：`components/shell/`（固定 240px 侧栏 → ≤1100px 图标栏 → ≤720px 顶栏；产品标记 + 四个分区 + Approvals 实时待办徽标（`list_pending` 计数 + `action.pending/updated`）+ 底部 WS 连接状态点（`WsClient` 新增 `getStatus()/onStatusChange()`，connecting / connected / reconnecting / closed）+ Forget key）；`styles/tokens.css` 定义 `--bg --surface-1/2/3 --border(-strong) --text/-2/-3 --accent(-hover/-soft) --ok/--warn/--danger/--info(+-soft) --radius-s/m/l --space-1..6 --shadow-1`，深色默认、`prefers-color-scheme: light` 覆盖，系统字体栈、内联 SVG 图标（`components/ui/Icon.tsx`），无 CDN、无 web 字体、无任何外部请求；`components/ui/` 15 个原语各 ≤150 行。状态芯片 `StatusChip` 的色调映射（`lib/status-tone.ts`）按 `@nexttime/shared` 的枚举以 `Record<Status, ...>` 定型，`StatusChip.test.tsx` 穷举五个状态机的每个值，内核新增状态时 `tsc` 与测试同时失败；未知值以虚线芯片 + 原始字符串显示。Tasks 的 "Cancel task" 由 `canTransition(TASK_TRANSITIONS, status, 'cancel')` 决定。
+  - **对话页**：线程最大宽 820px 居中、用户/助手以对齐与表面区分、工具调用行折叠（`<details>`）、`system.action_update/task_update` 为可点击的紧凑通知直接打开 Approvals/Tasks 抽屉（哈希路由 `#/approvals/<id>` `#/tasks/<id>` 可深链）、编辑器固定底部（Enter 发送 / Shift+Enter 换行）、自动滚动在用户上翻时暂停并显示 "Jump to latest"。审批卡片与抽屉共用 `ActionRequestDetail`（参数块对 `credential|secret|token|password|api_key|authorization` 类键名做展示层 `[redacted]`）。
+  - **权限推断**：内核没有"当前 principal 角色"读取能力，`hooks/usePermissions.tsx` 记录本会话遇到的每个 403 capability，据此隐藏/替换 owner-/operator-only 的按钮（"Always allow this kind"、`list_pending` 徽标、Connections 的 owner 动作）。推断闭包按 `@nexttime/shared` 的 `CAPABILITY_REGISTRY.minRole` 与内核 `authorize.ts` 的 `roleSatisfiesMinRole` 规则派生（`deniedClosure`）：某个 `minRole:'owner'` 的 capability 返回 403 即证明不是 owner，所有 owner-only capability 一并视为拒绝；`minRole:'operator'` 的 403 则连 operator-/owner-only 一起拒绝——不手写 capability 名单（`usePermissions.test.tsx`）。
+  - **e2e**：`e2e/chat.spec.ts` 与 `e2e/approvals.spec.ts` 选择器随结构更新（返回按钮改为 `aria-label="Back to chats"`；审批队列改为 `data-testid="approval-row"` 行 + `approval-drawer` 抽屉；状态断言改为芯片的 `data-status` 属性而不是显示文字），覆盖范围不变，仍是 opt-in、不进 CI。
+  - **内核缺口（本 PR 全部在 UI 侧绕过，未改内核）**：见 `docs/runbooks/web-console.md`"已知缺口"——当前 principal 自省能力、principal 目录、已决定 ActionRequest 的列表能力、`search` 的 50 条上限与分页、`approve` 无 `reason`、Task → ActionRequest 读取、`action.pending` 的合成标题与恒空 `simulated`、`cancel_connection_request`。
+
+### S2.11 chat 与 Task 联动
+- 交付物：Task 与 ActionRequest 状态变化推送到 `on_behalf_of` 用户的 Chat；下一轮 `context` 注入 Task 结果；Turn `generated` Task / Decision 的边写入。
+- 验收：超时返回 `task_id` 的 `invoke_worker` 在审批后，下一轮对话入口 agent 能引用结果。依赖：S2.7、S1.6。
+- 实现说明（S2.11 PR，2026-09）：
+  - **新模块 `application/linkage`，不是 `application/chat`**（与本任务派发文字字面不同，已知偏离）：派发文字要求"outbox consumers in `application/chat`……use their public index.ts reads only"，但 `.dependency-cruiser.cjs` 的 `chat-and-host-bridge-must-not-import-approval-or-task` 规则按路径前缀匹配 `governance/approval/` 与 `application/task/` 整棵目录（含 `index.ts`），没有"只读走 index.ts 就放行"的例外——`chat` 从 `governance/approval` 或 `application/task` 读任何东西（哪怕是公开只读函数）都会被 CI 的 depcruise 步骤拦下（本任务"PR 前验证"一条明确写了"approval → chat 依赖方向必须保持单向"）。而 ActionRequest 的持有者列表以外的富字段（`awaitDecision`、`blastRadius`）、Task 的 `onBehalfOf`，都必须从这两个模块读——`ActionRequestPending`/`ActionRequestUpdated`/`TaskUpdated` 这几个领域事件本身只携带最小必要字段。因此新增一个**同层级、不受该限制**的 application 模块 `application/linkage`（不叫 `chat-*`，避免让人误以为 depcruise 规则该覆盖它），自由读 `governance/approval`/`application/task` 的公开接口，再回调 `application/chat` 已公开的写入面（`insertChatMessage`/`publishChatPushEvent`，以及本任务新增的 `publishPrincipalPushEvent`）落地持久化与推送。`.dependency-cruiser.cjs` 的同一条规则同步把 `application/linkage` 加进 `chat`/`host-bridge` 的禁止目标列表，防止 `chat` 以后经它间接拿到同样的读权限。`application/chat/index.ts` 顶部注释同步更新，指向这个决定。
+  - **`application/linkage` 自己的表**：`migrations/linkage/0001_pending_context_items.sql`（`pending_context_items`，模块顺序 core < governance < **linkage** < llm-usage < task < worker——`"linkage" < "llm-usage"` 因为第二个字符 `i` < `l`——因此 `principal_id` 到 `principals` 是真外键，`subject_id`（taskId 或 actionRequestId）不设外键：既是多态，`linkage` 模块本身也排在 `task` 之前）。派发文字建议"a `delivered_at`/`acknowledged_turn_id` column [on tasks] or a delivery table"——选了后者且**不在 `tasks`/`action_requests` 上加列**：一是这两张表都不是本任务拥有的表，二是并发中的 S2.9 分支同样在改 `application/task`（`task/result.ts`），任何在 `tasks` 上加列的迁移都有和它正面冲突的风险，一张 `linkage` 自己的新表完全避开这个问题。`(workspace_id, principal_id, source_outbox_id)` 唯一索引把 outbox 行 id 当幂等键——同一个 outbox 事件重复投递（dispatcher 崩溃在"这一行提交"与"outbox 行自己的 `dispatched_at` 更新"之间）不会重复产生 context item；`chat_messages` 那条系统消息没有等价的持久幂等保护，沿用 `application/host-bridge/turn-started-consumer.ts` 已有的"进程内 `Set<outboxId>` 去重、非崩溃恢复级别"先例并如实记在下面"已知偏离"。
+  - **消息 `kind`（交付物 1 的"extend the chat message schema/enum in the existing style"）**：`packages/shared/src/chat-message-content.ts`（新文件，`SYSTEM_MESSAGE_KIND_VALUES` = `system.task_update` / `system.action_pending` / `system.action_update`，Zod 判别联合 `SystemMessageContentSchema`）——`chat_messages.role` 早在 S1.4 的迁移里就为 `'system'` 预留了（该迁移自己的注释就是这么写的），本任务不需要新迁移就能用这个角色；`kind` 只出现在 `content` jsonb 里，不落 DB 列。`chat.message` 的 wire 事件（`packages/shared/src/events.ts`）新增两个**可选**字段 `kind?`/`content?`，向后兼容——`application/gateway/handlers.ts` 的 `toWireChatMessage` 与 `interfaces/ws/server.ts` 的 replay 路径都透传这两个字段，S2.10 的 web 客户端可以直接用 `content` 里的结构化字段渲染卡片，不必等 `get_action` 再查一次。
+  - **`system.action_pending`/`system.action_update` 的 `isHolder` 字段**：区分"持有范围者收到的卡片"与"发起者收到的状态通知"是靠这一个布尔字段，而不是两个不同的 `kind`——两者 `kind` 相同，内容形状相同，方便 web 端用同一套渲染逻辑，`isHolder=false` 时不画批准/拒绝按钮（§8.5"请求者的对话里只显示该动作的状态，没有批准按钮"）。
+  - **WS 推送（交付物 2）**：`application/chat/push.ts` 新增一套按 principal 而非按 chat 的注册表（`subscribeToPrincipalPushEvents`/`publishPrincipalPushEvent`，与既有的按-chat 注册表并列、同一种"进程内 `Map`"实现），`interfaces/ws/server.ts` 在两处 `state.caller` 被设置的地方（Authorization 头鉴权、首帧 `authenticate`）各自补一行 `subscribeCallerToPrincipalPush`——不新增 `subscribe_principal` capability，"复用 authenticate 的会话"（本任务派发文字自己给的选项）。`action.pending`/`action.updated`/`task.updated` 三个 wire 事件的 Zod 形状（`packages/shared/src/events.ts`）在本任务开工前就已经存在（连同 `interfaces/ws/rpc.ts` 顶部注释提到这三个 method 名）——本任务是第一个真正发布它们的实现，形状未改动。
+  - **`action.pending`/`action.updated` 的 `title`/`description`**：`action_requests` 表本身没有 title/description 列（S2.1 的既有形状），这两个字段由 `application/linkage` 从 `actionKind`（`docker.container_restart` → `docker container restart`）与 `resourceScope`/`gatekeeperId` 拼出——真正精确的标题需要门的接口清单（S2.4 的 Operation `name`/`description`，图对象）参与，留给 S2.4/S2.13 落地后再替换这段拼接逻辑，不是本任务的错误留白。`simulated` 字段（S2.4 的 simulate 结果）本任务无处可读，恒为空（Zod schema 里本就是 optional）。
+  - **`ActionRequestUpdated` 的"哪些 status 值得播报"**：只对 `auto_approved / approved / rejected / expired / denied / executed / failed / compensated` 八个状态推送与写消息——`proposed`/`policy_evaluated`/`pending_approval` 在 `governance/approval/request-action.ts` 的既有实现里从来不会单独产生一次可观测的 `ActionRequestUpdated`（S2.3 的实现说明："单次 INSERT 落到已解析的最终状态"），`executing`/`verified` 视为内部过渡态，不单独打扰用户（假设，见 PR body "假设与偏离"）。
+  - **持有者名单来源**：`ActionRequestPending` 事件自己携带 `holderPrincipalIds`（S2.3 已加），直接用；`ActionRequestUpdated` 事件没有这个字段（S2.3 故意没加宽），本任务对它重新调用一次 `governance/approval` 公开的 `computeActionRequestHolders`（而不是缓存 Pending 时的名单）——持有者集合可能在两次事件之间因为 Grant 变化而改变，重新计算比缓存更准确，成本也不高（一次 SQL 查询）。
+  - **`get_entry_context`（交付物 3）**：`application/gateway/handlers.ts` 的 `getEntryContextHandler` 新增一次 `drainPendingContextItems(client, workspaceId, principalId)` 调用，返回值按 `application/linkage/types.ts` 的 `contextItemBucket`（`action_request_update` → `pendingApprovals`，其余五种 → `tasks`）拆到既有的两个字段——**没有新增顶层字段**：`packages/platform-extension/src/modes/entry.ts` 的 `EntryContextResult`/`renderSection` 已经把 `pendingApprovals`/`tasks` 当"任意 JSON 数组、逐项 `JSON.stringify`"处理，沿用比新增字段（需要改 platform-extension，不在本任务所有权范围）更省事也更兼容。读取与"标记已投递"在同一次 `drainPendingContextItems` 调用、同一个事务里完成——`get_entry_context` 本身的调用方（`dispatchCapability`）事务失败会让整次标记回滚，不会出现"标记了已投递但入口 agent 其实没收到"的情况。
+  - **`pendingApprovals` 只含发起者视角**：持有者（可以批准的人）不会在自己的下一轮 `context` 里看到这些 ActionRequest——入口 Handle 本身不可能调 `approve`/`reject`（I11："经 Handle 通道完成的 Approval"是 §5.3 永不允许存在的关系第 9 条），持有者是经 web 的审批队列/卡片行动，不是经对话——只有发起者（被别人的决定"卡住"的那个人）需要下一轮被提醒（假设，见 PR body）。
+  - **BudgetWarning**：只处理 `scope==='task'`（S2.7 目前也只发这一种 scope），只写 `pending_context_items`，不写 chat_messages/不推送 WS——预算警告不是"新的一件事发生了"（不属于交付物 1 列出的三个消息 `kind` 之一，也不属于交付物 2 列出的三个推送帧之一），只需要在下一轮 `context` 里出现一次即可，见 `application/linkage/budget-consumer.ts` 自己的模块注释。
+  - **`Turn --generated--> Task`（交付物 4a）**：`tasks.created_by_activity_id` 这一列 S2.7 就已经建好、且专门为这条边留白（该迁移文件自己的注释写"S2.11 wires the write"）——不是新迁移。`application/gateway/handlers.ts` 的 `invokeWorkerHandler` 在调用 `invokeWorker` 之前，用 `dispatchCapability` 已经开好、原本被这个 handler 完全忽略的那个事务（`_client`）跑一次 `application/host-bridge` 的 `findAttributableTurn`（读，很快，不额外占用这个事务的生命周期——它本来就要开到整个 `invoke_worker` 调用结束，见 `invoke.ts` 自己的模块注释），解析出的 `turnId` 经 `InvokeWorkerCallerCtx` 新增的可选字段 `turnId` 传入 `invoke.ts`；`invoke.ts` 只多了"把这个已解析好的值放进 INSERT 的一列"这一处改动，没有新增任何跨模块依赖或事务管理逻辑。**只在 `wasRunning === true` 时才采用**——`findAttributableTurn` 的 5 分钟"最近"回退窗口是给 egress/llm-usage 那种"大概率属于哪个 Turn"场景设计的，"generated"这个词在这里的含义是"在这个 Turn 期间"，不是"这个 Turn 结束后不久"——一次由脚本发起、当前没有任何运行中 Turn 的 `invoke_worker` 调用，不应该被错误地记到几分钟前刚结束的某个 Turn 头上。`record_decision`（见下）复用同一条规则，同样的理由。
+  - **`Turn --generated--> Decision`（交付物 4b）**：`record_decision` 这个 capability 在 S1.6 就注册进了 registry（`packages/shared/src/capabilities.ts`），但从未有人实现过 handler（S2.3 的实现说明明确点出这个空档、且说明"本任务不代为决定"）——deliverable 4b 要求这条边在"a Decision is recorded in a Turn"时写入，意味着 `record_decision` 得先能真正写入。`application/gateway/handlers.ts` 新增 `recordDecisionHandler`：解析当前运行中的 Turn（同上，只接受 `wasRunning`，否则抛 `NoActiveTurnError`——未在 `interfaces/ws/rpc.ts`/`interfaces/http/capability-route.ts` 里单独映射，沿用同一 handler 组里 `TurnNotFoundError` 从未单独映射过的既有先例，退化为 500），直接 `insert into decisions (..., activity_id, ...) values (..., <turnId>, ...)`——`decisions.activity_id` 就是这条边（同 `tasks.created_by_activity_id` 一样的"关系型外键即边"约定，而不是图 `links` 行：`links.source_object_id`/`target_object_id` 要求两端都是 `objects` 行，Turn 是 `activities`、Decision 是 `decisions` 独立的一等表，都不是图 Object，platform-meta 本体的六个 ObjectType 里也没有它们——把它们投影成图对象是一次单独的、跨越多个后续任务范围的本体扩张，不是本任务能单方面决定的事）。`record_decision` 的 `relatedFactIds`/`relatedTaskId` 参数（S2.3 早就点出的既有空档）在 `decisions` 表里没有专门列，暂存进已有的自由格式 `rationale` jsonb（不新增迁移列）。
+  - **遗留 308 后续**（#1309，2026-11-16 合入，119def7；无迁移）：`record_decision` 的 `relatedFactIds` 按调用方可见性检查（与 `explain` 一致），读不到或不存在即 400 `unresolved_references`，不写 Decision；`relatedTaskId` 仍不检查（遗留 783）。
+  - **`generated` LinkType 未添加到任何 ontology YAML**（交付物 4 文字"if `generated` does not exist yet, add it to the ontology YAML the core loader uses — say where"的落实）：本仓库目前没有"core 本体"YAML（只有 `platform-meta.yaml`/`entry-agent.yaml`/`ops-runner.yaml`，S3.1 的核心域本体注册表尚未落地）；即使有，`generated` LinkType 也要求两端都是图 Object——Turn/Task/Decision 都不是。**这里明确写下"如果将来 Turn/Task/Decision 被投影为图 Object，`generated` 这个 LinkType 该加在哪"**：跟随 platform-meta.yaml 已有的写法，`domain: Activity`（或届时投影出的 ObjectType 名）、`range: "*"`（Task/Decision 都可能是目标）；在那之前，`created_by_activity_id`/`decisions.activity_id` 这两个既有外键就是唯一的、可查询的"边"。
+  - **测试**：`packages/kernel/src/application/linkage/{task-consumer,action-request-consumer}.integration.test.ts`（DB-gated，`describe.runIf(DATABASE_URL)`）—— 前者覆盖交付物 5 点名的场景（"invoke a Task from a Turn (fake supervisor), publish TaskUpdated{completed} → system message lands in the right chat and get_entry_context on the next Turn includes the outcome once"，另加一条"重复投递同一个 outbox 行不产生重复 context item"）；后者覆盖"ActionRequestPending with two holders → card message in both holders' chats, status-only in the requester's"，并顺带覆盖 `ActionRequestUpdated{approved}` 的二次推送。`packages/kernel/src/interfaces/ws/server.test.ts` 新增两个用例（复用既有的真实监听器 + 真实 `WsRpcClient` 测试基础设施）：`action.pending`/`task.updated` 推送能通过 `authenticate` 自动建立的订阅到达；一个 principal 的推送不会送到另一个 principal 的连接。`packages/kernel/src/application/gateway/handlers.test.ts` 新增两条 `record_decision` 用例（有运行中 Turn / 没有）。`packages/kernel/src/application/linkage/content.test.ts`（无 DB）覆盖交付物 5 的"unit tests for the context formatting"。`packages/shared/src/chat-message-content.test.ts`（新文件）与 `packages/shared/src/events.test.ts`（新增一条 `chat.message` 样例，带 `kind`/`content`）覆盖 shared 层的 schema。
+  - **已知偏离清单**（PR body "已知偏离"重复一遍，便于以后查）：①`application/linkage` 而非 `application/chat`（depcruise 硬约束，见上）；②`chat_messages` 系统消息没有像 `pending_context_items` 那样的持久幂等保护，只有进程内 `Set` 去重（同 `turn-started-consumer.ts` 已有先例）；③`title`/`description` 由 `actionKind` 拼出，不是门接口清单的真实文案（S2.4/S2.13 落地后应替换）；④`ActionRequestUpdated` 只对八个"值得播报"的状态推送/写消息；⑤`pendingApprovals` 只含发起者视角，不含持有者；⑥`record_decision` 的 `relatedFactIds`/`relatedTaskId` 暂存于 `rationale` jsonb，无专门列；⑦`generated` LinkType 未落地为图 `links`（Turn/Task/Decision 都不是图 Object）。
+  - **W7 修复（2026-09-11，非 uuid 的 `resource_scope` 让状态播报静默失败）**：`governance/capability/grants.ts` 的两条持有者匹配 SQL（`MATCHING_GRANT_WHERE`、`listGrantHolderPrincipalIds`）原来写 `resource_id = $n`，而 `capability_grants.resource_id` 是 `uuid`（0009）、比较对象却是 ActionRequest 的 `resource_scope`（自由文本）——Postgres 把参数推断成 uuid，任何非 uuid 的 scope 都让整条查询以 22P02 中止：I14 审批前置检查变 500，`ActionRequestUpdated` 消费者（`computeActionRequestHolders`）抛错后被 outbox dispatcher 静默吞掉（`index.ts` 构造 `OutboxDispatcher` 时没有传 `onError`），对话里永远出现不了 `system.action_update` 状态行。主机 S2 流程的 `resource_scope` 恰好都是 gatekeeper id（uuid），所以从未暴露；`packages/web/e2e/approvals.spec.ts` 首次进 CI（W7）用 `e2e-approve-flow` 这种文本 scope 才撞上。修法：改成 `resource_id::text = $n`（uuid 语义不变，非 uuid 的 scope 对 uuid 范围的 grant 永不匹配），`governance/capability/grants.integration.test.ts` 覆盖通配 / uuid 范围 / 文本 scope 三种组合。dispatcher 无 `onError` 这一点另记为遗留（STATUS §4）。
+  - **R-57 更正（2026-10-02 复审，维护者决定 D-23）——入口上下文按 Turn 投递、`report_turn` 时确认、条目归发起它的对话**：上面交付物 3 的"读即标记已投递"有三处丢失：pi 的 `context` 在每次 LLM 调用前都触发、注入不持久化，同一 Turn 的第二次调用（以及供应商 5xx 后的重试）读到的是空的；同一 principal 的交互式 pi 会话会把队列读走；条目只按 principal 存，A 对话发起的 Task 结果会被 B 对话先读到。迁移 `linkage/0002_context_item_chat_lease.sql` 给 `pending_context_items` 加可空 `chat_id` 与 `lease_turn_id`（`chats` / `activities` 真外键，linkage 排在 core 之后，所以放在 linkage 模块而不是 core）。`store.ts` 换成三个函数：`leaseContextItemsToTurn`（该 Turn 所在对话的未确认条目，连同无对话的旧行，租给这个 Turn 并返回租给它的全部条目，不置 `delivered_at`；另一个 Turn 留下的未确认租约被接管——同一对话同时只跑一个 Turn，那个 Turn 已经结束却没回传，宁可再显示一次也不丢）、`acknowledgeTurnContextItems`（`report_turn` 在同一事务里确认租给该 Turn 的条目，最后一次读之后才到的条目不受影响）、`peekContextItems`（只读，跨对话，最多最近 50 条）。`get_entry_context` 新增可选参数 `turnId`：带上即按 Turn 租约；不带即 peek——`entry` 会话除外，它被归到该用户正在运行的 Turn（agent-host 每用户同时只跑一个 Turn），这样 `turnId` 之前构建的入口镜像（运行时镜像是运维设置，可能长期不换）照样得到新语义，它已有的 `report_turn` 负责确认。`turnId` 不是调用者自己的 `agent_turn` 时报 `TurnNotFoundError`（404）。`get_entry_context` 因此不再消费任何东西，消费只发生在 `write` 类的 `report_turn`，`observe` 名副其实（P3 L5-10 的这一条）。条目的对话：Task 结果与预算警告用 `resolveTaskChat`（与系统消息同一对话）；ActionRequest 对发起者而言属于触发它的 Worker 的 Task 所在对话（`chat-targets.ts` 的 `resolveRequesterChat`：`parent_worker_run_id → Task → resolveTaskChat`），`system.action_pending` 卡片、后续 `system.action_update`（仍钉在卡片所在对话）与上下文条目一起落在那里；没有 Worker 父级（人类通道发起）或面向持有者时照旧用 `resolveDefaultChat`。扩展：入口模式每次 `context` 都带当前 Turn 的 `turnId`（不知道 Turn 时发 `{}`）；旧内核以 `invalid_params` 拒绝 `turnId` 时本进程此后改发 `{}`；交互模式照旧发 `{}`（即 peek）。测试：`linkage/store.integration.test.ts`（同一 Turn 两次读同一批、确认后消失、确认不吞后到条目、未回传 Turn 的条目交给下一个 Turn、peek 不消费、A 对话条目不进 B 对话、旧行、同 Turn 并发租约）、`gateway/entry-context.integration.test.ts`（经 `dispatchCapability`：两次调用、`report_turn` 确认、`mcp_session` peek 不消费、A/B 对话隔离、无 `turnId` 的 `entry` 会话归到运行中 Turn、他人 Turn 404）、`linkage/task-consumer.integration.test.ts`与 `linkage/action-request-consumer.integration.test.ts`（Worker 发起的 ActionRequest 落在发起 Worker 的对话，而不是最新对话）、扩展的 `modes/entry.test.ts` / `modes/interactive.test.ts`。已知局限：嵌套 Worker（深度 ≥ 2）的 Task 没有 Turn 归属（`created_by_activity_id` 为空），`resolveTaskChat` 仍回落到最新对话；一个所有 LLM 调用都失败的 Turn 也会在 `report_turn` 时确认它被展示过的条目（决定按 Turn 确认，不按调用成功与否）。
+  - **D-21 落实（2026-10-02 复审，维护者决定 D-21，L2-11）——`get_task` 只对 owner、请求者与该 Task 自己的 WorkerRun 可见（#455）**：上面的 `list_tasks` / 任务视图说明里，`get_task` 把任何 Task 的 `input`、`result`、`failureReason` 与 WorkerRun 返回给工作区里的任何成员或 Handle，而 Task 输入可能带私有对话内容（§5.6 / I15）；`cancel_task` 本就是 owner 或请求者。现在 `application/task/service.ts` 的 `taskVisibleTo(viewer, task, workerRuns)` 是唯一谓词：工作区 owner，或请求者（`on_behalf_of`），或 `claims.sid` 是该 Task 某个 WorkerRun 的 session 的 Handle；`getTaskVisibleTo` 包一层读取，对不可见的 Task 抛 `TaskNotFoundError`，即与未知 id 完全相同的 404。Handle 通道上的 viewer 是该 Handle 的 `obo`（I13）及其 principal 的角色。`get_task` 用它；`cancel_task` 改调同一谓词，行为不变（owner 或请求者，否则 403）；`list_tasks` 不变（本就只列调用者自己的 Task，是谓词的子集，owner 的控制台列表仍是"我的 Task"）；`getTaskWithWorkerRuns` 仍是不过滤的内部读，供 `list_action_requests{taskId}` 过滤用。Task 名仍经 `resolve_refs` 全工作区可解析（resolve-refs-handler.ts 已论证名字不敏感）。D-21 只点名 owner、请求者与自己的 WorkerRun，所以 auditor / builder 读别人的 Task 现在得 404，不另开覆盖；`audit_query` 仍显示每个 Task 转移。隔离只收窄：没有任何读多出以前没返回的行。无迁移，回滚即还原。注册表里 `get_task` 的描述写明该规则；同步改了 design §9.3 task 行、`runbooks/troubleshoot-task.md`、`runbooks/host-chaos.md`、`scripts/chaos-kill-worker.sh` 头注释（它的 key 必须属于请求者或 owner）。测试：新 `application/gateway/task-operation-visibility.integration.test.ts`（Postgres，CI 跑，全部经 `dispatchCapability`）——请求者与 owner 读得到该 Task，另一成员与 builder 得 `TaskNotFoundError`（与未知 id 一致），Task 自己 WorkerRun 的 Handle 只靠 sid 分支读得到（种子 session 故意代表另一个 principal），无关 Handle 得 404，请求者自己的 Handle 读得到；`list_tasks` owner 看不到成员的 Task、成员看得到；`cancel_task` 另一成员仍 403。
+
+### S2.12 S2 验收脚本
+- 交付物：`scripts/accept_s2.sh`：(1) 用户 A 用连接卡片接入一台测试 SSH 主机（容器模拟）与一个测试 OpenAPI 服务；(2) A 对话「重启测试容器」→ `find_*` → `invoke_worker` → 卡片 → A 批准 → 执行 → `explain` 全链；(3) A 问「测试 API 的 GET 返回什么」→ 入口 agent 直接观察，不拉 Worker；(4) Worker 在 SSH 主机跑一条未分类命令 → 卡片 → 勾「总是允许」→ 第二次不再出卡片；(5) 用户 B 尝试批准 A 范围的动作 403；(6) Worker 容器 `env | grep -ci api_key` 为 0；Worker 经代理 `curl https://example.com` 成功、直连内网失败；(7) Worker 结果契约里的 Fact 入图为 `inferred`。
+- 验收：退出 0 打印 `S2 OK`。**主机通过：2026-09-04，第十五轮**（前十四轮暴露并修掉的问题见 PR #55–#69：入口工具注册、`request_action` 随门资源委派、`get_task` 基础设施能力、22P02→400、历史消息带 `content`、ssh/cli 免凭证 + simulate 失败不回滚、ssh 主机密钥策略/stderr/账户解锁、fake-llm 场景匹配与计步、步骤 6 改 `docker run`）。
+- 实现说明（S2.12 PR，2026-09）：
+  - **落地路径**：`scripts/accept_s2.sh`（POSIX sh，结构同 `scripts/accept_s1.sh`——一次性 kernel 镜像容器跑每一次 JSON-RPC/HTTP capability 交互，见脚本头注释）；`deploy/accept-s2/{sshd,openapi-fixture}/`（两个测试系统的镜像）、`deploy/accept-s2/{ssh,http}-gate-manifest.json`（两个通用门各自的静态清单）；`docker-compose.yml` 新增 `profiles: ["accept-s2"]` 下的五个服务（`accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/`accept-s2-restart-target`），复用既有 `control` 网络，未新建网络（详见 `docs/runbooks/host-accept-s2.md` "已知偏离"）；`deploy/fake-llm/server.mjs` 加性扩展（S2.12 scripted scenarios，`search`/回声两条既有行为逐字节不变，`deploy/accept-s2/fake-llm-scenario-selftest.mjs` 本地自测）；`docs/runbooks/host-accept-s2.md`。
+  - **核心发现——`packages/platform-extension` 的 entry 模式从未注册任何 S2 新增工具，这是本次运行两条 SKIP 的唯一根因**：`packages/platform-extension/src/modes/entry.ts` 的 `OBSERVE_CAPABILITY_NAMES` 仍然是 S1 的五个观察类工具（`get_object`/`traverse`/`search`/`explain`/`get_task`），整个文件只有这一处 `pi.registerTool()` 调用点；`find_operations`/`find_workers`/`find_procedures`/`invoke_worker`/`request_connection`/`record_decision`/`propose_*` 一个都没有注册成 pi 工具——尽管 `ontology/entry-agent.yaml`（S2.6 种下、`create-workspace` 自动发布）的 `capabilities` 列表把它们全部列为"S2 additions"且注释明确写"S2 additions"，其 `systemPrompt`（"Three-tier orchestration"一节）也逐字指导模型调用这些工具。`<gate>.<op>` 观察类工具投影同样只在 **Worker** 模式实现了（`modes/worker.ts` 的 `session_start` 调 `list_allowed_operations` 动态注册）——entry 模式没有等价机制；`request_action` 本身（唯一能触达门的能力）在 `governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES` 里结构性地不存在（`mode:'execute'` 的 capability，S2.7 实现说明原话已指出"结构上从不包含任何 execute 类名字"）。这不是"偶尔调用失败"，是入口 agent **完全没有能调用这些工具的手段**——`entry.sdk.test.ts`（真实 pi SDK 契约测试）与 `entry.test.ts` 都仍然只覆盖"the five S1 tools"。**本任务未修**（task brief 明确 "Do not modify … packages/platform-extension … source" 且要求 "do not hack around it … the main session fixes kernel code"）：`scripts/accept_s2.sh` 的 `step2_docker_restart`/`step3_observe_no_worker` 各自先把对应的中文聊天消息原样发进 alice 的对话（fake-llm 的 `entryRestartChatScenario`/`entryObserveChatScenario` 两个 scripted scenario 随时可用，只是打不到任何真实工具），用 `tasks` 表行数不变佐证"入口 agent 确实什么都没触发"，显式 `skip` 并打印根因，然后紧接着用同一批门/同一个 `ops-runner` WorkerDefinition 经 human 通道直接调 `invoke_worker`/`request_action`（与 `docs/runbooks/host-gatekeepers.md` §6/§10 的"owner 直接测试"惯例一致——这两个 capability 声明 `channel:'handle'`，human 通道对其放行）把"卡片→批准→执行→explain"与"观察不建 Task"两条链路本身完整验证——内核/门这一侧没有缺口，缺的只是"入口 agent 自己决定调用它们"这一层，修复方向见 `docs/runbooks/host-accept-s2.md` "已知偏离"。
+  - **`ssh.run_command` 声明 `auto_approvable:true`（而非字面"未分类"对应的 `false`）**——一处刻意的设计选择：`governance/policy/engine.ts` 的 `evaluate()` 对 `operationAutoApprovable:false` 的判断无条件先于任何工作区策略检查，`request-action-handler.ts` 自己的模块注释原话"operationAutoApprovable=false forces require_approval … regardless of workspace policy"——若声明成 `auto_approvable:false`，验收条目 (4) "总是允许→第二次不再出卡片"在当前代码库上结构性地不可能发生。改为 `auto_approvable:true, blast_radius:medium`：默认（无工作区策略）仍 `require_approval`（medium 非 low），第一次调用产生卡片；`set_auto_approved_action_kind('ssh.run_command')` 之后第二次调用才解析成 `allow`。"未分类"这个词在本次实现里对应的是 `accept-s2-ssh-gate` 的 `GATE_SSH_POLICY_FILE` 故意留空（`[]`）——该门自己的 `SshTransport.classifyCommand` 因此把每条命令都判成 `unclassified:true`（写进 `detail.classification`，仅信息性，从未被 `governance/policy` 读取或影响治理判定）。
+  - **五个 accept-s2 服务复用既有 `control` 网络，未新建专属网络**：`create_connection` 由内核进程自己发起 `manifestSource` 的 HTTP 抓取（`application/gateway/connection-handlers.ts` 的 `resolveManifestOperations`），openapi fixture 必须能被 `kernel` 直接触达；给 `kernel` 追加第三个网络会改写它已有的 `networks:` 字段，超出本任务"docker-compose.yml 只做加法"的边界。这不削弱"Worker 直连失败"这条验收——`worker-supervisor` 的 spawn spec 只给 Worker 容器挂 `internal:true` 的 `workers` 网络，与 fixture 具体挂在哪个 `control` 子网无关，`accept_s1.sh` 早已用同一事实验证过（`http://postgres:5432` 直连失败）；`step6_env_and_egress` 额外对同一目标做了同款探测佐证。
+  - **step 6 不经真实 Worker 的工具调用，改用 `docker compose run --entrypoint sh` 直接跑 `nexttime-ai-worker-runtime` 镜像**：`worker` 模式只注册 `list_allowed_operations` 动态门工具与 `report_result`，不存在任何通用 shell 工具可供 scripted scenario 驱动 `env`/`curl`——task brief 本身给出了这条回退（"fall back to `docker compose run --rm --no-deps -T worker-runtime sh -c '…'`"），本任务采用它：`--entrypoint sh` 绕过 `entrypoint.sh`（否则 `sh -c '…'` 会被当成 `pi` 自己的 CLI 参数），显式设置与真实 Worker 相同的 `HTTP(S)_PROXY=http://egress-proxy:3128`、`--network workers`。附带证据（非本步骤主断言）：`deploy/worker-runtime/entrypoint.sh` 自己的 S2.9 self-check 在每个真实 Worker 容器启动时已无条件跑过等价检查，step 2/4 已经 spawn 过的真实 Worker 容器如果这条自检不过会先失败在别处。
+  - **`ops-runner` WorkerDefinition 读取真实 `ontology/ops-runner.yaml`**（经 kernel 镜像里已有的 `yaml` 包解析，不是脚本自己编的提示词），补上 `capabilities:['request_action']`（省略时默认排除全部 execute 类能力，`packages/shared/src/worker-definition.ts` 自己的文档）与三个已连接门的 `gates` 数组后 `propose_worker_definition`/`publish_worker_definition`。
+  - **`step2-approval-card`/`step4-approval-card` 可能降级为 SKIP 而非 FAIL**：S2.11 的 `application/linkage` 消费者是异步的（订阅 outbox 事件，`AGENT_RUNTIME=fake` 下走 kernel 自己的 200ms 轮询），脚本查 `list_pending` 是同步确定性的，但对话卡片消息理论上可能还差最后一次轮询节拍——`list_pending`/`approve`/`get_action` 这条真正的治理链路从不依赖它，即使这一行因时序 SKIP，批准/执行/explain 仍然全部真实通过。
+  - **S2.13 验收句折入本任务**：接入测试 OpenAPI 后 `find_operations("stock")` 在 `publish_manifest` 前 miss、之后 hit；`create_connection` 用真实 `manifestSource`（fetch 测试系统自己的 `openapi.json`）走 `importOpenApi` 而非门自己的静态 `describe_operations`——因此 `deploy/accept-s2/http-gate-manifest.json`（门自己 serve `/gate/observe` 用的静态清单）必须与 `importOpenApi` 从同一份 `openapi.json` 推导出的形状逐字段一致（文件头注释里有完整对照）；凭证明文（bearer token）经 `information_schema.tables` 遍历全部 `public` schema 表断言不出现。
+  - **本机（Windows，无 Docker）验证**：`sh -n scripts/accept_s2.sh`、`node --check`/自测 `deploy/fake-llm/server.mjs`（`node deploy/accept-s2/fake-llm-scenario-selftest.mjs`）、`node scripts/validate-compose.mjs`、`pnpm lint`/`typecheck`/`depcruise`/`ci:guards` 全部本地跑通；`pnpm test` 全绿（两次独立运行各自出现一个不相关的、与本任务改动无关的计时敏感测试在 `pnpm -r` 并行满载下偶发超时——`packages/llm-proxy/src/proxy.test.ts` 与 `packages/platform-extension/src/entry.sdk.test.ts`，两者单独跑各自稳定通过，判定为本机资源争用下的既有 flaky 测试，不是本任务改动引入的回归）。容器级行为（真实构建/起服务/跑满七步）留给目标主机验收，步骤见 `docs/runbooks/host-accept-s2.md`。
+  - **`deploy/accept-s2/fake-llm-scenario-selftest.mjs` 现按 `docs/contracts/capabilities.json` 校验每一次 scripted 工具调用的参数**（W6，retrospective-2026-09-09.md §5.4）：自测启动时加载一次 registry，对 `search`/`traverse`/`get_object`/`find_workers`/`invoke_worker` 这些注册在案的 capability，逐条断言其 `args` 满足对应 `params` JSON Schema（required/additionalProperties/type/enum）——registry 一旦发生契约漂移（例如 `search` 新增必填字段）会在这里失败，而不是留到主机验收才暴露；门操作与 Worker 侧 `report_result` 不是 registry capability，按名跳过而非判失败。
+  - **PR #54 后续两轮修订（2026-09）**：① `docker-compose.yml` 的 `accept-s2-openapi.environment.ACCEPT_S2_API_TOKEN` 从 `${ACCEPT_S2_API_TOKEN:?...}` 改成 `${ACCEPT_S2_API_TOKEN:-}`——compose 在按 profile 过滤之前就要对**整份文件**做变量插值，`:?` 会让任何未设置该变量的普通 `docker compose up/ps/build`（不只是 `accept-s2` profile）都直接报错退出；`deploy/accept-s2/openapi-fixture/server.mjs` 自己已经在校验空/缺失 token 并拒绝启动，`:-` 把这个校验完全留给它。② 移除 `step2_docker_restart`/`step3_observe_no_worker` 的 SKIP，改为断言真实的 chat 驱动链路（`find_workers`→`invoke_worker`、观察类 gate 工具），入口 agent 的最终回复若命中 `"did not resolve"`（或为空）判定为 `packages/platform-extension` 的 entry-mode-tools 修复（另一个 PR，分支 `fix/entry-mode-tools`）尚未部署，`FAIL` 并给出可操作信息，而不是 SKIP——`deploy/fake-llm/server.mjs` 的两个 entry scenario 因此改成真正的多轮工具链（`findToolResult` 从消息历史里解析上一步*真实*的工具返回值，喂给下一步调用，而不是脚本预先猜好的 id）。过程中发现一个更深的发现：`governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES` 按 capability **名字**（不是按目标 Operation 的 observe/execute 模式）永久排除 `request_action`（I11/§5.3 item 11），意味着一个真实入口 Handle 结构性地永远无法调用任何声明了 `request_action` 需求的 WorkerDefinition/工具——协调者的修复为此给 entry 模式的观察类 gate 工具引入了专门的、observe-only 的新 capability `observe_operation`（不是 `request_action`），解决了 step 3；step 2（`ops-runner` 需要 `request_action` 去触达 execute 类的 `container.restart`）仍可能撞上同一条限制，详见 `docs/runbooks/host-accept-s2.md` §5"已知偏离"核心缺口 2。
+  - **W7 实现说明（工具调用结果可观测）**：新增可选字段 `isError` 沿链路透传——pi 的 `tool_execution_end.isError` 经 agent-host `bridge.ts` 转译进 `AgentRuntimeEvent`（`agent-host-protocol.ts` schema）、kernel `event-sink.ts` 写进 `chat.stream` 的 `toolCallEnded` payload、web `streaming-reducer.ts`/`ToolCallRowView.tsx` 渲染成工具调用行的 "failed" 芯片（`data-tool-outcome="failed"`）；全程可选且加法式，旧运行时省略该字段时行为不变，`docs/contracts/events.json` 快照已随之重新生成。`deploy/accept/driver.mjs` 同步扩展：`send-and-wait` 从 `chat.stream` 增计 `TOOL_CALLS`/`TOOL_ENDED`/`TOOL_ERRORS`/`TOOL_ERRORS_KNOWN`/`TOOL_NAMES`/`TOOL_ERROR_NAMES`；新增子命令 `transcript-stats <path>` 直接读 Worker 自己的 pi 会话 JSONL（`type:"message"` 逐行，`assistant` 消息里的 `toolCall` 块 + `toolResult` 消息的 `isError`）打印同一组字段外加 `ASSISTANT_MESSAGES`/`MODEL`——该 JSONL 格式钉在 pi 0.84.x，升级时随 `scripts/check-pi-version-consistency.sh` 一起核对。
+  - **W7 实现说明（真实模型模式）**：`scripts/accept_s2.sh`/`scripts/accept_s3.sh` 新增
+    `--real <provider/model> [--runs N]`，保留主机上已部署的真实 provider（不切到 fake-llm、不
+    需要跑完再切回），把 fake-scripted 的 step2/3/4/5/7（S2）与 `chat_dependency_step`（S3）换成
+    同一批场景用真实模型跑 N 次（默认 3），只按**结果**判定——真实模型不像 fake provider 那样保证
+    固定的工具调用顺序，因此判据全部退化成"容器真的重启了/回复真的带 payload/Task 真的
+    completed"这类可观察结果，单次失败只是数据点，只有整场景全军覆没才 FAIL。为此
+    `deploy/accept/driver.mjs` 新增两个能力：`send-and-wait` 的
+    `auto-approve=<gatekeeperId,...>` 让驱动自己以调用者身份监听 `action.pending` 推送并当场
+    批准（docker 场景用它模拟 alice 自己批准）；新子命令 `wait-task <token> <taskId> <timeoutMs>`
+    轮询 `list_tasks` 直到终态。`run_driver_mount`（`scripts/lib/accept-common.sh`）配合既有的
+    `transcript-stats` 子命令把 Worker 自己的 pi 会话 JSONL 挂进驱动容器统计工具调用出入，汇总进
+    `worker_tool_calls`/`worker_tool_errors`。每次尝试打印一行 `RUN scenario=<key> run=<i>
+    outcome=ok|fail <detail>`，每个场景跑完打印一行 `REAL scenario=<key> ok=<k>/<n>
+    turn_tool_calls=… turn_tool_errors=… worker_tool_calls=… worker_tool_errors=…` 汇总；两个脚本
+    都从不替调用者选默认模型——`<provider/model>` 必须由调用者显式传入且是已部署 provider
+    `models.json` 里真实存在的 id。详见 `docs/runbooks/host-accept-real-model.md`。
+
+### S2.13 连接系统流程与清单导入
+- 目标：把一个新系统接进来只需要一张卡片。
+- 交付物：kernel `connections/service.ts`（`request_connection(kind, target)` 产生连接请求卡片；human 填地址、凭证、凭证种类 → 凭证直达门实例的存储，不经内核持久化 → 注册门 → 图里生成 `Gatekeeper` 与系统对象及 `connects_to`；`http` 从 OpenAPI URL 导入清单草稿，`mcp` 从 `tools/list` 导入；owner 发布清单）；`connect_gatekeeper` 把门授予某用户的入口 agent（写 Grant）。
+- 验收：接入 fake OpenAPI 后 `find_operations("stock")` 命中；内核数据库任何表中不存在凭证明文；未发布的清单对 agent 不可见。依赖：S2.4、S2.6。
+- 实现说明（S2.13 PR，2026-09）：
+  - **`complete_connection` 命名对照表**：派发文字的交付物 2 用 `complete_connection {connectionRequestId, endpoint, credential?, credentialKind, manifestSource?}` 举例这一步的 capability 名字，但本任务开工前 `packages/shared/src/capabilities.ts` 里 `create_connection` 就已经用设计文档 §9.3 自己的名字注册好了（`{kind, target, credentials}`）——本 PR 在这个已存在的 capability 上做**加法扩展**（新增 `connectionRequestId?`/`endpoint`/`credentialKind?`/`onBehalfOf?`/`manifestSource?`，`credentials` 从必填放宽为可选），而不是再注册一个名字不同、语义重复的第二个 capability。`governance/connections/service.ts` 自己的 `completeConnection()` 就是这一步的服务函数名——派发文字的 `complete_connection` 与本仓库的 `create_connection`/`completeConnection` 指同一件事，该模块文件头注释里逐字写了这张对照表。
+  - **kernel 侧模块落位**：新建 `governance/connections/{types,service}.ts`（替换 R1 的占位符），只做纯 DB 编排——`registerGatekeeper`/`importManifest`（调 `governance/gatekeepers`，S2.4）与 `grantCapability`（调 `governance/capability`，S2.3）都是同级 governance 模块互相调用公开接口，不读对方的表，同 `governance/approval` 调 `governance/policy`/`governance/capability` 的先例。**这个模块不做任何网络 I/O**——`.dependency-cruiser.cjs` 的六层规则本身没有把"governance 不能自己发 HTTP 请求"写成一条硬规则（它只挡 governance 直接 import `adapters/*`），但派发文字点名的凭证 POST、OpenAPI 文档抓取、MCP `tools/list` 调用全部落在 `application/gateway/connection-handlers.ts`——同 `governance/gatekeepers/registry.ts`（从不碰门的网络）与 `cli/bootstrap.ts` 的 `registerGatekeeperFromCli`（"先在 CLI 层抓完 `describe_operations`，再把纯数据交给只碰 DB 的服务函数"）一致的分层。`completeConnection()` 因此接受一个已经解析好的 `operations: Operation[]` 参数，从不自己决定"这份清单从哪来"。
+  - **ConnectionRequest 存储**：新迁移 `migrations/governance/0005_connection_requests.sql`（`connection_requests` 表，`requested → completed | cancelled`，`packages/shared/src/{enums,transitions}.ts` 新增 `ConnectionRequestStatus`/`CONNECTION_REQUEST_TRANSITIONS`，与 `GRANT_TRANSITIONS` 同一形状）——workspace 级 RLS（不按 owner 收窄，同 `action_requests` 的既有选择：`request_connection` 本身是 Handle 通道、由 `member` 发起，行必须至少对发起者可见；"谁能看见这张卡片队列"是 `list_connection_requests` 的 `minRole:'owner'` capability 门槛，是应用层的事，不是行可见性）。`gatekeeper_id` 外键直接指向 `objects(workspace_id, id)`（`objects` 是 core 模块，排在 `governance` 之前，真实外键可用，同 `governance/0003_action_requests.sql` 头注释的既有论证）。`completeConnection()` 用 `transition(CONNECTION_REQUEST_TRANSITIONS, existing.status, 'complete')` 前置校验（I6）——对同一个 `connectionRequestId` 第二次调用 `create_connection` 会在写入任何东西之前就抛 `IllegalTransition`，不会重复注册第二个 Gatekeeper。`cancelled` 状态与 `cancel` 事件已声明在转移表里，但本任务没有交付 `cancel_connection_request` capability——已知偏离，见下。
+  - **凭证的落点与顺序（I9/§11 "凭证只在门"）**：`create_connection` 的处理器（`connection-handlers.ts`）顺序是：①（网络）解析清单——`manifestSource` 给了就直接抓取（`http` 解析成 OpenAPI 文档喂给 `@nexttime/gatekeeper-base` 的 `importOpenApi`；`mcp` 对 `manifestSource` 发 `tools/list` 喂给 `importMcpTools`），没给就调门自己的 `describe_operations`（同 `registerGatekeeperFromCli` 的既有路径，适用于已经用 `GATE_MANIFEST_FILE` 起好的门，以及全部 `cli`/`ssh` 门）；②（DB，同一个 `dispatchCapability` 事务内）`completeConnection()`——注册 Gatekeeper、把清单当草稿导入（I17，`registerOperationDraftObject` 早已保证草稿态，无论传输种类自己建议什么默认值）、把 ConnectionRequest（如果有）转移到 `completed`、发 `ConnectionCreated` 事件；③（网络，刻意放在最后）只有这一步成功了，才把凭证 POST 给门的 ConnectedAccount 存储。顺序反过来（先发凭证）会有更差的失败模式：DB 写入失败时，凭证已经进了一个内核完全不知道、也没法用事务撤销的门实例；现在的顺序下，凭证 POST 失败会让 `dispatchCapability` 的 `withWorkspace` 事务整体回滚，②的每一条写入都撤销，不留下"注册了门却没有凭证"的半成品状态。`credentialKind` 缺省规则：给了 `credentials` 且没显式给 `credentialKind` → 视为 `connected_account`；两者都没给 → 视为 `shared`（门已经在容器启动时用共享 env 凭证配置好，同 S2.5 的 `docker`/`ragflow` 两个门的既有模式，本次调用完全不碰 `/gate/connected-accounts`）；`connected_account` 但没给 `credentials` → 在做任何 DB 写入之前就抛 `ConnectionCredentialRequiredError`。凭证的 `onBehalfOf`：显式参数优先，其次是 ConnectionRequest 自己的 `requestedBy`，最后退到 `create_connection` 调用者自己（通常是 owner）。
+  - **redaction 机制（"内核数据库任何表中不存在凭证明文"）**：`dispatchCapability`（`application/gateway/dispatch.ts`）原本无条件把 `parsed.data`（capability 的全部入参）整个塞进 `audit_records.payload.params`——对 `create_connection` 这种入参里带凭证的 capability，这条既有的通用逻辑本身就是一个真实的泄露路径。修法是给 `Capability` 类型新增一个纯数据字段 `redactedParamKeys?: readonly string[]`（`packages/shared/src/capabilities.ts`，与该注册表"pure data"的既有定位一致，不是函数字段），`dispatch.ts` 写 audit 前用它把命中的字段整体替换成固定占位符 `'[redacted]'`；没有声明这个字段的 capability（其余全部）行为完全不变。`create_connection` 是第一个（目前也是唯一一个）声明 `redactedParamKeys: ['credentials']` 的 capability。`application/gateway/connection-handlers.ts` 自己返回给调用方的 `result` 也从不回显 `credentials`。验证：`application/gateway/connection-handlers.test.ts`（假 `GatekeeperClient`，断言 audit payload）与 `connection-flow.integration.test.ts`（真门 + 真 Postgres，除了断言 audit payload，还枚举 `information_schema.tables` 里 `public` schema 的每一张表，对每张表整行转 text 做 `ILIKE '%<凭证明文>%'`，全部为空）。
+  - **门侧新增 `POST`/`DELETE /gate/connected-accounts`**（`@nexttime/gatekeeper-base`，`server.ts`/`protocol.ts`/`credentials/connected-account.ts` 新增 `ConnectedAccountStore.delete()`）——派发文字明确问"门有没有暴露存 ConnectedAccount 的 HTTP 端点，没有就加一个"。**刻意没有 `GET`**：一个凭证一旦进了门的 `ConnectedAccountStore` 就不能再经协议读出来（同"凭证只在门"的精神，读接口只存在于门进程内部的 `resolve()` 调用链）。只有 `createGatekeeperServer({..., connectedAccountStore})` 给了 store 才注册这两条路由；`GATE_CREDENTIAL_MODE=shared` 起的门（`startGatekeeperServer` 走 `SharedEnvCredentialResolver` 分支）没有 store，两条路由都返回 501（`ConnectedAccountStoreNotConfiguredError`）而不是悄悄接收后丢弃。`packages/kernel/src/adapters/gatekeeper-client/index.ts` 的 `GatekeeperClient` 端口新增 `storeConnectedAccount`/`deleteConnectedAccount` 两个方法（`HttpGatekeeperClient` 的私有 `request()` 顺带加了 `DELETE` 方法支持）。
+  - **`connect_gatekeeper` 的 Grant 编码**：复用 `governance/policy/engine.ts` 已经在用的 `GATEKEEPER_RESOURCE_SCOPE_KEY`（字面量 `'gatekeeper'`）——`capability_grants.capability = 'gatekeeper'`，`scope.resourceScope = gatekeeperId`。选它而不是发明一个新的 `'gatekeeper:<id>'` 字符串编码，是因为这样一条 Grant 行天然就能被 `governance/capability/grants.ts` 已有的 `hasActiveGrant`/`listGrantHolderPrincipalIds` SQL 直接用，不需要为"这是不是一条门授权"再造一套 LIKE 查询或专门的判定逻辑。
+  - **补上 `handles.ts` 自己标注的"S2.4/S2.13 已知缺口"**：`governance/capability/handles.ts` 的 `WORKER_CEILING_CAPABILITIES` 段落原本就写明"一旦 S2.4/S2.13 落地了真正的 Gatekeeper 与 CapabilityGrant，下一步是让 `entryScope()` 从 Grant 里取 `resources`"——本任务把这一步接上：`governance/capability/grants.ts` 新增 `listActiveGrantResourceScopes(client, workspaceId, {principalId, capability})`，`application/host-bridge/agent-host-runtime.ts` 的 `ensureEntryHandle` 在每次（重新）签发入口 Handle 前用它查这个 principal 对 `'gatekeeper'` 这个 capability 名下所有仍然 `active` 的 `resourceScope`，喂给 `entryScope({resources:{gatekeeper: [...]}})`。这条读只在 Handle 签发的那一刻生效——`ensureEntryHandle` 已有的缓存（ttl 剩余 10% 以内才重签）意味着一次新的 `connect_gatekeeper` 授权，最迟要等到入口 Handle 的下一次重签才会体现到 `resources.gatekeeper` 里，不是实时的；对一个人工触发的授权动作，这个延迟被认为可以接受（同一个类比：`resolveEntryDefinition` 对已发布 WorkerDefinition 的刷新延迟）。测试：`application/host-bridge/agent-host-runtime.test.ts` 新增一条假 pool 用例（不连真库），断言签出的 Handle JWT 载荷解出的 `scope.resources.gatekeeper` 确实包含种好的 Grant；`connection-flow.integration.test.ts` 用真库复核 `connectGatekeeper()` 之后 `listActiveGrantResourceScopes()` 真的能读到（`ensureEntryHandle` 写侧的镜像验证）。
+  - **`find_operations`/`find-means.ts` 的一处真实 I16/I17 缺口，顺手修了**：`substrate/graph/find-means.ts` 自己的模块注释原来断言"published only 对三种元本体类型都是免费的，因为都是发布时才投影进图"——这句话对 `WorkerDefinition`成立（`projectWorkerDefinitionObject` 只在 `publishWorkerDefinition` 里调用），但 S2.4 落地的 `Operation` 走的是另一条路：`registerOperationDraftObject` 在**导入/提议时**就把 Object 写进 `objects`（`properties.status:'draft'`），`setOperationStatusObject` 之后只是原地把 `status` 改成 `'published'`——一份刚导入、还没发布的清单，`find_operations` 立刻就能搜到，直接违反 I16/I17（"未发布的清单对 agent 不可见"）与本任务自己的验收条目。修法：`findMetaOntologyObjects` 对 `Operation` 加一条 `properties ->> 'status' = 'published'` 过滤，`WorkerDefinition` 保持不加。**一次真实的两分支同时开发踩坑，rebase 到 S2.14 后由 CI 抓到并订正**：本 PR 最初把这条过滤也加到了 `Procedure` 上（按"S2.14 会落地的同构未来类型，提前做成同一形状"的假设），但 S2.14（并行开发，落地时本 PR 尚未 rebase 到它）落地后发现 `Procedure` 的 `projectProcedureObject` 实际走的是 `WorkerDefinition` 那条路——只在 `publishProcedure` 里调用、且只写 `{name, description}`，从不写 `status` 属性；对 `Procedure` 加这条过滤会让它对**任何** Procedure（已发布的也不例外）恒为空，被 rebase 后跑的 `application/task/find-procedures.integration.test.ts`（S2.14 自己的测试）当场抓到（CI `test` job 失败，4 个用例）。修正：过滤只对 `Operation` 生效。
+  - **`find_operations` 与调用者 Grant 取交集，S2.7 留的"文档化空操作"接上了；口径向 S2.14 的姐妹实现对齐**：`application/task/service.ts` 的 `findOperations` 原来对 `caller` 参数完全不使用（S2.7 自己的注释："intersection 是文档化的 no-op，等 S2.4 落地真正的 Operation Object 与可核对的 Gatekeeper 关系"）。本 PR 最初照抄 `findWorkers` 的整体形状——`'unconstrained'` 看到全部候选，否则只保留 `identityKey.gatekeeperId` 落在 `resources.gatekeeper` 里的候选——**无差别应用到每一个候选**，不分 observe/execute。Rebase 到 S2.14 后发现同一个文件里 `findProcedures` 自己的 `stepUsableByCaller`（S2.14，`operation` 类型的步骤）按的是另一条规则："`operation.operation.mode !== 'execute'` 就直接放行——§11 observation is ungated by design"，只有 execute 类步骤才核对 `resources.gatekeeper`——这与 `application/task/handle-mint.ts` 的 `computeChildHandleScope` 早就写明的同一条设计规则（"观察免审，只有 execute 受凭证门槛"）一致，本 PR 最初的"每个候选都要 Grant 覆盖"反而是与全仓库既有口径不一致的那一个。改成同一条规则：`findOperations` 只在候选的 `properties.mode === 'execute'` 时才核对 `resources.gatekeeper`，observe 类候选永远放行（`'unconstrained'` 或有 Grant 与否都一样）——`connect_gatekeeper` 对 `find_operations` 的可观察效果因此专门落在"能不能看见可用的 execute 类 Operation"上，不影响观察类的可见性，这与设计文档 §8.6 的 ERP 例子（"接入即可直接观察，不需要额外授权"）以及本任务自己的验收条目（`find_operations("stock")` 命中——`stock.get` 是 observe 类，不需要先 `connect_gatekeeper`）完全对得上，不是巧合。`request-action-handler.ts` 的 `observe` 路径本身不检查 `resources.gatekeeper` 仍然是 S2.4 既有缺口（已知偏离清单里重复一遍），与这条修正无关——那是"门收到调用时" 的强制点，这里改的是"`find_operations` 展示候选" 的那一层。
+  - **`publish_manifest`（`connection` 分组，早在本任务开工前就已注册好参数形状 `{gatekeeperId}`，此前一直没有 handler，落到 501）**：`governance/gatekeepers/manifest.ts` 新增 `listDraftOperationsForGatekeeper`（单个 Gatekeeper 下全部 `draft` 状态的 Operation，一次查询），`application/gateway/operation-manifest-handlers.ts` 的 `publishManifestHandler` 循环调用 S2.4 已有的 `publishOperation`——批量发布的粒度差异（§7.5 "owner 发布清单"，整份清单一次性发布，区别于逐条的 `publish_operation`），复用同一个转移函数，不是重新实现一遍发布逻辑。没有草稿可发布时返回空的 `publishedOperationNames`，不是错误。
+  - **已知偏离 / 未覆盖**：①`cancel_connection_request` capability 未交付——`connection_requests` 表与转移表都已经支持 `cancelled` 状态，接一个 handler 是后续工作；②`request-action-handler.ts` 的 observe 路径不检查 `resources.gatekeeper`（S2.4 既有缺口，见上，本任务未修）；③`ensureEntryHandle` 对新 Grant 的可见延迟受既有 Handle 重签缓存策略约束，不是实时的（见上）；④`create_connection` 的 `manifestSource` 只对 `http`/`mcp` 有意义，`cli`/`ssh` 给了也会被忽略（这两种传输种类的清单形状不是"一个 URL 能描述"的东西，同 S2.4 的既有假设）；⑤`ConnectedAccountStore` 的 `DELETE` 路由已经加好、`GatekeeperClient.deleteConnectedAccount` 已经加好，但没有任何 capability 调用它（对称性交付，没有强制要求；`revoke_capability`/未来的账号解绑流程是自然的调用方，留给后续任务）。
+  - **测试策略**：`@nexttime/gatekeeper-base` 全部新增测试是纯单元测试（`credentials/connected-account.test.ts` 的 `delete()`、`server.test.ts` 的新路由，含"没配置 store 时 501"与"没有 GET 路由"两条）；kernel 侧 `packages/shared/src/{transitions,events}.test.ts` 扩展了穷举/样例覆盖到新机器/新事件；`governance/connections/service.test.ts`（DB-gated）覆盖状态机与 `connectGatekeeper` 的 Grant 形状；`application/gateway/connection-handlers.test.ts`（DB-gated，假 `GatekeeperClient`）覆盖 `describe_operations` 兜底路径、`credentialKind` 缺省/校验规则、redaction；`application/gateway/connection-flow.integration.test.ts`（DB-gated，真 `@nexttime/gatekeeper-base` 门服务器 + 一个假 OpenAPI 目标系统，两个都在 `127.0.0.1` 临时端口）端到端覆盖验收条目原文的三句话：`find_operations("stock")` 命中（发布前为空、发布后命中）、凭证明文不出现在任何 `public` schema 表、`connect_gatekeeper` 之后 `listActiveGrantResourceScopes` 能读到。本机没有 Postgres，以上 DB-gated 测试本地未跑，全部 `describe.runIf(DATABASE_URL)`，经 CI 的 Postgres service 验证。
+  - **R-40 / R-41 更正（2026-10-02 复审，维护者决定 D-19）——接入包三态真正约束自连；"disabled"确认不再谎称切断（#443）**：①R-40：连接器三态（`disabled` / `self_serve` / `platform_preset`）从未被 `create_connection` / `request_connection` 读取，把 `ssh` 设为 `disabled` 后工作区 owner 仍可 `create_connection {kind:'ssh', …}` 注册一个绕过所有平台规则的门，而 `platform-admin-design.md` §6.3 把"可自连"定义成规则、不是界面提示。现在 `application/gates/store.ts` 新增 `readConnectorMode(client, name)`（`connectors_read_all` 使其可在工作区事务内读），`application/gateway/connection-handlers.ts` 的 `assertConnectorSelfServe(client, kind)` 在 `requestConnectionHandler` 与 `createConnectionHandler` 里最先执行（早于目录地址守卫、密钥检查与任何网络 I/O），非 `self_serve`（含连接器行不存在）一律抛新的 `ConnectorNotSelfServeError`（`code` / `connector` / `mode`）→ HTTP 409 `connector_not_self_serve`（与 `enable_gate_instance` 的 `connector_not_preset` 同族）、WS `ILLEGAL_TRANSITION`；消息说明原因（disabled 或平台预置 → 走目录），MCP 路径上的 agent 也读得懂。**产品后果**：提供宿主 `http` / `mcp` 门实例（`platform_preset`）与 owner 自连同一种类现在互斥——这是三态的原意，只是现在被强制。**主机前置条件**：`accept_s2.sh` 会自连 `ssh` 与 `http`（`request_connection` → `create_connection`），上次主机核对时通用连接器 `cli/http/mcp/ssh` 均为 `self_serve`，所以通过；若管理员此后把 `http` / `mcp` 设成 `platform_preset`，这些验收步骤会以 `connector_not_self_serve` 失败（设计如此）。②R-41：控制台连接器模式的 `disabled` 确认（irreversible 档，需重输名称）声称"disabled 会立即让所有启用它的工作区都拿不到这个接入包"，而内核按设计相反——模式只是目录可见性与新连接的闸门，既有链接继续调用（`readGateLinkPolicy` 只读拒绝名单）。`PlatformIntegrationsPage` 现按模式给出文案：`disabled` = "禁用只拦新的"（目录、启用，以及通用种类的自连），既有工作区继续调用，该种类下已自连的系统不在连接器状态管辖内；通用连接器改 `platform_preset` 会说明自连随之关闭；其它切换说明既有连接不受影响。禁用一个有实例的连接器时，同一对话框提供"同时禁用全部 N 个 Operation"（`useConnectorMode.alsoDisableOperations`，每次开 / 关复位）：勾选后 `list_gate_instances{connector}` → 一次 `set_connector_mode{name, mode:'disabled', disabledOperations}`，携带所有已宣告名与已被拒绝的名（即允许清单自己的名字全集），之后才宣告的 Operation 不在其内，标签已说明。确认档在所有情形下降为 `medium`（popover）——原 `irreversible` 档的依据正是那句切断声明，而模式和拒绝名单都可逆，拒绝名单自己对同一效果的确认也是 `medium`；连接器名仍作为目标显示。`ConnectSystemLauncher` 的"设为平台预置"提示补一句：通用连接器随之对所有工作区关闭自连。注册表文字（`request_connection` / `create_connection` / `set_connector_mode`）、设计文档 §6.3 与 `runbooks/add-gatekeeper.md` 同步。无迁移、无线上形状变更。测试：`connection-handlers.test.ts`（无 DB 段：`disabled` / `platform_preset` / 缺行时 `create_connection` 抛 `ConnectorNotSelfServeError` 且只发出一次连接器读取、无 fetch / 门调用，`request_connection` 同；Postgres 段：`ssh` 设 `disabled` 后经 `dispatchCapability` 被拒）、`capability-route.test.ts`（409）、`PlatformIntegrationsPage.test.tsx`（`medium` 档、文案、无勾选只发 `{name, mode}`、勾选发排序后的并集）。
+
+### S2.14 Skill、Procedure 与提议流程
+- 目标：做过的事沉淀成图里可发现的做法。
+- 交付物：元本体 `Skill`（pi skill 格式的 markdown + 适用的门种类与 ObjectType）与 `Procedure`（有序步骤引用 Operation / WorkerDefinition，含审批步与验证步）；`propose_skill / publish_skill / propose_procedure / publish_procedure`（提议私有、发布 human 通道）；supervisor 按 WorkerDefinition `uses` 把已发布 Skill 挂进容器的 pi skills 目录；`ops-runner` 定义的 system prompt 含「结束时提炼 Fact、记 Decision、成功且新颖时提议 Skill」；入口定义的 prompt 含三档编排规则与异步模型。
+- 验收：Worker 结束后草稿 Skill 出现且仅提议者可见；发布后 `find_procedures` / 下一次 Worker 容器内可读到该 Skill；Procedure 的步骤引用不存在的 Operation 时发布被拒。依赖：S2.6、S2.9。
+- 实现说明（S2.14 PR，2026-09）：
+  - **`skills`/`procedures` 是各自的关系型生命周期表，不是纯图对象**（与 `Operation` 不同）：派发文字明确给出了两张表的列（`workspace_id, id, version, status, name, description, markdown|steps, applicable, proposed_by, published_by, created_at, published_at`），`application/worker/skills.ts`/`procedures.ts` 逐字实现，`migrations/worker/0002_skills_procedures.sql`（沿用 0001 的 advisory-lock key `7241000501`——同模块共享一把锁，不是每文件一把）与 `worker_definitions` 完全同构：同一个 `PUBLISHABLE_TRANSITIONS`（`packages/shared/src/transitions.ts` 早就在其注释里预留了"Shared by OntologyVersion, WorkerDefinition, Skill, Procedure"）、同一条"已发布内容冻结、`published → deprecated` 是唯一出边、`deprecated` 终态"immutability 触发器规则。发布时仍然把对象投影进 `objects`/`links`（`substrate/ontology/meta-objects.ts` 新增 `projectSkillObject`/`projectProcedureObject`，identity 为 `{skillId|procedureId, version}`），职责与 `Operation` 一致——只是多了一张关系表作为真源，图投影只是给 `find_procedures` 用的发现层，不是权威内容（mounting 直接读 `skills` 表本行，不读图）。
+  - **`markdown` 只存 SKILL.md 的正文，不存 frontmatter**（与派发文字"pi SKILL.md frontmatter + non-empty body"字面读法不同，记录为已知偏离）：把 `name`/`description` 双写进 frontmatter 文本 *和* 独立列，两者迟早会不同步；改为 `name`/`description`/`markdown` 三个独立列各自校验（`@nexttime/shared`'s `skill.ts`：`PublishedSkillNameSchema`/`PublishedSkillDescriptionSchema` 照抄 pi 自己的 Agent Skills 规则——1-64 位小写字母数字加单连字符、描述 ≤1024 字符，对照 `@earendil-works/pi-coding-agent@0.84.4` 的 `core/skills.ts` `validateName`/`validateDescription` 验证过，不是猜的），挂载时 `application/worker/skills.ts` 的 `renderSkillMarkdownFile` 用 `yaml` 库（内核已有依赖，`substrate/ontology/loader.ts` 同款）确定性地拼出 `---\n...\n---\n\n<body>` ——发布时校验的字段就是最终会被序列化进 frontmatter 的字段，不需要在两处分别维护"这段文字要满足 pi 的规则"。
+  - **I16 读隐私不是靠 RLS**（同样记录为对派发文字"drafts private to the proposer"字面读法的实现选择说明，而非偏离——验收本身照办了）：`worker_definitions` 的既有先例（0001 迁移header 注释）把 I16 定义成"发布只走 human 通道"这条写路径规则，不覆盖读；但本任务的验收明确要"另一个 principal 读不到草稿"，一个真的读隐私需求。本想照抄 `sources` 表的 `visibility`/`owner_principal_id = app_principal()` RLS 策略，但 Skill 的 `proposed_by` 通常是替用户提议的 *agent/Worker* principal（"Worker 结束时可 propose_skill"），不是将来要发布它的人类——RLS 按 `proposed_by = app_principal()` 卡行可见性，会连要审核发布的人类都读不到这行，直接破坏 `worker_definitions` 已经建立的"任何 human 都能发布任何草稿"模型。改为：RLS 只做和 `worker_definitions` 一样的纯 workspace 隔离；I16 读隐私在 `application/worker/skills.ts`/`procedures.ts` 的 `listSkills`/`listProcedures` 里用查询谓词实现（"`status='published'` 或者`status='draft'` 且`proposed_by = 调用者`"，`select distinct on (id) ... order by id, version desc`——同一 id 下调用者自己更新的草稿版本会遮住旧的已发布版本，这是故意的"我自己的最新工作在先"语义）——`publish_skill`/`deprecate_skill` 走 `getLatestForUpdate` 直接按 `(workspace_id, id)` 取最新版本行，不经过这条隐私谓词，任何人类都能发布任何人的草稿，与 `worker_definitions` 行为一致。
+  - **`publish_skill`/`publish_procedure`/`deprecate_skill`/`deprecate_procedure` 只接受 `{skillId|procedureId}`，没有 `version` 参数**（`packages/shared/src/capabilities.ts` 里这四个 capability 在本任务开工前就已经登记成这个形状——大概率是更早的 S2.4/S2.6 PR 顺手占位的，本任务只是第一次真正实现它们的 handler）：发布/废弃永远解析"这个 id 下版本号最大的那一行"（`getLatestForUpdate`），不像 `worker_definitions` 要求调用方明确给出 `{definitionId, version}` 二元组。`propose_skill`/`propose_procedure` 的 `paramsSchema`（同样是既有形状）也没有"给已存在的 id 追加新版本"的字段——`ProposeSkillInput.skillId`/`ProposeProcedureInput.procedureId` 仍然保留了这个可选参数（关系表本身按 `worker_definitions` 的版本化模式设计，早晚用得上),只是当前唯一真实调用路径（`skill-procedure-handlers.ts`）从不传它，每次 `propose_skill` 都是一个全新的 version-1 家族。
+  - **`Procedure` 的四种步骤类型与发布校验**：`packages/shared/src/procedure.ts` 的 `ProcedureStepSchema`（`z.discriminatedUnion('kind', […])`）——`operation`（`{gatekeeperId, operationName}`，标识形状复用 `governance/gatekeepers` 的 `OperationIdentity`）、`worker`（`{definitionId, version}`）、`approval`/`verify`（只有 `description`，没有外部引用——"审批步与验证步"是流程标记，不是可解析对象，未来 P5 Workflow 引擎才真正执行它们，本任务只负责把形状定下来并在 publish 时通过纯结构校验）。`application/worker/procedures.ts` 的 `publishProcedure` 在写入前对每个 `operation`/`worker` 步骤各做一次真实解析——`getPublishedOperation`（governance/gatekeepers，I17：draft/不存在一律当作"未分类"）与 `requirePublishedWorkerDefinition`（本模块 `definitions.ts`，S2.6 已有）——任何一步解析失败，`ProcedureStepReferenceError`（带 `stepIndex`）整体拒绝发布，草稿原样保留；同一遍解析顺带拿到每一步引用对象的图 Object id，发布成功后立刻用它们写 `Procedure --steps--> …` Fact（每步一条，`properties.stepIndex` 记顺序，因为 Fact 本身无序）。零步的 Procedure 也拒绝发布（`ProcedureStepReferenceError(-1, ...)` ）——派发文字没明确这条，但"有序步骤"字面上不该允许空列表，且允许发布一个不做任何事的 Procedure 没有实际意义。
+  - **`WorkerDefinition --uses--> Skill` 在 *Skill* 发布时反向扫描已发布的 WorkerDefinition，不是在 *WorkerDefinition* 发布时正向解析**（记录为实现选择，非字面偏离——两个时点都能满足派发文字"publish 时投影这条边"）：`definitions.ts` 的 `publishWorkerDefinition` 至今没有自己的 Activity（只做纯 Object upsert，upsert 不需要 Activity），要在那里加一条 Fact 断言就得先给它引入 Activity 生命周期，改动一个 S2.6 就稳定下来、且不属于本任务所有权的文件；改为在 `skills.ts` 的 `publishSkill` 里，用 `worker_definitions.definition -> 'skills' ?| array[id, name]`（jsonb 的"数组顶层元素命中任一"操作符）一次查询找出所有已经声明用这个 Skill（按 id 或 name）且已发布的 WorkerDefinition，逐个解出它们的图 Object id 后断言 `uses` Fact——整个机制自包含在本任务新建的文件里，不touch `definitions.ts`。已知限制：只覆盖"WorkerDefinition 先发布、Skill 后发布"这个方向；反过来（Skill 先发布，WorkerDefinition 后发布仍引用它）这条边不会补断言——设计文档没有对"要不要补历史边"表态，`find_workers`/`invoke_worker` 本身已经会在调用时正确解析 `skills[]`（S2.7 建立的机制），这条图边纯粹是发现层的锦上添花，不是任何治理路径依赖的强不变量。
+  - **Worker 容器挂载 Skill：`skillsInline`，不是 `skills[].hostPath`**（S2.14 deliverable 4，`packages/worker-supervisor` 的 Task spawn API 加性扩展）：内核没有可写的数据挂载（`config:ro` 是唯一挂载，I9 相邻），没法先把已发布 Skill 内容写成宿主机文件再传 host path——`application/task/invoke.ts` 新增 `resolveSkillsInline`（解析 WorkerDefinition 的 `skills[]`，经 `resolvePublishedSkills` 按 id 或 name 解析到**已发布**的 Skill 行，再用 `renderSkillMarkdownFile` 渲染成 `{name, files:{"SKILL.md": <text>}}`），随 `spawnWorkerRun`→`TaskSpawnInput.skillsInline` 一路传到 supervisor 的 `/task/spawn`；`task-service.ts` 的 `spawn()` 在 `docker.createAndStart` **之前**把这些文件直接写进这个 Task 已经会整体挂载到 `/workspace` 的本地工作目录（`<agentDir>/skills/<name>/…`），不需要新增 bind mount。`config.ts` 的 `TaskSkillInlineSchema`（`superRefine`）校验 `name` 复用与 `skills[].name` 相同的安全单段路径规则（未合并成共享 schema，故意让两条规则独立演化）、`files` 每个键必须是安全相对路径且必含 `"SKILL.md"`、单文件 ≤512 KiB、单条目合计 ≤2 MiB。`lifecycle.ts` 的 requeue 路径（`spawnWorkerRunForRetry`）不重新解析 `skillsInline`——与它本来就不重新解析 `model` 是同一个既有简化（重试沿用失败 WorkerRun 自己已经拿到的 Handle scope，不重新读 WorkerDefinition 内容），不是本任务引入的新缺口。
+  - **`find_procedures` 的 Grant 交集**（`application/task/service.ts`）：S2.7 把这个函数标成"S2.14 之前恒为 no-op"，本任务把它填满，与 `findWorkers` 同一形状——逐步骤检查：`worker` 步骤复用 `findWorkers` 自己那套 `computeChildHandleScope` 干跑；`operation` 步骤按 `getPublishedOperation` 解出的真实 `mode` 分流——`observe` 免检（§11"观察不受credential约束"），`execute` 用一次单门"合成 WorkerDefinition"干跑（`declaredCapabilities:['request_action'], declaredGates:[gatekeeperId]`）逼出与真正 `invoke_worker` 同一条判定路径；`approval`/`verify` 步骤永远放行（没有外部引用可检查）。任何一步解析不到"当前已发布"的对象（哪怕 Procedure 自己发布时是合法的，之后被废弃了）整条 Procedure 落选——软性随图状态实时重新校验，不是发布时一次性的静态判定，也不算错误。
+  - **`proposedSkill`（S2.9 留的缝）从 `jsonRecord` 收紧成结构化 schema**：`packages/shared/src/worker-result.ts` 的 `WorkerResultContractSchema.proposedSkill` 从不透明 `z.record` 改成 `ProposeSkillContentSchema`（`{name, description, markdown, applicable?}`）——`report_result` pi 工具的参数 schema（`toToolParameters`，zod-to-json-schema 转换）因此从模型的角度变成结构化字段而不是一个自由 JSON blob，间接教会模型 Skill 提议该长什么样。`application/task/result.ts` 的 `postWorkerResult` 在写 `facts_to_assert`/`evidence`/`proposed_operations` 之后、`completeTaskWithResult` 之前，多一步：`contract.proposedSkill` 存在时调用 `proposeSkill`，owner 是 `actorPrincipalId`（Task 的 `on_behalf_of`，与其它 Fact 的 `asserted_by` 同一个值）——不在 try/catch 里单独兜底，失败与其它写入一样整体回滚（"Worker 的结果要么完整写入要么完全不写"）。`tasks.result` 里仍然原样保留 `proposedSkill` 这个字段（不只存新生成的 `proposedSkillId`）——两者是同一次调用的两个独立、都为真的结果，不是互斥的。
+  - **`ops-runner.yaml`/`entry-agent.yaml` 提示词**：`ops-runner.yaml` 新增"## Closing this out"段落，把"提炼 Fact / 记 Decision / 提议 Skill"三件事说清楚——但措辞上明确了 Worker 自己没有 `record_decision` 能力（`WORKER_CEILING_CAPABILITIES` 里确实没有这个名字），记 Decision 是入口 agent 读到 Worker 的 `facts_to_assert` 之后自己做的事，Worker 的职责止于提供证据；`entry-agent.yaml` 未改动——它的三档编排小节已经字面提到 `find_procedures` 与 `propose_procedure`/Procedure 复用（"你（或者，之后，一个 Trigger）可以直接调用该 Procedure"），派发文字的条件句"只有缺失才加一句"因此不成立，改了反而是无意义的扰动。
+  - **已知偏离 / 未覆盖**：①`markdown` 不含字面 frontmatter（见上，含详细理由）；②`WorkerDefinition --uses--> Skill` 只覆盖"WorkerDefinition 先发布"方向（见上）；③`skills`/`procedures` 未接入 `find_operations` 目前仍未做 Grant 交集的既有缺口（S2.4 遗留，不在本任务范围，`findOperations` 自己的文档注释已经点出这一点）；④`applicable`（Skill 的 `gate_kinds`/`object_types` 过滤元数据）目前只落库、透传进 `list_skills` 的返回，未接入任何过滤逻辑——派发文字没要求过滤，只要求这两个字段存在；⑤本机（Windows，无 Docker）只跑了 `typecheck`/`lint`/`test`（DB-gated 集成测试在 CI 的 Postgres service 上跑，本地因为没有 Postgres/Docker 全部 `describe.runIf(DATABASE_URL)` 自动跳过——`packages/kernel/src/application/worker/{skills,procedures}.test.ts`、`application/task/find-procedures.integration.test.ts`、`application/gateway/worker-result.integration.test.ts` 新增的用例都遵循这个既有约定）；容器级"挂载真的出现在磁盘上"验证留给 `docs/runbooks/host-worker-runtime.md` §14，由主机验收执行。
+  - **D-24 落实（2026-10-02 复审，维护者决定 D-24，L3 §4、L5-5、V2 note 6）——所有 `publish_*` / `deprecate_*` 有 builder 下限，且只有提议者或 owner 能发布 / 弃用（#460）**：`publish_ontology_version` 早已是 `minRole: 'builder'` 且发布者 = 提议者（遗留 100），而 `publish_operation` / `deprecate_operation`、`publish_skill` / `deprecate_skill`、`publish_procedure` / `deprecate_procedure`、`publish_worker_definition` / `deprecate_worker_definition` 八个能力没有任何规则：任何成员都能按 id 发布别人的草稿，或弃用任何已发布行（把一个 Operation 从所有 agent 的工具集拿掉），同一个 I16 概念跑在两套策略下。现在：**注册表**（`packages/shared/src/capabilities.ts`）这八个能力加 `minRole: 'builder'`，描述写明规则；`publish_ontology_version`（builder、仅提议者）与 `publish_manifest`（owner）不变；shared 新测试钉住每个 `publish_*` / `deprecate_*` 都是 human 通道且有 builder 或 owner 下限。**一条规则**（`kernel/src/governance/capability/publish-authority.ts`）：`mayPublishOrDeprecate(actor, proposedBy)` 允许 owner 或该行的提议者，`assertPublishAuthority(...)` 对单行应用，`NotProposerError` 映射为 HTTP 403 `not_proposer` / WS FORBIDDEN。**检查位置**：服务层、对刚锁住的那一行，经可选 `actor` 参数——`publishSkill` / `deprecateSkill`、`publishProcedure` / `deprecateProcedure`、`publishWorkerDefinition` / `deprecateWorkerDefinition`、`publishOperation` / `deprecateOperation`；能力处理器总是传（`publishActorOf(ctx)` / `currentPrincipalRole`），内部调用方不传、不受检——它们不是某个人的能力调用：创建工作区时的默认入口定义、`publishManifest`、`enable_gate_instance`、CLI 种子、模块安装。**拒绝形状**：别人的 Skill / Procedure / WorkerDefinition 草稿对提议者私有（I16），所以回该模块自己的 not-found，与 `discard_draft` 一致；调用者看得见的行回 403 `not_proposer`——包括任何已发布 / 已弃用的行，以及 builder 审阅的 Operation 草稿（D-26，#455）。**修订发布**：`publish_operation` 发布修订草稿时同时弃用该身份的现行行（S3.12），所以调用者对那一行也要有权限；builder 可以修订并发布自己的 Operation，替换（可能重新分类）别人提议的那条是 owner 的事，门导入的 Operation 是最常见的情形。**族发布**（`application/worker/publish-family.ts`，第二个 commit）：提议仍放开——`propose_worker_definition{definitionId}` 可以给任何人的族加一个版本，`propose_skill` / `propose_procedure` 线上不带族 id 但服务接受；发布一个**已有别人提议的已发布版本**的族的新版本，需要那个提议者或 owner（`assertFamilyPublishAuthority`，skill / procedure / worker_definition 共用），与 Operation 修订同一规则——否则 builder 可以给别人的族加版本再以该提议者身份发布，D-24 就成了空话。**控制台**（`packages/web/src/lib/errors.ts`）：`not_proposer` 有标题；`isForbiddenError` 仍只认 `forbidden`，这样"一行是别人提议的"不会把该能力标成本会话被拒、藏掉调用者自己行上的按钮（`usePermissions.markDenied` 不收 `not_proposer`），成员的 403 `forbidden` 仍照旧隐藏。**R-35 auditor 白名单一致**：`roleMayUseCapability`（`governance/capability/roles.ts`）先应用 `roleSatisfiesMinRole`，auditor 既过不了 `builder` 也过不了逐行规则，这些能力又都不在 `AUDITOR_READ_CAPABILITIES`，所以仍被拒；`roles.test.ts` 本就对 `publish_operation`、`deprecate_operation`、`publish_worker_definition`、`deprecate_skill` 断言这一点且通过；`entryScope({role})` 不受影响（human 通道能力从不在 Handle 上限里）。验收脚本的每次发布都是 owner 的 key（`accept_s1/s2/s4`、`demo.sh`）或 builder 发布自己刚提议的草稿（`chaos-kill-kernel-mid-invoke.sh`），仍允许。无迁移，回滚即还原旧规则。测试：新 `application/gateway/publish-authority.integration.test.ts`（Postgres，CI 跑，全部经 `dispatchCapability`）——`publish_skill`：成员 403 `forbidden`、另一 builder 得 `SkillNotFoundError` 且草稿仍是草稿、提议者发布、owner 发布 builder 的草稿；`deprecate_operation`：成员 403 `forbidden`、另一 builder 得 `NotProposerError` 且 Operation 仍已发布、提议者弃用、owner 弃用；另一 builder 不能发布某 builder 的 Operation 草稿（`NotProposerError`）；builder 对 owner 已发布 Operation 的修订，builder 发布得 `NotProposerError`、owner 发布为 v2；别人的族（Skill）：v1 由提议者发布，另一 builder 经服务加 v2（提议可以）但 `publish_skill` 得 `NotProposerError`，owner 发布 v2；别人的族（WorkerDefinition）端到端同理；`packages/shared/src/capabilities.test.ts` 的注册表下限测试；`packages/web/src/lib/errors.test.ts`（`not_proposer` 有描述且不是 `isForbiddenError`）。`pnpm contract:check`：快照重生成，八项加了 `minRole`。文档：design §9.3 meta 与 worker 行、`runbooks/web-console.md` 能力目录行、`scripts/chaos-kill-kernel-mid-invoke.sh` 头注释。
+  - **D-24 后续（2026-10-03）——Worker 提议的 Skill / Procedure 草稿可由 builder / owner 审阅（#462）**：D-24 之后成员不能再发布自己的草稿（builder 下限），而 Skill / Procedure 草稿对提议者私有（I16）、owner 的 `list_skills` / `list_procedures` 看不到——成员的 Worker 经 `report_task_result` 提议的 Skill / Procedure 于是没有任何审阅入口，只能按 Task 结果里的 id 发布。现在与 D-26 对 Operation 草稿同一条规则：草稿对提议者、builder、owner 可见（`application/worker/draft-visibility.ts` 的 `draftVisibleTo` / `draftVisibilityBinds`；审阅角色判断 `seesEveryDraft(role)` = `roleSatisfiesMinRole(role, 'builder')`，放在 `governance/capability/publish-authority.ts`，`operationVisibleTo` 也改为调用它）；`list_skills` / `get_skill` / `list_procedures` 都按它过滤，Handle 通道以 `obo` 的角色为准。看得见不等于能发布：D-24 不变，看不见的草稿 publish / deprecate 回 not-found，看得见但不是自己提的回 403 `not_proposer`（builder 发布别人 Skill 草稿由原来的 not-found 变为 403）；`discard_draft` 仍只限提议者。WorkerDefinition 草稿仍只对提议者可见（没有 Worker 路径会提议它，`includeOwnDrafts` 的语义也是"自己的"）。线上：`list_skills` / `list_procedures` 的条目加 `proposedBy`（增量字段，契约快照重生成）；控制台 Skill / Procedure 详情显示"提议者"，丢弃按钮只在自己的草稿上。测试：新 `skill-procedure-draft-review.integration.test.ts`（成员提议 → owner 在列表里看到并发布、另一成员看不到、builder 看得到但发布得 `not_proposer`），`publish-authority.integration.test.ts` 相应更新。无迁移。
+  - **收尾波次（2026-10-04）——`update_operation_description` 也适用 D-24：builder 起步、提议者或 owner（遗留 123，#469）**：该能力原来没有 `minRole`，服务也不查谁提议了这个 Operation——任何成员都能改写任何 Operation 的描述；已发布 Operation 的描述正是每个 agent 在工具列表里读到的内容，所以这是提示词注入杠杆，不只是文档问题。D-24（#460）只管了 `publish_*` / `deprecate_*`。现在：①注册表（`packages/shared/src/capabilities.ts`）给它 `minRole: 'builder'`，描述写明规则（builder 起步，提议者或 owner，403 `not_proposer`）；②服务（`governance/gatekeepers/manifest.ts` 的 `updateOperationDescription`）接受可选 `actor`，对被编辑的那一行（身份当前行，即 `getOperation` 草稿优先的那行——与其写入的行相同）施行 D-24：调用者无权看到的草稿（`operationVisibleTo`，D-26）→ `OperationNotFoundError`（404，无存在性旁路；builder 起步下每个调用者都是草稿审阅者，此分支只在门槛将来变动时才起作用），否则 `assertPublishAuthority`——只有该行的提议者或 owner，其余 `NotProposerError`（403 `not_proposer`）；内部调用方（目前没有）不传 actor；③处理器（`operation-manifest-handlers.ts`）传 `publishActorOf('update_operation_description', ctx)`，AuditRecord 的 actor 即该 principal（人类通道上与之前同值），被拒绝的调用不写 `operation.description_updated` 行；④线上契约：`OperationSummaryWire`（`list_operations` 条目、`get_gatekeeper.operations`）新增可选 `proposedBy`（principal id；没有记录提议者的旧行缺省）——控制台要靠它知道调用者能编辑哪些行，纯增量，契约快照已重新生成；⑤控制台（`CatalogPage.tsx`）："编辑描述 / Edit description" 只在能成功的地方出现——owner，以及 builder 对自己提议的行（复用 Skill / Procedure 的 `isOwnDraftOrUnknown`）；已知角色低于 builder（member / operator / auditor）或已推断为 member 的永不看到；角色或提议者未知（仍在加载、旧内核）保持原样显示、由内核拒绝；`not_proposer` 拒绝留在该行的对话框里，不会让该能力在本会话里被标记为被拒。语义：权限形状与 `publish_operation` / `deprecate_operation`（D-24）相同——`not_proposer` 是逐行拒绝，`forbidden` 是角色拒绝；门导入的 Operation 由 owner 提议（`importManifest` 以 owner 为提议者），所以只有 owner 能改，builder 能改自己提议的 Operation（含修订草稿）；成员失去改描述的能力是有意的（"只在关键点设门"：它进入 agent，所以这是关键点）。无迁移，回滚即还原本 PR。设计文档 §9.3 能力表一行与 `runbooks/web-console.md` 的目录一行已更新。测试：`operation-governance.integration.test.ts`（Postgres，CI）替换了旧的"成员可以改"用例——门导入（owner 提议）的已发布 Operation：成员 403 `ForbiddenError`、另一个 builder `not_proposer` 且描述不变、owner 通过并恰好一条 `operation.description_updated`（actor 为 owner，记录前后值）；builder 提议的 Operation：另一个 builder `not_proposer`，提议者通过且持久化；`capabilities.test.ts` 断言 `minRole: 'builder'`；`CatalogPage.test.tsx` 覆盖按钮显隐。未做、可后续：目录里的 Publish / Deprecate 按钮也可用同一个 `proposedBy` 在 builder 无权的行上隐藏（现状是显示、逐行回 `not_proposer`，D-24 已记）。
+  - **弃用锁住正在生效的一版（#1223，遗留 423，2bef11a）**：`deprecate_operation` 先锁住正在生效的一版再复查，与并发发布交错时不会落在刚退役的旧版本上；可选 `version` 是调用方看到的版本，与生效版本不一致则 409 `version_changed`、不弃用；不传 `version` 的调用方行为不变。结果与审计带 `version`；控制台总是传版本。
+- 实现说明（遗留 486：流程 Worker 步骤只能指向 worker 种类，#774，2026-10-29 合入，a079a84；无迁移）：Worker 步骤的种类在提议时按提议人能看到的定义族判定（族种类不变，别人的草稿不算，不借 400 透露其存在），发布时（`resolveStepTargets`）按版本再判一次；`find_procedures` 的 `stepUsableByCaller` 排除修复前发布的这类流程。同类问题 `proposeWorkerDefinition` 的私有族可见性见遗留 492。
+
+---
+
+## 5. S3 — 图有内容、看得见、找得到
+
+### S3.1 本体注册表与本体 v1
+- 交付物：`ontology/{schema,registry}.ts`（含 `identity_key` 每 ObjectType；ActionType 元数据）；`ontology/ops-assets-v1.yaml`：ObjectType `Host / ComposeProject / Container / Image / SystemdService / Process / Volume / Network / Endpoint / Repository / Owner`，LinkType `runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by / spawned_by`；身份键：Container = 项目 + 服务名，Image = digest，Repository = 远程地址，Process = 可执行路径 + 工作目录 + 父进程；`propose_ontology_change` 走 Handle 通道生成私有 draft。
+- 验收：同内容再发布得 v2；`validate_link` domain / range；agent 提议的 draft 对他人不可见。依赖：S1.2。
+- 实现说明（S3.1 PR，2026-09）：
+  - **`OntologyDefinitionSchema` 搬到 `packages/shared`**：S2.6 时这份 Zod schema 直接定义在 kernel 的 `substrate/ontology/loader.ts` 里（当时没有跨包调用方）。本任务新增 `packages/shared/src/ontology-definition.ts`（`ObjectTypeDefinitionSchema`/`LinkTypeDefinitionSchema`/`ActionTypeDefinitionSchema`/`OntologyDefinitionSchema`），因为 `propose_ontology_change` 的 `paramsSchema`（`packages/shared/src/capabilities.ts`）需要同一份形状——结构不合法的提议在 `dispatchCapability` 的 params 校验这一步就是 400 `InvalidCapabilityParamsError`，不会作为未映射的 500 落进 handler。`shared-domain-has-no-internal-deps`（depcruise）决定了这只能是单向的：kernel 的 `substrate/ontology/schema.ts` 反过来 `import` 它，保留自己的 YAML 解析包装（`parseOntologyDefinition`/`loadOntologyDefinitionFile`/`OntologyDefinitionParseError`）。`identityKey`（ObjectType，字符串数组）与 `actionTypes`（ActionType 数组：`mode`/`blastRadius`/`reversibility?`/`autoApprovable?`/`awaitDecision?`/`requesterCanApprove?`，字段沿用 `action-description.ts` 的 `OperationSchema` 同名概念）都是新增的**可选**字段——`platform-meta.yaml`/`entry-agent.yaml`/`ops-runner.yaml` 三份既有文件一个字段都没加，`.strict()` 解析不受影响，未touch这三个文件。
+  - **域包发布机制泛化，而不是另起一套**：S2.6 的 `seedPlatformMetaOntology` 只发布一个固定文件、每次都开新 `id`。本任务在 `loader.ts` 加 `publishOntologyDomainPack({packName, fileName?, dir?, principalId})`——`packName`（如 `"ops-assets"`）与 `fileName`（如 `"ops-assets-v1.yaml"`）分离，是刻意的：`ontology_versions` 表本身没有 `name` 列（只有不透明的 `(workspace_id, id, version)`），要让"同一个域包再发布"落在同一个 `id` 族下，又不想为此加迁移（不在本任务文件所有权内，`migrations/core/**` 没有列在 W1-A 的范围表里），`deriveOntologyPackId(packName)` 用固定命名空间做 UUIDv5 风格的确定性派生——同名必同 id，免查表。`packName` 与文件名解耦是为 S3.4（"ops-assets-v2.yaml，本体 v2"）铺的：那次发布传 `packName:'ops-assets', fileName:'ops-assets-v2.yaml'`，落在同一族的下一个版本，而不是另起一个 v1 的兄弟族。"同内容再发布得 v2"因此是免费的——`publishOntologyVersion` 从来不比较 `definition` 内容，只管版本号自增。**已知缺口**：`publishOntologyDomainPack` 未接入 `cli/bootstrap.ts`（`create-workspace` 目前只种 `platform-meta.yaml`/`entry-agent.yaml`）——`cli/bootstrap.ts` 不在本任务文件所有权内；哪个任务/wave 接入 ops-assets-v1 的种子，留给 W1-E 运行手册或后续任务决定。
+  - **I16 draft 隔离——"复用 PR #71 的 guard"落地成什么**：`meta-objects.ts` 的 `registerOperationDraftObject`（PR #71 `fix/operation-draft-isolation`）修的是"同一身份原地覆写"场景下的竞态——Operation 的身份 `{gatekeeperId, name, version}` 不含版本自增语义，第二次提议要么覆盖要么冲突，所以需要 `ON CONFLICT ... WHERE` 的原子条件覆写守卫。`ontology_versions` 的身份 `(workspace_id, id, version)` 里 `version` 本身就是自增的键组成部分——`proposeOntologyChange` 因此永远是纯 INSERT 新行，从不原地覆写已有行，"我会不会覆盖别人的草稿"这个问题在这个身份形状下根本不存在（两个提议者对同一 `id` 并发提议，各自拿到相邻的版本号，互不覆盖）。真正复用的不是那条 SQL 覆写守卫本身（这里没有覆写路径可保护），而是 PR #71 体现的 I16 语义——"Handle 调用者只能看/动自己的草稿"——本任务把它实现成**读时过滤**（`loadVisibleOntology`：每个 `id` 族里，`published` 行人人可见，`draft` 行只对 `proposed_by = 调用者` 可见，逐族取"该调用者可见的最高版本"），而不是写时条件，这是这个自增身份该用的正确机制，不是绕开了原有做法另起一套。
+  - **`get_type`/`list_types`/`validate` 三个能力没有 `ontologyId` 入参**——按设计文字面（`{typeName}`/`{kind?}`/`{link:{...}}`），它们查询的是"当前对调用者可见的整个类型命名空间"（`loadVisibleOntology` 聚合工作区里每一个本体族——`platform-meta`、`ops-assets`、任何 `propose_ontology_change` 开的新族——的最新可见版本），不是某一个具体域包。**已知简化**：不同族之间如果 ObjectType/ActionType 重名，后取到的族按 `id` 排序覆盖前者（`ops-assets-v1` 与 `platform-meta` 之间不存在这种重名，未被验收测试覆盖到）；LinkType 重名则不覆盖而是累积多组 `{domain, range}` 签名（`ontology-definition.ts` 的 `LinkTypeDefinitionSchema` 本来就允许同名多条——`ops-assets-v1.yaml` 自己的 `runs_on`/`part_of`/`owned_by` 就用了这个手法，而不是像 `platform-meta.yaml` 那样用 `"*"` 通配：本体 v1 的关系都能穷举，穷举比通配符对 I2 更精确）。
+  - **`validate`（即派发文字里的 `validate_link`——注册表里没有单独一个同名能力，`validate` 自己就是这套语义）的 `paramsSchema` 从 `{typeName, payload}`（通用 JSON Schema 校验的占位）改成了 `{link:{linkType, sourceType, targetType}}`（domain/range 检查，I2）；`publish_ontology_version` 的 `paramsSchema` 从占位的 `{ontologyVersionId}` 改成 `{id, version}`——`ontology_versions` 表的主键就是这两者，没有第三个字段能单独定位一行，之前的占位形状本来就没有真实 handler 依赖过。这两处改动、`get_type`/`list_types` 的真实 resultSchema，都在 `packages/shared/src/capabilities.ts` 落地，`packages/shared/src/wire/ontology.ts`（新增）承载 `OntologyVersionWireSchema`（同 `wire/worker.ts` 的 `WorkerDefinitionWireSchema` 一个形状）与按 `kind` 判别的 ObjectType/LinkType/ActionType 投影 schema。词表守卫（`vocabulary.mjs`）与契约快照（`pnpm contract:snapshot`）都过。
+  - **HTTP/WS 错误映射是本任务明确留白的一环**：`registry.ts` 新增的 `OntologyDraftNotFoundError`/`OntologyChangeValidationError` 都没有在 `interfaces/http/capability-route.ts`/`interfaces/ws/rpc.ts` 里注册专门的 `instanceof` 分支（这两个文件不在本任务派发的文件所有权列表内）——目前落地是通用 500，不是这两个模块一贯给"调用方自己的输入错误"配的 400/404/409。`registry.test.ts`/`ontology-handlers.integration.test.ts` 都是直接调用 `registry.ts`/`dispatchCapability`（应用层），不经过这两个接口层文件，所以本任务自己的验收不受影响；哪个后续任务拥有这两个文件，补上这两条映射（各约 3 行）即可。
+  - **新增一个领域包**（W1-E 的完整运行手册尚未落地时的段落版说明；`docs/runbooks/domain-pack.md` 不由本任务创建，避免与 W1-E 撞文件）：① 在 `ontology/<pack>-v<N>.yaml` 写 `objectTypes`（每个带 `identityKey`）/`linkTypes`（`domain`/`range` 指已声明的 ObjectType 或 `"*"`）/可选 `actionTypes`；② 调用 `publishOntologyDomainPack(client, workspaceId, {packName, fileName, principalId})`（`packName` 是这个域包的族名，跨版本文件保持不变；`fileName` 才带版本号后缀）——目前没有专门的 CLI 子命令，调用方是运维脚本/未来的 bootstrap 步骤/集成测试；③ 校验：`get_type`/`list_types` 能读到新类型，`validate` 能校验新 LinkType 的 domain/range。运行时提议路径（`propose_ontology_change`/`publish_ontology_version`）是另一条独立机制，服务于 agent 在会话中临时提议本体调整，不是域包发布的替代品。
+  - **`ontology_versions` 的 `identity_key`/身份键选择记录在 `ontology/ops-assets-v1.yaml` 自己的文件头注释里**（Container/Image/Repository/Process 四个是设计文字面直给，其余七个是本任务的选择，逐条写了理由），未重复搬进本节。
+  - **19 个"已注册未实现"能力减到 14 个**：S3.7 自己的实现说明（本文件上方）记录过 `get_type`/`list_types`/`validate`/`propose_ontology_change`/`publish_ontology_version` 是 ontology 组里未挂 handler 的 5 个——本任务全部挂上，`docs/code-review-2026-09-04.md` §7 与 S3.7 小节那条"19 个"的历史计数应理解为在本 PR 之后降为 14（未逐处改字，避免与其它并行 wave 的文档编辑冲突；此处是权威更新点）。
+  - **门（gates）**：`pnpm --filter @nexttime/kernel typecheck/lint/test`、`pnpm --filter @nexttime/shared test`、`pnpm -r typecheck`、`pnpm depcruise`（0 violations）、`pnpm ci:guards`（含 kernel-purity、词表守卫）、`pnpm contract:snapshot` + `pnpm contract:check` 均过。本机（Windows，无 Docker/Postgres）DB-gated 的 `registry.test.ts`/`ontology-handlers.integration.test.ts` 遵循既有约定 `describe.runIf(DATABASE_URL)`，本地自动 SKIP，CI 的 Postgres service 上跑。
+  - **R-60 / R-61 更正（2026-10-02 复审）——草案记录它基于哪个已发布版本，发布时校验；提案详情只在本族内对比（#439、#442）**：①R-60：每个本体版本都是完整替换定义，读侧取该族最高的 `published` 版本，而 `publish_ontology_version` 只检查"这是你的草案"。于是从同一已发布版本提出的两个草案，后发布的会悄悄丢掉先发布者新增的全部类型（这些 LinkType 的新写入开始报 `undeclared_link_type`，既有 Link 开始计入 I-S5-1），或者版本号更低的那个"发布"进空气（`list_ontology_versions` 显示已发布，而强制与 `get_type` 读的仍是更高版本）。迁移 core `0038_ontology_draft_base_version`：`ontology_versions.base_version`（可空 int，草案提出时该族的已发布头；新族或无已发布版本为 null；CHECK `base_version is null or 1 <= base_version < version`），存量草案按新代码本会存的值回填（草案 `created_at` 时已发布的最高版本且低于其自身版本）。`proposeOntologyChange` 在算下一版本号之前读头并存入（不加锁，有意为之：并发发布只会让存的 base 比头更旧，发布时被拒，失败安全，不会更新）；`publishOntologyDraft` 取族级 advisory 锁（`pg_advisory_xact_lock(hashtext('ontology_family:<ws>:<id>'))`，`loader.ts` 的 `lockOntologyFamily`），先检查草案是调用者的（`not_found` 语义不变，I16），再在族的已发布头不再是草案 base 时抛 `OntologyBaseMovedError`；loader 的 `publishOntologyVersion`（种子 / 领域包 / `install_module` / `upgrade_module`）取同一把锁，两条发布路径按族串行化，锁序为 `install_module:*` → `ontology_family:*`，无反向。loader 路径自身不做 base 检查（经 git 评审的领域包 / 模块发布仍按运维意图替换头），只是移动头，之后基于旧头的草案被拒。线上：HTTP 409 `ontology_base_moved`（独立错误码，登记在 `capability-route.ts` 与 `publish_ontology_version` / `propose_ontology_change` 的描述里），WS 映射 `ILLEGAL_TRANSITION`，无线上形状变更；控制台发布确认显示"草案提出后已有更新版本发布，未发布任何内容；请基于当前版本重新提出，或丢弃此草案"（`lib/platform-errors.ts`，原始 code 保留在横幅里，发布按钮保留，不是 403）。I16：不是自己的草案仍读 `not_found`，绝不泄露 `ontology_base_moved`；I12 不动（发布 UPDATE 仍不碰 `definition`，回填只更新草案行，状态锁触发器忽略它们）。迁移可逆，已入 `docs/runbooks/release.md` §6：v0.39.0 代码对 `ontology_versions` 的每个读写都用显式列清单，不读该列、永远写 null（满足 CHECK）；回滚再升级后，旧代码提出的修订草案 base 为 null，若其族已有已发布版本则按"base 已移动"被拒，失败安全，提出者重新提出即可。②R-61：提案页签原来拿草案去对比 `list_types`——**所有**族合并的类型命名空间，而提出者（唯一能看到并发布草案的人）在其中已经看到自己对该族的草案（I16），于是在不可逆发布之前：真正的改动被藏起来（草案与自己相比相等，被删的类型两边都没有），全新的族里什么都不显示为"新增"，而每个其它族（如 `platform-meta`）的全部类型都显示成**移除**。现在 `list_ontology_versions` 的每项带 `base: { version, definition } | null`——草案所在族被提出时基于的已发布版本（R-60 的 `base_version`，`left join` 到那一行；join 排除草案行，所以无法暴露别人的草案），无已发布版本的族的草案与所有已发布行为 null；共享线上 `OntologyVersionListItemWireSchema.base`（必填、可空），契约快照重新生成（唯一差异是该列表项新增 `base` 属性与 `required`）。控制台 `ontologyProposalDiff(draft, base)`（`lib/graph-view.ts`）只在同一族的两个定义之间对比（`base: null` → 全部为新增，绝不出现移除），详情不再读 `list_types`，显示"基于 已发布的 vN / 无（新的本体族）"；发布与丢弃都使 `list_types` 失效（旧注释说丢弃不改变它，对提出者是错的）；类型页签注释更正为：显示一个族最新的已发布版本，或查看者自己更新的草案。无迁移（读 R-60 的列）。测试：`ontology-handlers.integration.test.ts`（两个草案同 base 先后发布、反序、loader 发布移动头、base 仍是头则可发布、他人草案仍 not-found；`base` 对修订草案 / 已发布行 / 新族草案 / 发布后的值）、`capability-route.test.ts` / `rpc.test.ts`、`OntologyTypesDrawer.test.tsx`、`graph-view.test.ts`。
+  - **LinkType 端点校验（#1141，遗留 303，b5c2619）**：`substrate/ontology/namespace.ts` 的 `findOntologyLinkEndpointProblems`（纯函数）与 `assertOntologyPublishable`（= I-P1 + 端点检查，可带 `pending` 叠加）；端点必须是 `"*"` 或工作区里已发布本体声明的 ObjectType。ChangePlan 审阅（`planOntologyItem`）与撤销（`planOntologyRollback`）把同段前面的本体项叠加后判断，撤销阻塞为 `link_endpoint_undeclared` 并带 `linkEnds`。错误 409 `ontology_link_endpoint_undeclared`，`details` 带本体族名（取自 ChangePlan 记录，遗留 706）。巡检 I-P1-LINK（`checkIP1Link`）。`requires` 范围限定未做（遗留 705）。
+  - **族名与包依赖（#1154，遗留 705、706，dc36bee；core 0056）**：族名改由 `ontology_families` 提供（遗留 706；不变量 F1 名字唯一、不可改，F2 id 由名字推出，F3 `platform-meta` 保留），303 的拒绝原因与回滚预览从这里读名字。L1（遗留 705）：包和模块安装时 LinkType 两端只能指向元本体、自身各族、直接依赖包的族里声明的类型，违反为 409 `ontology_link_endpoint_outside_requires`，不传递；注册表分级：镜像自带包违反即抛错，额外包在 minVersion 违反则跳过，只在更高版本违反则读入并写进 `extra_packs_status.warnings`。
+
+### S3.2 冲突检测
+- 交付物：`epistemic/conflicts.ts`：同 `source_id` → supersede；不同 → Conflict(open)；私有参与的 Conflict 只对私有方可见。
+- 验收：v0.1 T0.4 的三步测试 + 可见性测试。依赖：S3.1。
+- 实现说明（S3.2 PR，`feat/s3-2-conflicts-epistemic`，2026-09）：
+  - **唯一写入点是 `SqlGraphStore.assertFact` 本身，不是 `postWorkerResult`**：派单文字给了两个候选（`assertFact` 或应用层的 `postWorkerResult`/`submit_observations` 缝合点），要求"挑一个并写明理由"。核对每一处调用 `assertFact` 的现有代码（`application/gateway/observed-facts.ts`、`application/task/result.ts` 的 `postWorkerResult`、`application/worker/{procedures,skills}.ts`、`substrate/ontology/meta-objects.ts`）后发现：只有 `postWorkerResult` 一条路径都不覆盖——其余四处全部直接调 `graphStore.assertFact`，从不经过任何共享的应用层封装。`assertFact` 因此是唯一真正的"每个写入者都会走到"的缝合点；`substrate/graph/sql-store.ts` 的 `assertFact` 就地做冲突检测——插入前先按 `(linkType, sourceObjectId, targetObjectId)` identity 查一行仍 `recorded` 的既有 Fact（新增 `queries.ts` 的 `buildFindActiveFactByIdentityQuery`，`for update` 防并发），同源直接 `return this.supersedeFact(...)`（复用既有 I5 identity-match 校验，避免重复实现），异源走普通插入再调 `substrate/epistemic` 的 `openConflict`。
+  - **`source_id` 判定泛化为 origin 判定**：设计文字面"写入路径按 `source_id` 判定"假设每条 Fact 的 Activity 都挂了恰好一个 epistemic Source（`observations`）——但核对后发现只有 Worker 会话回流（`postWorkerResult` 的 `worker_session` 私有 Source）这一条路径真的会挂 Observation，其余四处写入者的 Activity 从不挂 Observation。字面规则套到"两侧都没有 Source"的绝大多数场景会把每一次普通的重复断言都误判成"异源"（两侧都是 `null` ≠ 相等），直接违反 S3.3 自己的验收标准（"跑两遍无重复无 Conflict"）。`substrate/epistemic/conflicts.ts` 的 `resolveFactOrigin` 因此泛化：一个 Activity 只挂了唯一一个 Source 时用该 Source id，否则退到断言方 `asserted_by` principal id——同一个采集器/agent/service principal 重复断言视为同源（supersede），确实不同的 principal 断言才视为异源（Conflict），字面的按-Source 规则是这条规则在"确实只挂了一个 Source"时的特例（这条子路径被 T0.4 测试直接覆盖）。
+  - **`migrations/core/0017`**：`conflicts` 表（`core/0002_substrate.sql` 早已建好但从未有写入者，`grep` 全库确认）补 `activity_id`（NOT NULL，指向触发这次检测的*新* Fact 的 Activity——`links`/`decisions` 都有类似的 I3 溯源列，`conflicts` 之前没有）与 `resolved_by`；CHECK `status='open' or (resolved_by is not null and resolved_at is not null)`（镜像 `links` 自己的"verified ⇒ verified_by"）。可见性用 `conflict_visible_to_caller`（新的 `security definer` 函数，复用 `core/0013` 的 `link_visible_to_caller` 各查一侧）替换掉 `0002` 自己注释里早就标注的占位 workspace-only 策略。**关键的非对称设计**：`using`（读）走 `conflict_visible_to_caller`，`with check`（写）只查 `workspace_id = app_workspace()`——两者故意不同。原因：打开 Conflict 的 INSERT 往往由"看不见另一侧私有 Fact 的那个 principal"的事务执行（I5 的常见场景本来就是"私有 Fact 与 workspace Fact 冲突"，触发方通常不是私有一侧的所有者）；如果 `with check` 也套用同一条可见性谓词，恰恰会让设计文§5.6 点名的这个场景连 Conflict 行都建不出来。`conflicts.test.ts` 的第二个测试专门把断言方设成不同于私有 Source 属主的另一个 principal，锁定这个回归。
+  - **`verify_fact` 需要 `GraphStore` 新增一个方法**：I3.6（"`verified` 的 Fact 没有 `verified_by` 与 Evidence"）需要既改 `links.epistemic_status`/`verified_by`（graph 模块的表）又查 `evidence` 表是否有行（epistemic 模块的表）——两个子模块各自只该碰自己的表，所以拆成：`SqlGraphStore.verifyFact`（新方法，镜像既有 `invalidateFact` 的写法，只做 `EPISTEMIC_PROMOTION_TRANSITIONS` 校验 + UPDATE，不查 Evidence）+ `substrate/epistemic/evidence.ts` 新增的 `hasEvidence`（只读）；两者在应用层的 `verifyFactHandler` 里协调——同 `postWorkerResult` 早就确立的"跨 substrate 子模块协调是应用层的活，不是某个子模块伸手进另一个的表"的分工。`verify_fact` 的 `paramsSchema` 从占位的 `{factId, evidenceIds}` 收窄成 `{factId}`——Evidence 走既有的 `attach_evidence` 能力单独挂，`verify_fact` 只检查已有 Evidence 存在并晋升。
+  - **`causal_chain`/`decision_impact`/`query_decisions`/`find_precedents` 都是只读，直接查 `links`/`action_requests`/`tasks`**：这三张表分别属于 `substrate/graph`、`governance`、`application/task`，`substrate/epistemic` 本不该碰——但 `.dependency-cruiser.cjs` 的六层规则只管 import 图（substrate 不得 `import` governance/application），不管运行期原始 SQL；`substrate/epistemic/explain.ts`（S1.3）已经为完全一样的处境（`explain` 需要跨 Fact/Activity/Source/Principal 读）立了先例——只读 SELECT、各自本地声明行形状、绝不写。`decisions.ts` 沿用这个先例：`decision_impact` 查 `action_requests.approval_decision_id = decisionId`（唯一真正的结构化下游 FK，`governance/approval/decide.ts` 的 `writeApprovalDecision` 写的）与 `tasks.created_by_activity_id = decision.activityId`，`causal_chain` 沿 `links.supersedes_id` 走 Fact 自己的历史链（≤5 跳，每跳 `explain()` 一次，复用它的富投影）。**已知局限**：`decisions.rationale` 是自由格式 jsonb，`query_decisions`/`find_precedents` 的 `objectId` 过滤只认得 `relatedFactIds`（`record_decision`）与 `factAId`/`factBId`（本任务的 `resolve_conflict`）这两种既有写入者实际填的字段——`governance/approval/decide.ts` 写的审批类 Decision（`rationale.actionRequestId`/`actionKind`）没有 Fact 关联，`query_decisions({objectId})` 找不到它们是预期行为，不是 bug（`find_precedents({actionKindTag})` 走另一条分支覆盖这类）。
+  - **`resolve_conflict`/`verify_fact` 的 `channel` 从占位的 `'handle'` 改成 `'human'`**：派单文字明确把这两个标成"(human)"——解决冲突要 invalidate 一条 Fact 并落一条 Decision，晋升 Fact 到 `verified` 是认知状态的人工背书，都是设计文§5.6/I3.6 语境下的治理判断，不该让 Worker 的 Handle 自己就能触发。`minRole` 保持占位注册表原有的 `member`（派单文字"minRole as registered"）。
+  - **`resolve_conflict` 的三种 `resolution` 都落在 `CONFLICT_TRANSITIONS` 唯一的 `resolve` 事件上**（`open → resolved`）：`keep_a`/`keep_b`/`invalidate_both` 具体是哪一种，记在 `conflicts.resolution` jsonb（`{choice, reason}`）与对应 Decision 的 `rationale` 里，不是三个不同的目标状态——既有的 `accepted_both`/`dismissed` 语义完全不同（"两侧都承认有效"/"根本不是真冲突"），跟这三种选择都对不上，没有勉强套用。三种选择在 Fact 层都只用 `GraphStore.invalidateFact`（不用 `supersedeFact`）——一次冲突解决不产生新的 Fact 内容，`invalidate` 才是正确的 I4 操作；`keep_a`/`keep_b` invalidate 输掉的一侧，`invalidate_both` 两侧都 invalidate。解决动作本身落一条 Decision（`activity_id` 指向新起的 `epistemic.conflict_resolution` Activity），直接落在 `approve` 后的已解决状态（同 `governance/approval/decide.ts` 的 `writeApprovalDecision` 一样——这个人类动作本身就是决定，不是待决定的提议）。
+  - **测试**：`substrate/epistemic/conflicts.test.ts`（T0.4 三步 + 私有可见性/非对称 RLS 回归，直接调 `SqlGraphStore.assertFact`，同 `explain.test.ts` 的层级）；`application/gateway/epistemic-handlers.integration.test.ts`（七个能力经 `dispatchCapability` 端到端，含 `resolve_conflict` 的 human-only 拒绝、二次 resolve 的非法转移、`verify_fact` 的 Evidence 前置、`query_decisions`/`decision_impact`/`causal_chain`/`find_precedents` 的取数验证），均 `describe.runIf(DATABASE_URL)`，本机（Windows，无 Docker）自动 SKIP，CI 的 Postgres service 上跑。`KERNEL_VALIDATE_RESULTS=1`（vitest 配置常开）覆盖七个 handler 的真实返回值与各自 `resultSchema`。
+  - **CI（本机无 Postgres，只能靠 CI 抓）抓到两层同一类 RLS 坑**：① `buildFindActiveFactByIdentityQuery` 最初是对 `links` 的一条普通 `select`——本身就跑在 `links_visibility` RLS 之下，异源断言方（I5 的常见场景）看不到私有一方的既有 Fact，`assertFact` 因此永远发现不了要比较的对象，静默插入一条无关的新 Fact，Conflict 从未打开。修法同 `link_visible_to_caller`：新增 `security definer` 函数 `find_active_fact_for_identity`（`returns setof links`，不是裸 `links`——否则查无结果时函数在 `FROM` 子句里退化成"一行全 null"而不是零行，`priorResult.rows[0] === undefined` 的判断会读错）。② 修完①后，插入 `conflicts` 本身又被拒：`error: new row violates row-level security policy for table "conflicts"`——不是 `with check` 失败（`workspace_id` 对得上），是 PostgreSQL 对 `INSERT ... RETURNING` 的既有行为：`RETURNING` 的输出还会额外过一遍表的 `using`（等价于 SELECT）策略，过不了就报同一句错，而不是静默不返回行；`conflicts_visibility` 的 `using` 恰恰对"打开这条 Conflict 的那个 principal"经常是 false（I5 的前提本来就是"打开者常看不见另一方私有 Fact"）。修法：`openConflict` 不再用 `RETURNING`——`id`/`opened_at` 改成应用层生成，返回值直接从入参拼，不回读。两处都是"本地测不出、CI 一跑就现形"的真实 bug（这个沙箱没有 Docker，`describe.runIf(DATABASE_URL)` 本地全 SKIP），`gh pr checks` 两轮红后第三轮全绿；`migrations/core/0017`、`substrate/epistemic/conflicts.ts`、`substrate/graph/queries.ts` 的最终版本已经包含这两处修复，不是留给下一个任务的已知缺口。
+  - **门（gates）**：`pnpm --filter @nexttime/kernel typecheck/lint`、`pnpm --filter @nexttime/shared typecheck/lint`、`pnpm -r typecheck`、`pnpm depcruise`（0 violations）、`pnpm ci:guards`（含 kernel-purity——`decisions.ts` 注释里原本直接写了 "Semantica"，被 kernel-purity 挡下后改成不点名，词表守卫另过）、`pnpm contract:snapshot` + `pnpm contract:check` 均过。本机无 Docker，DB-gated 套件本地自动 SKIP；`gh pr checks` 四项（guards/quality/test/web-e2e）全绿（含上一条记录的两轮修复）。
+  - **未做/超出范围**：`supersede_fact`/`invalidate_fact` 两个 epistemic 组能力（`assert_fact` 同组邻居，已挂但抛"未实现"）本任务未接线——派单文字明确只给了这七个；`interfaces/http/capability-route.ts`/`interfaces/ws/rpc.ts` 未给 `ConflictNotFoundError`/`DecisionNotFoundError`/`FactHasNoEvidenceError` 加专门的 4xx 映射（这两个文件不在本任务文件所有权内，同 S3.1 对 `OntologyDraftNotFoundError` 的留白一致处理），目前落地是通用 500。
+  - **W5.5 实现说明（遗留 17，PR #140）**：首次断言无行可锁、`links` 无身份唯一约束（Conflict 路径刻意保留两条活跃行），故在无既有 Fact 时按身份取事务级 advisory lock 并重读；仅首次路径加锁，稳态重复观测（已有活跃行）从不加锁。反向加锁（两批交叉锁不同顺序的一组首次身份）可能死锁，Postgres 会中止其中一方（`40P01` → 对该调用方呈现为 500），采集器的下个周期照常重提，写入本就幂等，批次因此是被重试而非丢失。
+  - **R-62 更正（2026-10-02 复审）——`record_decision` 只收 uuid；读侧对已存的坏值安全（#445）**：上面的 `query_decisions` / `find_precedents` / `decision_impact` / `causal_chain` 读的是 `record_decision` 原样存下的 `relatedFactIds` / `relatedTaskId`（`z.string().min(1)`）。一个 `"fact-1"`（LLM 常见笔误，`record_decision` 在入口上限内）就让工作区里每个 `query_decisions{objectId}` / `find_precedents{objectId}` 以 Postgres 22P02 失败（未映射的 500），该 Decision 的 `decision_impact` / `causal_chain` 也失败；Decision 不可删，故破坏是永久的。写侧：`record_decision` 的 `relatedFactIds` 改为 `z.string().uuid()` 数组、`relatedTaskId` 为 uuid，派发时即 400 `invalid_params`，早于 handler（描述已写明）。读侧（已存的行继续工作）：`substrate/epistemic/decisions.ts` 的 `factIdAsUuid(column)` = `(case when fid ~ '<uuid>' then fid::uuid end)` 守住 `query_decisions` / `find_precedents` 里 rationale Fact id 的转换——模式测试有意放在 `case` 里：join 条件中紧挨裸转换的 `where` 过滤不能保证求值顺序（计划器可能先转换），`case` 只算走到的分支；null 永不等于 Fact id，坏值只是不贡献匹配。`extractFactIdsFromRationale` 只保留 uuid 形状的值（它喂给 `id = any($2::uuid[])` 与 `explain({factId})`），用于 `decision_impact` / `causal_chain`。Decision 与冲突解决写入的内容不变。无迁移。测试：`epistemic-handlers.integration.test.ts`（独立工作区里存 `relatedFactIds: ["fact-1", <真实>]` 与 `factAId: "not-a-uuid"` 的 Decision，四个读能力都能处理；非 uuid 的 Fact / Task id → `InvalidCapabilityParamsError`）。
+
+### S3.3 采集器 `host-inventory`（TS）
+- 交付物：`collectors/host-inventory`：dockerode + `systemctl` + `git remote` + 进程树（只保留 agent 运行时进程树下的非 systemd 子进程；命令行在形成 Observation 前脱敏，`environ` 不读）；service Principal；只采结构性字段；一次运行一个 Activity。
+- 验收：跑两遍无重复无 Conflict；改一个端口后第三遍旧 Fact supersede；fixture 含 `--token=abc` 入库为 `***`（脱敏失败整批不提交）。依赖：S3.1、S3.2。批准：否（只读）。
+- 实现说明（S3.3 PR，2026-09，W3-A）：
+  - **五个"已注册未实现"的 ingest/meta 能力全部挂上真实 handler**：`register_source`（新
+    `application/gateway/ingest-handlers.ts`，直接写 `sources` 表——`substrate/epistemic/
+    sources.ts` 的 `registerPrivateSource` 只写 `visibility:'private'`，而采集器的 Source 必须
+    `workspace` 可见（Fact 可见性继承自 Source，`migrations/core/0010_link_visibility.sql`），
+    否则 owner 之外任何人都看不到采集器写的 Fact；本任务派发文字明确排除触碰
+    `substrate/epistemic/**`，这条 6 行 INSERT 是与 `substrate/epistemic/explain.ts` 自己模块
+    注释同款的"最窄偏离"，非二次实现）；`submit_observations`（同文件，identity-key 完整性对
+    S3.1 本体注册表校验，缺字段 400；纯粹通过 `GraphStore.assertFact`/`supersedeFact` 写——不
+    做任何去重/同源判定，S3.2（并行落地，merge 到 main 时这条判定已经在 `assertFact` 自己内部
+    实现，见下）；`assert_fact`/`supersede_fact`/`invalidate_fact`（新
+    `application/gateway/fact-handlers.ts`，`assert_fact`/`supersede_fact` 的 `paramsSchema`
+    从占位的 `{objectId,value,sourceId?}`/`{factId,value}` 换成真实的
+    `{sourceObjectId,targetObjectId,linkType,activityId?,...}`——旧形状从未能支撑一次真实的
+    `AssertFactInput` 写，见移除的 `AssertFactWriteNotImplementedError` 桩自己的注释）。
+  - **`submit_observations` 的三阶段依赖顺序，与 S3.2 的关系**：`ontology/ops-assets-v1.yaml`
+    的身份键约定（"一个 `<Type>Id` 属性持有另一个 Object 自己的图 id"）意味着 `ComposeProject`
+    的 `hostId`、`Container` 的 `composeProjectId` 不能由调用方凭空构造——`submit_observations`
+    的结果因此在派发文字给的 `{activityId, objectsUpserted, factsAsserted, factsSuperseded}`
+    之外加了一个 `objects[]`（每个被写对象的 `{objectType, identity, id}`），供调用方跨多次
+    `submit_observations`（共享同一个 `activityId`，靠可选的 `activityId` 参数）分阶段学到上一
+    阶段真实解析出的图 id——采集器自己按这个协议分三阶段提交（Host/Repository/Image/Process →
+    ComposeProject/Volume/Network/SystemdService → Container，`observation-builder.ts` 自己的
+    模块注释有完整依赖表）。**本任务开工时 S3.2 尚未合并**，`ingest-handlers.ts` 最初自己实现了
+    "同一 caller principal 的既有 Fact→supersede-or-noop"判定；S3.2 合并到 `main`
+    后（`SqlGraphStore.assertFact` 自己判定同 identity 的既有 Fact、用 `resolveFactOrigin`
+    判定同源/异源、同源直接委托给 `supersedeFact`），这条本地判定与 store 自己新加的判定重复且
+    可能相互矛盾，按派发文字"就写透过 `assertFact`/`supersedeFact`（缝合点）、依赖它的行为"这条
+    指示整段移除——`submit_observations` 现在对每条 Link 直接调 `assertFact`，用返回 Fact 的
+    `supersedesId` 是否非空区分"新断言"与"（被 store 判定为同源而）supersede"。这也是"两遍无重复
+    无 Conflict"验收成立的真正机制：采集器的 `register_source` 只在真正首次运行时调用一次（返回
+    的 `sourceId` 缓存进采集器自己的本地状态文件，此后每次运行复用），使得同一条边每次重新提交都
+    经 `resolveFactOrigin` 解析到同一个 Source，S3.2 自己判定为"同源"、走 supersede，从不开
+    Conflict——这条链路完全由 S3.2 的 store 逻辑保证，S3.3 这边不实现、不重复任何冲突判定。
+  - **两个新 CLI 子命令**（`packages/kernel/src/cli/bootstrap.ts`）：`issue-service-handle`（铸造
+    `kind='service'` Principal + Session + 一个按 `--scope` 限定能力的 Handle——派发文字本身预见
+    到这个缺口："if no path exists to mint a service Handle, add a CLI subcommand"；今天没有任何
+    capability 能给一个 service Principal 签发 Handle，`issue_handle` 那个唯一同名 capability是
+    `channel:'human'`、给已有 session 续签，且没有任何机制创建 `kind='service'` 的 session）；
+    `seed-domain-pack`（`publishOntologyDomainPack` 自己的模块注释早就点名"这是留给 bootstrap 后
+    续任务或运维 CLI 的缝合点"——S3.1 落地时没有 wire 进任何 CLI，本任务是第一个真正需要在真实
+    workspace 里发布 `ops-assets-v1.yaml` 的调用方）。
+  - **`sources` 无 `name` 列**：`register_source` 的 `name` 参数折进 `metadata.name`，
+    `resource-wire.ts` 的 `toWireSource` 读回时投影成顶层字段——新增
+    `packages/shared/src/wire/ingest.ts`（`SourceWireSchema`/`SubmitObservationsResultWireSchema`）。
+  - **门（gates）**：`pnpm -r typecheck/lint`、`pnpm --filter @nexttime/kernel test`、
+    `pnpm --filter @nexttime/shared test`、`pnpm --filter @nexttime/collector-host-inventory
+    test`（79 例，纯函数 + fake 注入，无需真实 Docker/`/proc`/内核）均在本机（Windows，无
+    Docker）跑通；`pnpm depcruise`、`pnpm ci:guards`、`pnpm contract:snapshot` +
+    `pnpm contract:check`、`node scripts/validate-compose.mjs` 同样本机跑通。DB-gated 的
+    `application/gateway/{ingest,fact}-handlers.integration.test.ts`（`describe.runIf
+    (DATABASE_URL)`）遵循既有约定，本机自动 SKIP，交给 CI 的 Postgres service 验证。
+  - **已知偏离 / 未覆盖**：①进程树采集在当前默认部署形态（无 `pid: host`）下必然
+    `skipped:true`——`process-tree.ts`/`docs/runbooks/host-collector.md` 都有完整记录，这是刻意
+    的权限收紧决定，不是遗漏；②`Owner` ObjectType 与 `owned_by` 边不由本采集器写入（
+    `ontology/ops-assets-v1.yaml` 自己的文件头已经这样约定）；③容器级验证（真实构建、真实
+    Docker Engine API、`docker-socket-proxy-collector` 的 `wget` healthcheck 是否真的存在于该
+    镜像的用户态）留给目标主机验收，步骤见 `docs/runbooks/host-collector.md`。
+  - **W5 实现说明（Fact → Observation，PR #132）**：迁移 `0018_fact_observation.sql` 给
+    `links` 加可空的 `observation_id`（外键到 `observations(workspace_id, id)`）；
+    `submit_observations`（本文件）现在把每条已写 Link 对应的、`recordSourceObservation`
+    返回的 Observation id 逐条传进 `assertFact` 的 `observationId`。`substrate/epistemic/
+    explain.ts` 的 `explain(factId)` 据此把 `activity.observations` 收窄到该 Fact 自己的
+    这一条，`observationId` 为 `null` 时（`assert_fact` 临时断言、Worker 结果、以及所有
+    0018 之前的旧行）回退为原来的整个 Activity 级列表，行为不变。`assert_fact`/Worker 结果
+    写路径本次未改，仍写 `null`——遗留 16（复用 `AssertFactInput.observationId`）留给后续
+    任务补上这两条写路径。线上契约新增字段：`ExplainFactRef.observationId`、
+    `FactWire.observationId`。
+    **更正（2026-10-04，遗留 103，#468）**：上面"逐条传进"描述的是每个条目各写一条 Observation 的旧行为。自遗留 103 起，一次 `submit_observations` 调用只写**一条** Observation（每个 `(activity_id, source_id)` 一条，一次调用恰好一对），本次调用写入、supersede 或再确认的每条 Link 共享它：`observation_id`（新增 / supersede）或 `last_observation_id`（未变的再确认）都指向这一条。
+
+  - **收尾波次（2026-10-04）——一次 `submit_observations` 只写一条 Observation，`observations` 不再按"条目 × 运行次数"增长（遗留 103 第一部分，写入侧，#468）**：原来每个提交条目各写一条 `content = '{}'` 的行，10-03 主机上约 63 万行 / 108 MB、每天 +5.5–7.6 万行，是最大的表，也拉大了每日 dump。现在那一条随第一个条目惰性写入、早于第一条 Link（`assertFact` 要据它判定新断言的 origin）；无条目的调用（只能与 `window` 同时出现）照旧不写。增长变为"运行 × 阶段 × Source"（一次 host-inventory 运行有 3–4 次阶段调用，写 3–4 行而不是几百行）。条目 → Fact 的映射本来就在 Fact 自身（identity + 属性 + `observation_id`），合并行不丢信息。各读者答案不变：`resolveFactOrigin` 看每个 Activity 的去重 `source_id`；`link_visible_to_caller`（core 0013）看 (activity, source) 对；新鲜度与 collector 静默检测看每个 Source 的 `max(created_at)`（同一调用的行共享事务 `now()`）；观察窗口看 Fact 的 `coalesce(last_observation_id, observation_id)` 是否属于该 Source；`explain(factId)` 本来就收窄到一条；`explain(activityId)` 与 PROV 导出改为每次调用（阶段）一条，仍保证每个 (activity, source) ≥ 1 条且响应小得多（0018 绕开过的 >400 KB 批次）。门观察（`observed-facts.ts`、`gate-observation.ts`）与任务结果本来就是每次调用一行且带 content，未动。无迁移；回滚代码即恢复逐条写，新版本写的行在旧代码下仍有效（读者只看对与 id，从不看条目数）。迁移注释 0018 / 0002 仍写"逐条"，属历史、未改；设计文档 §5.1.3 补上了 Observation 粒度的定义。测试：`ingest-handlers.integration.test.ts` 新增 DB 门控用例（4 条目 / 3 Link → 恰好 1 行；未变重跑 → 新增 1 行且 Fact 的 `last_observation_id` 前移、`observation_id` 不变；第二阶段 → 第二行；完整窗口缺一个容器 → 恰好该 Fact 以 `not_reobserved` 退役）。
+
+  - **收尾波次（2026-10-04）——`compact-observations` 保留策略：30 天年龄闸，带 payload 的观察永不压缩（遗留 103 第二部分，#470）**：处理已写入的存量行。维护者 2026-10-04 决定：年龄闸 30 天，带 payload 的观察永不压缩。新增内核 CLI `compact-observations`（`packages/kernel/src/cli/compact-observations.ts`；机制在 `application/platform/compact-observations.ts`，与清除同处）：缺省演练，按类别打印各工作区计数（`payload / referenced / source-newest / last-of-activity-source / would-delete`）与合计，不写任何东西；`--yes` 才删；可选 `--older-than-days <n>`（缺省 30）、`--workspace <id>`、`--batch-size <n>`（缺省 1 万）、`--actor <login>`；最后一行 stdout 是一行摘要，失败时是 `compact-observations: failed: …` 且退出码 1。一行只有同时满足五条才删：(a) 不被任何 `links.observation_id` / `last_observation_id` 引用（不论 Link 状态）；(b) 不是所属 Source 最新的一行（与最新同一时刻的都留）；(c) 不是所在 `(workspace_id, activity_id, source_id)` 剩下的最后一行——按 `(受保护, created_at, id)` 排名，每组最高的一行永不删，所以与窗口边界无关；(d) `content = '{}'`（门观察与任务结果带 content，永不删）；(e) `created_at` 早于年龄闸。执行：按 Source 用 `(created_at, id)` keyset 分窗（游标以微秒精度的 UTC 文本保存，因为 JS `Date` 会截断），每窗一个短事务——先分类，再由重新校验全部条件的 DELETE 删；走 core 0039 的 `observations_source_idx`、`observations_activity_idx` 与 `links_observation_id_idx`（0018）/ `links_last_observation_id_idx`（0039）；只访问有早于年龄闸的行的 Source；事务级 advisory lock（固定 key `7241010301`）让两个并发 `--yes` 逐窗串行；从不 UPDATE 行。权限：删除跑在登录角色上（`skipRoleSwitch`，与 `purgeWorkspace` 一致），`nexttime_app` 仍只有 `observations` 的 SELECT + INSERT（core 0035 不变），外键照常生效、不用 `session_replication_role`；目录里出现 `links` 两个外键以外指向 `observations` 的外键就拒绝运行。审计只增不减：每次 `--yes` 写一条平台行 `cli.observations_compacted`（参数、合计、各工作区计数），中途失败也写（`completed: false` 带错误）；署名取 `--actor`，否则取 `NEXTTIME_PLATFORM_ADMINS` 的第一个登录，再不然不署名（`actor_user_id` 为 null、`payload.attributedActor: false`）。迁移 core `0040`：把 `audit_records_actor_shape` 恰好放宽 `cli.observations_compacted` 一项（0032 / 0036 标记之下），因为 apply-release 钩子无人值守，"解析不到操作者"不能让审计行丢失；其他无署名的平台行照旧被拒。`scripts/apply-release.sh` 第 8 步在 `BACKUP_NOW`（其 dump 是恢复点）与过期工作区清除之后运行 `docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js --yes`，完整输出进 `drills/apply-<tag>-<ts>-compaction.log`，主日志一行 `STEP observations-compaction exit=<rc> <summary> log=…`；`BACKUP_NOW` 失败则记 `STEP observations-compaction skipped …`；从不中止发版，且以 tag 中存在该 CLI 为前提。读者语义不变：起源判定与 `link_visible_to_caller` 靠 (c)；新鲜度 / 静默检测靠 (b)；观察窗口靠 (a)（Fact 自己的 Observation）与 (c)（不指名 Observation 的 Fact 的 Activity 级回退）；`explain(factId)` 靠 (a)；`explain(activityId)` 与 PROV 导出靠 (c)；payload 靠 (d)。可逆性：core 0040 只放宽，`release.md` §6 加了可逆性一行、CI 探针用 v0.41.0 的内核套件跑它；回滚代码后 v0.41.0 没有该命令也不会写新 action；已删的 Observation 不会随回滚回来，按构造没有读者用它们，需要取回就用紧前的 `BACKUP_NOW` dump。runbook：`release.md` §3"观察记录压缩"与 §6、`operations.md` §10.1、`backup-restore.md`。测试：`compact-observations.integration.test.ts`（DB 门控）写成"压缩前后不变量不变"——演练不改任何东西、不写审计行且精确预测执行的计数；冗余行删除，payload / source-newest / 年龄闸内的行保留，只有未被引用的组各留最新一行；无悬空 Link；起源、owner / 成员可见性、各 Source 新鲜度、`explain` 在前后一致；一个未署名审计行带计数，第二次运行删 0 行；之后窗口运行仍能经最后的 Observation 与 Activity 回退两条路径退役未再观察的 Fact。`cli/compact-observations.test.ts` 与 `substrate/audit/writer.test.ts` 覆盖参数守卫与 `attributedActor` 的审计形状。主机首次运行：先演练看计划，再在 `BACKUP_NOW` 之后跑 `--yes`，或交给下一次 apply-release。
+
+### S3.4 `gatekeeper-ragflow` 与本体 v2
+- 交付物：observe `kb.list / kb.documents / retrieve`；execute `document.upload`（medium）、`document.parse`（low）；`ops-assets-v2.yaml` 增 `KnowledgeBase / Document / Dataset`；采集器扩展经门 observe 写 `observed` Fact。
+- 验收：图里有 `Document part_of KnowledgeBase`；`explain` 到 `ragflow@<gatekeeper>`。依赖：S2.4、S3.3。
+- **已完成（feat/s3-4-ragflow-v2，2026-09-09+）**：
+  - **起点核对**：S2.5 已经交付了 `kb.list`/`kb.documents`/`retrieve`/`document.upload`/
+    `document.parse` 五个 Operation 与 `KnowledgeBase`/`Document` 两个"经门 observe 写"的低保真
+    `result_mapping`（`gatekeepers/ragflow/manifest.json`），本任务不是从零建这五个 Operation——
+    是把它们从"能起、能注册"补到"清单本身正确 + 有本体 v2 + 有采集器自己的 phase 4"。
+  - **`document.upload` 从 `?type=empty` 换成真的文件上传**（S2.5 README 自己记录的已知限制）：
+    RAGFlow 真实文件上传是 `POST .../documents?type=local` 的 `multipart/form-data`，而
+    `@nexttime/gatekeeper-base`'s `HttpTransport` 只发 JSON body。新增
+    `gatekeepers/ragflow/src/transport.ts`：`RagflowTransport` 包一层既有 `HttpTransport`，只在
+    `document.upload` 这一个 Operation 上手写 multipart 请求（全局 `fetch`/`FormData`/`Blob`），
+    其它 Operation 原样委托。`manifest.json` 的 `document.upload.params_schema` 换成
+    `{dataset_id, name, content, encoding?}`（`content` 是 utf8 文本或 base64，`encoding` 缺省
+    utf8）；`simulate()` 只解码 `content` 量字节数、不发请求，保持"simulate 无副作用"契约。
+  - **`document.parse` 改 `auto_approvable: true`**（已被 S11 P1-F #726 取代：现为 `medium`、不可自动批准）：`blast_radius` 仍是 `low`，`await_decision`
+    仍是 `true`——S2.5 沿用的是 `importOpenApi` 对新导入 execute 类 Operation 的保守默认
+    （`auto_approvable:false`），但这份清单从来都是手写、经审阅的，不是导入草稿；这次审阅后认为
+    "低影响半径 + 手写审阅过"不需要再保留那个默认，改成走 workspace 内置的低影响半径自动批准
+    （`governance/policy/engine.ts` 的 `effectiveWorkspaceAutoApprove`）。`document.upload` 的
+    `auto_approvable`/`await_decision` 不变（medium 半径不因这个 flag 自动批准，除非 workspace
+    策略显式为 medium 开了口）。
+  - **`ontology/ops-assets-v2.yaml`**（新文件，同 `packName: 'ops-assets'` 的下一个 version，
+    loader 侧无需改动——`publishOntologyDomainPack` 本就与 pack 内容无关）：完整携带 v1 的每个
+    ObjectType/LinkType（同 identityKey，未改动，`ontology-v2.test.ts` 逐项断言），新增
+    `KnowledgeBase [gatekeeperId, kbId]`、`Document [gatekeeperId, kbId, documentId]`、
+    `part_of (Document -> KnowledgeBase)`、`served_by (KnowledgeBase -> Gatekeeper)`（`range:
+    Gatekeeper` 引用 `platform-meta.yaml` 的类型，跨领域包合法，`mergeVisibleOntology` 把两者
+    合并进同一个类型命名空间）。也声明了派发文字点名的 `Dataset [gatekeeperId, datasetId]`，但
+    **本任务的门/采集器代码都不写它、也不给它任何 `part_of` 边**——核对 RAGFlow 自己的 HTTP API
+    参考（`GET /api/v1/datasets` 就是"知识库"列表，RAGFlow 自己的 REST API 全程管这个资源叫
+    `dataset`）：`Dataset` 和 `KnowledgeBase` 是 RAGFlow 给同一个资源的两个名字，不是一层父子
+    关系——声明一条 `part_of (Dataset -> KnowledgeBase)` 会凭空发明一层这个系统里不存在的层级
+    （A4"命名不该存在的关系"的反向应用）。`Dataset` 留着不填，同 v1 自己给 `Owner` 的先例——留给
+    未来某个门若真的需要这个区分时再接。
+  - **采集器 phase 4**（`collectors/host-inventory`，扩展 S3.3 既有三阶段结构，不改其行为）：
+    - `kernel-client.ts` 加 `observeOperation`（新 capability 客户端方法，`POST
+      /api/cap/observe_operation`）——用它而不是 `submitObservations`/`request_action`，因为
+      `kb.list`/`kb.documents` 都是 `mode: 'observe'`，`observe_operation` 正是为"没有可批准动作
+      的读"设计的能力（S2.12），不产生 ActionRequest。
+    - `config.ts` 加 `ragflowGatekeeperId`（`RAGFLOW_GATEKEEPER_ID`，可选，缺省 unset）——这个门
+      实例自己的图 Object id，运行时才知道（某个 workspace 真的接入过一个 ragflow 门之后），不能
+      像其它 env 一样给编译期默认值。
+    - 新增 `ragflow.ts`：`buildRagflowObservations`（纯函数，同 `observation-builder.ts` 的
+      "纯构建 + 编排分离"结构）把 `kb.list`/`kb.documents` 的原始 RAGFlow 响应映射成
+      `KnowledgeBase`/`Document` 两类 `IngestObservation`（`identity: {gatekeeperId, kbId}` /
+      `{gatekeeperId, kbId, documentId}`，`served_by`/`part_of` 两条边）；
+      `collectRagflowObservations` 编排两次 `observe_operation` 调用 + RAGFlow 自己 `{code,
+      data}` 信封的解包（非 0 `code` 记 warning、当"没观察到"处理，不抛错——同
+      `gatekeepers/ragflow/README.md` 早就记录的"这个信封对协议不可见，调用方要自己查"）。
+    - `run.ts` 加"phase 4"：只在 `config.ragflowGatekeeperId` 设置时跑，独立于 Host/Container（
+      不需要任何前序阶段解出的图 id），跑在 phase 1-3 之后、共用同一个 `activityId`。**非致命**
+      ——RAGFlow 门不可达/未接入/`kb.list` 报错只记一条 warning、跳过这个 phase，不让整次
+      `runOnce` 失败（Docker 才是本采集器唯一的硬性数据源，S3.3 既有的失败契约不变）；单个
+      KnowledgeBase 的 `kb.documents` 调用失败只让那一个 KnowledgeBase 的 Document 数为零，不
+      影响其它 KnowledgeBase 或让整个 phase 4 失败。
+  - **两条独立写入路径，记录而非消解**：`observe_operation`（无论谁调用）都会无条件地经门自己的
+    `result_mapping` 再写一份低保真 `{id}`-only 的 KnowledgeBase/Document Fact（经共享的
+    Gatekeeper service Principal，`request-action-handler.ts` 的 `runObserve`）——这是既有的、
+    S3.4 之前就存在的门侧行为，采集器无法也不需要抑制它。采集器 phase 4 是**第二条**独立写入：
+    身份更完整（`gatekeeperId`/`kbId`/`documentId`）、带 `served_by`/`part_of` 边、经采集器自己的
+    service Principal 直接 `submit_observations`。两份 Object 因身份键形状不同而不会互相覆盖或
+    合并——`ontology/ops-assets-v2.yaml` 自己的文件头、`ragflow.ts`/`README.md`/两个 runbook 都
+    在同一处记录了这个已知形状（同 `gatekeepers/docker` 的 `Container`-typed observe 写入早就有
+    的先例，不是本任务引入的新问题）。
+  - **测试**（全部纯函数/fake 注入，无需真实 RAGFlow/Docker/内核）：
+    `gatekeepers/ragflow/src/transport.test.ts`（multipart 请求体形状、base64/utf8 解码、非 2xx
+    包装、`simulate` 无副作用、其它 Operation 仍走纯 JSON）；
+    `gatekeepers/ragflow/src/ontology-v2.test.ts`（v2 对 `OntologyDefinitionSchema` 的 schema
+    校验、v1 全量携带、新类型/边、`Dataset` 故意无边、清单 `result_mapping.object_type` 与本体
+    声明一致）；`manifest.test.ts`/`result-mapping.test.ts` 更新到新的 auto_approvable/参数形状；
+    `collectors/host-inventory/src/ragflow.test.ts`（纯构建函数 + fake `KernelClient` 编排，含
+    "kb.list 非 0 code"、"单个 KnowledgeBase 的 kb.documents 失败降级"、"kb.list 失败向上抛"三个
+    分支）；`kernel-client.test.ts`/`config.test.ts`/`run.test.ts` 加 `observeOperation`/
+    `ragflowGatekeeperId`/phase 4（未设置时不调用、设置时提交第四阶段并计入 summary、
+    RAGFlow 不可达时整次运行仍成功）各自的用例。
+  - **门（gates）全部本机（Windows，无 Docker/psql）跑通**：`pnpm -r typecheck`、`pnpm -r
+    lint`、`pnpm -r test`（含 kernel 的 555 例、web 165 例、platform-extension 75 例等，DB-gated
+    套件按既有约定本机自动 SKIP，交给 CI 的 Postgres service）、`pnpm ci:guards`、
+    `pnpm contract:check`（无漂移——本任务未改动任何 kernel capability 的 params/result
+    schema）、`pnpm depcruise`（346 模块无违规）、`node scripts/validate-compose.mjs`（22 个
+    服务、`collector-host-inventory` 新 `RAGFLOW_GATEKEEPER_ID` env 解析正常）均通过。
+  - **`docker-compose.yml`**：只加了一行——`collector-host-inventory.environment` 里
+    `RAGFLOW_GATEKEEPER_ID: "${RAGFLOW_GATEKEEPER_ID:-}"`（缺省空串，`config.ts` 当 unset 处理，
+    phase 4 整体跳过）；`gatekeeper-ragflow` 服务块本身未改动（S3.4 只改了它的清单/代码，不改它
+    的 compose 配置）。
+  - **运行手册**：`docs/runbooks/host-collector.md` 加 `observe_operation` scope、
+    `RAGFLOW_GATEKEEPER_ID` 配置步骤、§4.5"`Document part_of KnowledgeBase`/`served_by`
+    `traverse`+`explain`"验证（含两条独立写入路径的提醒）、§5 三条新的已知限制（无分页循环、
+    phase 4 非致命、两条写入路径不去重）；`docs/runbooks/host-gatekeepers.md` 更新 §12 两条过期
+    的已知偏离（`document.upload` 已修复、`document.parse` 的 `auto_approvable` 变化），新增
+    §13（真实文件上传验证步骤 + 指向 `host-collector.md` 对应小节，不重复内容）。
+  - **未做/超出范围**：`kb.list`/`kb.documents` 无分页循环（各调用一次、较大 `page_size`，见
+    `ragflow.ts`/两个 runbook 的已知限制记录）；主机上对一个真实 RAGFlow 实例的端到端验收（真实
+    `document.upload` 落地文件、`RAGFLOW_GATEKEEPER_ID` 配置后 phase 4 真的写出
+    `part_of`/`served_by` 边）留给目标主机验收，步骤已写进两个 runbook，本机无 Docker 无法跑。
+  - **R-70 更正（2026-10-02 复审，L6-10）——RAGFlow 阶段要么读完整、要么什么都不提交（#456）**：上面把 phase 4 写成非致命、`kb.list` 报错只记 warning、单个 KnowledgeBase 的 `kb.documents` 失败只让它的 Document 数为零、且"无分页循环"；但 phase 4 带 S5.2 观察窗口（"本次运行是该 Source 对这些类型的完整视图"），内核会把本次没重新观察到的此类 Fact 全部 `not_reobserved` 失效，于是"读不到"被当成了"不存在"，三处：①RAGFlow 的错误以 `200 {code: <非零>}` 回，`unwrapEnvelope` 把它变成 `undefined` 再 `?? []`——RAGFlow API key 轮换或过期时 `kb.list` 回 `{code:109}`，采集器提交一个带完整窗口的空批次，该 Source 的所有 KB 与 Document Fact 被失效，每个周期重复；②失败的 `kb.documents` 被吞成"该 KB 零 Document"，窗口把它变成该 KB 全部 Document 失效；③只读一页且 `page_size: 1000`，而 RAGFlow 当前服务端源码（`internal/handler/document.go` 的 `ListDocuments`）把大于 100 的 `page_size` 重置为 **10**，采集器每个 KB 只看到 10 个 Document，窗口把其余失效。现在 `collectors/host-inventory/src/ragflow.ts` 整个阶段全有或全无：`readAllPages` 逐页读一个列表（页码从 1 起、`page_size: 100`，即 `RAGFLOW_PAGE_SIZE`），遇空页、或已读够 RAGFlow 报告的总数即停（数据集看顶层 `total_datasets`，Document 看 `data.total` 或 `data.total_datasets`——RAGFlow 的 HTTP 参考写的是后者，两种都收）；任何不完整或不一致的读取都抛导出的 `RagflowReadError`：非零 RAGFlow `code`（消息保留、截到 200 字符）、响应形状不是列表、条目没有字符串 `id`、总数在翻页中变了（列表中途变动，偏移页可能漏项）、读到的去重条目数与报告总数不符、一页里全是已读过的条目（服务端忽略 `page`）、超过 `MAX_PAGES = 1000` 页；`kb.list` 与任何 `kb.documents` 的内核 / 门错误向上传播，不再按 KB 吞掉。`unwrapEnvelope(raw, what)` 现在抛 `RagflowReadError` 并返回整个信封（数据集总数在 `data` 旁边）；`logger` 输入与 `RagflowLogger` 类型删除（模块内不再有降级为 warning 的东西），`run.ts` 的 phase-4 warning 带上错误消息。`run.ts` 结构不变——phase 4 本就在 try/catch 里记 `ragflow observation phase failed` 并跳过，所以抛错即"phase 4 什么都不提交、不提交窗口"，已有 Fact 原封不动，等以后某次运行读完整。不变式：S5.2 窗口只对完整读到的数据声明；完整读取仍精确失效已消失的，空 KB 列表仍提交带窗口的空批次（RAGFlow 真被清空时仍如实反映）；phase 4 对整次运行仍非致命，Docker 仍是唯一硬数据源，phase 1–3 不受影响；`Repository` 子项未碰（按 V3，D-27 保持 Repository 观察未接线，`run.ts` 只在配置了仓库路径时才把 `Repository` 加进窗口）。依据对 `infiniflow/ragflow` main 核对：数据集列表（`internal/handler/dataset.go`）接 `page` ≥ 1 与 `page_size` ≥ 1（无上限），回 `{code, data:[…], total_datasets}`；文档列表把 1–100 之外的 `page_size` 重置为 10，回 `{code, data:{docs, total}}`。每一页是一次 `observe_operation`，门自己的 `result_mapping` 写入仍每次调用发生（两条独立写入路径不变）。无迁移、无 wire / 注册表变更。测试：`ragflow.test.ts` 加分页 fake RAGFlow——250 个 Document 读 1–3 页（`page_size: 100`）、0 个 Document 的 KB 只一次调用、服务端每页只给 10 个仍读到底（短页不当作最后一页）、无总数时读到空页；下列都抛：`kb.list` 的 `code:109`、某 KB 第 2 页 `code:102`（无部分结果）、`kb.documents` 的 `KernelClientError`、非信封体 / 非列表 `data` / 无 id 条目 / 缺 `data.docs`、翻页中总数变化（页间删了一个 Document）、读到条数少于报告总数、服务端忽略 `page`；`run.test.ts`（`R-70: the window is committed only after a complete read`）用一个小的内核窗口模型，同一 Source 跑四次——完整读（2 个 KB、跨页 153 个 Document，无失效）；`kb.list` 回 `{code:109}`（phase 4 不提交、无窗口，155 个 Fact 全留）；某 KB 第 2 页失败（同样全留）；删掉一个 Document（在第 2 页）和一整个 KB（含 3 个 Document）后完整读（恰好失效这 5 个）；对旧的 `ragflow.ts` / `run.ts` 此测试在第 2 次运行失败（`live` = 0）。文档：`host-collector.md` §5 的已知限制（"无分页循环""单 KB 失败 → 零 Document"）改写为全有或全无规则与"持续出现 warning"的含义，README 的 phase-4 段同步。
+
+### S3.5 Explorer 契约与挂载
+- 交付物：`kernel/src/explorer-contract/*`：设计 §9.5 的 9 个端点，响应形状按 Semantica `explorer/schemas.py`，`207` 约定，`X-API-Key`（human 通道）；`explorer/` 构建脚本从 Semantica 源码 `explorer/` 构建静态包，caddy 挂 `/explorer`，隐藏 Ontology 等工作区。
+- 验收：Explorer 的 Graph / Decision / Lineage 三个工作区能加载并显示采集器写入的图与 S2 的决策链。依赖：S3.3、E8。
+- **已完成（feat/s3-5-explorer，2026-09-09+）**：
+  - **九个端点**（`packages/kernel/src/interfaces/explorer-contract/index.ts`，挂在 kernel 自己的 Fastify 实例上，路径与 Semantica 完全一致——`/api/graph/nodes`、`/api/graph/edges`、`POST /api/graph/search`、`/api/temporal/bounds`、`/api/temporal/snapshot`、`/api/decisions`、`/api/decisions/:id/chain`、`/api/provenance`、`/api/provenance/report`，不是 `/explorer-api/*` 前缀——原因：未改动的 Explorer 静态包本身硬编码根相对路径 `fetch("/api/graph/nodes")` 这类调用，改前缀等于要 fork 前端源码）。鉴权只做 human 通道：`X-API-Key` 复用 `resolve-caller.ts` 的 `resolveCaller`（包成 `Bearer <key>` 传入），`workspaceId` 取解析出的 Principal 自己的 workspace，RLS 天然做隔离。
+  - **不经 `dispatchCapability`，改走新的 `application/gateway/explorer-read-service.ts`**——不是风格选择而是结构性的：这九个端点背后对应的能力（`graph` 组的 `get_object`/`traverse`/`search`/`state_at`，`epistemic` 组的 `explain`/`query_decisions`/`causal_chain`/`decision_impact`/`find_precedents`）在 `packages/shared/src/capabilities.ts` 里全部注册成 `channel: 'handle'`（只给 agent/Worker），human 通道调用会被 `authorizeCapabilityCall` 直接拒——Explorer 走 `dispatchCapability` 根本不通。`explorer-read-service.ts` 自己开 `withWorkspace` 事务，调用与那些 handler 相同的底层 `substrate/graph`/`substrate/epistemic` 函数，没有 policy/quota 检查（读操作无需），不写审计记录（`export_prov` 除外，见下）。
+  - **隐藏平台元本体对象**：`substrate/ontology/meta-objects.ts` 把 `WorkerDefinition`/`Gatekeeper`/`Skill`/`Procedure`/`Operation` 投影成 `objects`/`links` 表里的行，跟真实域对象同一张表——`explorer-read-service.ts` 的 `PLATFORM_META_OBJECT_TYPES` 硬编码这五个 `objectType` 字面量，在 nodes/edges/search/temporal 四类读上全部过滤掉（手工维护，与 `meta-objects.ts` 的耦合在代码注释里点明了）。
+  - **分页**：`GraphStore.search`/`listRecentFacts` 没有原生 offset/游标（改 `substrate/graph` 超出本任务文件所有权），nodes/edges/search 都是"拉一批（上限 `EXPLORER_MAX_FETCH=5000`）+ 内存内切片"，游标是 base64 编码的 offset；`decisions` 列表则是真游标（循环 `queryDecisions` 自己的 keyset cursor 攒够为止）。已知局限：超过 5000 条的工作区，尾部数据这几个端点看不到，写进了代码注释与 `explorer/README.md`。
+  - **时间维度**（`/api/temporal/bounds`、`/api/temporal/snapshot`）：本域的 Object 没有独立的 `valid_from`/`valid_until`（Semantica 的 ContextGraph 节点有，我们没有——只有 Fact/Link 才有 bitemporal 字段），改成从 Fact 批次推导：bounds = 所有 Fact 的 `valid_from`/`valid_until ?? recorded_at` 的 min/max；某时刻"活跃"的节点 = 至少有一条该时刻有效的 Fact 触达它——领域适配，非 bug，代码里有详细注释。
+  - **Decision 工作区只有一个详情端点**（`§9.5` 只列了 `/api/decisions` 和 `/api/decisions/:id/chain`，没有单独的 detail/impact/precedents）：`/decisions/:id/chain` 一次性 fan-out 调 `causal_chain`（决定 chain 主体，不存在则 `ExplainNodeNotFoundError` → 404，不计入下面的部分失败）+ `decision_impact`（best-effort）+ `find_precedents`（用 `decision_impact` 结果里第一条 Fact 的 `sourceObjectId`/第一条 ActionRequest 的 `actionKindTag` 当锚点，同样 best-effort）。`decision_impact`/`find_precedents` 任一失败但不是全部失败 → `207`，body 带 `message` 字段（`DecisionWorkspace.tsx` 自己认这个字段）；这是本任务里唯一用到 207 的端点，对齐 Semantica `analytics.py` 的先例。
+  - **Lineage**（`/api/provenance`、`/api/provenance/report`）：`application/gateway/provenance-graph.ts`（新增，`export_prov` 也复用它）把 `explain()`/`causal_chain()` 的 `ExplainResult` 链投影成去重后的通用图，两个消费者各自再投影成自己的线上形状。`node_id` 只能解到 Fact/Activity/Decision（`explainByNodeId` 的探测顺序）——从一个纯 Object（图节点）id 去查血缘不在本任务范围（Object 在本域没有直接的 Activity/Evidence 链，只有触达它的 Fact 才有），404，同其它未匹配 id 一样。
+  - **`export_prov`**（`packages/shared/src/capabilities.ts` 原来是"已注册无 handler"的占位 `jsonRecord`，见 S3.7 的清单）：`application/gateway/export-prov-handler.ts`，`paramsSchema` 改成 `{factId?/decisionId?/activityId?, depth?}`（"恰好一个"由 handler 校验，不在 schema 层——同 `causal_chain` 的既有约定），`resultSchema` 改成 `{format:'prov-json', document}`，新增 `packages/shared/src/wire/provenance.ts`。`document` 是 PROV-JSON *风格*（entity/activity/agent + 七个关系桶），不是字节精确的 W3C 规范实现——关系记录统一用 `prov:source`/`prov:target` 两个泛化字段，没有照抄每种关系各自的标准属性名对（代码注释里说明了为什么：本域的 `actedOnBehalfOf` 连接的是 Activity→Agent 而不是标准要求的 Agent→Agent，硬凑"标准正确"的属性名反而更误导）。走标准的 `POST /api/cap/export_prov`（`channel:'human'`），不经 `interfaces/explorer-contract`。
+  - **`explorer/` 构建**：`explorer/build.sh`（POSIX sh）——`SEMANTICA_SRC=<路径>` 用本地检出，否则 clone `SEMANTICA_REPO`（默认 `semantica-agi/semantica`）的 `SEMANTICA_REF`（默认 `v0.6.7`，按 checkout 版本猜的 tag，可能要改）。已验证 Explorer 前端能独立构建（纯 Vite+React+TS 静态站，不需要 Python 后端）——原任务书允许的"构建不了就写个 minimal shell"的退路没有用上。构建脚本自己覆盖了两处上游默认值：`--base=/explorer/`（上游 `vite.config.ts` 写死 `base:'/'`，挂在非根路径需要覆盖）、`--outDir`（上游默认写到 `../semantica/static`，不是 `explorer/dist`）。产物默认写到 `deploy/caddy/explorer-placeholder/`（CI 不跑这个脚本，仓库里长期只有一个"explorer bundle not built"的占位 `index.html`，`deploy/caddy/Dockerfile` 的 `COPY` 因此永远能成功）。
+  - **caddy**（W7 已移除，见下方 W7 实现说明）：`deploy/caddy/Caddyfile` 新增一个 `handle` 块（在既有 `@backend` 块之前，匹配九个端点自己的路径），`reverse_proxy` 到 `kernel:8080` 时加 `header_up X-API-Key {$EXPLORER_API_KEY}`——未改动的 Explorer 前端自己不发这个头，由 caddy 代为附加。`docker-compose.yml` 的 `caddy` 服务原来想用 `env_file: ${NEXTTIME_DATA:?}/secrets/explorer.env`（同 `llm-proxy.env` 的既有约定）——PR 推上去后被 CI 的 `web-e2e` 工作流当场跑挂：`env_file` 要求该文件在 `docker compose up` 时已存在，而 CI 只为它实际起的三个服务（postgres/kernel/caddy）预置 secrets，不知道这个新文件；改成 `environment: { EXPLORER_API_KEY: "${EXPLORER_API_KEY:-}" }`（compose 级展开，`.env` 或 shell 环境变量提供值，未设置时是空字符串——Explorer 调用带一个空 `X-API-Key`，内核侧照样 401，fail closed 不是放行）。`.env.example` 补了对应条目。`docs/runbooks/host-explorer.md` 讲了怎么建专用 `member` 角色 Principal 拿 key、写进 `.env`、构建、验证三个工作区。**本机未跑过真实 `caddy validate`**（本机没有 caddy 二进制也没有 Docker）——按 `@backend` 块的既有写法逐字对照写的；CI 的 `web-e2e` 工作流实际起了这个 caddy 容器（`docker compose up -d --wait kernel caddy`，PR #116）并通过，间接确认 Caddyfile（含新的 `@explorer_api` 块）能被 caddy 成功解析并启动、`environment: { EXPLORER_API_KEY: "${EXPLORER_API_KEY:-}" }` 这个改动本身没有拖垮 compose 启动——但该工作流没有专门针对 Explorer 路由本身发请求的 e2e 断言，九个端点的真实行为仍待 `docs/runbooks/host-explorer.md` 的主机验收确认。
+  - **测试**：`provenance-graph.test.ts`（纯单元）、`interfaces/explorer-contract/wire.test.ts`（纯单元，含 Zod schema 校验每个投影结果）、`interfaces/explorer-contract/explorer-contract.integration.test.ts`（HTTP 层，`app.inject`；无 key 401 是纯单元，其余是 DB-gated 集成，覆盖九个端点、隐藏元本体对象、跨 workspace 隔离）、`application/gateway/export-prov-handler.integration.test.ts`（DB-gated，三种 root、"恰好一个"校验、HTTP 层 404/400）。**本机（Windows，无 docker/psql）没有条件跑通 DB-gated 套件**，同 S3.2/S3.8/S3.11/S3.13 等既有 PR 的先例；CI（PR #116，与 S3.3 合并后）的 `test`/`quality`/`guards`/`web-e2e` 四项全绿，含真实 Postgres 上的 DB-gated 套件。合并 S3.3（`feat/s3-3-host-inventory`，同样在 handlers.ts 里加了 capability handler）时顺带修了两处因此变得过期的既有测试：`dispatch.test.ts` 的"auditor 调 export_prov 通过鉴权"用例——它的注释历史本来就是"换成下一个还未实现的 minRole 受限 human capability"的接力，`export_prov` 是最后一个，改完后注册表里已无同类可换，且 export_prov 真实鉴权通过后会打 DB（不再符合该 describe 块自己的"决策不碰 DB"约定），故删除，改由 `export-prov-handler.integration.test.ts` 新增的 member-403 用例接住同一覆盖点；`capability-route.test.ts` 的"未实现 capability → 501"用例把示例从 `export_prov`（S3.5 刚实现）换成 `create_task`（现在唯一还没 handler 的注册表 capability）。
+  - **未做/超出范围**：不隐藏 Explorer 自带导航里 Ontology/Enrich/Manage→KG Overview 等标签页本身（只是它们的后端没有实现，点开会报错）——要真正从导航里去掉需要对上游前端源码做一个小 patch，权衡后没做（会带来一份要跟着上游走的 diff，见 `explorer/README.md` 自己的说明）；`substrate/graph`/`substrate/ontology` 均未改动（任务文件所有权排除），nodes/edges/decisions 分页与元本体对象过滤都是在 `explorer-read-service.ts` 这一层用现有服务函数拼出来的，不是新增底层查询能力。
+  - **W7 实现说明（Explorer 按调用者鉴权，STATUS 遗留 8）**：`interfaces/explorer-contract/session.ts` 新增一个独立的会话令牌类型——用内核已有的 Handle 密钥对签 EdDSA JWT，但 `typ` 头与严格 claims（`ws`/`sub`/`sid`/`iat`/`exp`）都与真实 Handle 不同，两种令牌互相验证不通过，即使共享同一把密钥。新增 `POST /api/explorer/session`（拿调用者的 `X-API-Key` 换 cookie）与 `DELETE /api/explorer/session`（清 cookie）两个路由；九个只读端点鉴权顺序改成先认 `X-API-Key`（脚本/curl/`accept_s3.sh` driver 保持不变），没有才认 `nexttime_explorer_session` cookie，且每次请求都重新读一遍 Principal（未禁用）与 `kind='web'` 会话（`active`），不是签发时一次性判定。cookie 属性 `HttpOnly; Secure; SameSite=Strict; Path=/api`，TTL 8 小时。随之移除 caddy 的 `@explorer_api` 注入块与 `docker-compose.yml`/`.env.example` 里的 `EXPLORER_API_KEY`。控制台侧新增 `packages/web/src/lib/explorer-session.ts`（登录后换 cookie、登出前清 cookie）与侧栏"图 Explorer"链接。测试：`session.test.ts`（纯单元）、`explorer-contract.integration.test.ts` 新增的 cookie 路径用例、`packages/web/e2e/explorer.spec.ts`。已知局限：`rotate_api_key` 不使已签发的 cookie 失效，撤权靠 8 小时 TTL 或 `disable_principal`。
+
+### S3.6 MCP gateway 与 `interactive` 模式
+- 交付物：`kernel/src/mcp/*`（TS SDK，streamable HTTP，工具由注册表生成，Semantica 17 个工具名与必填参数别名）；扩展 `modes/interactive.ts`；`docs/howto-connect-claude-code.md`、`docs/howto-connect-pi.md`。
+- 验收：`tools/list` = 注册表 Handle 通道集合 + 别名；Claude Code 经 MCP `traverse` 到同一图；无 Handle 连接被拒。依赖：S1.9、S3.1。
+- **已完成（feat/s3-6-mcp-gateway，PR #113，2026-09-09；`accept_s3.sh` 的 MCP `tools/list` / `traverse` 步骤通过）**：
+  - `packages/kernel/src/interfaces/mcp/**`：`POST /mcp`，`@modelcontextprotocol/sdk` streamable HTTP、无状态（每请求新建 Server + Transport，按 Handle 当前 scope 重建工具目录）。只认 Handle 通道：Bearer 一律按 CapabilityHandle 校验，API key 与其它垃圾 token 同样 401，在 JSON-RPC 层之前决定。每 Handle 固定窗口限流（默认 60 req/min）+ 1 MiB body 上限，是仓库里第一个带限流的接口面。
+  - `tools/list` = Handle scope 内所有 `channel:'handle'` 能力（注册表驱动，新能力零改动）+ 参考工具名别名表（`reference-tool-aliases.ts`，文件名不含具体系统名以过内核纯度守卫，该守卫为此文件加了唯一豁免）+ scope 允许门访问时的动态 `<gate>.<op>` 工具。别名只映射有对应能力的 5 个（`get_provenance`→`explain` 等），同名能力不重复投影，无对应物的（抽取、分析、推理、RDF 导出）不伪造。
+  - `issue_handle`：`channel:'human'`、`minRole:'owner'`，为新的 `kind='mcp_session'` 会话签发 Handle，scope = 请求 ∩ entry 上限 ∩ 调用者自己的 Grant（纯交集，静默收窄，永不宽于入口 Handle）。无单独吊销能力，`disable_principal` 级联即可。
+  - `platform-extension/src/modes/interactive.ts`：与 `entry` 同一组工具，但不回传 Turn；走 `/api/cap/*` 而非 `/mcp`（自己就是 pi 扩展，不需要再做 MCP 客户端）。
+  - `deploy/caddy/Caddyfile` 补裸 `/mcp` 路由（E8 只写了 `/mcp/*`）；`docs/howto-connect-claude-code.md`、`docs/howto-connect-pi.md`。
+
+### S3.7 语义一致性校验
+- **前置决策（2026-09-08）**：线上契约词表与信封规则已定在 `docs/wire-contract-conventions.md`（`idempotencyKey` 只指调用方去重键、门协议执行键改 `actionRequestId`；`actionKind` 只指 `{tag,label}`、裸标识改 `actionKindTag`；Grant 用 `resourceType`/`resourceId` 不再借用「capability」；capability `mode` 四值 `observe / write / propose / execute`，即时写操作从 `propose` 改 `write`；单资源结果主键一律 `id`、引用用 `<resource>Id`；列表统一 `{ items, nextCursor? }`；时间戳 ISO 8601）。对齐实现是一个跨层 PR（shared → kernel → gatekeeper-base/门实例 → platform-extension/web/fake-llm/验收脚本），主机跑 `accept_s1.sh` + `accept_s2.sh` 通过后合入；本条 S3.7 随后把 `resultSchema`、契约快照与词表守卫做进 CI。
+- 交付物：`scripts/check-capability-consistency.ts`：注册表 = HTTP 路由 = MCP 工具 = WS 方法 = policy 可识别 `action_kind`。
+- 验收：CI 步骤；故意删一个路由被拦。依赖：S3.6。
+- **已完成（feat/contract-guards，2026-09-08+）**：实现范围由后续任务书重新定得更具体，落地的是 `docs/wire-contract-conventions.md` §5 的三件事（`resultSchema` + 契约快照 + 词表守卫），不是本条最初写的 `check-capability-consistency.ts`（注册表=HTTP=MCP=WS=policy 一致性）——那个更宽的校验仍未做，留给未来任务，本条只把已确定范围内的三件事收口。
+  - **`resultSchema`**：`packages/shared/src/capabilities.ts` 96 个 capability 现在每个都有 `resultSchema`（此前只有 `get_operation_stats`，S3.12 自己加的）。新增 `packages/shared/src/wire/*.ts`：Chat/ChatMessage、Object/Fact/AuditRecord/Explain、ActionRequest/CapabilityGrant/Policy/Quota、Gatekeeper/Operation/ConnectionRequest、Task/WorkerRun/InvokeWorkerResult、WorkerDefinition/Skill/Procedure、Principal/Workspace/AgentProfile/AgentPolicy——每种资源一处定义，`resultSchema` 与 `events.ts` 的 `task.updated`/`action.updated` 推送事件（`.pick()` 出同形子集）共用同一个 schema。尚未挂 handler 的能力（`docs/development-tasks.md` 历史遗留的"已注册未实现"集合，见下）给的是宽松占位 schema（`jsonRecord`，列表命名再套 `listEnvelope`），不是编造的精确形状；`assert_fact`/`supersede_fact`/`invalidate_fact`/`verify_fact`（Fact 形状明确）、`create_task`（Task 形状明确）是例外——handler 未接但返回形状可从既有资源推出，用了真实 schema 而非占位。
+  - **推导 `resultSchema` 时顺带发现并修的线上契约违规**（"改 handler/投影使其合规，minimal，在 PR 描述里逐条说明"这条本条自己的要求）：`search`/`audit_query` 原来直接返回裸数组（§3 明令禁止），改成 `{items}`；`get_object`/`search`/`state_at`/`get_entry_context`（facts 字段）/`find_operations`/`audit_query`/`reconstruct`/`list_chats`/`new_chat`/`list_grants`/`grant_capability`/`revoke_capability`/`connect_gatekeeper`/`list_policies`/`set_policy`/`set_auto_approved_action_kind`/`set_quota`/`list_connection_requests` 这些 handler 原来把内部行对象（真 `Date` 字段）直接交给 `dispatchCapability`，不是每个 handler 都像 `toWireActionRequest`/`toWireTask` 那样投影成 ISO 字符串——对外线上无实差（`JSON.stringify` 本来就会把 `Date` 转成 ISO 字符串），但内部表示不一致，且正是 `resultSchema` 校验要盯住的东西；新增 `packages/kernel/src/application/gateway/resource-wire.ts`（`toWireObject`/`toWireFact`/`toWireAuditRecord`/`toWireChat`/`toWireGrant`/`toWirePolicy`/`toWireQuota`/`toWireConnectionRequest`），套到每个调用点。`set_policy` 的裸参数字段 `actionKind`（`governance/policy/policies.ts` 的 `SetPolicyPayloadSchema`）改名 `actionKindTag`（§1 词表："actionKind" 只留给 `{tag,label}` 展示对象）——该模块内部的 `SetPolicyInput`（对应 DB 列 `action_kind`）不受影响，两者已解耦；`list_policies`/`set_policy`/`set_auto_approved_action_kind` 的结果同样通过 `toWirePolicy` 改名。消费者只找到一处真正要改的：`packages/platform-extension/src/modes/worker.ts` 的 `context` 处理器读 `search` 结果时按 `{objects}`/裸数组两种猜测防御式解析——改成读 `{items}`（连同它自己的测试）；`set_policy` 的 `actionKind` 参数、`PolicyRow.actionKind` 结果字段没有找到真实消费者（web 只泛化渲染 Policy 行）。
+  - **`KERNEL_VALIDATE_RESULTS`**：`application/gateway/dispatch.ts` 的 `dispatchCapability` 在 `process.env.KERNEL_VALIDATE_RESULTS === '1'` 时把最终返回值（`afterCommit` 解析后的那个，不是 phase-1 的）拿去过一遍 `capability.resultSchema.safeParse`，不匹配抛 `CapabilityResultValidationError`（内部契约错误，不是调用方输入错误，走 500，不映射成 400）。生产环境不设这个变量——零运行时开销，行为完全不变。`packages/kernel/vitest.config.ts` 的 `test.env` 和 CI `test` job 的 env 都设了它，所以现有的每个 kernel 单元/集成测试都顺带把自己 dispatch 到的每个 capability 的真实返回值校验了一遍（没有新增测试例，靠现有测试覆盖）。`isResultValidationEnabled()` 本身在 `dispatch.test.ts` 有独立单测。
+  - **契约快照**：`scripts/contract-snapshot.mjs`（`pnpm contract:snapshot` / `pnpm contract:check`），用 `zod-to-json-schema`（钉死 `3.24.1`，匹配仓库其余地方 `zod ^3.24.1` 的 peer 要求）把每个 capability 的 `{name, group, mode, channel, minRole?, params, result}` 和 `PlatformEventSchema` 序列化进 `docs/contracts/{capabilities,events}.json`（key 递归排序，确定性输出）。`contract:check` 生成到临时目录 diff，不一致时报错并提示跑 `contract:snapshot`。CI `quality` job 在 Build 之后跑 `contract:check`。
+  - **词表守卫**：`scripts/guards/vocabulary.mjs`（`pnpm ci:guards` 本地路径 + CI `quality` job 独立步骤，因为它要读 `@nexttime/shared` 的构建产物）五项检查（对应 §5 原文 + 本任务书的加严版）：(a) `actionKind` 裸字符串 zod 字段只准出现在 `action-description.ts`；(b) `idempotencyKey` 不准出现在 `gatekeeper-base`/`gatekeepers/*` 的请求响应 schema；(c) `mode: 'propose'` 与 `propose_`/`request_` 前缀双向对应（唯一例外 `request_action`——`execute` 模式、`request_` 前缀，注册表条目自己的注释解释过为什么，守卫里同样记录并列进白名单）；(d) `paramsSchema`/`resultSchema` 任何键不准 snake_case（唯一例外：`publish_operation` 结果里内嵌的、`action-description.ts` 自己承认是故意 snake_case 的 Operation 清单字段——`params_schema`/`blast_radius`/`tool_name` 等一串，列进白名单）；(e) `list_*`/`find_*`/`query_*`/`get_chat_history` 的 `resultSchema` 必须是 `listEnvelope` 形状。首次跑在加固前抓到一个真实违规——`policies.ts` 的 `SetPolicyPayloadSchema.actionKind: z.string()`（上面已修）；其余四项首次跑干净。`scripts/guards/vocabulary.test.mjs`（`node --test`，无框架依赖）单测每个探测器的纯函数（正例/反例都覆盖），CI `quality` job 单独一步跑。
+  - **已注册但无 handler 的 capability**（`CAPABILITY_HANDLERS` 缺项，S3.7 落地时点的快照，逐个对照 `capabilities.ts` 与 `application/gateway/handlers.ts` 得出，未实现，未改）：`get_type`、`list_types`、`validate`、`propose_ontology_change`、`publish_ontology_version`（ontology 组，S3 尚未有专门任务）；`causal_chain`、`decision_impact`、`find_precedents`、`list_conflicts`、`query_decisions`、`resolve_conflict`、`verify_fact`、`supersede_fact`、`invalidate_fact`（epistemic 组，除 `assert_fact` 已挂但 handler 内自己抛"未实现"外，其余均无入口）；`register_source`、`submit_observations`（ingest 组）；`export_prov`（audit 组）；`create_task`（task 组，S2.7 自己的决定，见 `handlers.ts` 里 `setQuotaHandler` 旁的注释）；`issue_handle`（governance 组）。`<gate>.<op>`/`<gate>.<op>:execute` 是运行时动态生成的占位模式，不算在内（本来就不可直接 dispatch）。共 19 个真实未实现 + 2 个占位模式；`docs/code-review-2026-09-04.md` §7 的"19 个"这条旧记录经核对与当前注册表一致，已在那份文档里更新为确认状态。**W4 收尾更新（2026-09-09+）**：19 个已逐个由 S3.1（ontology 5 个）、S3.2（epistemic 7 个：`causal_chain`/`decision_impact`/`find_precedents`/`list_conflicts`/`query_decisions`/`resolve_conflict`/`verify_fact`）、S3.3（`register_source`/`submit_observations`/`supersede_fact`/`invalidate_fact`，4 个）、S3.5（`export_prov`）、（governance 组 `issue_handle` 由 S3.6 落地）、本次 W4（`create_task`，语义"只建不跑"，见 S3.9/S3.10 之间的 W4 wave 行）挂上真实 handler——`grep`/直接对照 `CAPABILITY_REGISTRY` 与 `CAPABILITY_HANDLERS`（`packages/kernel/src/application/gateway/dispatch.test.ts` 新增的"every registered capability has a wired handler"标准测试）确认：**0 个真实未实现，仅剩 2 个占位模式**，`docs/code-review-2026-09-04.md` §7 已同步更新。
+
+### S3.8 不变量监控与混沌
+- 交付物：`audit/invariant-checks.ts`（I1–I16 定时校验 → 指标与日志）；`scripts/chaos-kill-worker.sh`、`scripts/chaos-kill-entry.sh`。
+- 验收：人为写入违反 I7 的记录后告警计数为 1；杀入口进程与 Worker 后系统状态符合 §13。依赖：S2.12。
+- **已完成（feat/s3-8-invariants-and-chaos，2026-09-09+）**：
+  - **`substrate/audit/invariant-checks.ts`**：I1–I16 逐条映射到一条纯 SQL 查询或"不可数据库检查，理由"，表格见该文件自己的模块级文档注释（不在此重复一份会漂移的副本）——8 条可查（I4/I6/I7/I11/I12/I13/I14/I16）、8 条标记不可查（I1/I2/I3/I5/I8/I9/I10/I15，多数是 NOT NULL/触发器已经使违反在数据层不可表示，或依赖 `substrate/ontology`/`governance/policy` 自己的运行时逻辑而非 DB 状态）。I4/I12 用触发器存在性检查（`pg_trigger`）；I6 用 `audit_records` 里 `action_request.*` 转移的审计轨迹比对 `@nexttime/shared` 的 `ACTION_REQUEST_EDGES`；I13 是唯一一条"DB 层本来就没有防线"的真实独立检查（子 Handle 的 `on_behalf_of`/`expires_at` 继承只在 `UPDATE` 时被触发器拦，`INSERT` 时完全不挡）——验收用例即以它为目标（插入一个 `expires_at` 超过父 Handle 的子 Handle → 该不变量 `violations: 1`；delete 干净后回到 `0`；因为 DB-gated 集成测试在本仓库共用一个 Postgres、文件间不重置，"全干净时全为 0"改成对目标不变量本身做前后差值断言，理由见该测试文件自己的文档注释）。任务书原文举例的 I7 本身已被三条 CHECK 约束在数据层堵死（`governance/0003_action_requests.sql`），插不进违反记录，因此验收用例改用同样"DB 层无防线"的 I13，语义等价（"人为插入一条违反某条可查不变量的记录 → 该不变量计数为 1"）。额外做了任务书举例但不属于 I1–I16 编号的两条"运维健康检查"：`ops.one_running_turn`（分区唯一索引的防御性复查）、`ops.outbox_stuck`（`dispatched_at is null` 超过阈值，默认 30 分钟）。
+  - **调度**：`packages/kernel/src/index.ts` 的 `createBackgroundServices`，镜像既有 outbox-prune 循环的写法——`INVARIANT_CHECK_INTERVAL_MS`（默认 10 分钟，`0` 关闭）、首次 tick 在 `INVARIANT_CHECK_INITIAL_DELAY_MS`（10 秒）后跑，之后按间隔重复；每次 tick 结果同时写入一个跨 `createServer()`/`createBackgroundServices()` 共享的 `InvariantMetricsStore`（供 `/internal/metrics` 读）并对每条 `violations > 0` 的不变量打一条结构化 `warn` 日志。
+  - **`GET /internal/metrics`**：`interfaces/http/internal/metrics.ts`，Prometheus 文本格式（`nexttime_invariant_violations{invariant="..."}`、`nexttime_invariant_check_last_run_timestamp_seconds`），同既有 `/internal/*` 令牌网关。为了不越过 `interfaces` 不得直接 import `substrate` 的分层规则（dependency-cruiser），这个路由本身完全不知道"不变量"是什么——只接一个 `deps.renderMetrics: () => string` 闭包，真正的 `substrate/audit` 调用与格式化都在组合根（`index.ts`）里完成后再把闭包传进来；`deps.renderMetrics` 缺省时路由仍然存在，返回"未接线"占位文本，不 404——保证所有既有 `createServer(...)` 调用点（多个既有测试文件）不用跟着改。
+  - **`get_operation_stats` 的 observe 类归因缺口**（S3.12 遗留，见该 capability 注册表条目自己此前的文档注释）：`substrate/audit/writer.ts` 新增 `queryAuditActionOperationStats`（按 `action` + `payload.params` 里的 `gatekeeperId`/`operation` 做日期范围分组读，通用，不写死单一 capability 名）；`governance/approval/reads.ts` 的 `getOperationStats` 用它查 `observe_operation` 的审计轨迹，按 `{gatekeeperId, operationName}` 与既有 execute 类查询结果合并——`calls` 变成两侧之和，新增 `observeCalls` 字段单独承载 observe 侧计数，`approved`/`rejected`/`autoApproved`/`failed` 仍只来自 execute 侧。已知遗留缺口（文档化，未近似）：Worker 经 `request_action` 调用、恰好解析成 observe 模式的少见兜底路径，审计 `action` 记的是 `request_action` 不是 `observe_operation`，不参与这次归因——真正的 `<gate>.<op>` observe 路径固定走 `observe_operation`，不受影响。`packages/shared/src/capabilities.ts` 的 `get_operation_stats` 条目同步补了 `resultSchema.observeCalls` 与说明文字，`docs/contracts/capabilities.json` 已重新生成。
+  - **`scripts/chaos-kill-worker.sh` / `scripts/chaos-kill-entry.sh`**：POSIX sh 操作员脚本，同 `scripts/accept_s1.sh`/`scripts/restore.sh` 的既有约定（从检出根跑、`docker compose config` 探活、`</dev/null`、API key 只打印前 6 位）。前者用 `get_task`（human 通道也能调——`authorize.ts` 的 `channel:'handle'` 分支对两个通道都放行，只有 `channel:'human'` 才排斥非 human 调用方）定位当前 `running` 的 WorkerRun，按 `taskContainerName` 约定算出容器名直接 `docker kill`（不是 `docker compose kill`——Worker 容器不是 compose 服务），轮询到 `queued`（attempt 增，reaper 已重试）或 `failed` 记 PASS。后者 `docker kill nexttime-entry-<principalId>`，用 `send_chat_message` 触发"下一轮"，轮询 worker-supervisor 的 `/resident/<principalId>`（同 accept_s1.sh 的 `resident_status()` 助手同一条路径）等 `restarts` 增且 `running=true`。两者的期望输出、常见故障、与 `/internal/metrics` 的运维读法写进新 runbook `docs/runbooks/host-chaos.md`（`docs/runbooks/README.md` 排障表已加一行；`docs/runbooks/operations.md` 两处"`invariant-checks.ts` 未实现"的旧记录已更新）。
+  - **测试**：`substrate/audit/invariant-checks.integration.test.ts`（新增，DB-gated，`describe.runIf(DATABASE_URL)`）——I13 插入/清理的前后差值断言、I4/I12 触发器存在性、`runInvariantChecks` 返回形状与固定顺序；`governance/approval/reads.integration.test.ts`（新增，DB-gated）——纯 observe 行、`days` 窗口截断、`gatekeeperId` 过滤、与 execute 类行合并四例。**本机（Windows，无 docker/psql）没有条件跑通这两份 DB-gated 测试**，同 S3.11/S3.13 PR 的先例，只做了对照既有 `substrate/invariants.test.ts`/`writer.test.ts`/`members-flow.integration.test.ts` 写法的仔细人工核对，需要 CI 的真实 Postgres 服务确认一遍。`packages/kernel/src/index.test.ts` 原有一例断言"`outboxPruneDays: 0` 时 `setTimeout` 一次都不该被调用"，因为本任务给 `setTimeout` 加了第二个使用者（不变量检查的首次 tick 延时）而需要同时传 `invariantCheckIntervalMs: 0` 才能继续成立，已同步修——不是新缺陷，是同一个断言语义下必须的连带更新。
+
+- **R-34 更正（2026-10-02 复审）——密钥与 Handle 不再出现在任何进程的 argv 里**：验收套件在生产主机上跑
+  （`apply-release.sh` 第 7 步），原来 `run_driver` / `cap` 把 key、Handle 作为 `docker compose run … node
+  /tmp/driver.mjs cap <token> …` 的参数，同机任何用户都能从 `/proc/*/cmdline` 读到（验收工作区留 7 天、S4 的工作区
+  启用并授予了全部平台门）；`cap` 的 params JSON 里还带着门的 `connectionSecret` 与凭证；accept_s1 的三处 curl 与
+  三个混沌脚本用 `curl -H "Authorization: Bearer $KEY"`，混沌脚本还把 key 当位置参数（进 shell 历史）。现在：
+  ①`scripts/lib/accept-common.sh` 的 `run_driver`（子 shell 函数体）把每个带 token 的子命令的 token 移进
+  `NT_ACCEPT_TOKEN`、`cap` / `mcp` 的 params 移进 `NT_ACCEPT_PARAMS`，以 `docker compose run -e NAME`（不带值，
+  从调用方环境取）带进容器，驱动收到的是 `env:NAME`——`deploy/accept/driver.mjs` 的 `resolveArg` 把任何
+  `env:<大写名>` 参数换成该环境变量的值（未设为空串，字面值照旧可用）；调用方不改。②新增 `auth_header <token>`
+  （printf 内建 → `curl -H @-`），accept_s1 的三处 curl 改用它。③accept_s2 的 S2.13 泄露检查不再
+  `psql -v token=…`，改为同一 stdin 上一行 `\set token …`（token 已校验为 40 位十六进制）。④三个混沌脚本的
+  `<apiKey>` 换成 `<apiKeyFile>`（0600 文件路径，`host-chaos.md` 给了不进历史的建法），读入后经 `auth_header |
+  curl -H @-` 发出；参数不是可读文件时报错且不回显参数（旧式调用传的就是 key 本身）。所有 PASS / FAIL 行不变。
+  验证：主机上无法跑验收，只做了 `sh -n`、shellcheck 0.11.0（无新增告警，既有的 info / warning 与 main 相同）
+  与逐行核对；驱动的 `env:` 解析由 `packages/kernel/src/interfaces/accept-driver.test.ts` 新增用例覆盖（HTTP
+  Bearer、params、未设变量、WS authenticate）。未做：收尾时吊销验收 key（复审 L9-5 的另一条建议），留作后续。
+
+### S3.9 S3 验收脚本
+- 交付物：`scripts/accept_s3.sh`：采集 → 入口 agent 回答「哪个服务依赖哪个」并 explain → Explorer 端点返回图 → Claude Code 经 MCP 观察同一图。
+- 验收：退出 0 打印 `S3 OK`。
+- **已完成（W4 收尾，2026-09-09+）**：`scripts/accept_s3.sh`（镜像 accept_s1.sh/accept_s2.sh 结构：preflight、共用的 `deploy/accept/driver.mjs`、PASS/FAIL、`--keep`）覆盖派发文字的五点：(a) `bootstrap.js seed-domain-pack` 发 `ops-assets-v1`；(b) `bootstrap.js issue-service-handle` 铸采集器 Handle → 跑两遍 `collector-host-inventory --once`，第一遍断言 `Container runs_on Host` 与 `factsAsserted>0`，第二遍断言 `factsAsserted=0 && factsSuperseded=0`（等价于派发文字的 `factsUnchanged>0, factsSuperseded=0`——采集器自己的 console 摘要不转发 `factsUnchanged` 字段，见脚本自己的注释）与 `list_conflicts` 无 open；(c) 聊天"哪个服务依赖哪个"——`deploy/fake-llm/server.mjs` 新增 `entryDependencyChatScenario`（search→traverse→get_object 三跳真实工具链，落在 `kernel depends_on postgres` 这条 `docker-compose.yml` 自身就有的真实关系上），脚本另外直接 `traverse`+`explain` 验证 `explain` 溯源到采集器 Source（不解析聊天记录里的工具结果）；(d) 直接对内核镜像（不经 caddy）调三个 Explorer 端点；(e) `issue_handle{sessionKind:'interactive'}` 铸 Handle 后走 `/mcp` 的 `tools/list`/`tools/call(traverse)`，无 Handle 401（对照已安装的 `@modelcontextprotocol/sdk` 源码与一次本地真实 SDK server 验证过 driver 的 JSON-RPC 请求形状）。运行手册 `docs/runbooks/host-accept-s3.md`。本机无 Docker，脚本本身未端到端跑过；`entryDependencyChatScenario` 已用 `deploy/accept-s2/fake-llm-scenario-selftest.mjs` 新增的 6 个用例对真实运行的 fake-llm 验证过。
+
+### S3.10 运行手册与测试策略文档
+- 目标：换人能维护。
+- 交付物：`docs/runbooks/`：重启各服务与恢复顺序、从备份恢复、轮换 Handle 签名密钥与 provider key、新增一个接入包（含清单导入与发布）、新增一个领域包、升级 pi 版本（契约测试流程）、排查一次失败的 Task（沿 `explain` 与审计）；`docs/testing.md`：设计 §7.10 的测试分层与每层的运行命令。
+- 验收：按「从备份恢复」手册在临时环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功。依赖：S3.9、S1.12。
+- **已完成（W4 收尾，运维演练脚本化部分，2026-09-09+）**：本文档与两份 runbook 早于本次已存在；本次把"从备份恢复"/"新增接入包"两条验收句从"人读手册、手动敲命令"落成两个可重复跑的脚本——`scripts/drill-restore.sh`（找最新备份 dump，没有就先触发一次，跑真实的 `scripts/restore.sh` 进一次性 `nexttime_restore_<ts>` 库，断言表数量 > 0，随后 `DROP DATABASE`）、`scripts/drill-add-gatekeeper.sh`（复用 accept-s2 OpenAPI fixture，走 `request_connection → create_connection → publish_manifest → connect_gatekeeper → request_action`，被授权的 member 而非 owner 亲自验证观察类 Operation）。docs/testing.md §4、`docs/runbooks/backup-restore.md`/`add-gatekeeper.md` 各自新增"验证"小节记录用法。
+
+### S3.11 中台控制面（管理员面）
+
+- 背景与反省（2026-09-08）：S1/S2 的 web 只是验收面——登录、对话、审批卡片、任务、连接页壳。一个"中台"缺的是**控制面**：谁能进（成员、角色、API key）、谁能做什么（Grant / Policy / Quota）、接了什么系统（Gatekeeper 与其 Operation 分类）、发布了什么能力（Skill / Procedure / WorkerDefinition / Operation）、发生过什么（审计）。这些在内核里大多已有 capability，只是没有读侧能力、没有 UI、没有信息架构。
+- 本体（不新增一等概念，补读侧与成员管理）：Principal（kind / role / api_key）、CapabilityGrant、Policy、Quota、Gatekeeper + Operation、ConnectionRequest、Skill、Procedure、WorkerDefinition、AuditRecord 均已存在。缺口 = **成员管理能力** + **列表/详情读能力**：`list_principals`、`create_principal`（owner；API key 只显示一次）、`set_principal_role`（owner；不能把最后一个 owner 降级）、`rotate_api_key`（owner 或本人）、`disable_principal`（owner；撤销其全部 Handle 与入口会话）；`list_grants`、`list_policies`、`list_quotas`、`list_gatekeepers`（含健康、manifest 版本、Operation 数）、`get_gatekeeper`、`list_operations`（human 侧目录，按门分组；agent 侧已有 `find_operations`）、`get_workspace`、`list_models`（llm-proxy 白名单的只读投影——kernel 只读挂载的 `config/models.json`，不接触 provider key）。全部 `channel: 'human'`，minRole 按组：成员/授权/策略 = owner，审批与配额查看 = operator，审计 = auditor，目录 = member。
+- 不变量：管理能力**永不**出现在任何 Handle 的 scope 里（注册表 `channel:'human'` 已强制，加一条 CI 守卫：`governance`/成员管理组不得被 `ENTRY_CEILING`/Worker 基础设施集合引用）；每次管理变更写 audit（`dispatchCapability` 已统一）；`disable_principal`/`set_principal_role`/`revoke_capability` 触发既有"Grant 变更即重签/撤销入口会话"路径。
+- UI 信息架构：左栏两区。**工作**：对话、任务、待我审批。**治理**（owner/operator 可见）：成员与授权（Principal 列表、角色、API key、Grant 矩阵）、系统接入（门列表 + 接入向导 → S3.12）、能力目录（Operations / Skills / Procedures / Workers：草稿 → 发布 → 弃用）、模型与配额（白名单、AgentPolicy → S3.13、Quota）、审计（按 principal / capability / 时间过滤，explain 跳转）。member 只见工作区 + 「我的智能体」（S3.13）。
+- 交付物：内核上述 capability + 测试；web 路由化（当前单 `App.tsx` 组件切换 → 路由 + 按 role 的导航守卫）、治理区五页；`docs/runbooks/web-console.md` 更新。
+- 验收：owner 在 UI 创建 member 并发 key → member 登录只见工作区；owner 授 Grant 后 member 的入口工具列表变化（下一 turn 生效）；`disable_principal` 后该 member 的 WS 与 Handle 全部 401；审计页能按 principal 查到以上每一步。依赖：S2.10、S2.13。
+- **实现说明（feat/control-plane-capabilities PR，2026-09；本 PR 只落地内核半——13 个 capability + 测试，不改 `packages/web/**`，web 路由化/治理区五页由另一并行任务负责）**：
+  - **能力清单**（`packages/shared/src/capabilities.ts`；全部 `channel:'human'`）：新增 `members` 组承接原本没有归属的成员管理与两个摘要读——`list_principals`（`observe`，`operator`）、`create_principal`（`write`，`owner`）、`set_principal_role`（`write`，`owner`）、`rotate_api_key`（`write`，registry 层 `minRole:'member'`——handler 再收紧成"owner 或本人"）、`disable_principal`（`write`，`owner`）、`get_workspace`（`observe`，`member`）、`list_models`（`observe`，`member`）；`governance` 组追加三个读——`list_grants`/`list_policies`/`list_quotas`（均 `observe`/`operator`）；`connection` 组追加三个读——`list_gatekeepers`/`get_gatekeeper`/`list_operations`（均 `observe`/`member`）。`mode` 全部按 `docs/wire-contract-conventions.md`（MANDATORY）：Principal 的四个写是平台内即时状态变更、无门审批 → `write`，不是 `execute`（现有 `grant_capability`/`set_policy`/`set_quota`/`issue_handle` 仍是 2026-09-08 定档前的 `execute` 标注，超出本任务范围，未改）。全部同步加进 `HUMAN_ONLY_CAPABILITY_NAMES`（既有的注册表级二次防线）。
+  - **迁移**：`migrations/core/0015_principal_disabled.sql` 加 `principals.disabled_at timestamptz`（`nexttime_app` 早已有该表的 `update` 权限，未追加 grant）。
+  - **key 生成/哈希复用**：`generateApiKey` 从 `cli/bootstrap.ts` 私有函数搬进 `application/gateway/auth.ts`（与既有 `hashApiKey` 同一模块），`bootstrap.ts` 改为导入——没有第二份哈希/生成逻辑。
+  - **`disable_principal` 的撤销路径**：复用既有 `governance/capability/handles.ts` 的 `revokeEntrySessionHandles`（Grant 变更已经在用的同一条路径，没有写第二条撤销代码），撤销该 principal 全部 `kind='entry'` 会话下的 Handle。额外的第二层防线：一个已签发但仍在有效期内的 `kind='worker_run'` Handle 不属于任何 `entry` 会话，`revokeEntrySessionHandles` 覆盖不到——`application/gateway/handle-auth.ts` 的 `authenticateHandle` 现在对**任何**验证通过的 Handle 都额外查一次其 `on_behalf_of` principal 的 `disabled_at`，命中则复用 `HandleRevoked`（不是新错误类）拒绝，语义上与"已撤销"完全一致。`auth.ts` 的 `lookupPrincipalByApiKeyHash` 查询加 `and disabled_at is null`——旧 API key 立即 401（不是事后检查，查询本身就找不到）。last-owner 不变量用 `select ... where role='owner' and disabled_at is null for update` 在同一事务里锁住当前全部活跃 owner 行再判断，避免两个并发的降级/禁用请求都读到"还有 2 个 owner"从而一起通过。（2026-10-02 复审 R-05 更正：第二层防线只在内核里生效，llm-proxy 只按 jti 同步吊销表，运行中的 Worker 因此仍能调用 LLM；现改用 `revokeOnBehalfOfSessionHandles`，吊销所有 `on_behalf_of` 该 principal 的会话（entry、`mcp_session`、`worker_run`）下的 Handle，提交后再经 `application/gateway/session-revocation.ts` 的踢出总线关闭其已打开的 `/ws`。）
+  - **R-06 更正（2026-10-02 复审，维护者决定 D-05）**：原来的 `assertHumanTarget` 让 `set_principal_role` / `rotate_api_key` / `disable_principal` 对 `create_principal` 铸出的 service principal 一律 409，泄露的 owner 级 CI key 只能停整个工作区或改库。现在三者对 `human` 与 `service` 一视同仁，只拒绝 `agent` 与内部 service principal（`__…__` 显示名，reason `platform_managed`）；`create_principal` 拒绝 `__…__` 显示名（`reserved_name`），wire 上的 `internal` 也只认 service。停用 service 走 R-05 同一条 `revokeOnBehalfOfSessionHandles`（含 `issue_service_handle` 的 `service` 会话）；改角色走 `revokeRoleScopedSessionHandles`（#1150 起删除，由 `applyRoleChange` 取代）；由他人轮换 service key 时提交后再按 principal 踢掉它已打开的 `/ws`（人的控制台 socket 走 cookie，不踢；自己轮换也不踢）。"最后一个 owner"统一为最后一个**活跃的人类** owner，一个谓词 `isLastActiveHumanOwner`（`application/gateway/auth.ts`，`for update` 锁住全部活跃人类 owner 行）同时供工作区 `set_principal_role` / `disable_principal` 与平台 `set_membership_role` / `remove_membership` 使用——此前工作区侧把 service owner 也算进去、平台侧只算人。web：`PrincipalDetail` 对 service 显示停用 / 轮换 / 改角色，对 agent 与内部 principal 隐藏；`CreatePrincipalForm` 选 owner 时先过 `kit/confirm` irreversible 层级（列出 owner 级 key 能做什么），取消即不创建。`PrincipalDetail` 把 service 提升为 owner 走同一确认（先建 member 再提升绕不过去；提升人、降级任何人不变）。平台 `set_user_status` → disabled 对任一工作区的最后一个活跃人类 owner 同样拒绝（`last_owner`，同一谓词，先转移 owner）。测试见 `members-flow` / `platform-capabilities` 集成测试与 `MembersPage.test.tsx`。
+  - **停用即清 key（#1204，遗留 734，e4013be）**：`disable_principal` 停用时清掉 API key；`rotate_api_key` 先拿主体锁，对已停用的目标回 409 `conflict`，reason 为 `disabled`；控制台把已停用但行上还留着 key 的成员显示为「已失效」。用约束钉住「已停用就没有 key」登记为遗留 738。
+  - **已停用的成员没有 API key，由数据库保证（#1210，遗留 738，6ec2150）**：core `0059` 加约束 `principals_disabled_no_api_key`（`disabled_at is null or api_key_hash is null`），停用那次写入由 BEFORE UPDATE 触发器 `principals_disabled_clears_api_key` 清掉行上原有的 key（同一句里既停用又设新 key 被约束拒绝，`23514`）；升级时清掉以前留下的 key，每个成员一条 `principal.disabled_api_key_cleared` 审计；迁移先锁 `principals`（ACCESS EXCLUSIVE），避免旧版本的写入落在补救和加约束之间。控制台去掉「已失效」显示，已停用的成员显示「无 API key」。主机步骤见 `release.md` §3.179。
+  - **重复调用不改东西就不写（#1214，遗留 679、685、686、689，195da73）**：`set_agent_profile` 同值再存不写库、不撤销入口 Handle（`setAgentProfile` 返回 `changed`），`set_agent_policy` 同理（不另开遗留号）；`assert_fact` 写到同一条 Fact、`refresh_operation_governance` 什么都没刷新时，回滚自建的 Activity（SAVEPOINT）；`publish_ontology_version` 对已发布 / 已弃用的版本回 409 `illegal_transition`，别人的草稿仍是 404。能力矩阵这五行的 `repeat` 列随之修改。
+  - **R-12 更正（2026-10-02 复审，维护者决定 D-25）——重置、停用、移出真正切断访问；人不再签发 API key**：原来 `reset_user_password` / `set_user_status` → disabled / `remove_membership` 只写 `sessions.status`（Handle 校验从不读它），且只改 `status = 'active'` 的行（入口会话一直是 `starting`）；用偷来的密码自助铸的 API key 和 30 天的 `issue_handle` Handle 都熬过重置，`mcp_session` 也不在外部运行时清单里。现在 `application/identity/credentials.ts` 的 `revokeUserCredentials` 是吊销一个用户的唯一函数：吊销控制台会话（可保留一条）、对该用户每个人类成员资格清空 `api_key_hash`、把 `on_behalf_of` 它的会话标 `revoked`（条件是 `<> 'revoked'`，含 `starting`）并逐个会话 `revokeSession`（`disable_principal` 所用 `revokeOnBehalfOfSessionHandles` 的同一做法）吊销其下全部 Handle（entry、`mcp_session`、`worker_run`；选项 `keepWorkerRuns` 跳过 `worker_run`，只有自助改密用）；`capability_handles` 只有工作区策略，所以逐个成员资格切 `app.workspace_id`，结束后还原调用方的值。重置、停用调全量，`remove_membership` 限定该工作区（不动控制台会话），三者提交后都发踢出（重置现在也踢 API key socket）。`identity` 里无人调用的 `revokeWorkspaceSessionsForUser` 与平台面的两份内联副本删除；`revokeAllUserSessions` 改为在调用方事务里执行、可排除一条、返回被吊销的 id。其余写 `sessions.status = 'revoked'` 的语句（`set_membership_role`、`set_workspace_status`）同样改为 `<> 'revoked'`。`rotate_api_key` 对人类目标一律 409（reason `human_api_key`，本人自助与 owner 代签都拒——后者等于能冒充成员，L8a-11）；运维 CLI（`create-workspace` / `add-principal`）照旧给人类 Principal 发 key（验收套件按 key 认证），已有的 key 不动，直到该用户被重置、改密、停用或移出。`list_external_runtimes` / `revoke_external_runtime` 收入成员的 `mcp_session`；`issue_handle` 把会话 `expires_at` 设成 Handle 的到期时间，此前开的（无到期）只在创建后 30 天内列出。`recheckHumanSession` 对 API key socket 加一条"该 Principal 仍有 key"。web：人类成员的抽屉不再有"轮换 API key"，换成一行说明；`howto-connect-pi.md` 拿 Handle 改走「我的账户」卡片。无迁移。测试：`platform-capabilities` 集成测试（重置吊销 entry / `mcp_session` / `worker_run` Handle 并清空 CLI 发的 key、旁人不受影响；停用同样且重新启用不恢复 key；移出只动该工作区）、`members-flow`（自助与 owner 轮换人的 key 均 409、旧 key 仍可用）、`platform-gates`（成员 `mcp_session` 列出、可吊销，30 天前的无到期会话不列）、`issue-handle-handler`、`interfaces/ws/server.test.ts`（重置踢 API key socket）、`MembersPage.test.tsx`。
+  - **R-35 更正（2026-10-02 复审，维护者决定 D-07、D-08）——`auditor` 严格只读；`mode` 不再充当"只读"判据（#449）**：原来 `roleSatisfiesMinRole('auditor', 'member')` 为真，且 `deprecate_operation` / `publish_*` 根本没有 `minRole`，auditor 因此能调 `invalidate_fact`、`supersede_fact`、`assert_fact`、`invoke_worker`、`cancel_task`、`resolve_conflict`、`record_decision`、`deprecate_operation` 等；其入口 Handle（`entryScope({role:'auditor'})`）带着同样的能力，包括 `invoke_worker`、`observe_operation` 与 `<gate>.<op>`，于是同一个人在控制台被 403，其 agent 却能在 Handle 通道观察每个门。auditor 规则还散在两处：`authorize.ts`（"member 减去门"）和只对 human 通道生效的重复 `auditor` 检查。**D-07：一个角色谓词 `roleMayUseCapability`**（`governance/capability/roles.ts`）：非 `auditor` 的角色决定不变，只看 `minRole`（有测试在整个注册表上钉住）；`auditor` 只能用两份显式清单，不从 `mode` 推导——`AUDITOR_READ_CAPABILITIES`（审计与溯源工具 `audit_query` / `export_prov` / `reconstruct` / `explain` / `causal_chain` / `decision_impact` / `find_precedents` / `query_decisions` / `list_conflicts`、图与本体读、注册表与门目录元数据（绝不是门调用）、工作区与自身读，且每个都必须按注册表的显式标志无副作用，所以误列的读仍被拒）与 `AUDITOR_CONVERSATION_CAPABILITIES`（auditor 保留入口 agent，与它对话只写 auditor 自己的聊天、Turn 与上下文条目记录：`new_chat`、`send_chat_message`、`stop_agent`、`rename_chat`、`archive_chat`、`unarchive_chat`、`get_entry_context`、`report_turn`）。auditor 不可用：任何门能力、`invoke_worker`、任何 Fact / Decision 写、publish / deprecate、`set_agent_profile`，以及 agent 执行规划类读（`find_operations`、`find_workers`、`find_procedures`、`execution_readiness`、`list_allowed_operations`，它们描述"调用者的 agent 能触及什么"，对 auditor 是空集）。调用点：`authorizeCapabilityCall`（human 通道；过了 `minRole` 的 auditor 得到"read-only … allowlist (R-35 / D-07)"消息，其余 `minRole` 消息不变）；`entryScope({ role })`（入口 Handle 与 `issue_handle`，并在范围里没有任何读它的能力时去掉 `resources.gatekeeper`）；`issue_service_handle`（auditor 角色的 service key 拿不到任何会写的能力）；门路径 `observe_operation` / `request_action` 对 on-behalf-of Principal 的角色在两个通道上都用同一谓词（`assertRoleMayReachGatekeeper(role, capabilityName)`）复核，重复的 `role === 'auditor'` 检查删除，旧上限下签发的 Handle 也到不了门。`roleSatisfiesMinRole` 签名与导出路径（`governance/capability/index.js`）不变，作为 `minRole` 那一半。**迁移 governance `0017_auditor_handles_revoked`**：`authorizeCapabilityCall` 是纯函数，对 Handle 只信其自带范围，上一版本为 auditor 签发的入口 Handle 在到期前（最长 24 小时）仍列着全部 member 能力。迁移吊销所有代表 auditor 的、未过期未吊销的 Handle，并为每个 auditor 写一条 `principal.auditor_handles_revoked` 审计；入口 agent 下一个 Turn 在新上限下重签。无 schema 变更，重跑为空操作；借用空余的 0017 号，否则只读上限在升级后最多一天才生效；可逆性行记入 `docs/runbooks/release.md` §6。**D-08：显式 `sideEffects` 标志**（`shared/capabilities.ts`）：`Capability.sideEffects?: boolean`，对会写的四个 `observe` 能力显式设置——`observe_operation`、`<gate>.<op>`（写 Fact、Observation 与 Activity）、`get_entry_context`（租用并确认上下文条目）、`test_gate_instance`（记录健康）；缺省时随 mode（`observe` 无副作用，其余 mode 有）；`assertRegistryConsistent` 拒绝非 `observe` mode 上的 `sideEffects: false`。需要"只读"判断的地方一律经 `capabilityHasSideEffects()`：auditor 角色检查，以及控制台审计视图默认的"写入与决定"过滤（`web/src/lib/audit.ts` 的 `isReadAuditAction`，现在会显示 `observe_operation` / `get_entry_context` 的写入；P3 L5-10）。`execute` 的定义放宽为"一个由人有意触发或由策略把关的、有实际后果的效果"（既含经 Gatekeeper 行事，也含约 22 个带治理分量的 human 通道动作），`observe` 的定义不再承诺什么都不写；mode 标签不变，因为 worker 编辑器、目录过滤和 `HANDLE_EXECUTE_ALLOWLIST` 以它们为键。`scripts/contract-snapshot.mjs` 输出解析后的 `sideEffects`，`docs/contracts/capabilities.json` 的差异就是每项多这一个字段（重新生成而非手改）；无参数或结果形状变更。`wire-contract-conventions.md` §1 的 `mode` 行更新并新增 `sideEffects` 行，过时的"96 个全覆盖"说法删除（P3 L10-15）；设计 §5.1.1 角色行与 `enums.ts` 角色注释同步。测试：shared 新增 `sideEffects` 套件（非 observe 永远有副作用、会写的 observe 集合被钉住）；`roles.test.ts`（清单中的名字都存在、auditor 过 `minRole`、每个读都无副作用、auditor 可用集合恰好等于两份清单、一长串写 / 门 / 执行规划读被拒、标志为 `true` 的读被拒、其它角色在整个注册表上与 `roleSatisfiesMinRole` 一致）；`handles.test.ts`；新增 DB 门控的 `auditor-read-only.integration.test.ts`（human 通道写与门调用在 handler 之前被拒、读仍可用；旧 Handle 到不了 `observe_operation` / `request_action`；新范围 Handle 不能 `invoke_worker`；0017 语句吊销并审计 auditor 的 Handle、不动 member 的、幂等）；web `isReadAuditAction` 测试。
+  - **CI 守卫**：`scripts/check-membership-capabilities-not-in-handle-scope.sh`（挂进根 `package.json` 的 `ci:guards` 与 CI `guards` job）——纯 grep（`guards` job 没有 Node/build 步骤，不能像别处一样 import 编译产物），对 `governance/capability/handles.ts` 里的 13 个新能力名做字面量命中检查，命中即失败。是注册表 `HUMAN_ONLY_CAPABILITY_NAMES`（编译期）与 `assertValidScope`（运行期）之外的第三层、静态、独立于两者实现方式的检查。
+  - **已知缺口，未杜撰数据**：`get_gatekeeper`/`list_gatekeepers` 的 `manifestVersion` 与每个 Operation 的 `version` ——领域模型里没有清单版本号这个概念（Operation 行是原地覆盖写，不是真正的多版本历史），前者按契约的 `?` 留空不填，后者按固定 `1` 上线（有注释说明，等真实版本号落地后再替换）；Gatekeeper 没有草稿/发布/弃用这类生命周期状态，`status` 恒为字面量 `'active'`。`get_gatekeeper` 的健康探测用独立、短超时（3s）的 `HttpGatekeeperClient` 实例，不复用 `packages/kernel/src/index.ts` 组合根里给 `request_action`/`create_connection` 用的共享长超时客户端——否则一个真的宕掉的门会把控制台的这一次探测拖到 15s。
+  - **测试**：`packages/kernel/src/application/gateway/members-flow.integration.test.ts`（新增，DB-gated，同 `connection-flow.integration.test.ts` 的 `describe.runIf(DATABASE_URL)` 套路）覆盖 create/rotate/disable 的 key 生效与失效、`disable_principal` 对 Handle 的撤销（直接查 `capability_handles.revoked_at` 并再验证一次 `authenticateHandle`）、last-owner 与"不能禁自己"、非 human 目标拒绝、`list_*` 信封形状、`get_gatekeeper` 健康探测（注入假 `GatekeeperClient`，不发真实网络请求）、`list_models` 对临时 fixture 文件的投影与文件缺失时的 503。`resolve-caller.test.ts` 补了禁用 principal 的 Handle → 401 单测。**本机（Windows，无 docker/psql）没有条件跑通这份 DB-gated 测试**，只做了仔细的人工核对（对照 `connection-flow.integration.test.ts`/`auth.test.ts` 的既有写法逐行核实查询与断言），需要 CI 的真实 Postgres 服务确认一遍。
+  - **不改 `models.json` 相关的 compose 挂载**：kernel 服务在 compose 里早已把整个 `${NEXTTIME_DATA}/config` 只读挂到 `/data/config`（`worker-supervisor`/`agent-host` 用同一目录取同一份 `models.json`），`list_models` 直接读 `/data/config/models.json`（`MODELS_JSON_FILE` 可覆盖），没有新增/修改任何 compose 卷。
+  - **`docs/runbooks/web-console.md` 未改**：该文档记录的是**已存在** web 页面消费哪些 capability；本 PR 不新增任何 web 页面（治理区五页是并行任务的范围），没有新内容可补。
+  - **协调追加（2026-09-08，web 侧并行任务发现的缺口）**：`get_workspace` 结果加一个 `caller: { id, role, displayName, kind }`——web 控制台此前完全没有"我是谁/我的角色"这个读能力（web console redesign PR 的实现说明里"内核缺口"一条明确点了"当前 principal 自省能力"这一项），只能靠挨个 capability 试错、按 403 反推角色（`usePermissions.tsx` 的 `deniedClosure`）。`caller` 直接投影自 `application/gateway/dispatch.ts` 在鉴权阶段就已经解析好的 `ResolvedCaller.principal`（human 通道），不是第二次按 API key 查库——`capability-handler.ts` 的 `CapabilityHandlerContext` 新增 `principal?` 字段，与既有 `scope`/`claims` 同样的"纯增量"做法（S2.4/S2.7 先例），只在 `channel:'human'` 时填充。`get_gatekeeper`/`list_operations` 顺带发现并修的一个真实缺口：`list_operations` 的任务派发文字写"按门分组"，但共用的 Operation 投影函数原来没有 `gatekeeperId` 字段——一个没有 `gatekeeperId` 过滤参数的跨门列表根本没法分组，已加上（`get_gatekeeper` 的 `operations[]` 里这个字段是无害的额外信息，同一个投影函数复用）。
+  - **W5.5 实现说明（遗留 18，PR #138）**：入口 Handle 签发时按 on_behalf_of 角色收窄 ceiling（`entryScope({role})`），`roleSatisfiesMinRole` 下沉到 governance；`ensureEntryHandle` 读取角色并纳入缓存比较；`set_principal_role` 吊销入口会话 Handle；authorize 的 handle 分支不变；扩展里 `entry.ts` / `interactive.ts` 的工具清单仍硬编码含 `propose_*`，member 调用得 403（fail-closed，未改）。角色变更吊销 entry 与 mcp_session 两类会话的 Handle（`revokeRoleScopedSessionHandles`（#1150 起删除，由 `applyRoleChange` 取代），取代 `set_principal_role` 原先调用的 `revokeEntrySessionHandles`）；运行时缓存按 jti 向数据库核对吊销状态而非只比较角色值（`ensureEntryHandle` 的 `readHandleFreshness`，`CachedHandle.jti`）。
+  - **会话撤销即撤 Handle（#1150，遗留 699、707，59b7979；governance 0042）**：I-H1「已撤销的会话下没有有效 Handle」由 `sessions` 上的触发器保证，迁移补救存量。`revokeSession` 用行锁与签发串行，不先标会话；父 Handle 已撤只拒同一会话下的子 Handle（崩溃重试的新 `worker_run` 会话例外，其它种类从已撤父 Handle 开新会话一律 `parent_revoked`）。换角色两个平面共用 `applyRoleChange`：不登出，正在跑的 Worker 按新角色能否覆盖它的 Handle 判定去留，工作区侧也结束 admin_agent 会话；服务主体的 key 按签发时同一个角色过滤判定，越界的撤销（#501 P2-1）。
+  - **停用的权威名下没有有效 Handle（#1152，遗留 702，450a96c；governance 0043）**：I-H2 由权威锁保证——签发和改权限在 advisory 锁上串行，签发带依据（`IssuanceBasis`）并在锁下重读，停用由 DB 触发器撤会话。全局加锁顺序：权威锁 → 会话行按 id → Handle 行；写方先取锁，签发方在插入引用主体的行之前取锁，撤多个会话时一条语句按 id 锁全、只锁活会话；签发只在 READ COMMITTED 下进行。运维签发只在 CLI，有守卫。
+  - **Handle 治理收尾（#1172，遗留 708、713、714，8db3ec0）**：`authority_changed` 在 `/api/cap` 回 409 `conflict`、WS 回 `ILLEGAL_TRANSITION`，共用 `AUTHORITY_CHANGED_MESSAGE`，其余拒签码仍是 401（714）；`merge_user` 在目标用户的权威锁下读目标状态，已停用则 409 `user_disabled`（708）；`revokeWorkerRunAndDescendants` 撤完后重新收集树，树变大就回滚到保存点、用一条按 id 排序的语句重拿整棵树（守住 `handles.ts` 的全局锁顺序；只补锁新会话会与子树撤销者成环，工作区级 advisory 锁会与 reaper 成环），连续 `WORKER_TREE_REVOKE_ATTEMPTS`（3）次仍在变大才逐轮补锁，此时同树两个撤销者可能报一次 40P01、整笔回滚（713）。
+  - **连接密钥签发台账（#1176，遗留 711，f056515）**：core 0058 `connection_secret_issuances`，主键 (workspace_id, salt)；`application/gates/connection-secret-issuances.ts` 的签出、轮换、查状态、消费四个函数；`mint_connection_secret` 记签出并清掉本工作区过期未用的行，`rotate_connection_secret` 记签出即使用；`create_connection` 在原有检查之后、出站判定之前消费，`preview_gate_address_change` 只检查，`propose_gate_address_change` 消费；消费是一条带条件的 UPDATE（`consumed_at is null and expires_at > now()`），并发出示同一把时后者等行锁后回 `connection_secret_in_use`；新增 `ConnectionSecretExpiredError`；能力矩阵把 `mint_connection_secret` 的重复调用改为 `creates`。
+  - **签发时复查调用方凭证（#1180，遗留 712，9652eb2）**：`IssuanceBasis` 的 role 变体必须带 `credential: PresentedCredential | null`（TypeScript 强制每个签发方写明）；`dispatch.ts` 在人类通道上推出凭证（有 cookie 登录是控制台会话，否则是 `{kind: "api_key", principalId, apiKeyHash}`，调用者对象只带 key 的哈希）；`assertIssuingAuthority` 持 governance 0043 的锁、在停用检查之后复查（`assertPresentedCredentialLive`：会话经 governance 0045 `console_session_is_live`，key 用 `coalesce(api_key_hash = $3, false)`），失败为 `credential_revoked`（401）；`requirePresentedCredential` 让人类通道缺凭证直接抛错；服务 Handle 在服务主体的锁下复查发起人凭证；系统签发方（入口 Turn、管理员 agent、目标步骤、规划器、评审员、评估、崩溃重试）显式传 `null`。
+  - **合并停用用户时审计成员资格恢复（#1185，遗留 719，b4985a6）**：`platform-handlers.ts` 的 `mergeUserHandler` 在合并事务里按合并前读到的来源成员资格，为未移出的每条写 `platform.membership_restored`（来源启用时不写）；`merge_user` 行的两个 login 经 handler 的 `auditPayload` 写入；控制台 `capability-labels.ts` 加动作标签，`audit-pickers.ts` 加进平台审计筛选，`UserDetailPanel.tsx` 改合并确认的影响清单。\n
+  - **已移出的成员资格不再挡合并（#1189，遗留 723、724，a937c72）**：`merge_user` 只把两条都没移出的成员资格算作冲突（`already_member` 带工作区名），先锁上可能改到的主体，再重读成员资格后判断；同一工作区有一条已移出时，那一条脱离用户（`user_id` 清空，和 `purge_user` 一样），记进 `merge_user` 行的 `detachedPrincipals`，来源那条已移出时脱离来源的，否则脱离目标的；`platform.membership_restored` 带 `workspaceName`；控制台在合并前检查冲突并逐条说明，`kit/confirm` 键入确认的标签合成一句（724）。按工作区过滤平台审计查不到脱离记录（`detachedPrincipals` 在负载里，不在 `params`），#501 O2，维持现状。
+  - **被移出的人可以加回（#1193，遗留 725，4f651e5）**：只有没被移出的成员资格才算「已是成员」。`add_membership`、`add_member`、绑定 API key 遇到已移出的那条时，旧主体脱离这个人（`user_id` 清空，行、审计历史、草稿和目标都留在旧主体名下），再新建成员资格（绑定时由 key 的主体接替）；这次加入的审计行在 `detachedPrincipals` 里列出脱离的那条，加回的人看不到移出前的草稿和目标。给用户加成员资格的路径都先拿用户的权限锁，绑定 API key 还锁 key 原属的用户；脱离由 `identity/memberships.ts` 的 `freeMembershipSlot` 在主体锁下完成。工作区审计行（`add_member`）的 `detachedPrincipals` 不带平台用户 id；`merge_user` 的每条带 `login` 和 `workspaceName`。控制台：被移出的工作区可以再加入并提示后果；移出和停用的确认说明讲加回的后果；审计说明写出脱离的是谁在哪的那条；合并冲突说明点出在哪移出，目标已移出时说明会重新成为成员。`create_workspace` 建所有者不拿用户锁登记为遗留 726。
+  - **已移出的成员资格只读（#1198，遗留 687、688、729、730，f6b3e98）**：按 725 定的语义，已移出的成员资格不恢复，加回是新建。已移出的那条保留移出时的角色：平台 `set_membership_role` 对它回 409 `membership_removed`；工作区 `set_principal_role` 对已停用的主体回 409 `conflict`，reason 为 `disabled`。再次移出、再次停用不写、不撤销、不踢，审计带 `unchanged: true`。两个平台写路径都在主体锁下重读成员资格，等锁期间被移出又加回的回 409 `membership_replaced`，新的那条不动。控制台收到这几种拒绝会重读，界面跟着变成只读；管理成员资格里已停用的那条只读，成员页把已停用的折叠，审计「操作者」把已停用的归组。能力矩阵里 688 的旧注释去掉（#1193 的用户锁已修好）。
+  - **建所有者拿用户锁、绑定争用码（#1200，遗留 726、727、728，ebd1e6a）**：`create_workspace` 给已有用户建所有者前拿用户锁，并在锁下重读用户；绑定 API key 重试用尽回 `bind_contended`（不再借用 `already_claimed`），控制台说成争用、请稍后再试；`identity/memberships.ts` 的注释改准。第二阶段失败时审计行没有结果行，登记为遗留 735。
+  - **平台成员资格写操作带 `principalId`（#1204，遗留 732，e4013be）**：平台 `set_membership_role` / `remove_membership` 可带调用者读到的 `principalId`，当前成员资格不是它时回 409 `membership_replaced`，什么也不改；控制台用户详情的成员资格行都带上。
+### S3.12 Skills / MCP / 第三方能力的统一接入与治理
+
+- 决策（2026-09-08）：**不引入「插件」为一等概念**。第三方能力只有两种来源：**Gatekeeper**（transport `http / mcp / cli / ssh`——一个 MCP server 就是 `kind: mcp` 的门，`publish_manifest` 从 `tools/list` 导入 Operation，已在 S2.4/S2.13 落地）与 **Skill**（S2.14，pi skill 文件包，内联挂载）。pi 扩展只有平台自己的 `platform-extension`；不开放第三方 pi extension（会绕过 Gate 与审计——违反底线三）。
+- 缺的是**治理面而非机制**：接入向导 UI（选 kind → 地址 / 凭证直达门 → 导入清单 → 逐 Operation 审核分类：mode、blast_radius、auto_approvable、参数 schema 预览 → publish）；门详情页（健康、manifest 版本、ConnectedAccount 数、最近 ActionRequest）；Skill 页（列表 / 草稿预览 / 发布 / 弃用、被哪些 Worker 使用）；Procedure 页；Operation 目录（按门分组、版本、分类、近 30 天调用与审批统计——来自 audit/action_requests 聚合读能力 `get_operation_stats`）。
+- 本体补充：Operation 分类修改是**版本化**的（`propose_operation` → `publish_operation` 已如此）；UI 不得提供"直接改分类"的捷径——保持 propose/publish 两步，因为分类决定审批边界。
+- 交付物：向导与四个页面；`get_operation_stats`、`get_gatekeeper`；accept-s2 的 OpenAPI/ssh 夹具复用为 UI e2e（Playwright，可选）。
+- 验收：通过 UI 接入一个 fixture MCP server（`deploy/accept-s2` 增加一个最小 MCP fixture）并 publish 后，对话中出现 `<gate>.<op>` 工具且 observe 直连、execute 走卡片。依赖：S3.11。
+- **实现说明（web 半，与 S3.13 web 半同一 PR，2026-09）**：本次只落地接入向导 UI 与 `deploy/accept-s2/mcp/` fixture——`get_gatekeeper` 已在 S3.11 落地；`get_operation_stats` 未实现（未出现在 `packages/shared/src/capabilities.ts` 注册表），`CatalogPage.tsx` 留 TODO 未编造数据；门详情页/Skill 页/Procedure 页均在本次范围外（`GatekeeperDetailDrawer` 已由 S3.11 web 半提供健康+Operation 列表，未扩展）。向导五步：kind 选择 → 复用既有 `CompleteConnectionForm`（新增 `initialKind`/`hideKindField` 可选 prop，不改其字段/校验）→ `publish_manifest` → 逐 Operation 审核表（数据源 `search{objectType:'Operation'}`，因为 `list_operations`/`get_gatekeeper` 的投影函数 `toWireOperationSummary` 不带 `propose_operation` 所需的 `binding`/`params_schema`/`reversibility`/`await_decision`/`reads`/`writes`）→ 完成并跳转门详情。**发现的内核交互缺口**：`propose_operation` 的冲突守卫（`governance/gatekeepers/manifest.ts` 的 `isOwnProposalDraft`）只允许替换同一提议者自己此前的 `propose_operation` 草稿——一条 `origin:'import'` 的 Operation（清单导入产生的，向导审核页每一行都是）不满足这个条件，"提议重分类"因此对任何刚导入的 Operation 都会撞上 `OperationIdentityConflictError`（409 `conflict`），无论目标当前是 draft 还是 published。这是内核既有规则的结构性结果，本次未改内核；控制台按钮仍调用真实的两个 capability 并把内核原话通过 `ErrorBanner` 显示，不吞错也不假装成功——详见 `docs/runbooks/web-console.md`"已知缺口"第 11 条与 `OnboardingWizardReview.tsx` 自己的注释。`deploy/accept-s2/mcp/server.mjs`（~140 行，无第三方依赖）实现最小 MCP JSON-RPC（`initialize`/`tools/list`/两个工具/`tools/call`），无需独立前置门（`kind:'mcp'` 的清单导入由内核进程直接调 `manifestSource`）；`scripts/accept_s2.sh` 新增 `step8_mcp_connect`（`connect-mcp-*`，追加在 step 7 之后，不改前 7 步）。
+
+  - **后续内核修复（fix/operation-revision-via-propose，2026-09-08）**：上面这条"发现的内核交互缺口"现在关闭了——`propose_operation` 对一个**已发布**身份（向导审核页的真实场景：`publish_manifest` 已经把每一行发布成 `published`）不再 409，而是开一条新的修订草稿（Operation 身份新增 `version` 维度，`{gatekeeperId, name, version}`，与 `WorkerDefinition`/`Skill`/`Procedure` 同一约定；`version = 已发布版本 + 1`，`draftOf` 指回已发布行的 Object id）；已发布行本身完全不动，直到 owner 对这条草稿单独调用既有的 `publish_operation`——同一事务内发布新版本并把旧版本转 `deprecated`（若旧版本此时已被单独弃用则跳过、不报错），发布 Activity 记 `metadata.supersedes` 供 audit/explain。`find_operations`/`list_allowed_operations`/门工具解析（`<gate>.<op>`，`getPublishedOperation`）/`list_operations`/`get_gatekeeper.operations` 均已验证：只解析到当前一个 published 版本；`list_operations`/`get_gatekeeper.operations` 一如既往展示完整版本历史（人类可见 draft/published/deprecated 全部行）。仍未变：`origin:'import'` 且尚未 `publish_manifest` 的草稿上再次 `propose_operation` 依旧 409（I16，该草稿不是提议者自己通过 `propose_operation` 写的）；另一 Principal 对同一身份的冲突判定不变。web 半（`OnboardingWizardReview.tsx`）行为不变（本次未改内核以外的任何东西，仍旧调用同一对真实 capability），但其自身的"已知内核交互缺口"注释和 `docs/runbooks/web-console.md` 第 11 条在本次提交时未及同步——留给下一个接触这段代码的任务去更新（已在 S3.12 下方另记一条待办）。测试见 `governance/gatekeepers/manifest.test.ts`。
+
+  - **后续 web 侧收尾（feat/operation-stats-and-worker-definition-filter，2026-09-08+）**：上一条遗留的待办已完成——`OnboardingWizardReview.tsx` 自己的模块注释与 `docs/runbooks/web-console.md`"已知缺口"第 11 条都已改写为准确描述当前状态（已发布身份不再 409，仅未发布的 `origin:'import'` 草稿再次 propose 仍 409）；未改任何功能代码，只更新了两处文档/注释使其不再误导。同一提交也补上了本节上方"`get_operation_stats` 未实现"的另一半缺口：`get_operation_stats{gatekeeperId?, days?}` 现已注册（`connection` 组，`mode: observe`），handler 与 `list_operations` 同一模块（`gatekeeper-read-handlers.ts`），读侧实现在 `governance/approval/reads.ts` 的 `getOperationStats`——execute 类 Operation 专属，`calls`/`approved`/`rejected`/`autoApproved`/`failed` 按 `action_requests.status` 的**当前值**分组统计（trailing `days` 窗口，默认 30，上限 90），不是决策历史的累计；observe 类 Operation（`observe_operation`/`<gate>.<op>`）未纳入统计——`substrate/audit` 的 `queryAudit` 服务接口没有日期范围过滤也没有 payload 路径分组，直接查 `audit_records` 又违反该模块自己的边界，扩展这个查询面超出本次范围，作为已记录的缺口留下而非编造近似值（详见该 capability 注册表条目自己的注释）。`packages/shared/src/capabilities.ts` 同时补上了 `resultSchema`（S3.7 尚未落地的字段，本次只给这一个新 capability 加，未回填其余既有条目）。`CatalogPage.tsx` 去掉了 TODO，Operations tab 每行加了调用/批准/拒绝/最近四列（`get_operation_stats` 单独一次 `useCapabilityList`，取不到时该行单独退化成"—"，不拖垮 `list_operations` 自己的列表）。测试：`application/gateway/members-flow.integration.test.ts` 新增一例，直接种若干 `action_requests`（跨 auto_approved/approved/rejected/failed/pending_approval/executed 状态与两个 Gatekeeper）验证聚合、`days` 窗口截断、`gatekeeperId` 过滤；`components/CatalogPage.test.tsx` 新增两例覆盖有/无 stats 数据两种渲染路径。
+
+  - **后续内核修复（R-08，2026-10-02 复审，遗留 113）**：上面"同一事务内发布新版本并把旧版本转 `deprecated`"只认修订草稿自己的 `draftOf`，而 `importManifest` 覆盖待审修订草稿时（`enable_gate_instance` 关联到已有 Gatekeeper、CLI 注册、`create_connection` 都走这里）整体替换 `properties`、丢了 `draftOf`，随后的发布留下两条 `published`，`getPublishedOperation`（`limit 1`、无排序）任取一条。现在：`importManifest` 替换草稿时带上它的 `draftOf`，草稿已丢失时取该身份当前 published 行的 id；`publishOperation` 不再跟随 `draftOf`，而是在同一事务里**先**把该身份所有仍为 `published` 的行转 `deprecated`（`substrate/ontology` 新增 `deprecatePublishedOperationObjects`，按 `identity_key ->>` 字段匹配）、**再**发布草稿，`supersedes` 取被弃用的那一行；`getPublishedOperation` 按版本倒序。数据库侧：迁移 core 0034 先自愈（每个身份只留最高版本的 published，其余转 `deprecated`，`raise notice` 报行数——migrate CLI 现在会打印 PL/pgSQL `RAISE` 的 notice），再加排除约束 `objects_operation_single_published`（`=` 语义等同部分唯一索引）。约束定为 `DEFERRABLE INITIALLY DEFERRED`，因为 v0.35.1 的 `publishOperation` 是"先发布、后弃用"，语句级检查会让回退后的修订发布失败（`release.md` §6）。测试：`governance/gatekeepers/manifest.test.ts` 的 "R-08" 组（导入覆盖修订草稿后发布只剩最新一条、丢失的 `draftOf` 从 published 行恢复、无 `draftOf` 的发布也弃用旧行、约束在提交时拒绝第二条 published 而旧顺序可提交、迁移自愈段对种入的重复行生效并报数），`application/gateway/platform-gates.integration.test.ts` 端到端复现启用门实例的场景。
+
+### S3.13 每用户智能体配置：AgentProfile / AgentPolicy
+
+- 背景：现在每个用户的常驻入口 agent 的模型由启动参数决定（`--model` 经 agent-host → worker-supervisor 已可按 spawn 传入），Skill 只挂给 Worker，门工具 = Grant 全集。用户不能选模型、不能挑 Skill、不能收窄可见系统。
+- 本体：
+  - **AgentProfile**（每 (workspace, principal) 至多一个；缺省 = 继承 AgentPolicy 默认）：`model`（`provider/id`，必须 ∈ llm-proxy 白名单 ∩ AgentPolicy.allowedModels）、`enabledSkills[]`（已发布 Skill 子集）、`enabledGatekeepers[]`（门子集）、`enabledWorkerDefinitions[]`（可选）、`promptAddendum`（长度上限，审计可见）、`autoApproveLow`（不得高于 Policy 允许）。
+  - **AgentPolicy**（每工作区一个，owner 设）：`allowedModels[]`、`defaultModel`、`memberCanEditProfile`、`maxPromptAddendumChars`、`allowedSkills[]`/`allowedGatekeepers[]` 上限集合（空 = 不限制）。
+- 不变量（核心）：**Profile 是 Grant 的子集投影，永不扩权**——入口 Handle scope = Grant ∩ Profile；Worker 子 Handle 仍是父的子集（既有 `attenuate` 规则不变）。Profile 只会收窄，所以变更是即时的、不走 propose/approve；但每次变更写 audit，并触发入口会话 Handle 重签 + 常驻容器按 jti 轮换重建（#78 已有机制）。模型不在允许集合 → 400 `invalid_params`；Skill/门不在 Grant 内 → 400。
+- 状态与数据：Profile 无状态机，只有 `updated_at / updated_by`；表 `agent_profiles(workspace_id, principal_id, model, enabled_skills jsonb, enabled_gatekeepers jsonb, enabled_worker_definitions jsonb, prompt_addendum, auto_approve_low, updated_by, updated_at, primary key (workspace_id, principal_id))`、`agent_policies(workspace_id primary key, allowed_models jsonb, default_model, member_can_edit_profile, max_prompt_addendum_chars, allowed_skills jsonb, allowed_gatekeepers jsonb, updated_by, updated_at)`；迁移在 `governance/`（它是授权投影，不是应用状态）。
+- 能力：`get_agent_profile`（member 看自己；owner 看任何人）、`set_agent_profile`（member 改自己且 Policy 允许；owner 改任何人）、`get_agent_policy`（member）、`set_agent_policy`（owner）、`list_models`（member，来自 S3.11）。全部 human 通道。
+- 运行时投影：入口 spawn 时内核解析 Profile → `model` 传 supervisor（既有 `--model` 通道）；Skill 内联挂载扩到入口容器（复用 S2.14 `skillsInline`）；入口 `list_allowed_operations` 与工具注册按 Grant ∩ enabledGatekeepers 过滤；`promptAddendum` 进入口系统提示的独立段（不可覆盖平台段）。Worker 的模型：WorkerDefinition 自带，或继承发起人 Profile 的 model（当定义未指定时）。
+- UI：「我的智能体」页——模型下拉（白名单内）、Skills 勾选、系统接入勾选、提示词附加、当前 Handle 范围只读展示；owner 在「模型与配额」页设 AgentPolicy。
+- 验收：member 改模型 → 下一 turn llm-proxy `llm_usage` 记录新模型；关掉一个门 → `session_start` 注册的工具不再包含该门的 observe 工具；选未允许模型 → 400；Policy 关闭 `memberCanEditProfile` 后 member 的 `set_agent_profile` → 403。依赖：S3.11、S2.14、#78 jti 轮换。
+- **实现说明（web 半，2026-09；不改 `packages/kernel/**`/`packages/shared/**`——四个 capability 由并行内核 PR 针对同一契约落地）**：`lib/agent-profile.ts` 定义了这四个 capability 的线上形状（`AgentProfile`/`AgentPolicy`/`SetAgentProfileParams`/`SetAgentPolicyParams`）。「我的智能体」页（`AgentProfilePage.tsx` + `AgentProfileForm.tsx`）：模型下拉（`list_models` ∩ `AgentPolicy.allowedModels`，含"继承工作区默认"）、Skills/系统接入/Worker 定义三个勾选清单——每个都带独立的"继承（不覆盖）"复选框，因为 `null`（继承）与显式空数组（"什么都不给"）是两种不同的生效结果，不能用同一个空状态表示；提示词附加带实时字数对比 `maxPromptAddendumChars`；`autoApproveLow` 在 `AgentPolicy.allowMemberAutoApproveLow` 为 false 时禁用并给出说明；只读"当前生效"面板直接渲染 `profile.effective`；保存永远发送完整六字段状态（而非增量 diff），避免"清空一个字段"因为被省略而被误解成"不变"。owner 可通过 `list_principals`（S3.11）下拉切换查看/编辑其他 principal——`get_agent_profile{principalId}` 的 404 对该场景是真正的歧义（未上线 vs. 无此 principal），只有无参数的自查视图把 404 当"该能力尚未上线"处理。AgentPolicy 编辑器（`AgentPolicyForm.tsx`）挂在"模型与配额"页，插在只读 Models 表和既有 Quotas/Policies 表之间；`get_agent_policy` 对所有 member 可读，但只有 `get_workspace.caller.role === 'owner'` 时才渲染可编辑表单，其余角色看只读摘要——避免给出一个注定 403 的表单。**顺带完成的角色管线重构**：`get_workspace.caller.role`（S3.11 协调追加）现在是 `hooks/useWorkspaceIdentity.ts` 的权威角色来源（`lib/role.ts` 新增 `WorkspaceRole` 联合类型），原有 403/200 推断（`inferRole`）降级为该字段未 ready/未部署时的 fallback；`Sidebar` 角色徽标在已知角色时改用与成员页同一个 `StatusChip machine="role"`。**顺带修的一处既有 bug**：`OperationCatalogRow`（`lib/governance.ts`）此前带着 `id`/`gatekeeperName`/`createdAt` 三个字段，但 S3.11 落地的真实 `list_operations` 投影（`toWireOperationSummary`）从不返回它们——`CatalogPage.tsx` 的 Operations tab 因此一直用 `undefined` 当 React key；已改为 `operationKey()`（`gatekeeperId::name`，Operation 本就没有独立 id 列）。
+- **实现说明（内核半，feat/agent-profile PR，2026-09；本 PR 只落地内核半——4 个 capability + 六处运行时投影 + 测试，不改 `packages/web/**`——见上一条同任务的 web 半说明）**：
+  - **能力清单**：新增 `agent_profile` 组（`packages/shared/src/capabilities.ts`；未复用 `members`——四个能力语义独立成一组更清晰，符合任务本身给的两个选项之一）：`get_agent_profile`/`set_agent_profile`（`minRole:'member'`，handler 再收紧"自己，或 owner 改任何人"，与 `rotate_api_key` 同一形状）、`get_agent_policy`（`minRole:'member'`）、`set_agent_policy`（`minRole:'owner'`，无需 handler 二次收紧）。全部 `channel:'human'`，同步加进 `HUMAN_ONLY_CAPABILITY_NAMES` 与 `scripts/check-membership-capabilities-not-in-handle-scope.sh` 的守卫名单。`set_agent_profile`/`set_agent_policy` 每个字段独立 `optional().nullable()`——省略=不动该字段（partial update），显式 `null`=重置为"继承"；zod 天然区分 `undefined`（键缺失）与 `null`（键存在但为空），handler 直接用 `!== undefined` 判断，不需要额外的 `hasOwnProperty` 技巧。
+  - **迁移**：`migrations/governance/0010_agent_profiles.sql`——`agent_profiles`/`agent_policies` 两张表，RLS + `nexttime_app` 的 `select, insert, update` 授权，与同目录既有迁移同一套写法。
+  - **模块划分**：新增 `governance/agent-profile`（`resolve.ts` 纯函数 `resolveEffectiveAgentProfile`——只接受已读出的 Profile/Policy 行 + 调用方装好的"当前可用资源"集合，不查库，可独立单测；`store.ts` 行读写 + `readEffectiveAgentProfile` 便捷读；`types.ts` 把两行的 TS 接口单独拆出，避免 `resolve.ts`⇄`store.ts` 循环 import，`pnpm depcruise` 之前会警告）。语义校验（model 必须在 `list_models` 白名单里、Skill 必须已发布、门必须有 Grant——需要越过 `application/worker`/`governance/capability`/`governance/gatekeepers` 好几个模块）放在 `application/gateway/agent-profile-handlers.ts`，不放进 `governance/agent-profile`：governance 层不能依赖 application 层（六层规则），把跨模块校验硬塞进 governance 会破坏这条边界。
+  - **协调修正（2026-09-08，与并行 web 任务已合并的实现对齐）**：本 PR 起草阶段一度把 `effective.*` 六个字段全部设计成可 `null`（`enabledSkills`/`enabledGatekeepers` 的 `null` 落地成"什么都不挂/不额外过滤"两种不对称语义）。在 `git fetch` 到并行 web 任务已合并的 `feat/console-agent-profile-and-onboarding`（PR #101，`packages/web/src/lib/agent-profile.ts`/`AgentProfileForm.tsx`/`AgentProfilePage.tsx`）后发现：该 PR 把 `EffectiveAgentProfile` 六个字段全部定成**非空**（`model: string`、`enabledSkills: readonly string[]` 等），其 `EffectivePanel` 直接对 `effective.enabledSkills.length`/`enabledGatekeepers.length`/`enabledWorkerDefinitions.length`/`promptAddendum.length` 取值——若内核按原设计返回 `null`，这个已经合并、已经上线的面板会直接抛异常。更进一步，该 PR 自己的模块注释与 commit message 明确写了设计意图："AgentProfile 的 `null` 与显式空数组是两种不同的生效状态——'当前一切可用' vs '明确什么都不给'"，即 `enabledSkills`/`enabledGatekeepers`/`enabledWorkerDefinitions` 的 `null`（继承）统一解析成**"当前一切可用"**，不是"什么都不给"。这是已经落地的契约解读，不是本 PR 自己能重新决定的——于是整个 `resolveEffectiveAgentProfile` 按此重写：签名新增第三参数 `available: AvailableAgentResources`（`publishedSkillIds`/`grantedGatekeeperIds`/`publishedWorkerDefinitionIds`，调用方装配——`governance` 层不能查 `application/worker`，所以这三个集合必须由上层传入，`resolve.ts` 自己保持零 IO），`effective.*` 六个字段全部改成非空具体值（`model`/`promptAddendum` 缺省 `''`，四个列表字段缺省 `[]`，`autoApproveLow` 缺省 `false`）；`null`（继承）现在统一解析为"`available` 给的全集，再按 Policy 上限收窄"，`resolveList` 一个函数覆盖 `enabledSkills`/`enabledGatekeepers`（`enabledWorkerDefinitions` 无 Policy 上限，直接取 `available`）。**入口容器的 Skill 挂载行为随之改变**：`enabledSkills` 为 `null`（从未碰过自己 Profile）的用户，入口容器现在会挂载工作区里**全部已发布 Skill**——这不再是本 PR 自己的保守判断，而是与已上线 UI 保持一致所必须的选择（UI 显示"当前生效：全部 Skill"而运行时只挂了零个，是比"行为改变"更糟的不一致）。`application/worker` 新增 `listPublishedSkillIds`（`skills.ts`）供 `available.publishedSkillIds` 使用；`listWorkerDefinitions`（已存在）直接复用取 `publishedWorkerDefinitionIds`。修正过程中顺带抓到一个真实 bug：`agentProfile?.model ?? entryDefinition?.model` 类的合并逻辑用 `??` 只挡 `null`/`undefined`，挡不住新语义下的 `''`（"未配置"）——`effective.model` 变成非空字符串后，一个从未配置模型的用户会让空字符串"赢过" WorkerDefinition 自己的 model，静默清空它；`agent-host-runtime.ts`/`invoke.ts`/`lifecycle.ts` 三处都已改成显式的"非空才用"判断（`? :` 或 `|| undefined`），而不是继续用 `??`。
+  - **六处运行时投影落地位置**：
+    1. **模型**——`agent-host-runtime.ts` 的 `sendStartTurnFrame`：`model = agentProfile?.model ? agentProfile.model : entryDefinition?.model`（Profile 设了非空值就赢，否则退回已发布入口 WorkerDefinition 的 model）。Worker 侧 `application/task/invoke.ts`/`lifecycle.ts`：WorkerDefinition 没声明 model 时才查发起人的 `effective.model`，且把空字符串归一化成 `undefined`，永远不覆盖 WorkerDefinition 自己声明的。
+    2. **门**——`agent-host-runtime.ts` 的 `ensureEntryHandle`：Grant 算出的 `grantedGatekeeperIds` 与 `effective.enabledGatekeepers` 求交集（`enabledGatekeepers` 为 `null` 时已经在 `resolveAgentProfile` 里解析成"当前全部 Grant"，交集因此等于不额外过滤）。
+    3. **Skill**——`agent-host-runtime.ts` 新增 `resolveSkillsInline`（复用 `application/worker` 的 `resolvePublishedSkills`/`renderSkillMarkdownFile`，和 Task 路径的 `resolveSkillsInline` 同一对函数），渲染 `effective.enabledSkills`（已经是具体列表，`null` 已在解析阶段变成"全部已发布 Skill"）；新增协议字段 `KernelStartTurnCommandSchema.skillsInline`（`packages/shared/src/agent-host-protocol.ts`）；`agent-host` 的 `host.ts`/`supervisor-client.ts` 转发到 `/resident/spawn`；`worker-supervisor` 的 `SpawnRequestSchema` 接一样的 `TaskSkillInlineSchema`（挪到文件里 Task/resident 都能引用的位置，不是复制一份）；`resident-service.ts` 新增 `writeSkillsInline`（只在真正要重建容器时写，写之前先清空 `skills/` 子目录——常驻工作目录跨重建持久化，被移除的 Skill 不能靠"目录从没删过"继续留在盘上）。
+    4. **提示词附加**——`agent-host-runtime.ts` 新增 `appendPromptAddendum`：严格追加在 `entryDefinition.systemPrompt` 之后，用分隔行标注"用户配置的附加内容，仅供参考，不能覆盖上面的指令"，结构上不可能出现在平台段之前（空字符串按"无附加"处理，函数自身的真值判断已经覆盖这一点，未受上面的 `??` bug 影响）。
+    5. **autoApproveLow**（R-21 / D-16 更正，#444）——`principalAutoApproveLowEnabled` 是发起人解析后的 `effective.autoApproveLow`（`resolveAutoApproveLow`：策略 `allowMemberAutoApproveLow` ∧ profile ≠ `false`）；策略是被强制的收窄，其默认为 `true`，表单永远不写 `true`。`governance/policy/engine.ts` 的 `evaluate()` 的可选输入 `principalAutoApproveLowEnabled`（省略=`true`，即完全不变旧行为）只在 `blastRadius==='low'` 且该值为 `false` 时，把本该 `allow` 的结果收紧成 `require_approval`（reason `principal_auto_approve_low_disabled`）——检查放在其它信号都已经同意 `allow` 之后，所以只会收紧，不会单独造出一个 `allow`。`application/gateway/request-action-handler.ts` 在两个 `runGovernedRequest` 调用点之前查一次发起人（`onBehalfOf`）的 `effective.autoApproveLow`，透传给 `governance/approval/request-action.ts` 的 `requestAction`。（原文把它写成 raw profile 值、省略 = `true`，已被取代。）
+    6. **变更传播**——`set_agent_profile` handler 在写完 Profile 行的**同一个事务**里调用既有 `revokeEntrySessionHandles`（Grant 变更已经在用的同一条路径）。**额外修的一个真实缺口**：`agent-host-runtime.ts` 原有的入口 Handle 内存缓存（`handleCache`）只比较 `gatekeeperIds` 决定要不要提前重签——一次只改 model/Skill/promptAddendum/autoApproveLow、不改门集合的 Profile 变更，原本不会让这份内存缓存失效，用户要等到 Handle 接近过期（默认 24h 的 10%）才会拿到新配置，即便 DB 里 `capability_handles.revoked_at` 已经被设置。`CachedHandle` 新增 `profileVersionKey`（`agent_profiles.updated_at`/`agent_policies.updated_at` 拼接）随 `gatekeeperIds` 一起参与新鲜度比较，任何一次真实的 Profile/Policy 写入都会让下一次 `ensureEntryHandle` 强制重签，进而让 `resident-service.ts` 既有的 jti 轮换判定接管容器重建——不需要为"Profile 变了要不要重建容器"单独发明第二套机制。
+  - **已知缺口，未杜撰数据**：`enabledWorkerDefinitions` 只做了 schema/effective 透传（读写、`effective` 里如实返回），本任务给的六处运行时投影列表里没有提到它的消费端（不像 model/门/Skill/提示词/autoApproveLow 各有明确落地点），所以没有为它编造一个用途；未来任务如果要用它，`resolveEffectiveAgentProfile` 已经把值备好了。
+
+  - **后续运行时消费端落地（feat/operation-stats-and-worker-definition-filter，2026-09-08+）**：上一条缺口已关闭——两个收窄点：① `find_workers`（`application/task/service.ts` 的 `findWorkers`，`FindMeansCaller` 新增可选字段 `enabledWorkerDefinitionIds`，只有这一个 find_* 函数读它——`findOperations`/`findProcedures` 不受影响）在既有的 attenuation 过滤之后再按这个集合过滤候选；② `invoke_worker`（`application/task/invoke.ts` 的 `invokeWorkerCreate`）在创建 Task/WorkerRun 之前（与配额检查同一"先鉴权后创建"位置）拒绝一个不在集合里的 `definitionId`，抛 `InvokeWorkerDefinitionNotEnabledError`（`application/task/types.ts`，与 `InvokeWorkerAttenuationError` 同一套"task 模块自己的错误类，不下钻 application/gateway 的 `ForbiddenError`"约定）——`interfaces/http/capability-route.ts` 映射 403 `worker_definition_not_enabled`，`interfaces/ws/rpc.ts` 新增 `WORKER_DEFINITION_NOT_ENABLED = -32016`。两处读的都是原始 `AgentProfile.enabledWorkerDefinitions` 字段（`governance/agent-profile` 的 `readAgentProfile`），不是 `readEffectiveAgentProfile` 的解析结果——`resolve.ts` 自己的注释说这个字段没有 AgentPolicy 上限，`null`（无 Profile 行或显式 `null`）直接等价于"不收窄"，不需要先算出全量已发布集合再做交集。收窄的主体永远是这条调用链**发起的人类**（`request_action`/`invoke_worker` 系同一条 `on_behalf_of`/`claims.obo` 链——Worker 调 `invoke_worker` 再派生 Worker 时，`obo` 原样透传，不会变成某一层 Worker 自己的 agent 身份），owner 不例外（Profile 是本人给自己设的偏好，不是权限边界）——只收窄，从不放宽（既有 Grant/Handle 范围 attenuation 保持不变，两层过滤独立叠加）。测试：`application/gateway/invoke-worker-handler.integration.test.ts` 新增两例（`enabledWorkerDefinitions=[A]` → `find_workers` 只见 A、`invoke_worker(B)` 403，且 A 自身仍可正常调用；未设置 Profile 的 principal → 两个已发布定义都可见可调）。
+  - **测试**：`governance/agent-profile/resolve.test.ts`（纯函数单测，17 例，含 `null`→"全部可用"解析与 `NO_AVAILABLE_AGENT_RESOURCES` 占位符两条新覆盖）；`governance/policy/engine.test.ts` 新增 5 例（autoApproveLow 收紧/不收紧/no-op on medium/never override deny）；`application/host-bridge/agent-host-runtime.test.ts` 新增 9 例（model 覆盖/回退、门收紧/`null`解析成全部 Grant、提示词追加顺序、Skill 挂载全部已发布 Skill when null、Profile 变更触发重签即使门集合没变）；`worker-supervisor` 的 `spawn-spec.test.ts`（`hashSkillsInline` 6 例）与 `resident-service.test.ts`（6 例：写盘、打标签、集合不变复用、集合变化重建、移除 Skill 后重建且旧目录确实被删）；`agent-host` 的 `host.test.ts`/`supervisor-client.test.ts` 各 1 例透传。新增 `application/gateway/agent-profile-flow.integration.test.ts`（DB-gated，`describe.runIf(DATABASE_URL)`，27 例，覆盖 get/set 默认值、`effective` 解析成"全部当前可用"而非空、写入校验矩阵、`memberCanEditProfile`、AgentPolicy 上限收紧 effective 但不拒绝写入、`get_agent_policy`/`set_agent_policy`、变更撤销 Handle）——**本机（Windows，无 docker/psql）没有条件跑通这份 DB-gated 测试**，同 S3.11 PR 的先例，只做了对照既有 `members-flow.integration.test.ts` 写法的仔细人工核对，需要 CI 的真实 Postgres 服务确认一遍。
+  - **R-21 更正（2026-10-02 复审，维护者决定 D-16）——`allowMemberAutoApproveLow` 是被强制的收窄（#444）**：这个开关原有四种含义：读模型显示 `profile ?? policy`，运行时却用 `profile ?? true`，所以 owner 的收窄显示为生效而被忽略；我的智能体表单每次保存都把"继承"写成显式值；已存的 `true` 在策略关闭后还锁住 profile。现在 `resolveAutoApproveLow(profile, policy) = policy.allowMemberAutoApproveLow && profile?.autoApproveLow !== false`（`governance/agent-profile/resolve.ts`）是唯一谓词，`resolveEffectiveAgentProfile`（"当前生效"）与 `request_action`（→ `principalAutoApproveLowEnabled`，`request-action-handler.ts`）都调它；编译内默认 `defaultAgentPolicy().allowMemberAutoApproveLow` 与列默认同时翻成 `true`（没有策略行的工作区仍自动批准 low）；`set_agent_profile` 仍拒绝策略禁止时的显式 `true`，但已存的 `true` 无害。控制台：`AgentPolicyForm` 开关写"低风险动作可以自动批准"，提示关闭对所有人强制、每人仍可只关自己，通用说明不再说 profile 可覆盖；`AgentProfileForm` 勾选 = 跟随工作区（`null`）、不勾 = 收窄自己（`false`），表单永远不写 `true`，该字段只在读者改动过且复选框未禁用时才发送，所以无关的保存既不会把继承变成显式值，也不会撞上锁死的 400；策略禁止时复选框显示生效的关闭值与"对所有人强制生效"。上面 S3.13 第 5 条已按此改写。**迁移 governance `0016` 数据步骤（R-21 回填）**：多数工作区都有 `agent_policies` 行（工作区创建或平台面模型设置播种），带着没人选过的旧列默认 `false`，不回填则 D-16 会在升级时把几乎所有工作区的 low 自动批准关掉；仅当该工作区从未有过提交 `allowMemberAutoApproveLow` 的 `set_agent_policy` 调用（审计日志保留每次调用的参数且不清理）时才把仍为 `false` 的行翻成 `true`，每行写一条 `agent_policy.auto_approve_low_default_applied` 审计；**owner 提交过该字段的工作区保留 `false`，并且从此版本起生效**——low 动作需要审批，这是 D-16 的本意但是可见变化，应用前先查出哪些工作区属于这一类（主机预检 SQL 在 #444 的描述里），在模型与配额页勾上开关即可恢复。回滚：旧运行时本就忽略该策略，翻值不影响它。测试：`resolve.test.ts`（强制收窄、编译默认 `true`、谓词与生效值在 6 种组合下一致）、`request-action.integration.test.ts`（策略 `false` 收窄无 profile 的 member 与存了 `true` 的 member）、`agent-profile-flow.integration.test.ts`、web `AgentProfilePage` / `ModelsPage` 等。
+  - **R-37 更正（2026-10-02 复审，维护者决定 D-20）——执行权限在调用时按当前 AgentProfile / AgentPolicy 重新核对（#447）**：Handle 的 `resources.gatekeeper` 在签发时固定（入口 Handle、Worker 缩小后的子 Handle、`issue_handle` 的 MCP Handle）。成员在"我的智能体"取消勾选门 G、owner 在 AgentPolicy 里把 G 排出上限、或成员的 Grant 被撤销之后，`execution_readiness` 与 `find_operations` 立刻说"被排除"，但运行中的 Worker 在 G 上的 `request_action` 仍会创建并（若 low / 可自动批准）执行 ActionRequest；`set_agent_policy` 不撤销任何东西，进行中的 Turn 可凭旧范围继续 `invoke_worker`；`issue_handle` 只按 Grant 收窄，所以 MCP Handle 带着 owner 已为其 agent 排除的门（L2-17）。读模型与强制不一致。现在一条规则 `resolveEnabledGatekeepers(profile, policy, available)`（`governance/agent-profile/resolve.ts`）= 可用门减去成员 AgentProfile 排除项、再受 AgentPolicy 上限约束；`resolveEffectiveAgentProfile`（我的智能体"当前生效"、入口 Handle、`execution_readiness`）改调这个共享函数，读模型、签发（`ensureEntryHandle`、`issue_handle`）与强制（`request_action`、`list_allowed_operations`）都经它。新文件 `application/gates/execute-access.ts` 是 `observe-access.ts` 的执行侧对应物：`readExecuteAccess`（角色、profile、policy、Grant）、`entryGatekeeperIds`（入口 Handle 的门集合）、`executableGatekeepers`（调用时规则）、`narrowScopeToExecutableGates`。①`request_action`（Handle 调用者，`request-action-handler.ts` 的 `governedScope`）：进入治理路径前，Handle 的门被收窄到 `onBehalfOf` 当前能行动的集合，签发后被排除的门落到请求者范围之外，`evaluate()` 记一条 `deny` 的 ActionRequest（拒绝仍留下通常的痕迹），调用者得 403（`ActionRequestDeniedError`），门不会被调用；observe 分支不变（沿用 `observeRefusal`）。②`list_allowed_operations`（`worker-result-handler.ts`）对执行类工具列表做同样收窄，Worker 不会被给出一个会被拒的工具。③`set_agent_policy`：门上限（`allowedGatekeepers`）改变时（入口 Handle 范围唯一依赖的策略字段）在同一事务里吊销该工作区所有成员的入口会话（`governance/capability/handles.ts` 新增 `revokeWorkspaceEntrySessionHandles`，与 `set_agent_profile` 对其目标用的是同一机制）；其它策略编辑不吊销。④`issue_handle` 用入口 Handle 的门集合（`entryGatekeeperIds` = `effective.enabledGatekeepers`）而不是原始 Grant（`issue-handle-handler.ts`）。注册表中 `request_action` 与 `issue_handle` 的描述、设计文档控制面段落同步。**调用时的可用门按角色**：非 owner = 其当前门 Grant，结果恰好等于其 `effective.enabledGatekeepers`，所以被撤销的 Grant 也会停住运行中的 Worker（超出 D-20 字面，补上 L2-3 的 worker_run 那一半）；owner = Handle 自带的门减去 AgentPolicy 上限与 owner 自己的"我的智能体"排除项——owner 持有一切范围（§5.8 / I14），owner 直接起的 Worker 以 `unconstrained` 父权限签发（`application/task/handle-mint.ts` 的 `resolveParentAuthority`），既有测试依赖这条设计路径，与 owner 的 Grant 求交会在 owner 从未被授予的门上破坏它；owner 的聊天 agent 本来就按 Grant 签发，不受影响；owner 仍受上限与自身排除项约束，这才是 D-20 的要点。只收窄、从不放宽：`executableGatekeepers` 只过滤 Handle 自己的 `resources.gatekeeper`，其它范围轴不变；observe 不变（无需 Grant，D4 已撤销，其谓词本来就在调用时应用上限与排除项）；`capability-reachability.ts` 不变（本就经 `resolveEffectiveAgentProfile`）。无迁移、无线上形状变更（描述不入快照）。测试：新增 `execute-access.test.ts`（member / owner 规则、从不增加门、`entryGatekeeperIds`、范围收窄保留其它资源并去掉空 `gatekeeper` 键）；`request-action.integration.test.ts`（持有 G 的 Worker 形状 Handle 走四个状态：基线可执行且工具在列；成员排除 G → 记录的拒绝、门未被调用、工具列表为空；策略上限排除 G → member 与 owner Worker 都被拒，恢复上限后重新可执行；Grant 撤销 → 被拒且只剩 observe 工具，同一门上的 owner Worker 仍可执行）；`agent-profile-flow.integration.test.ts`（改门上限吊销 member 与 owner 的入口 Handle，改 `maxPromptAddendumChars` 或重发相同上限不吊销）；`issue-handle-handler.integration.test.ts`。
+  - **service Handle 补上门集（#1091，遗留 690，2026-11-08）**：R-37 当时只改了 `issue_handle`，`issue_service_handle` 与 CLI `issue-service-handle` 仍写 `resources: {}`，授了门的 service Principal 调 `request_action` 一定被拒。现在三个签发方的门集规则统一为 `entryGatekeeperIds`（`application/gates/execute-access.ts` 的 `serviceHandleResources`，只在带了 `request_action`、`invoke_worker`、`list_allowed_operations` 时才带）。service Handle 的门集是签发时的快照，执行时由 `narrowScopeToExecutableGates` 再收窄。请求的判定与其他成员一致，低风险操作的自动批准由 AgentPolicy `allowMemberAutoApproveLow` 控制（协调者 2026-11-08 定为保留）。
+
+### S3.14 web 重构为控制台
+
+- 目标：把验收面改成产品面。路由化与按 role 的导航守卫；统一数据层（一个 WS，请求缓存与失效；列表分页统一 `{ items, nextCursor }`——与 F10 后续的信封统一同步）；设计规范（信息密度、状态色语义：待审批 / 执行中 / 失败 / 已完成；暗色 + 亮色；中文主标题英文副标题）；空状态与错误态；键盘可达。与 S3.5 Explorer 挂载并列，Explorer 作为治理区的「图」入口。
+- 交付物：`packages/web` 路由化重构、组件库收敛（`components/ui` 为唯一基元）、五个治理页 + 「我的智能体」页、Playwright 覆盖登录 → 审批 → 治理三条主路径。
+- 验收：S3.11–S3.13 的 UI 验收全部通过；`pnpm --filter @nexttime/web e2e` 在主机上跑通。依赖：S3.11–S3.13。
+
+- **实施顺序（2026-09-08 决定）**：S3.11 内核读侧 + 成员管理能力 → web 路由化 + 治理区壳与成员页 → S3.13 迁移 + 能力 + 运行时投影 → 「我的智能体」页 → S3.12 接入向导与目录页。前两步可与 S3.1–S3.4 并行；不等 Explorer。
+
+### S3.15 pi 升级契约与漂移检测
+- 目标：回答"pi agent 解耦，可以跟随主线更新吗"——把升级 pi 从"没人敢动的冻结依赖"变成一条有
+  耦合面清单、有自动检测、有回滚方案的可执行流程；本任务本身不升级 pi、不改运行时行为。
+- 交付物：`docs/runbooks/pi-upgrade.md`（耦合面清单——每个依赖 pi 具体行为的文件/flag/schema
+  一行、变更后果、覆盖它的测试；单一版本源 `pi.version`；升级步骤；兼容性测试清单；回滚方案）；
+  `scripts/check-pi-version-consistency.sh`（`pi.version` 与 `packages/platform-extension/
+  package.json` 两个版本号字段、`deploy/worker-runtime/Dockerfile` 是否仍读 `pi.version`，三者
+  一致性校验，接入 `pnpm ci:guards` 与 CI `guards` job）；`.github/workflows/pi-drift.yml`
+  （每晚 + 手动，对 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 的 `@latest`
+  跑 `@nexttime/platform-extension` 的 pi-SDK 相关测试，只在一次性 checkout 里改版本、从不
+  提交；失败时开/更新单个 `pi-drift` label 的 issue，打印 pinned/latest 版本 diff；无
+  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；~~`.github/dependabot.yml`
+  （`packages/platform-extension` 的 npm 依赖按周检查，`@earendil-works/*` 分组为 `pi`，
+  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）~~——**已移除（#287，
+  2026-09-25 决定，遗留 126）**：该文件不存在也不恢复，npm 的 Dependabot 版本更新在 pnpm workspace 的
+  lockfile 上会失败，常规依赖升级不交给 bot、按收敛方案的波次手动做；pi 升级的"什么时候能升"只剩
+  `pi-drift.yml` 提醒。
+- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`
+  YAML 语法有效（~~`dependabot.yml`~~ 随上条移除）；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
+  platform-extension test` 全绿。依赖：S1.5、S1.6。
+
+---
+
+### S3 实施波次（2026-09-09 排定）
+
+依据：S3.1–S3.10 的依赖声明、复审遗留（Docker 事件驱动 egress 反注册、observe 类操作统计归因、19 个已注册未实现 capability、web e2e 进 CI）。同一波次内各项**文件互斥**，可并行派子代理；每个 PR 过 CI 三门 + `pnpm contract:snapshot`（注册表变更必须提交快照）；含运行时/线上变化的 PR 先在主机分支跑 `accept_s1/s2` 再合；合入即清分支、主机应用、回归。
+
+| 波次 | 项 | 范围（文件所有权） | 交付 |
+|------|----|-------------------|------|
+| W1-A | **S3.1** 本体注册表与 v1 | `packages/kernel/src/substrate/ontology/**`、`ontology/ops-assets-v1.yaml`、`shared` 注册表 `ontology` 组 5 个能力的 handler（`get_type / list_types / validate / propose_ontology_change / publish_ontology_version`） | 版本化本体注册表、identity_key 每 ObjectType、domain/range 校验、草稿私有 |
+| W1-B | **S3.8** 不变量监控与混沌 + observe 统计归因 | `substrate/audit/invariant-checks.ts` + `index.ts` 调度、`scripts/chaos-kill-{worker,entry}.sh`、`audit` 模块日期范围/分组读能力、`get_operation_stats` observe 归因 | I1–I16 定时校验 → 指标/日志；杀入口/Worker 后状态符合 §13 |
+| W1-C | egress 反注册事件化 | `packages/worker-supervisor`（订阅 Docker 事件 `die/destroy`）、`docker-compose.yml`（supervisor 的 proxy `EVENTS=1`） | 容器退出即从 source map 移除，reap 间隔只作兜底 |
+| W1-D | web Playwright e2e 进 CI | `.github/workflows/ci.yml` 新 `e2e` job、`packages/web/e2e/**`、compose 精简 profile | 登录 → 审批 → 治理三条主路径在 CI 用 compose 起 postgres+kernel+caddy+fake-llm 跑通 |
+| W1-E | **S3.10** 运行手册（不依赖 S3.9 的部分） | `docs/runbooks/*.md`、`docs/testing.md` | 重启/恢复顺序、密钥轮换、新增接入包、新增领域包、排查失败 Task；测试分层与命令 |
+| W2-A | **S3.2** 冲突检测 + epistemic 7 能力 | `substrate/epistemic/**`、`list_conflicts / resolve_conflict / verify_fact / query_decisions / causal_chain / decision_impact / find_precedents` handler | 同源 supersede、异源 Conflict(open)、私有可见性、决策/血缘查询 |
+| W2-B | **S3.6** MCP gateway + `interactive` 模式 + `issue_handle` | `packages/kernel/src/interfaces/mcp/**`、`platform-extension/src/modes/interactive.ts`、`docs/howto-connect-{claude-code,pi}.md` | `tools/list` = 注册表 Handle 通道集合 + Semantica 别名；无 Handle 拒绝 |
+| W3-A | **S3.3** 采集器 `host-inventory` + 写入能力 | 新包 `collectors/host-inventory`、`register_source / submit_observations / assert_fact / supersede_fact / invalidate_fact` handler（service principal）、compose 服务 | 两遍无重复无 Conflict；改端口第三遍 supersede；脱敏失败整批不提交 |
+| W3-B | **S3.5** Explorer 契约与挂载 + `export_prov` | `interfaces/explorer-contract/**`、`explorer/` 构建脚本、caddy `/explorer` | Graph / Decision / Lineage 三工作区加载 |
+| W4 | **S3.4** ragflow 门 v2 与本体 v2；**S3.9** `accept_s3.sh`；**S3.10** 收尾（恢复/接入手册演练）；`create_task`（W5 下架，见 S2.7 实现说明） | 依前序 | `S3 OK` |
+
+---
+
+## 5a. S4 — 平台管理（W8，2026-09-11 立项，同日按维护者要求修订为平台级用户目录）
+
+设计见 `graph-ai-middle-platform-design.md` §7.11（用户目录、登录、平台管理员、供应商路径、门目录、
+生效表）。起因：一台刚装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型、
+看平台状态；维护者要求平台管理员能增改停用不同权限的用户，新用户直接登录。顺序 S4.1 → S4.2 → S4.3
+→ S4.4 → S4.5；S4.1 + S4.2 合起来回答"怎么加用户"。每项完成标准里都含 CI 的 e2e 用例。
+
+### S4.1 用户目录与登录
+
+- 交付物：
+  1. 迁移：`users`、`user_sessions`、`platform_setup`（平台级，无 RLS）；`principals.user_id`
+     （human 必填，回填现有行：每个 human Principal 一个用户，`login` 由显示名去重加短后缀）；
+     `(workspace_id, user_id)` 唯一；`audit_records.workspace_id` 可空 + `app_platform()` 与
+     `or (workspace_id is null and app_platform())` 策略子句；`workspaces.status`（`active` /
+     `disabled`）与 `workspaces.entry_model`。
+  2. 身份模块（`application/identity`）：scrypt 密码哈希与校验、登录节流（同一 login 5 次失败
+     锁 5 分钟）、`user_sessions` 签发 / 吊销、控制台会话 JWT（`typ` 独立、claims `{uid, sid}`）。
+  3. 路由：`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`（用户、平台角色、
+     成员资格列表）、`GET /api/platform/setup-state`、`POST /api/platform/setup`。
+  4. gateway：cookie → 用户 → 按 `X-Workspace-Id`（HTTP）/ `authenticate {workspaceId}`（WS）找到
+     该用户在该工作区的 Principal → 之后与今天一致；`scope:'platform'` 能力只认 cookie 且要求
+     `platform_role='admin'`，不需要工作区；状态变更路由要求 `X-Requested-With: nexttime`；WS 握手
+     校验 `Origin`。**API key 路径原样保留**（Bearer / `X-API-Key` / WS `apiKey`）。Explorer 的
+     `nexttime_explorer_session` 由控制台会话替代，`/api/explorer/session` 路由退役，caddy 不变。
+  5. 初始化：kernel 启动无活跃平台管理员则生成令牌（明文写 `${NEXTTIME_DATA}/secrets/setup/token`
+     0600，compose 只把该子目录挂为可写；日志只写路径）；`POST /api/platform/setup` 一次性、5 次错误
+     作废。CLI `bootstrap.js create-platform-admin --login <l>`（密码从 stdin）。`host-env-init.sh`
+     末尾打印令牌路径。
+  6. web：登录页改为登录名 + 密码（保留"用 API key 登录"折叠项给自动化 / 过渡）；"初始化平台"页；
+     首次登录强制改密；工作区切换器（单个自动选中）；"我的账户"页（改密码、改显示名、成员资格）。
+  7. `create-workspace` CLI 保留（内部改调同一 application 函数）；`add-principal` 只用于 agent /
+     service（human 走 S4.2 的成员资格）。
+- 完成标准：全新数据库启动 kernel → 令牌文件出现 → web 初始化页建管理员并直接登录 → 管理员调
+  `list_chats` 得 403（无成员资格）；现有 owner 的 API key 在 S1 精简验收里照常通过；错误密码 5 次
+  后锁定；登出后 cookie 失效；WS 从异源 `Origin` 握手被拒。e2e 覆盖初始化 → 登录 → 强制改密 → 登出。
+- 不做：OIDC（P5）；把验收 harness 迁到 service Principal（之后）。
+- **实现说明（内核半，2026-09-11）**：
+  - 迁移 `0019_platform_users.sql`：`users` / `user_sessions` / `platform_setup`（平台级，无 RLS）；
+    `principals.user_id` + `(workspace_id, user_id)` 部分唯一索引；回填在一个临时表里算好登录名
+    （`<显示名 slug 去首尾横杠、≤50>-<principal id 前 8 位>`，与 `derivedLogin` 同形）再插入并回写；
+    `workspaces.status` / `entry_model`；`audit_records` 主键改为 `(id)`、`workspace_id` /
+    `actor_principal_id` 可空、新增 `actor_user_id` 与 `audit_records_actor_shape` 检查；`app_platform()`
+    只在 `principals` / `sessions` / `audit_records` 三条策略上加读写子句。**授权最小化**：应用角色
+    `nexttime_app` 在 `users` 上只得到 `insert (login, display_name)` 与 `select (id, login,
+    display_name, platform_role, status, created_at)`——这是 `create_principal`（工作区能力，以该角色
+    运行）把新 human Principal 挂到用户所需的全部；`password_hash`、`user_sessions`、`platform_setup`
+    对应用角色不可见。身份模块其余读写都走 `withAdminClient`（与 `lookupPrincipalByApiKeyHash` 同路）。
+  - `application/identity/`：`password.ts`（node:crypto scrypt，`scrypt$N$r$p$salt$hash` 自带成本参数）、
+    `users.ts`（登录名规则 `^[a-z0-9][a-z0-9._-]{2,63}$`、5 次失败锁 5 分钟、未知登录名走同长度的
+    dummy 校验以抹平时序、`ensureUserForHumanPrincipal` 只插两列以配合上面的授权）、
+    `console-session.ts`（cookie `nexttime_console_session`：EdDSA、Handle 密钥对、`typ`
+    `nexttime-console-session+jwt`、claims `{uid,sid}`、`Path=/; HttpOnly; Secure; SameSite=Strict`、
+    8 小时；每次请求重读 `user_sessions` 与用户状态）、`setup.ts`（令牌 sha256 入库、明文 0600 写
+    `PLATFORM_SETUP_TOKEN_FILE`（compose 挂 `${NEXTTIME_DATA}/secrets/setup:/run/setup`，kernel 根文件
+    系统仍只读）、`completeSetup` 在一个事务里消费令牌 + 建管理员）。
+  - gateway：`resolveCaller`（Bearer）原样保留；新增 `resolveRequestCaller({authorization, cookie,
+    workspaceId, requestedWith, requireCsrfHeader, allowPasswordChangePending})`——有 `Authorization`
+    走老路，否则 cookie → 用户 → CSRF 头 → 临时密码门 → 工作区（`X-Workspace-Id` 头 / 选择器 cookie
+    `nexttime_workspace` / 用户唯一成员资格）→ `authenticateUserInWorkspace`（成员 Principal +
+    `createOrReuseWebSession`），产出**同一个** `channel:'human'` 调用者（多一个可选 `user` 字段），
+    authorize / dispatch / Handle 签发 / 审计全部不变。三个 `ForbiddenError` 子类给 web 可辨识的 403
+    码：`workspace_required`、`csrf_header_required`、`password_change_required`。
+  - 路由 `interfaces/http/auth-routes.ts`：`GET /api/platform/setup-state`、`POST /api/platform/setup`、
+    `POST /api/auth/login|logout|password`、`GET|PATCH /api/auth/me`（后两个是任务清单之外的补充：
+    "首次登录强制改密"和"我的账户"必须有一条不依赖工作区的改密 / 改显示名路径）。状态变更路由含登录与
+    初始化都要 `X-Requested-With: nexttime`；登出服务端吊销 `user_sessions` 行。WS：`authenticate
+    {workspaceId}` 走 cookie（`{token}` 不变）；握手时 `Origin` 存在则其 host 必须等于
+    `X-Forwarded-Host` / `Host`（caddy 不改写 Host；vite 开发代理对 `/ws` 改为 `changeOrigin:false`）。
+  - Explorer：九个端点改认控制台 cookie（+ 工作区头 / 选择器 cookie / 唯一成员资格），
+    `POST|DELETE /api/explorer/session` 与 `interfaces/explorer-contract/session.ts` 删除；`X-API-Key`
+    路径不变。**用 API key 登录控制台的会话没有 cookie**，浏览器看 Explorer 需密码登录。
+  - 启动：`main()` 在后台服务 IIFE 开头调 `ensureSetupToken`，任何失败只记 error 不退出。CLI 新增
+    `create-platform-admin --login <l> [--display-name <n>] [--temporary]` 与 `set-password --login <l>
+    [--temporary]`（密码从 stdin 读）；`create-workspace` / `add-principal` 为 human Principal 建无密码
+    用户并打印 `owner login:` / `principal login:` 行（既有输出行不动，验收脚本仍按原样解析）。
+  - **与任务清单的偏离**：① `scope:'platform'` 注册表字段与"平台通道"未在本项落地——S4.1 没有任何平台
+    能力可测，字段留到 S4.2 随 `list_users` 一起加；本项只落地"cookie 无工作区 → 403
+    `workspace_required`"这一钩子（完成标准里"管理员调 `list_chats` 得 403"由它满足）。② `add-principal`
+    在 S4.1 仍接受 human（CI e2e 用它建 bob），限制留给 S4.2。③ `principals.user_id` 在库里可空，由
+    三处创建路径（两条 CLI + `create_principal`）保证 human 必有用户。④ CI e2e 需要一个带临时密码的用户
+    来跑"强制改密"，S4.1 没有建用户的 UI，用 `set-password --temporary` 给 bob 设临时密码代替。
+  - 遗留：`rotate_api_key` 不使 cookie 失效（STATUS 31，同 Explorer 时期）；`create_principal` 建出的
+    用户无密码，S4.2 的 `reset_user_password` 之前只能用 CLI `set-password`。
+- **实现说明（web 半，2026-09-11）**：
+  - `App.tsx` 变成一台会话前状态机：`boot`（`GET /api/auth/me` 在途，渲染空白而非闪一下登录页）→
+    `setup`（`setup-state.initialized:false`）/ `login` / `changePassword`（`user.mustChangePassword`）/
+    `noWorkspace`（零成员资格，平台管理员刚建好时就是这样）→ 打开工作区会话（WS `authenticate
+    {workspaceId}` + cookie 模式 `HttpClient`）。工作区选择：唯一成员资格自动选中；多个时取本标签页
+    `sessionStorage` 里上次的选择，否则第一个（偏离"否则不选"——本项没有单独的选工作区页，侧栏切换器
+    `data-testid="workspace-switcher"` 兜底）。切换 = 关 WS、重连认证、新 `HttpClient`、`generation+1`
+    让 `PermissionsProvider` 重挂、写选择器 cookie `nexttime_workspace`（Explorer 靠它）。
+  - `lib/http-client.ts` 的 `auth` 分 `{kind:'apiKey'}` / `{kind:'cookie', workspaceId}`；所有请求带
+    `X-Requested-With: nexttime`，cookie 模式带 `X-Workspace-Id` + `credentials:'same-origin'`，不带
+    `Authorization`。`lib/ws-client.ts` 的 `authenticate` 接 `{token}` 或 `{workspaceId}`，重连按原样
+    重发。`lib/auth-api.ts` 是七条 `/api/auth/*`、`/api/platform/*` 的类型化封装。`lib/explorer-session.ts`
+    删除。
+  - **R-64 更正（2026-10-02 复审）——切换工作区失败保持当前会话；成员资格不再是登录时快照（#448）**：上面的"切换 = 关 WS、重连认证……"在切换失败时（成员资格已被移除 / 工作区已停用）会关掉正在工作的 socket、清空会话并显示登录表单、没有任何错误（只有 `console.warn`），然后照样导航；cookie 仍有效，刷新后又静默登回去。另外 `session.memberships` 是登录时的快照：把自己委派为 owner 的管理员在重新登录前看不到"打开工作区配置"和切换器条目。现在 `openCookieSession` 返回结果 `opened` / `superseded` / `kept` / `fellBack`；只有 `switchWorkspace` 传 `keepReplacedOnFailure`，`authenticate` 失败时只关新 socket、保持当前会话已发布，其它调用方（启动、登录、绑定、认领、成员资格消失恢复）保持原有回退行为。`switchWorkspace` 仅在 `opened` 时导航；`kept` 时记录 `workspaceSwitchFailure`（`{seq, generation, workspaceId, workspaceName, error}`）并重读 `/api/auth/me`，`Routed` 对每次失败只弹一次 danger toast（"没能切换到工作区「X」 / 仍在当前工作区。<内核原因>"），且只在失败发生的那个会话里。新增 `refreshMemberships()`：把 `/api/auth/me` 重读进当前已发布 cookie 会话的 `user` / `memberships`（同一会话、不开新 socket），切换失败后与 `PlatformWorkspacesPage` 在委派 owner 或创建工作区之后调用。隔离与凭证不变（切换仍经内核认证新工作区，被拒的仍被拒；保持的会话是片刻前有效的那个，内核之后若结束它由 R-16 接管）；无内核 / 线上变更。测试：`useSessionMachine.test.tsx`（被拒的切换保持同一代与 socket、只关新 socket、记录失败、重读成员资格、不导航；之后成功的切换清除失败；`refreshMemberships` 无新 socket）、`App.test.tsx`（端到端 toast 与仍登录的外壳）、`PlatformWorkspacesPage.test.tsx`。
+  - 页面：`LoginPage`（登录名 + 密码为主，提交按钮 `Log in`；折叠项 `用 API key 登录 Use an API key
+    instead` 里是原来的 API key 表单，按钮仍叫 `Sign in`、占位符仍是 `sk-...`）、`SetupPage`
+    （`创建管理员 Create administrator`；另有 `已有账户？登录 Already have an account? Log in` 回到登录
+    页——**不在清单里，但 CI 必需**：五个 Playwright spec 一次按字母序跑，只有最后的 `login.spec.ts`
+    调初始化，前面四个都会先落在初始化页）、`ChangePasswordPage`（强制改密，只能改密或登出）、
+    `NoWorkspacePage`、`AccountPage`（`#/me/account`，改显示名 / 改密码 / 成员资格只读；API key 会话下
+    提示需密码登录）。侧栏：cookie 会话的登出按钮 `登出 Sign out`，API key 会话仍是 `Forget key`（现有
+    e2e 依赖这个名字）；`我的账户 My Account` 在「我的」组。
+  - e2e：`e2e/auth-helpers.ts`（`reachLoginForm` 会点掉初始化页、`loginWithApiKey` 展开折叠项）；四个既有
+    spec 改用它；`explorer.spec.ts` 改为 owner 密码登录（API key 会话没有 cookie）；新 `login.spec.ts`
+    四个场景按声明顺序：初始化平台 → 无工作区页 → 登出（CI 重试时改为直接登录已建的 `e2e-admin`）；
+    owner 密码登录 → 登出 → `/api/auth/me` 401；bob 临时密码 → 强制改密（先试错当前密码）→ 登出 → 新密码
+    再登录；最后 5 次错误密码锁定 `e2e-admin`（放最后，锁 5 分钟不影响其他用例）。
+    `.github/workflows/e2e.yml` 新增读令牌与 `set-password` 两步（见 `runbooks/web-console.md` CI 一节）。
+  - 未做：`noWorkspace` 状态下的「我的账户」页没有返回 / 登出按钮（只能前进）；vite 开发代理 `/ws` 改
+    `changeOrigin:false` 以通过内核的 Origin 校验。
+  - 一次性令牌 + `SetupPage` 这条路径由 P-A1（预置 `admin`、无令牌无初始化页）作废，见
+    `platform-admin-design.md` §4。
+  - **R-13 / R-15 更正（2026-10-02 复审）**：①`POST /api/auth/password` 原来什么都不吊销、按常量 8 位校验（不读平台 `passwordMinLength`）、当前密码可无限猜。现在 `identity/credentials.ts` 的 `changeOwnPassword` 先按平台设置校验新密码（与管理员重置同一条规则 `passwordPolicyViolation`：平台下限、不低于 8、不超过 256），再经 `checkPassword` 校验当前密码（错误计入登录锁定，锁定时 423 `locked`），成功后在同一事务里写入并调 `revokeUserCredentials`——保留本次请求的控制台会话与用户正在运行的 Worker（`keepWorkerRuns`：自己改密不能让进行中的 Task 断掉 LLM），其余控制台会话、成员资格的 API key 以及 `mcp_session` / entry 等其余会话的 Handle 全部吊销（管理员重置、停用、移出仍连 `worker_run` 一起吊销）；路由提交后按被吊销的控制台会话逐个踢出，另以新的 `apiKeyPrincipalIds` 踢掉 API key socket（不碰本会话的 socket）。CLI `set-password` 同样按平台规则校验并吊销该用户全部控制台会话，但不动 key 与 Handle（运维路径；验收与 e2e 给 CLI 建的成员设密码后照用其 key）。②`POST /api/auth/logout` 在 CSRF 检查之后的每条路径（含吊销失败的 500）都下发清 cookie 的 `Set-Cookie`。web：`cookieLogout` 本地立即登出，请求前在 `localStorage` 置"登出待确认"标记、成功后清除；标记在时启动不问 `/api/auth/me`，先重试登出再到登录页；新的登录 / claim 换掉 cookie 时清除标记。登录页上不做周期性后台重试：登出响应会清掉同名 cookie，若晚于新登录到达会连新会话一起清掉。测试：`auth-routes.integration.test.ts`（另一控制台会话 401、本会话 200、key 401、`mcp_session` 与 entry Handle 吊销而 `worker_run` Handle 不动；低于平台下限 400；当前密码错 5 次后 423；吊销失败仍清 cookie）、`interfaces/ws/server.test.ts`（改密踢其他会话与 API key socket、不踢本会话）、`useSessionMachine.test.tsx`。
+  - **R-43 更正（2026-10-02 复审）——并发登录绕不过锁定**：`checkPassword` 原来先读"未锁定"、再做慢的 scrypt 校验、失败后才加计数，C 个并发请求都读到未锁定，5 分钟里能猜 C 次而不是 5 次。现在每次尝试先**预占**一次：一条带条件的 `UPDATE … RETURNING` 自增 `failed_login_count`、自增到上限时同时写 `locked_until`、只在未锁定时命中；语句提交后才校验密码，校验通过再归零。行锁让并发尝试串行，后一个在前一个提交后重新检查锁，所以 N 个并发错误密码恰好得到 `LOGIN_MAX_FAILURES` 次校验，其余返回 `locked`。没命中的（已锁定、无此登录名或尚无密码）再读一次区分出锁定，其余照旧走假哈希等时。改密校验当前密码也走这里（R-13）。没有另加 `/api/auth/login` 的限流。测试：`auth-routes.integration.test.ts`（12 个并发错误密码恰好 5 个 `bad_credentials`、7 个 `locked`，随后正确密码也是 `locked`）。
+  - **R-28 更正（2026-10-02 复审）——绑定 API key 与认领身份留审计**：`bindPrincipalToUser` 把成员资格挪到调用者账户、`claimIdentityOnClient` 把一把 API key 变成平台登录，原来都不写审计行——泄露的 owner key 被绑到别人账户后，轮换 key 也撤不回，也查不到何时挪给了谁。现在两者在各自事务里写平台审计行（`workspace_id` 为空）：`principal.user_rebound`（操作者 = 调用者，`payload {workspaceId, from, to, formerUserDeleted}`）、`user.identity_claimed`（操作者 = 认领的用户，`payload {workspaceId, principalId, login}`）。运维 CLI 的身份与凭证变更（P3 L1-14：`create-workspace`、`add-principal`、`issue-service-handle`、`create-platform-admin`、`set-password`）各写一条 `cli.*` 平台行：操作者照 CLI 清除的办法解析（`--actor <login>`，否则 `NEXTTIME_PLATFORM_ADMINS` 的第一个登录名；在变更之前解析，写错的 `--actor` 什么都不改）；解析不出时仍写，记为未署名的主机操作（`actor_user_id` 为空、`payload.attributedActor: false`），迁移 core 0036 只为这五个动作放宽 `audit_records_actor_shape`（同 0032 的写法）。CLI 的行在变更提交后、打印 key 之前写（`createWorkspaceWithOwner` 与 `setUserPassword` 自带事务），payload 不含 key、token 或密码。`register-gatekeeper --publish` 不是身份变更，未纳入。测试：`auth-routes.integration.test.ts`（绑定与认领各一条行、字段正确）、`cli/bootstrap.test.ts`（有操作者署名、无操作者未署名）、`substrate/audit/writer.test.ts`（0036 的放宽与边界）。
+
+### P-A1 身份、用户与管理面骨架
+
+- 交付物：
+  1. migrations：0020（`platform_setup` 表 drop；kernel 启动时若无活跃 admin 则直接建 `admin`
+     账户 `platform_role='admin'`、随机临时密码写 `${NEXTTIME_DATA}/secrets/setup/initial-admin-password`
+     0600、同时建默认工作区并把 `admin` 设为 owner；有管理员之后该文件删除、永不重生成）。
+  2. kernel：注册表新增 `scope:'platform'` 字段，gateway 对其只放行 cookie 会话且
+     `platform_role='admin'`，业务 Principal / Handle 一律 403；平台审计 = `workspace_id is null`
+     的 `audit_records` 写路径 + `platform_audit_query`；`POST /api/auth/bind-api-key`（把某把既有
+     API key 的成员资格改指到当前管理员账户，空壳 Principal 删除）、`POST /api/auth/claim`（成员用
+     API key 登录一次后自设密码，用于升级接管）；删 `GET /api/platform/setup-state`、
+     `POST /api/platform/setup`。
+  3. kernel 能力（`scope:'platform'`）：`platform_overview`（版本/迁移、服务健康摘要、用户数、开始
+     使用清单、最近平台审计、`bind_api_key`）；`list_users` / `create_user` / `update_user` /
+     `set_user_status`（停用 = 吊销全部 `user_sessions` + 该用户各 Principal 的工作区会话；最后一个
+     活跃管理员不可停用）/ `reset_user_password` / `list_user_memberships` / `add_membership`
+     （工作区 + 角色 → 建 human Principal）/ `set_membership_role` / `remove_membership` /
+     `merge_user`（合并"待激活"用户，升级接管用）/ `set_user_budget`；`get_platform_settings` /
+     `update_platform_settings`（站点名、公告、默认工作区、平台默认入口模型、默认预算、每用户每日
+     调用上限、新用户默认平台角色、密码策略、`NEXTTIME_PLATFORM_ADMINS` 只读展示）。
+  4. kernel：工作区内（`scope:'workspace'`，minRole owner）成员页改为按登录名从平台用户里添加
+     （`add_member`）、`set_principal_role` 照旧、`remove_member`；`create_principal` 限 agent /
+     service，human 只走 `add_membership`。
+  5. web：删除 `SetupPage`；侧栏按 使用 / 管理 / 维护 三组重排，现有 owner 专属页（成员与授权、访问、
+     系统接入、能力目录、模型与配额、审计）搬进"管理 → 工作区配置"，普通 `member` 侧栏不出现任何
+     配置页；新增页：概览（首次运行清单）、用户（列表 + 编辑 + 重置密码 + 成员资格抽屉 + 设预算 +
+     合并"待激活"用户）、平台设置（基础项）。
+  6. compose / 主机：`host-env-init.sh` 结尾提示 `initial-admin-password` 文件路径。
+  7. e2e：删除既有 spec 里读初始化令牌的步骤；`.github/workflows/e2e.yml` 改读
+     `initial-admin-password` 文件写入 Playwright 用的环境变量。
+  8. docs：README「首次运行」与 `runbooks/host-bootstrap.md`、`runbooks/web-console.md` 按新流程
+     改写（去掉令牌 / 初始化页步骤，改成"装好即有 admin，密码在文件里"）。
+- 完成标准（design §9 P-A1 e2e）：admin 首登 → 改密 → 直接落在概览页并聊一轮验证 → 建用户 B（默认
+  进默认工作区）→ B 登录直接落在对话页、侧栏无任何配置页、能在"我的智能体"里选模型 → 停用 B → B 的
+  cookie 与 WS 会话立即失效；全程零 CLI。
+- 不做：OIDC（之后）；每用户一个 RLS 工作区（已否决，见 §11）；工作区新建 / 禁用与 owner 委托
+  （P-A2）；按对话分 pi 会话（P-A2）。
+
+- 实现说明（2026-09-11，PR #168）：
+  - **平台通道是第三个 caller 通道**，不是 human 通道上的一个标志：`ResolvedCaller` 增加
+    `{channel:'platform', user}`（`application/gateway/caller.ts`），`resolvePlatformCaller` 只认控制台
+    cookie + CSRF 头 + 非临时密码 + `platform_role='admin'`，带 Bearer 的请求先照常解析再 403（不泄露
+    token 是否有效）。`authorizeCapabilityCall` 两条新规则：`scope:'platform'` 的能力只放行平台 caller；
+    平台 caller 调任何工作区能力一律 403（它没有工作区）。`POST /api/cap/<name>` 按注册表的 `scope`
+    选解析器，未注册的名字仍走旧路径答 404。WS 与 MCP 不涉及平台能力（`/ws` 只解析工作区 caller）。
+  - **平台事务 `withPlatform`**（`adapters/db/platform-context.ts`）：`app.platform = on`、`app.user_id`、
+    清空 `app.workspace_id` / `app.principal_id`，仍 `set local role nexttime_app`——不是超级用户会话。
+    handler 需要写某个工作区的表时（加成员建 Principal）用 `setWorkspaceContext` 显式切 GUC。审计行是
+    0019 定义的平台形态（`workspace_id is null`、`actor_principal_id is null`、`actor_user_id`），`writeAudit`
+    的输入类型随之放宽。
+  - **迁移 0021**：`users` / `user_sessions` 开 RLS（`force`）——平台事务全见全写；工作区事务只能 `select`
+    本工作区成员对应的用户（成员页显示登录名），不能写；`password_hash` 对应用角色**只写不读**（列级
+    `update` 无 `select`），"待激活"用生成列 `has_password` 表达；`lookup_user_by_login`（security definer）
+    是工作区事务里唯一能按登录名找到非成员用户的口，只回 id / display_name / status，供 `add_member`。
+    `platform_settings` 单行 JSONB + 版本号 + `platform_settings_history`；`users.daily_call_limit` /
+    `monthly_token_budget`（P-D 才在 `llm-proxy` 强制）。因此平台 handler **不复用**身份模块的
+    `insertUser` / `setUserPassword`（它们在超级用户 client 上跑且回读 `password_hash`），SQL 按 0021 的列
+    授权重写在 `platform-handlers.ts`。
+  - **`create_principal` 改为只建 `service` Principal**（自动化凭证），人的成员资格只经 `add_member`
+    （工作区，owner，按登录名）/ `add_membership`（平台）产生，不再发 API key；0019 为 `create_principal`
+    的 human 路径授的 `users` 插入权随 0021 收回。
+  - **默认工作区**：`createWorkspace` 的种子逻辑从 `cli/bootstrap.ts` 搬到 `application/workspace/create.ts`
+    （`createWorkspaceWithOwner`，owner 可以是既有用户、可选签发 API key），CLI 只是包装；kernel 启动在
+    `ensureInitialAdmin` 之后跑 `ensureDefaultWorkspace`：零工作区 → 建（名取 `siteName`，`admin` 为 owner、
+    无 key）并写入 `defaultWorkspaceId`；有工作区但无默认且恰一个活跃 → 采纳；均非致命。
+  - **护栏**：最后一个活跃管理员不可停用 / 降级、不可停用自己；env `NEXTTIME_PLATFORM_ADMINS` 里的登录名
+    不可停用 / 降级（`protected_admin`）；工作区最后一个活跃的人类 owner 不可降级 / 移出（`last_owner`；
+    R-06 起 service owner 不计入，与工作区侧同一谓词）；
+    `merge_user` 只接受无密码的源、且两者不能同在一个工作区。错误类 `PlatformAdminError` 在路由层映射：
+    `*_not_found` → 404，其余 → 409。
+  - **R-45 更正（2026-10-02 复审）——`merge_user` 在控制台走不可逆确认（#446）**：上面的 `merge_user` 会硬删源用户并把其成员资格与角色交给目标，控制台却只用内联两次点击，目标列表还包含已停用账户。`UserDetailPanel` 现在用 `kit/confirm` 的 `tier="irreversible"`：重输**目标**账户的登录名（真正的风险是选错仍在用的目标，所以不是源），说明该行被删除、成员资格迁移，影响清单每个成员资格一行 `工作区 X · 角色 (已停用?) → target`；目标选择器只提供 `status === 'active'` 的账户；内核错误经 `friendly()`（`PurgeWorkspaceDrawer` 的约定）把控制台双语文案带进确认。内联确认及其本地 busy / error 状态删除。内核与 `merge_user` 语义不变；无线上变更。测试：`UserDetailPanel.test.tsx`（不可逆档、已停用账户不被提供、影响清单列出两个成员资格与 `→ bob`、源登录名不能解锁、目标登录名可以）。
+  - **web**：侧栏三组（使用 / 管理 / 维护），owner 页搬进"管理 → 工作区配置"（有工作区且非纯 member
+    时显示），`用户` / `平台设置` / `概览` / `平台审计` 仅管理员；零成员资格的管理员进入"仅平台"会话
+    （不连 WS，落在概览），普通用户零成员资格才见 `NoWorkspacePage`；管理员登录默认落在概览。工作区
+    下拉在 P-A1 由已加载用户的成员资格并集推导（`list_workspaces` 在 P-A2）。
+  - **e2e**：`.github/workflows/e2e.yml` 改读 `secrets/setup/initial-admin-password` 导出
+    `WEB_E2E_ADMIN_LOGIN=admin` / `WEB_E2E_ADMIN_INITIAL_PASSWORD`；`login.spec.ts` 首个用例为 admin 首登 →
+    强制改密 → 概览 → 用户页 → 登出（CI 重试幂等），锁定用例改锁 `admin`（该文件最后跑）；bootstrap 的
+    `create-workspace` 现在建的是第二个工作区（默认工作区由 kernel 建）。
+  - **独立审查（opus reviewer）抓到并已修**：① 停用用户只关了 cookie——API key 与 Handle 仍可用 → API key
+    查找与 Handle 校验都 join `users.status`，一次停用关全部通道（集成测试断言停用后 Bearer key 401）；
+    ② 平台侧改角色不吊销按角色签的 Handle → 与工作区侧 `set_principal_role` 一致调 `revokeRoleScopedSessionHandles`（#1150 起删除，由 `applyRoleChange` 取代）；
+    ③ `reset_user_password` 没有 env 管理员护栏 → 非本人重置 env 管理员密码 409 `protected_admin`；
+    ④ `NEXTTIME_PLATFORM_ADMINS` 只做了"不可停用"没做"始终是管理员" → `mapUser` 处统一投影
+    `effectivePlatformRole`，登录、`/api/auth/me`、平台通道、用户页一致；⑤ 初始密码文件在 admin 行提交
+    之后才写、写失败即永久丢密码 → 先写文件再建行，建行失败删文件，默认工作区改为独立 try。
+  - **未做 / 留到后面**：概览的服务健康只有 kernel / postgres / `llm-proxy`（读 `models.json` 是否可读），
+    运行层清单项恒为"由 CI 守卫保证"（P-C 出真实检查）；`platform_settings_history` 只写不读（回滚能力
+    未暴露）；每日 / 月度预算只存不执行（P-D）。
+
+### P-A2 使用面收口
+
+- 交付物：
+  1. kernel 能力（`scope:'platform'`）：`create_workspace`（名称、首位 owner、入口模型）、
+     `update_workspace`、`set_workspace_status`（禁用 = 该工作区 Session 全部失效 + 入口容器 `stop`
+     + 成员登录后不可见）、`set_allowed_models`（工作区允许的模型列表，约束 AgentProfile 可选范围）。
+  2. kernel：`instanceInstructions`（平台设置里的 agent 全局附加指令）拼进入口与 Worker 的 system
+     prompt（之后启动的容器生效）；按 chat 分 pi 会话（遗留 33）。
+  3. web："工作区配置"页加"新建工作区" / "禁用工作区"、owner 委托（管理员可把某工作区配置委托给
+     其 owner，owner 只在管理组看到自己那个工作区）；"我的智能体"选模型范围收窄到
+     `set_allowed_models` 的结果。
+  4. 平台级审计：以上写操作各一条。
+- 完成标准（design §9 P-A2）：用户的上下文按对话独立保存（同一用户两个 chat 的 pi 会话互不影响）；
+  管理员为一个部门新建工作区 W2、设入口模型与允许的模型、把它委托给某用户 owner；该 owner 登录只在
+  "管理 → 工作区配置"看到 W2，看不到其他工作区配置；W2 的成员在"我的智能体"只能选到允许的模型。
+- 不做：删除工作区（暂否，留 CLI `--yes`，见 §11）；工作区间数据迁移。
+- 实现说明（2026-09-11 至 09-12，PR #171 → v0.8.0）：
+  - **六个 `scope:'platform'` 能力**（`platform-handlers.ts` "workspaces" 段）：`list_workspaces`、
+    `list_platform_models`（管理员不是某工作区成员时也要看到模型目录——平台 caller 调不了工作区能力
+    `list_models`）、`create_workspace`、`update_workspace`、`set_workspace_status`、`set_allowed_models`，
+    统一返回 `PlatformWorkspaceWire`（`wire/platform.ts`；与 `get_workspace` 的成员视角 `WorkspaceWire`
+    是两个形状）。迁移 core 0022 给应用角色列级 `update (name, status, entry_model)`（0019 预留的那一步；
+    仍不能 insert / delete），governance 0011 给 `agent_policies` 加 `app_platform()` 策略（模块按名字顺序
+    应用，core 先于 governance，所以放不进 core 0022）。
+  - **入口模型只有一个真相**：运行时读的是 `agent_policies.default_model`（`resolveEffectiveAgentProfile`），
+    `workspaces.entry_model` 只是建区时的记录。`createWorkspaceWithOwner` 现在同时写三处（入口
+    WorkerDefinition 的 `model`、`entry_model`、AgentPolicy 的 `defaultModel` / `allowedModels`），
+    `update_workspace(entryModel)` 同步写 `entry_model` 与 `default_model`；`set_allowed_models` 顺带把
+    P-A2 之前建的工作区的 `entry_model` 补进 `default_model`。`updated_by` 是 Principal 外键、平台面
+    没有 Principal，因此清空，动作由平台审计行记账。
+  - **允许的模型是上限而非仅校验**：`resolve.ts` 新增 `resolveModel`——profile 里的模型不在非空
+    `allowedModels` 内时回退到（同样必须在名单内的）入口模型，否则 `''`；因此管理员收窄名单后，已选了
+    名单外模型的用户从下一个 Turn 起用入口模型，不需要逐人改 profile。相应地，非空名单**必须包含入口
+    模型、且入口模型必须已设置**（409 `entry_model_not_allowed`），否则运行时会落到入口 WorkerDefinition
+    自己的 `model` / pi 默认——一个管理员刚说不许用的模型。
+  - **`create_workspace` 是两阶段**：平台事务里校验 owner（须活跃，409 `user_disabled`）与模型
+    （409 `unknown_model`）、预生成工作区 id 写进审计行，`afterCommit` 再走 `createWorkspaceWithOwner`
+    （超级用户路径：`workspaces` 插入、元本体种子、入口 WorkerDefinition）。因此若第二步失败，调用方
+    收到错误、审计里留下一条没有对应工作区的 `create_workspace`——接受这一点，换来平台事务不持有超级
+    用户权限。
+  - **第二阶段失败的结果行（#1206，遗留 735，92b023f）**：第二阶段失败时补写 `workspace.create_failed`（同一工作区 id，`details.code` 为调用者收到的平台错误码或 `null`，`details.error` 为错误类名，`details.sqlState` 为数据库错误的 SQLSTATE 或 `null`），控制台显示「工作区创建失败」。没有对应工作区的 `create_workspace` 审计行从此都有一行结果。
+  - **禁用工作区**：不许禁用默认工作区（409 `default_workspace`）；禁用即吊销该工作区全部活跃
+    `sessions`（entry / worker_run / mcp_session / service，`sessions_platform_admin` 策略），API key 查找
+    与 Handle 校验（`lookupPrincipalByApiKeyHash` / `isPrincipalDisabled`）新增 join `workspaces.status`
+    ——控制台路径 `authenticateUserInWorkspace` 本已过滤；`afterCommit` 经 worker-supervisor
+    `POST /resident/stop` 停成员的入口容器（`TaskSupervisorClientPort.stopResident`，可选方法，测试
+    fake 不必实现；未配置任务运行时则跳过）。**顺带补上 P-A1 的缺口**：`set_user_status` 停用用户也停
+    其入口容器（design §8 一直这么写，P-A1 只吊销了会话）。
+  - **`instanceInstructions` 进 system prompt**：`application/platform/instance-instructions.ts` 的
+    `composeSystemPrompt`——固定顺序 WorkerDefinition `systemPrompt` → 平台附加指令（带标记行）→ 用户
+    `promptAddendum`（S3.13 原标记行不变）。入口：`agent-host-runtime.startTurn` 每 Turn 读一次
+    `platform_settings`（工作区事务内一行 select；读失败降级为空）。Worker：`invoke.ts` / `lifecycle.ts`
+    （重试）组合 `content.systemPrompt` 后经 `SpawnWorkerRunInput.systemPrompt` → `TaskSpawnInput.systemPrompt`
+    → worker-supervisor `/task/spawn`（`TaskSpawnRequestSchema` 新增可选字段，`task-service` 在
+    `createAndStart` 前写 `<task workspace>/.nexttime/system-prompt.md`）。**这是一个附带的行为变更**：
+    P-A2 之前一次性 Worker 容器从未收到过 WorkerDefinition 的 `systemPrompt`，一直跑 `entrypoint.sh`
+    的静态默认；现在收到了。生效时机按 design §8：之后启动的容器。
+  - **遗留 33（按 chat 分 pi 会话）只改 agent-host**：`AttachmentRecord.currentChatId`；`startTurn` 时
+    chat 变了就先发 `switch_session {id:'switch:<turnId>', sessionPath:'/workspace/.pi/sessions/chat-<chatId>.jsonl'}`
+    （不存在即新建），等到 `response` 成功且未被扩展取消才发 `prompt`；失败 / 取消 / 期间 stopTurn →
+    `turnRejected`（内核尚未收到 `turnAccepted`）。容器换了或 stdio 关了则 `currentChatId` 归零、下次必切。
+    `chatId` 先按 `/^[A-Za-z0-9_-]+$/` 校验，不可能拼出路径。`session_start` 在切换时重触发、
+    platform-extension 同名 `registerTool` 覆盖——STATUS 行 33 已核实。跨对话记忆仍靠 `context` 注入。
+  - **web**：`#/platform/workspaces`（"管理 → 工作区配置"子标题下第一项"工作区"，仅管理员；该子标题现在
+    对任何能见管理组的人渲染，逐工作区页仍按原规则显隐）——`PlatformWorkspacesPage`（`list_workspaces` +
+    `list_platform_models`）、`CreateWorkspaceForm`、`WorkspaceDetailPanel`（改名、入口模型下拉——名单非空时
+    只列名单内、允许的模型勾选清单、停用需二次确认且默认工作区按钮禁用并说明、owner 委托 =
+    `add_membership{role:'owner'}`，409 `already_member` 时改调 `set_membership_role`）、`UserPicker`
+    （懒加载 `list_users`，建区与委托共用）、`WorkspaceModelControls`。"打开工作区配置"只在管理员自己
+    是该工作区成员时切换过去，否则提示先把自己加为 owner。`handleSwitchWorkspace` 增加可选目标路由。
+  - **e2e**：`packages/web/e2e/workspaces.spec.ts`（serial 四步：admin 在用户页建 owner 用户并拿临时密码 →
+    工作区页建 `dept-<ts>`、只允许 `fake/fake-echo`、入口模型随之收窄 → owner 首登改密后侧栏只有工作区配置
+    项、无任何平台项，"我的智能体"下拉只有一个模型 → admin 停用再启用）。Playwright 按文件名字母序跑，
+    `workspaces` 会排在 `login` 之后而后者最后一个用例锁 `admin` 五分钟，因此 `playwright.config.ts` 拆成
+    `chromium`（其余 spec）与依赖它的 `chromium-login` 两个 project；代价是前者失败时后者跳过。
+  - **独立审查（opus reviewer）抓到并已修**：① 工作区禁用后**已认证的 WS 连接**仍可调能力，且
+    `send_chat_message` 会重新签出刚吊销的入口会话 → `dispatchCapability` 的工作区分支每次调用先读
+    `workspaces.status`，非 active 一律 403（HTTP / WS / MCP 同一卡口；集成测试断言禁用后既有 caller 的
+    `get_workspace` 被拒）；② owner 的 `set_agent_policy` 能随手改掉 / 撑破管理员设的 `allowedModels`，
+    或把 `defaultModel` 设到名单外让所有人解析成 `''` 而落到入口定义里钉死的模型 → 两个面共用
+    `governance/agent-profile` 的纯函数 `modelPolicyViolation`（非空名单必须含且必须有 defaultModel），
+    `set_agent_policy` 还校验模型在目录内（S3.13 的既有测试因此改为同时给 defaultModel）；③
+    `update_workspace{entryModel:null}` 只清了记录、入口 WorkerDefinition 里钉死的模型照旧在跑 → 该字段
+    改为不可为 null（管理员必须选一个具体模型；抽屉里不再有"平台默认"，新建时仍可不填），线上 `entryModel`
+    仍可为 null 只为表达旧工作区"未设置"；④ `switch_session` 回包是否回显 `id` 未核实 → 已对照 pi 0.84.4
+    `dist/modes/rpc/rpc-mode.js`（`success(id, "switch_session", …)`，`id = command.id`）确认，并容忍
+    无 id 的回包以免未来 pi 变更时把该用户卡死。
+  - **`config/llm-providers.fake.example.yaml` 多了 `fake-echo-alt`**：只为让 e2e 能观察到"允许的模型"
+    收窄"我的智能体"下拉（一个模型看不出差别）；fake-llm 不校验请求里的 model，验收脚本显式钉
+    `fake/fake-echo`，不受影响。
+  - **未做 / 留到后面**：管理员**不在**某工作区时不能进入它的深层配置页（成员 / 门 / 目录 / 配额）——
+    `resolveRequestCaller` 仍要求活跃成员资格，design §5 的"经 `X-Workspace-Id` 切换"未实现，页面提示
+    先把自己加为 owner；禁用工作区不切断成员在**其他**工作区仍有效的控制台 cookie（它是按用户发的），
+    只切断该工作区的会话与可见性；`platform_settings_history` 仍只写不读。
+
+### P-B 集成与模块
+
+> 原 S4.4 的 `gate_catalog`（平台级静态目录 + `upsert_gate_catalog_entry` 手工登记端点）设计被
+> design §6.3 取代：门实例改为打包门启动时向内核 `POST /internal/gates/announce` 自注册（稳定
+> `GATE_ID`），通用 `http` / `mcp` 门改由门宿主承载多实例、凭证页面直达门宿主，按 Operation 逐个开关。
+
+- **拆分与决定（2026-09-12，开工前）**：P-B 按 design §9 一行的内容有 P-A2 的两到三倍，拆成两个 PR 波次，
+  各自独立审查、合入、可回滚：
+  - **P-B1 门与集成目录**：门自注册（`POST /internal/gates/announce` + 心跳）、接入包三态与按 Operation 禁用、
+    门实例（发现 / 启用 / 禁用 / 失联 / `vetted`）、工作区侧"从平台目录一键启用"、MCP 提示位入 Operation 与
+    决策期信任规则、外部运行时盘点与吊销 + "访问"页签发 service Handle（复用既有 `issue_handle`）、
+    web 集成页。
+  - **P-B2 门宿主与模块**：gatekeeper-base 多实例宿主（`http` / `mcp`）、页面直达门宿主录凭证（5 分钟平台
+    JWT）、`vet_mcp_endpoint`、模块页（`list_modules` / `install_module` / `upgrade_module` /
+    `set_default_modules` / `promote_template`）、CI compose 加 fake MCP + 门容器跑 design §9 的 e2e。
+  - 决定 ①：**启用门实例与安装模块都是 `scope:'workspace'`、owner 动作**。`ontology_versions.proposed_by`
+    与 `registerGatekeeper` 的 `registeredBy` / `activityId` 都要真实 Principal，平台面没有；管理员不在某工作区
+    时先委托（P-A2 已记录的同一限制），不造"系统 Principal"。平台页只展示与配置。
+  - 决定 ②：**MCP 三个提示位存进 Operation、信任在决策时读**。`OperationSchema` 加可选
+    `read_only_hint` / `destructive_hint` / `idempotent_hint`，`importMcpTools` 从 `annotations` 填；
+    自动批准规则在 `request_action` 决策处：门为 `mcp` 时，需工作区门链接行指向 `trust='vetted'` 的实例
+    ∧ `!destructive_hint` ∧ `idempotent_hint`；自连（无链接行）的 MCP 永不自动批准；非 MCP 门维持 I8 双信号。
+  - 决定 ③：**P-B1 的 e2e 不起门容器**，在 CI 里经 `docker compose exec kernel` 用内部 token 调
+    `/internal/gates/announce` 播种一个"发现的门实例"（健康显示不可达，如实），页面走启用 / 三态 / 外部运行时；
+    design §9 的 fake MCP 全链路 e2e 归 P-B2（CI compose 加 `deploy/accept-s2/mcp` + gatekeeper-base 容器）。
+  - 决定 ④：**模块版本用仓库内索引 `ontology/modules.yaml`**（名、版本列表 `{file, version, notes, breaking}`），
+    "已安装版本" = 已发布 `definition` 的哈希匹配到的索引项，否则"已定制"；不加新列。P-B2 实现，
+    P-B1 的 0023 不为此留列。
+  - 决定 ⑤：**存活只用一种机制**：门每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60）重新 announce 当心跳，内核定时器
+    把 `last_seen_at` 超过 3 倍间隔的实例标 `lost`；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
+    已启用实例再次 announce 保持状态；端点变化写平台审计。三态变更不拆已有链接，只管新启用与目录可见；
+    按 Operation 禁用则在下一次调用就生效（与工作区禁用同一"按调用卡口"原则）。
+- **P-B2 再拆与决定（2026-09-12，P-B1 合入后、开工前）**：P-B2 再拆两个 PR 波次——**P-B2a 门宿主与页面直达凭证**
+  （风险高，先单独落地并在主机上稳住）→ **P-B2b 模块**（`ontology/modules.yaml` 索引、`list_modules` /
+  `install_module` / `upgrade_module` / `set_default_modules`、模块页与 owner 目录入口；`promote_template` 放最后
+  或再推）。P-B2a 的决定：
+  - 决定 ⑥：**实例定义由门宿主向内核拉取，不是内核推送**。design §6.3 写"内核经内部面推给门宿主"，但推需要一条
+    内核 → 宿主的凭证，今天不存在；拉（`GET /internal/gate-host/instances`，内部 token，启动时与每
+    `GATE_ANNOUNCE_INTERVAL_SEC` 一次）与 P-B1 announce 是同一个信任方向，不新增任何密钥。效果相同，记为措辞偏离。
+  - 决定 ⑦：**宿主实例就是 `gate_instances` 的一行**，不另建表：core 0024 加 `hosted boolean` 与 `definition jsonb`
+    （传输种类、目标地址、凭证模式、manifest 来源），`create_gate_instance` 落 `status='discovered'`、
+    `health='unknown'`、`last_seen_at null`、`endpoint ''`（审查后改：原定直接 `enabled`，但持内部 token 者可在宿主
+    首次 announce 前抢填一个活端点、无人复核就进工作区；改为与打包门同路——宿主接管、端点与 Operation 可见后
+    管理员再启用）；宿主接管后每个实例各自走 P-B1 的 announce 路——存活、接入包、链接、禁用名单全部复用，
+    内核不需要知道宿主地址。
+  - 决定 ⑧：**身份冻结从"管理员决定后"改为"首次被看见后"**（`last_seen_at is not null`）：管理员建的宿主行首次
+    announce 不能算 `identityMismatch`；一旦 seen，connector / transport / endpoint 照旧冻结。
+  - 决定 ⑨：**宿主尚未接管的实例拒绝工作区启用**（`last_seen_at null` 或 `operations` 为空 → 409 `gate_not_ready`），
+    否则工作区会发布零个 Operation、白留一条链接。
+  - 决定 ⑩：**凭证直达路的凭证是一张 5 分钟平台 JWT**：`issue_gate_host_token{gateId}` 用 Handle 私钥签
+    EdDSA JWT（`typ` 独立、`aud:'gate-host'`、`gate:<gateId>`、`obo:<存储槽>`、`sub:<用户>`、`exp` 5 分钟）；平台面
+    签的 `obo` 固定为共享槽 `__shared__`（非 UUID，不可能撞 Principal），工作区面（connection 组、需本工作区已链接
+    该实例）签 `obo:<principalId>`。Caddy 加 `handle_path /gate-host/* → gate-host:8083`；宿主用与 llm-proxy 相同的
+    `config/handle.pub` 验签，`POST` / `DELETE /i/<gateId>/gate/connected-accounts` **只**认
+    `gate` 声明等于路径 gateId 的平台 JWT（最初写的是"也接受既有 `gate_token`"，审查后收紧：`gate_token` 是内核对每个门
+    都带的同一把共享密钥，接受它等于任何工作区 owner 经内核就能改写宿主实例的槽位，见下文宿主实现说明、独立审查条目 ① 与
+    `runbooks/host-gatekeepers.md` §14.3；其余 `/i/*` 路由仍只认 `gate_token`），存储键取 JWT 的 `obo` 而非请求体。内核从未见过凭证——这条路第一次
+    做到"凭证不经内核"。两条反向校验入单测：内核 Handle 校验器拒绝这张 JWT（`typ` / 声明形状不同），宿主拒绝真
+    Handle（`aud` 不同）。
+  - 决定 ⑪：**宿主实例的共享凭证来自存储不来自环境变量**（`SharedEnvCredentialResolver` 服务不了 N 个实例）：
+    `credentialMode: 'shared'` 读 `__shared__` 槽（没有就无凭证调用，fake MCP 即此），`'connected_account'` 读
+    `obo`；一个宿主一把 `GATE_STORE_KEY_FILE`，每实例一个目录 `/data/gate/<gateId>/`。
+  - 决定 ⑫：**宿主路由是单组通配路由 + 内存表**，不是 N 次 Fastify 插件注册：Fastify 起监听后不能再加路由，
+    宿主又要在运行中增删实例，所以 `server.ts` 的 `/gate/*` 处理逻辑抽成 `registerGateRoutes(app, resolve, prefix)`，
+    单门（`resolve` 恒返回唯一门，前缀空）字节级不变，宿主用前缀 `/i/:gateId` 按表查。内核客户端本就拼
+    `${endpoint}/gate/observe`，端点写成 `http://gate-host:8083/i/<gateId>` 即可，客户端零改动。
+  - 决定 ⑬：**解除 P-B1 对通用 `http` / `mcp` 设 `platform_preset` 的 409**（宿主一出现就有平台跑的实例）；
+    `cli` / `ssh` 仍不能预置（无宿主）。决定 ③ 的 fake MCP 全链路 e2e 归本波：CI compose 起 `deploy/accept-s2/mcp`
+    与 `gate-host`，用例走"建 mcp 实例 → 宿主接管 → 平台启用 → 工作区启用 → 目录出现两个工具 → vetted →
+    禁用其一 → 目录隐藏"，并经 JWT 直达路存一次共享凭证（fake MCP 不用它，只证路通）。
+- 交付物：
+  1. kernel：`POST /internal/gates/announce`（内部面 token，同 supervisor；带 `GATE_ID`、种类、
+     `describe_operations`、健康端点，未启用的实例落"发现的门实例"、状态"未启用"；下线标"失联"）；
+     能力（`scope:'platform'`）：`list_connectors` / `set_connector_mode`（禁用 / 可自连 / 平台预置
+     三态，借 `ambientGatekeeperModes`）/ `list_gate_instances` / `create_gate_instance`（通用门宿主
+     实例：目标地址、传输种类、凭证模式）/ `test_gate_instance` / `set_gate_instance_status` /
+     `vet_mcp_endpoint`（`trust='vetted'` 标记，随时可撤、按决策时读）/ `list_external_runtimes`；
+     按 Operation 开关，过滤 gateway 签发 Handle 与能力目录；MCP 信任分级按 `readOnlyHint` /
+     `destructiveHint` / `idempotentHint` 分类（照 cloudflare-os `classifyTool` 规则，非自创）。
+  2. kernel：模块能力（§6.4）：`list_modules` / `install_module` / `upgrade_module`（复用
+     `seed-domain-pack` 逻辑生成新 OntologyVersion）/ `set_default_modules` / `promote_template`
+     （owner 的 `propose_*` Worker 模板 / Skill / Procedure 推荐到平台）。
+  3. gatekeeper-base：多实例宿主模式（一个容器承载 N 个 `http` / `mcp` 实例），实例定义由内核经
+     内部面推送，凭证由页面直接 POST 到门宿主（不经内核，同 `request_connection` 的直达路）。
+  4. web：集成页（三态目录、门实例列表 + 健康、按 Operation 开关、门宿主实例表单、`vetted` 标记）；
+     "外部运行时"标签（跨工作区盘点 + 吊销，替代 `issue-service-handle` CLI）；工作区"访问"页签发
+     service Handle；模块页（列表、安装/升级到工作区、默认模块、"推荐到平台"）；owner 的能力目录里
+     同样的安装/升级入口。
+- 实现说明（P-B1，2026-09-12，PR #175 → v0.9.0）：
+  - **摘要必填（遗留 311，#1143）**：`enable_gate_instance` 必须带 `preview_gate_instance_enable` 返回的 `manifestDigest`，不带为 400，清单变了为 409 `manifest_changed`；启用的判定顺序与预览一致，读清单放在与清单无关的拒绝之后。
+  - **迁移 core 0023**：`connectors`（三态 `mode` + `disabled_operations`；四个通用种类预置为
+    `self_serve`，打包门首次 announce 时以 `platform_preset` 建行）、`gate_instances`（主键 = `GATE_ID`，
+    存 announce 来的 manifest、状态 discovered / enabled / disabled / lost、`trust` byo / vetted、健康、
+    最近心跳）、`workspace_gate_links`（工作区 ↔ 实例 ↔ 该工作区的 Gatekeeper 对象）。前两张是平台级配置：
+    任何工作区事务可读（`*_read_all`），只有平台事务可写；链接表同时挂工作区隔离与平台两条策略。
+  - **`POST /internal/gates/announce`**（`interfaces/http/internal/gates.ts`，既有内部面守卫）：
+    `.strict()` 体，无凭证字段；跑超级用户 client（门既不是用户也不是 Principal），不写审计行（0019 的
+    actor 形状约束要求平台行有用户），以实例行的 `last_seen_at` / `updated_at` 与日志为记录。首见 →
+    discovered；已 enabled / disabled 的心跳保持状态；lost 的实例再出现 → 有链接则 enabled 否则 discovered。
+    存活只用一种机制（决定 ⑤）：kernel 每 60 s 把 `last_seen_at` 超过 `GATE_LOST_AFTER_SEC`（默认 180）的
+    enabled / discovered 实例标 lost；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
+  - **gatekeeper-base `announce.ts`**：`GATE_ID` / `GATE_CONNECTOR` / `KERNEL_URL` 三者齐全才开（否则
+    no-op 并记一行 info，验收夹具与 P-B2 宿主模式不受影响）；首次成功前 1 s → 30 s 指数退避，之后按
+    `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60）心跳，任何失败只记 warn、永不 crash、永不打印 token；端点默认
+    `http://<GATE_SERVICE_NAME|hostname>:<GATE_PORT>`，target 取 `GATE_TARGET` → `RAGFLOW_BASE_URL` →
+    `DOCKER_HOST`（都是地址不是密钥）。`startGatekeeperServer` 与 docker / ragflow 两个打包门的
+    `start*Gate` 都接了；compose 给两个门服务加 `internal_token` secret 与 `GATE_*` / `KERNEL_URL` 环境。
+  - **平台能力**（`platform-gates-handlers.ts`）：`list_connectors` / `set_connector_mode`（通用种类不能设
+    `platform_preset`：P-B2 出门宿主前没有平台跑的实例，409 `connector_mode_not_allowed`）/
+    `list_gate_instances` / `get_gate_instance` / `update_gate_instance`（`vetted` 只对 mcp，409
+    `trust_not_applicable`）/ `test_gate_instance` / `list_external_runtimes` / `revoke_external_runtime`。
+  - **工作区侧**（`gate-instance-handlers.ts`，owner）：`list_available_gate_instances` 只列
+    `platform_preset` 且 enabled 的实例（本工作区已链接的即使实例后来 disabled 也保留显示）；
+    `enable_gate_instance` 按 CLI `register-gatekeeper --publish` 逐步：Activity → `registerGatekeeper` →
+    `importManifest`（origin import）→ 全部 `publishOperation` → `ConnectionCreated` → 写链接行；按
+    (工作区, gate) 幂等。决定 ①：这一步需要真实 Principal，所以留在工作区面。
+  - **按 Operation 禁用两半**：读投影（`list_operations` / `get_gatekeeper`）按链接行的 connector 隐藏；
+    `request_action` / `observe_operation` 每次调用读 `readGateLinkPolicy` 后拒绝（`ForbiddenError`
+    `operation_disabled`）。工作区自连的门没有链接行，不受平台禁用名单影响（记录在能力描述里）。
+  - **MCP 信任**（决定 ②）：`OperationSchema` 增 `read_only_hint` / `destructive_hint` / `idempotent_hint`
+    （词表守卫例外表随之加三项），`importMcpTools` 原样保留 annotations；`request_action` 对
+    `transportKind === 'mcp'` 的门按 `mcpAutoApproveAllowed`（vetted ∧ !destructive ∧ idempotent）决定
+    是否允许自动批准，不允许时策略引擎给出独立原因 `mcp_gate_not_vetted`（新 `PolicyEvaluationInput.
+    mcpTrustBlocked`），审计能区分"未受信"与"Operation 本身不可自动批准"。
+  - **外部运行时**：`issue_service_handle`（workspace，owner）取代 `issue-service-handle` CLI 的页面路径——
+    给一个活跃的 service Principal 开 `service` 会话并按能力名列表签 Handle（`assertValidScope` 仍拒绝
+    human-only 能力），token 只返回一次；平台 `list_external_runtimes` 跨工作区列 service Principal 的活跃
+    会话，`revoke_external_runtime` 吊销。CLI 保留（无浏览器场景，`docs/runbooks/host-collector.md`）。
+    **R-36 更正（2026-10-02 复审，遗留 88 的内核半）**：`issue_service_handle` 原来接受平台自己的内部 service
+    Principal（`__gatekeeper_service__` 等，遗留 88 只在页面上隐藏了它们）——给 `__gatekeeper_service__` 签一把带
+    `assert_fact` 的 Handle，写出的 Fact 与门自己的观察无法区分；也不看 service Principal 的角色，`member` 角色的
+    key 能拿到只有 builder 才有的 `propose_*`。现在内部 Principal 以 `PrincipalOperationRefusedError`
+    `platform_managed`（409）拒绝、不开会话；请求的能力按该 Principal 的角色过滤（`roleSatisfiesMinRole`，与
+    `entryScope({ role })` 同一规则），超出的静默丢弃（同 `issue_handle`），返回的 `scope` 即 Handle 实际携带的范围。
+    `authorize.ts` 里"两个签发点都带角色"的说法改为三个（CLI `issue-service-handle` 是唯一不收窄的签发点）。测试：
+    `platform-gates.integration.test.ts` 的 "issue_service_handle (R-36)" 组。
+  - **web**：`#/platform/integrations`（"管理 → 集成"，仅管理员；`PlatformIntegrationsPage` 三个标签：接入包——
+    三态下拉 + 展开后按 Operation 的禁用勾选清单；门实例——列表 + 抽屉（改名、启用 / 禁用、只对 mcp 显示
+    的 `vetted` 开关、"测试连接"、公告的 Operation 表）；外部运行时——跨工作区列表 + 二次确认吊销）；
+    工作区"系统接入"页新增"从平台目录启用"段（`AvailableGateInstancesSection`：已启用则链到门详情）；
+    "访问"页新增"签发外部运行时凭证"段（`IssueServiceHandleSection`：选 service Principal、能力名、
+    有效期，token 只显示一次）。
+  - **e2e 播种**（决定 ③）：`.github/workflows/e2e.yml` 在 kernel 起来后 `docker compose exec kernel node -e`
+    用 `/run/secrets/internal_token` 向 `/internal/gates/announce` 播一个 `ci-fixture-mcp` 实例
+    （端点 `http://127.0.0.1:1`，健康如实显示不可达）。
+  - **独立审查（sonnet reviewer）抓到并已修**：① 按 Operation 禁用只在建 ActionRequest 时检查，已批准 /
+    待审批的请求在执行时不再复查 → `action-executor.execute` 执行前重读 `readGateLinkPolicy`，禁用即以
+    `operation_disabled` 失败（"下一次调用就生效"覆盖到已在途的审批）；② `revoke_external_runtime` 只改
+    `sessions.status`，Handle 校验看的是 `capability_handles.revoked_at` → 同时调 `revokeSession`（集成测试
+    断言会话下的 Handle 全部 `revoked_at`）；③ 已 enabled / disabled 的实例被任何持内部 token 者用同名
+    announce 覆盖 connector / transport / endpoint → 身份字段在管理员决定后冻结，不一致的 announce 只算心跳、
+    健康标 `unknown`、日志 warn，`operations` / `target` 仍可更新（新版本门合法地新增 Operation）；
+    ④ lost 恢复时无链接就退回 discovered、丢掉管理员的 enabled 决定 → 0023 加 `status_before_lost`，
+    恢复到失联前状态；⑤ 并发 `enable_gate_instance` 竞态撞主键 → 与 `invoke.ts` 同款 `pg_advisory_xact_lock`。
+  - **e2e 首次抓出的既有 bug**：控制台"系统接入"页与接入向导仍把 `search` 的结果当裸数组解析，而 `search`
+    自 W5 起返回 `{items, nextCursor?}` 信封——"已注册的系统"一段一直报 "F.map is not a function"（单测的 fake
+    返回数组，从未暴露）。`lib/connections.ts` 加 `searchItems()` 同时接受两种形状，三处调用改用它，
+    fake 改为信封。运行手册"已知缺口"不需要新增：问题已修。
+  - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
+    （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
+- 实现说明（P-B2a 门宿主与页面直达凭证，2026-09-12，PR #179 → v0.10.0）：
+  - **迁移 core 0024**：`gate_instances` 加 `hosted boolean` 与 `definition jsonb`（check：二者同真同假），
+    `grant delete`。宿主实例由 `create_gate_instance` 落行：connector = 通用种类名（`http` / `mcp`，0023 已预置）、
+    `status 'discovered'`、`health 'unknown'`、`endpoint ''`、`last_seen_at null`——"等待宿主接管"，接管后管理员启用。
+    `http` 实例的 `manifestSource` 必填（契约 `superRefine` + 表单 required；否则宿主导入零 Operation、永远 `gate_not_ready`）。
+  - **内核**：`GET /internal/gate-host/instances`（内部面守卫，只回定义，绝无凭证）；`upsertAnnouncement`
+    的身份冻结加一个例外：`hosted ∧ last_seen_at is null` 的行不冻结（决定 ⑧，宿主首次 announce 才填端点），
+    此后照 P-B1 冻结；`enable_gate_instance` 在 `last_seen_at null ∨ operationCount 0` 时 409 `gate_not_ready`
+    （决定 ⑨）；`test_gate_instance` 对空端点直接记 `unknown` 不探测；`set_connector_mode platform_preset`
+    只对 `cli` / `ssh` 409（决定 ⑬）。新平台能力 `create_gate_instance` / `delete_gate_instance`（有链接 409
+    `gate_in_use`，打包门 409 `gate_not_hosted`）/ `issue_gate_host_token`（只对 `shared` 模式的宿主实例，否则
+    409 `credential_mode_mismatch`）；工作区能力 `issue_gate_credential_token`（member；要本工作区已链接该实例且
+    实例为 `connected_account`，槽位 = 调用者 Principal）。四个都是 human-only。
+  - **R-46 更正（2026-10-02 复审）——删除宿主门实例按不可逆处理，被占用时不提供（#446）**：上面的 `delete_gate_instance` 会销毁门宿主上存的凭证（不在任何备份里），控制台却只用没有影响说明的内联两次点击，并且在内核会以 `gate_in_use` 拒绝时仍提供按钮。`GateInstanceDetailPanel` 现在在 `enabledWorkspaceCount > 0`（与内核 `gate_in_use` 用的是同一个计数）时禁用删除并给出"N 个工作区启用着这个实例…"（`gate-instance-delete-blocked`）；否则用 `Confirm tier="irreversible"`，重输 gate id，说明门宿主销毁全部存储的凭证（共享凭证或每个成员的 connected-account 凭证）、不在任何备份里、同 id 的新实例不会继承；迟到的 `gate_in_use` 仍内联显示在确认里；错误经 `friendly()` 映射。内联确认及其本地状态删除。内核与 `delete_gate_instance` 语义不变。测试：`GateInstanceDetailPanel.test.tsx`（不可逆档与"销毁共享凭证"、`enabledWorkspaceCount = 2` 时禁用并给原因）、`PlatformIntegrationsPage.test.tsx`（`gate_in_use` → 重试流程）。
+  - **共享 `gate-host-token.ts`**（决定 ⑩）：`mintGateHostToken` / `verifyGateHostToken`，EdDSA + Handle 私钥，
+    `typ 'nt-gate-host+jwt'`、`aud 'gate-host'`、`gate` / `obo` / `sub`、`exp ≤ 300 s`（超出上限被夹到 300）；
+    `.strict()` 声明形状与 `HandleClaimsSchema` 互斥，单测双向断言（Handle 校验器拒它、它拒 Handle）。
+  - **gatekeeper-base**：`server.ts` 的七条 `/gate/*` 路由抽成 `registerGateRoutes(app, {prefix, resolve})`，
+    `createGatekeeperServer` 用空前缀 + 恒定 resolve，单门行为不变（既有 server 测试原样通过）；`host.ts`
+    `createGateHost` / `startGateHost`（`GATE_MODE=host` 进 `main()`）：拉定义 → reconcile 内存表（定义变了就重建、
+    列表里没了就摘掉）→ 每个已就绪实例 announce 一次；`mcp` 实例 `tools/list` 导入、`http` 实例拉 OpenAPI 导入，
+    目标不可达则不 announce 只记 warn 并在下一轮重试；路由前缀 `/i/:gateId`，`onRequest` 守卫先认 `gate_token`，
+    `POST` / `DELETE …/gate/connected-accounts` **只**认平台 JWT（`gate` 声明必须等于路径 id；审查后改：
+    这两条路由不再接受 `gate_token`——它是内核对每个门都带的同一把共享密钥，`create_connection` 又允许 owner 指向
+    任意 URL，接受它就等于任何工作区都能经内核改写任何宿主实例的任何槽位），通过则把 JWT 的 `obo` 作为强制槽位、
+    忽略请求体的 `onBehalfOf`；实例被移除或定义变更时宿主 `rm -rf` 它的凭证目录（改名不算变更；审查后加：否则删掉再
+    同名新建指向别的系统，旧凭证会跟着 id 发给新系统）；`GET /healthz` 无鉴权只报就绪与计数。
+    `credentials/hosted.ts` `HostedCredentialResolver`：`shared` 读 `__shared__` 槽（空则无凭证调用），
+    `connected_account` 读调用者槽（空则拒绝）；一宿主一把 `GATE_STORE_KEY_FILE`，每实例一目录。
+    `announce.ts` 抽出 `postAnnouncement` 与导出 `loadInternalToken` 供宿主复用。
+  - **部署**：compose 新服务 `gate-host`（gatekeeper-base 镜像，`GATE_MODE=host`，secrets `gate_token` /
+    `internal_token` / 新 `gate_host_store_key`，只读挂 `config/handle.pub`，`/healthz` 健康检查，依赖 kernel
+    healthy）；`gen-handle-keys.sh` 多生成 `secrets/gate-host-store.key`，`host-bootstrap.sh` 多建 `gate-host/`；
+    Caddyfile 加 `handle_path /gate-host/* → gate-host:8083`（唯一绕过内核的路径，注释写明原因）。
+    CI：`deploy/ci/docker-compose.ci.yml` 起 `gate-host` 与 `fixture-mcp`（`deploy/accept-s2/mcp` 的镜像、不带
+    profile 的新服务名），e2e 工作流多一步 `up -d --wait gate-host fixture-mcp`。
+  - **web**（sonnet builder）：集成页门实例标签新增"新建门宿主实例"抽屉（`CreateGateInstanceForm`：id / 名称 / 种类 /
+    目标 / 凭证模式 / `http` 的 OpenAPI URL）、列表行 "宿主" 徽标与 "等待宿主接管" 状态、详情抽屉显示定义、删除（二次确认，
+    `gate_in_use` 原样显示）、`shared` 模式的 "录入共享凭证" 段；`GateCredentialEntry` 组件两处复用（`requestToken` 注入）：
+    取 5 分钟令牌 → Bearer token 或原始 JSON → `lib/gate-host.ts` `postGateCredential` 直接 `fetch(url)` 到宿主，成功清空
+    输入、从不持久化令牌与凭证；工作区"系统接入"的平台目录段对每条已链接实例给 "录入我的凭证"（`issue_gate_credential_token`，
+    非 `connected_account` 实例回 409 就地显示）。顺带：`list_available_gate_instances` 从 owner 放宽到 member（目录元数据，
+    启用按钮仍只 owner 可见），否则成员没有入口录自己的凭证；`platform-errors.ts` 补六个错误码文案。
+  - **e2e**（`packages/web/e2e/gate-host.spec.ts`，sonnet builder；决定 ③ 的 fake MCP 全链路）：管理员新建 `e2e-hosted-mcp`
+    （目标 `http://fixture-mcp:8080/`）→ 轮询至宿主接管（心跳 + 2 个 Operation，≤ 90 s）→ 录入共享凭证经 JWT 直达路存入
+    → 测试连接 ok → 启用实例 → 接入包 `mcp` 设平台预置 → owner 在系统接入一键启用、目录出现两个工具 → vetted →
+    接入包禁用其一、目录隐藏、再恢复。CI 工作流多起 `gate-host` 与 `fixture-mcp` 两个服务。
+  - **独立审查（sonnet reviewer）抓到并已修**：① P1 宿主凭证路由同时接受 `gate_token`，请求体的 `onBehalfOf` 就成了
+    槽位——任何工作区 owner 用 `create_connection{endpoint: 'http://gate-host:8083/i/<id>', onBehalfOf:'__shared__'}`
+    就能让内核替他把凭证写进平台预置实例的共享槽 → 这两条路由只认平台 JWT；② 删除再同名新建的实例复用旧凭证目录
+    → 移除 / 定义变更时宿主清目录；③ 宿主实例建即 `enabled`，内部 token 持有者可抢填端点且无人复核 → 建为
+    `discovered`，接管后管理员启用；④ `http` 实例不填 `manifestSource` 永远 `gate_not_ready` → 契约与表单必填，
+    宿主对零 Operation 的实例每轮重试。测试 builder 另抓到：宿主行首次 announce 可改 connector / 种类 → 与定义不符
+    直接 409 `identity_mismatch`、不写任何字段。
+  - **未做 / 留到 P-B2b**：模块页与 `list_modules` / `install_module` / `upgrade_module` / `set_default_modules` /
+    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`；**遗留 36**（P1，P-B2b 前单独修）：`create_connection` 的自填端点仍可指向宿主实例、绕过链接行的禁用名单与 `vetted` 并借用共享凭证——拒绝命中 `gate_instances.endpoint` 的端点。
+  - **R-69 更正（2026-10-02 复审，L6-9）——`tools/list` 要鉴权的 `mcp` 宿主实例现在能被接管：凭证路由按实例表解析、存入后立即重握手（#453）**：上面的接管流程默认首次 `tools/list` 无需凭证；目标要求每个方法（含 `tools/list`）都带 bearer 时，构建用实例存储里的内容调 `tools/list`，而存储是空的 → 401 → 构建失败、`instance.gate` 不设；`POST /i/<gateId>/gate/connected-accounts` 又只解析**已构建**的实例（`resolve` 在 `!instance.gate` 时返回 `undefined`），管理员的凭证 POST 拿到 404 `gate_not_found`，唯一能让构建成功的那份凭证永远存不进去；实例永远"等待宿主接管"，决定 ⑨（`gate_not_ready`）又挡着不让启用。现在：①凭证路由按实例表解析、不论是否已构建——`registerGateRoutes` 增可选 `resolveCredentialRoute`（缺省 `resolve`，单门服务不变），新类型 `CredentialRouteContext { connectedAccountStore?, forcedOnBehalfOf?, afterStore? }` 只覆盖这两条路由需要的东西，`GateRouteContext extends CredentialRouteContext { gate }`，从包 index 导出；POST 路由在 `set` 之后 `await ctx.afterStore?.(slot)`。②`shared` 模式的 `mcp` 实例共享槽存入成功后，宿主在响应前立刻用该凭证重建实例并宣告（`afterCredentialStored` / `announce`），内核不必等下一个 tick 就能看到心跳与 Operation 数；重握手失败则实例保持原样（未接管的仍未接管，已接管的保留上一次构建），`buildError` 记原因（如 `responded 401`），响应仍是 `{stored:true}`（凭证确实存了，wire 形状不变）。③构建按实例串行（`buildInTurn(instance, onlyIfNotReady)`）：tick 与凭证存入都可能触发构建，先于凭证存入开始的握手绝不能落在其后开始的握手之后；tick 的重试轮到它时重新检查就绪。④每实例**一个**幂等存储（`HostedInstance.idempotencyStore`，随实例在 `reconcile` 里与 `ConnectedAccountStore` 一起创建，所有构建共用）：重握手会替换 `GatekeeperBase`，而 `apply` 调用可能在途，`JsonFileIdempotencyStore` 对同一文件两个写者不安全（会丢 pending 键或互相覆盖快照）。⑤改名原地更新表项（原来用展开复制替换，运行中的构建可能落到过期副本），`displayName` 改可变。**语义与不变式不变**：凭证只在门进程与其加密存储里（红线）——浏览器 POST 到宿主、内核从不见凭证，新测试断言密钥不出现在任何日志行与宣告里，info / warn 只带 `gateId`、`operationCount` 与传输层错误文本（如 `mcp transport: tools/list responded 401`）；信任边界不变：凭证路由仍只收平台 JWT（`gate` 声明 = 路径、槽 = `obo`），`gate_token` 仍打不开，宿主未列出的 gate 仍 404 `gate_not_found`；只有构建本身所出示的凭证才驱动重握手——`mcp` 实例的共享槽；`connected_account` 实例的成员槽从不触发发现，OpenAPI manifest 仍无凭证拉取；决定 ⑪ 的清目录不变，移除 / 重建的实例仍清数据目录，实例被移除或替换后才结束的握手不宣告（新条目由 tick 负责）。无迁移、无 wire 或注册表变更（`pnpm contract:check` 干净），回滚即还原旧行为。测试：`packages/gatekeeper-base/src/host.test.ts` 加要求鉴权的 MCP fixture（`mcpRequiredToken`：无 `Bearer <token>` 的任何方法回 401）与 `R-69` 组——①连接 → 401、未就绪、未宣告 → 存共享凭证（200）→ `tools/list` 带 bearer、实例就绪含 2 个 Operation 且只宣告一次（都在响应之前）→ `observe` 可用，密钥不在任何日志 / 宣告里；②存错凭证（200），实例仍未就绪、`buildError` 401、无宣告，`DELETE` 对未构建实例可用，正确凭证随后接管；③已接管的实例在轮换被拒后保留 2 个 Operation（`describe_operations` 仍服务）并带 `buildError`，正确凭证重新宣告；④`connected_account` 成员凭证不触发 `tools/list`；⑤宿主未列出的 gate 的凭证 → 404 `gate_not_found`。①–③ 修复前失败，④⑤ 是护栏。运行手册 `host-gatekeepers.md` §14.2 第 3 步改写为先录凭证再接管、立即重握手、被拒时 `/healthz` 的 `buildError` 长什么样。**已知局限（本 PR 不改，需决定）**：`connected_account` + 要鉴权的 `tools/list` 仍无法接入——该模式的发现不带凭证，成员 token（`issue_gate_credential_token`）要先有工作区链接、链接又要实例就绪（决定 ⑨），出路是一项决定，例如允许管理员在 `connected_account` 模式下填共享槽作仅供发现的凭证，目前 runbook 写明先用 `shared`；`http` + 要鉴权的 `manifestSource` 同形，OpenAPI 文档无凭证拉取，把目标凭证附到任意 manifest URL 可能把它发往另一个源，本 PR 不碰。
+- 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
+  工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
+  装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程
+  不登主机。
+- 不做：`cli` / `ssh` 门的通用宿主化（仍是打包门 + 自注册）；上传模块文件与外部模块仓库（之后）；
+  第三方 pi extension（已否决，见 §11）。
+
+### P-C 运行层与运行状态
+
+- 交付物：
+  1. supervisor：`GET /images`（只列带平台 label 的镜像）；`deploy/worker-runtime/Dockerfile` 加
+     `LABEL ai.nexttime.pi-version / platform-extension-version / built-from`；滚动重建复用已有
+     `/resident/stop`，下次该用户发言时按平台设置里的活动镜像 `spawn`。
+  2. kernel：活动镜像 `WORKER_IMAGE` 从 env 改为平台设置项（env 仍作缺省；`WORKER_IMAGE_ALLOWLIST`
+     仍在 env、不进页面）；能力（`scope:'platform'`）：`runtime_inventory`（活动镜像
+     tag/digest/内含 pi 版本与扩展版本、入口容器列表及是否"待重建"）/ `list_runtime_images` /
+     `set_active_runtime_image` / `roll_entry_containers`（先标 draining、拒绝新 Turn，当前 Turn
+     结束后 stop，页面支持"全部 / 选中 / 仅我自己"）/ `rollback_runtime_image`（改回上一个 digest +
+     同样的滚动重建）；`pi_drift`（`pi.version`、镜像内 pi 版本、平台扩展版本三者是否一致，读
+     `pi-drift.yml` 写的静态 JSON，不出网查 npm）。
+  3. kernel：`platform_status`（原 S4.5：各服务健康——内核内部探测 `llm-proxy` / `egress-proxy` /
+     `worker-supervisor` / 各门实例 / `postgres`——最近备份文件名与时间、30 天跨工作区 `llm_usage`
+     汇总、最近 50 条审计）。
+  4. web："运行层"页（活动镜像、镜像列表、入口容器盘点、滚动重建进度、回滚、pi 漂移）；"运行状态"
+     页（只读，服务健康 + 备份 + 用量 + 最近审计）。
+- 完成标准（design §9 P-C e2e）：构建带新 label 的运行时镜像 → 运行层页设为活动镜像 → 滚动重建
+  （页面显示进度，忙的容器在其 Turn 结束后才换）→ 入口容器 digest 变为新镜像 → 回滚 → digest 变回
+  上一个；停掉一个门实例 → 运行状态页 30 秒内标红，页面全程只读。
+- 不做：在页面里构建镜像（已否决，见 §11，构建留 CI / 主机）；备份定时器（E7，最后）；告警。
+
+### P-D 模型与供应商
+
+- 交付物：
+  1. `llm-proxy`：自有可写目录 `${NEXTTIME_DATA}/llm-proxy/`（`providers.yaml` + `keys.env`，0600；
+     首次启动从现 `config/llm-providers.yaml` + `secrets/llm-proxy.env` 导入）；热加载；`gen-models`
+     逻辑内置，配置变更后**原地重写** `config/models.json`；管理端点 `GET/PUT/DELETE
+     /admin/providers[/<id>]`、`POST /admin/providers/<id>/test`；鉴权为内核签发的平台管理员会话
+     JWT（`typ` 独立，claim `platform:true`，5 分钟，同 §7.11）；每次变更经内部通道上报内核记审计
+     `provider.config_changed`。
+  2. kernel：`POST /api/platform/llm-session`（签发上述 JWT，仅平台管理员）；`list_models` 目录按
+     `models.json` mtime 重读；`set_entry_model`（minRole owner）写 `workspaces.entry_model`
+     （CLI `--entry-model` 参数保留、写同一列）；能力 `set_platform_default_model`（平台默认入口
+     模型，新工作区与新用户 AgentProfile 取它）；预算 100% 拒绝在 `llm-proxy` 落地（遗留 19），
+     预算来源链：平台设置默认值 → 用户预算 → 工作区 quota。
+  3. caddy：`/api/llm-admin/*` → `llm-proxy:8082/admin/*`（仅转发，不注入任何东西）。
+  4. web："模型与供应商"页（平台分组）；工作区"模型与配额"页加"默认入口模型"。
+  5. compose：`llm-proxy` 挂载改动（一个可写目录，根仍只读，`cap_drop` 不变）。
+- 完成标准（design §9 P-D e2e）：控制台新增一个供应商并测试连接 → 不重启任何容器，新建工作区选到
+  该供应商的模型 → 该工作区首轮对话经 `llm-proxy` 打到新上游（`llm_usage` 记到新 provider）；key
+  在 `GET` 里只有掩码；内核进程内 `grep` 不到 key（沿用 S2 的 no-token-leak 断言形式）；`llm-proxy`
+  重启后配置仍在；预算超限的用户发消息被 100% 拒绝。
+- 不做：模型路由 / 回退；BYOK（已否决，见 §11，产品定位不同）。
+
+## 5b. S5 — 基座打磨（2026-09-16 立项）
+
+背景：维护者 2026-09-16 决定暂不做场景层（RouterOS 门、网络领域包等推后），先把基座打磨好。立项前对
+main（v0.10.0）逐项核实：2026-09-09 回顾 §5 列的 12 个非最优点里，`explain` 收窄（#132）、`search` 分页
+（#132）、`create_task` 下架（#131）、driver 合一（#145）、fake provider 走 compose override（#146）、
+Explorer 按调用者鉴权（#153）、真实模型验证模式（#156）七项已经关闭。仍然开放且属于基座的，按"系统机制
+持有而不是靠 prompt 与约定"这条线归为 S5：
+
+1. **I2 只是能力，不是不变量**：`substrate/ontology/registry.ts` 的 `validateLink` 只被 `validate` 能力的
+   handler 调用；`SqlGraphStore.assertFact` / `supersedeFact` 与 `submit_observations` 的 link 写入既不校验
+   LinkType 是否被已发布 OntologyVersion 声明，也不校验 domain / range（ingest 只校验 ObjectType 存在与
+   identityKey 完整）。设计 §5.4 写的是"内核写入校验 + 触发器"（`code-review-2026-09-10.md` §4 第 1 项）。
+2. **溯源有起源没有新鲜度，也没有失效**：0018 给 Fact 加了起源 `observation_id`，但同源同内容再断言的幂等
+   no-op（#120）不记录"再次确认"；`links` / `objects` 没有 `last_observed_at`；采集器只断言看到的对象，消失的
+   对象永不失效——遗留 28 的幻影 Container 就是这个缺口的直接表现。
+3. **数据与代码没分开**：领域包烤在 kernel 镜像里、采集器把 Source id 缓存在本地文件、`register_source` 是裸
+   insert（遗留 9）；验收工作区靠名字正则清理（遗留 11 的一部分）。
+4. **prompt 与契约的漂移没有机制拦**：2026-09-09 审计的 15 条里，Worker prompt 的结果契约键名
+   （`facts_to_assert` vs schema 的 `factsToAssert`）、不存在的 `describe_operations`、静态"尚未加载
+   Skills"段等仍在 main 上；没有任何守卫在 CI 里对 prompt 引用的工具名与契约键做校验。
+5. **加固批次与稳定性缺陷已编号但未排期**：遗留 20 / 21 / 22 / 23 / 24 / 31 / 34 / 36 与 30；`invoke_worker`
+   在插入 `queued` 与 `spawnWorkerRun` 之间若内核崩溃会留下永久 `queued`（`create_task` 下架后 `queued`
+   没有任何消费者或清扫者）。
+
+S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W8 剩余项（P-B2b / P-C / P-D）的先后由维护者定，
+见"需要维护者决定的四项"；文件所有权上 S5 的前两波与 P-B2b 互斥，可并行。
+
+### S5 本体修正（增量）
+
+- World Model：不变。
+- Epistemic Model：Fact 在起源 Observation（0018 已有）之外，新增 `last_confirmed_by` Observation（0..1，
+  最近一次同内容再观察）；Object 新增 `last_observed_at`。新增失效原因 `not_reobserved`：同一 Source 在一次
+  声明为"完整"的观察窗口里未再观察到的 Fact 被失效（`invalidated_at`），Object 不删除（身份仍存在），
+  只是 `last_observed_at` 停止前进。
+- Governance Model：LinkType 写入受调用者可见的已发布 OntologyVersion 约束（I2 从"可校验"变为
+  "必满足"）；Task 的 `queued` 有清扫者（`create_task` 已下架，只剩崩溃恢复一种来源）。
+- 已知且推后的不对称：Object 属性（`objects.properties` jsonb）仍是 Activity 级溯源，没有逐属性
+  Observation；S5 不处理。
+
+### S5 新增不变量（进 `substrate/audit/invariant-checks.ts` 与 `/internal/metrics`）
+
+- I-S5-1：不存在 Fact 的 `link_type` 未被调用者可见的已发布 OntologyVersion 声明，或其 source / target
+  ObjectType 不满足该 LinkType 的 domain / range（只对 S5.1 落地后写入的行计数）。
+- I-S5-2：`epistemic_status='observed'` 且 `recorded_at` 晚于 S5.2 迁移时刻的 Fact 必有 `observation_id`。
+- I-S5-3：不存在 `status='queued'` 且 `updated_at < now() - 5min` 的 Task。
+- I-S5-4：`explain` / `traverse` / `search` 响应体大小分布（直方图，告警阈 256KB；有界性指标，不硬失败）。
+
+### S5.1 本体约束在写入点强制（I2 落地）
+
+- 背景：见上第 1 点。写入点三处：`SqlGraphStore.assertFact` / `supersedeFact`（承接 `assert_fact` 能力、
+  Worker 结果契约的 `factsToAssert`、MCP `add_relationship` 别名）与 `submit_observations` 的 link 写入。
+- 设计：写入前调用 `validateLink`（按调用者可见的已发布版本；一次请求内按 workspace 缓存类型表）。结果
+  三态：`declared_and_valid` 放行；`undeclared_link_type` 与 `domain_range_violation` 按工作区策略处理——
+  `reject`（默认：400 `ontology_violation`，错误体带 `linkType / sourceType / targetType / expected`，让 agent
+  能自纠，不需要 prompt 教它先调 `validate`）或 `warn`（写入 + 审计 `ontology_violation` + 计数）。策略是
+  工作区配置项 `workspaces.ontology_enforcement`（迁移 `core/0025`，与 P-A2 的 `entry_model` / `status`
+  同表同风格；环境变量 `ONTOLOGY_ENFORCEMENT` 作新建工作区缺省）。不做 DB 触发器：本体是按版本与可见性
+  解析的数据，触发器里无法正确解析"调用者可见"，应用层强制 + I-S5-1 计数即是设计 §5.4 的落地形式，
+  设计文档该行同步改写。
+- 迁移：目标主机先以 `warn` 跑一轮采集与 S2 / S3 场景，`/internal/metrics` 违规计数为 0 后切 `reject`；
+  测试与 CI 一律 `reject`。历史行不回溯。
+- 交付物：写入点校验、错误类型、审计、指标；`assert_fact` / `submit_observations` 描述写明该约束；
+  `ontology/ops-assets-v2.yaml` 中缺 domain / range 声明的 LinkType 补齐；单测 + DB-gated 集成测试；
+  `accept_s3.sh` 增一步"故意违规 `assert_fact` → 400 `ontology_violation`"；`graph-ai-middle-platform-
+  design.md` §5.4 I2 行改为"内核写入校验（应用层，按调用者可见版本）+ 不变量计数"。
+- 验收：采集器首跑 / 二跑违规计数 0；违规 assert 返回 400 且审计有记录；`warn` 模式写入成功且计数 +1。
+  依赖：S3.1、S3.3。关闭：`code-review-2026-09-10.md` §4 第 1 项。
+
+#### S5.1 实现说明（2026-09-17，PR #191）
+
+- **强制点在 store 层，不在 handler**：`substrate/graph/ontology-guard.ts` 的 `enforceOntologyOnLinkWrite`
+  由 `SqlGraphStore.assertFact` 与 `supersedeFact` 在任何写入前调用，一处覆盖全部八个写入者
+  （`assert_fact` / `supersede_fact` 能力、`submit_observations`、Worker 结果契约的 `factsToAssert`、
+  `request_action` 的 observed Fact、`registerGatekeeperObject` 的 `connects_to` / `exposes`、Skill 的
+  `uses`、Procedure 的 `steps`）。`assertFact` 同源变更委托 supersede 时不再重复校验（私有
+  `supersedeValidatedFact`）。
+- **只认已发布版本**：`loadPublishedLinkTypes` 取每个本体族最新 `published` 版本合并；与 `validate`
+  能力用的 `loadVisibleOntology`（含调用者自己的草稿）不同——草稿是提议，不授权写入。这是唯一可感知的行为
+  变化：只在草稿里声明的 LinkType 要发布后才能写。
+- **端点类型解析**：一条查询取两端 `objects.object_type`；任一不存在则跳过校验（`objects` 只有工作区隔离
+  策略，没有可见性策略，"不存在"即 id 错或跨工作区，随后 `links` 的外键照旧失败）。
+- **三态结果与策略**：`evaluateLink`（纯函数，与 `validateLink` 共用）给 `declared_and_valid` /
+  `undeclared_link_type` / `domain_range_violation`；违规时读 `workspaces.ontology_enforcement`——
+  `reject` 抛 `OntologyViolationError`（HTTP 400 `ontology_violation`，`error.details` 带
+  `reason / linkType / sourceType / targetType / expected`，WS 归 `invalid_params` 带同样文本），
+  `warn` 写入并在同一事务写 `ontology_violation` 审计（`resource_type='object'`、`resource_id` 为源对象 id——
+  该列是 uuid；LinkType 与四字段、两端 id 都在 payload）。
+- **迁移 `core/0025`**：列 `ontology_enforcement text not null check in ('reject','warn')`，
+  **既有行回填 `warn`、之后新建缺省 `reject`**（先 `default 'warn'` 加列再 `set default 'reject'`）——
+  应用发布不会让主机上采集器的下一轮开始被拒；`createWorkspaceWithOwner` 在调用者未指定时取
+  `ONTOLOGY_ENFORCEMENT` 环境变量（缺省 `reject`；测试与 CI 从不设置）。`update_workspace` /
+  `create_workspace` 新增可选 `ontologyEnforcement`，`PlatformWorkspaceWire` 多一字段（快照已重生成）。
+  平台"工作区"页的开关已在 PR #192（web）落地。
+- **`platform-meta.yaml` 补声明 `observed`**（Gatekeeper → `*`）：`observed-facts.ts` 一直在写这个
+  LinkType，但从未声明——reject 模式下 S2 的门执行会全部被拒，正是本项要抓的漂移。
+- **已知边界——没有任何已发布本体的工作区不强制**：I2 是相对于工作区声明的 LinkType 的约束，什么都没声明
+  的工作区无从约束。产品路径创建的每个工作区出生即播种 `platform-meta`（`createWorkspaceWithOwner`），
+  运行中的内核不存在这种工作区；只有本包 22 个用裸 SQL 插 `workspaces` 的 DB 测试夹具处于该状态（它们
+  故意断言临时 LinkType）。若将来出现不经播种的创建路径，这条边界就是漏洞，届时应改夹具并收紧。
+- **验收脚本**：`accept_s2.sh` 新增 `ontology_step`（`propose_ontology_change` + `publish_ontology_version`
+  发布 `AcceptS2Container` / `AcceptS2Observation` / `accept_s2_restarted`，identityKey 与 fake 场景一致）；
+  `accept_s3.sh` 新增 `ontology_guard_step`（`runs_on` Host → Container 故意违规 → 400 且 `details` 含
+  `Container -> Host`；主机 `ONTOLOGY_ENFORCEMENT=warn` 时接受 200 但要求审计有记录）。
+- **代价**：每次 Link 写多三条小查询，不做跨请求缓存——CLI `seed-domain-pack` 另起进程发布的新版本，下一次
+  写入即生效。
+- **模块环**：`ontology-guard.ts` 直接引 `audit/writer.js` 与 `ontology/registry.js`，不经两边的 index——
+  `audit/index` 经 `reconstruct.ts`、`ontology/index` 经 `meta-objects.ts`（模块顶层 `new SqlGraphStore()`）
+  都回到 graph，经 index 会在模块求值期形成环（`dispatch.test` 首跑即 `SqlGraphStore is not a constructor`）。
+- **I-S5-1**（`substrate/audit/invariant-checks.ts` `checkIS51`，进 `INVARIANT_CHECK_IDS` 与
+  `/internal/metrics`）：`recorded_at` 晚于迁移 0025 应用时刻、所在工作区至少有一个已发布本体版本、且按
+  当前各族最新已发布版本不合法的 `links` 行数（SQL 里重述 `evaluateLink`，`"*"` 通配）。reject 模式下
+  恒为 0；warn 模式下就是主机切 reject 前要看到归零的那个数。历史行不回溯；被后续版本删掉的 LinkType 的行
+  会开始计数——本体动了、数据没跟上，正该报。
+- **主机推出**：应用后所有既有工作区为 `warn`；跑一轮采集与 S2 / S3，看 `/internal/metrics` 的
+  `nexttime_invariant_violations{invariant="I-S5-1"}` 为 0 后，逐个 `update_workspace
+  ontologyEnforcement=reject`。
+- **测试**：`ontology-guard.integration.test.ts`（六例：出生即 reject 且声明签名可写、domain/range 违规带
+  `expected`、未声明 LinkType、warn 下写入 + 审计、warn 下写入的行在 reject 下不能被 supersede、裸工作区不强制）；
+  `capability-route.test` 的映射断言。
+
+### S5.2 新鲜度与失效（Epistemic 闭环，关闭遗留 28）
+
+- 背景：见上第 2 点。
+- 设计：
+  - 迁移 `core/0026_fact_freshness.sql`：`links.last_observation_id uuid null`（FK 到 `observations`）、
+    `links.last_observed_at timestamptz null`、`objects.last_observed_at timestamptz null`。
+  - `submit_observations`：幂等 no-op 路径（`factContentEquals`）改为**更新** `last_observation_id /
+    last_observed_at`（仍不产生新 Fact，`AssertFactResult.unchanged` 语义不变）；Object 更新
+    `last_observed_at`。`assert_fact`（agent / 人）不带 Observation，两列不动，溯源停在 Activity +
+    Principal——有意的区别，不是缺口。
+  - 观察窗口（绝对语义）：`submit_observations` 新增可选参数 `window: { complete: true, objectTypes:
+    string[] }`，语义是"本次提交是该 Source 对这些 ObjectType 的完整视图"。内核在同一事务里把同一
+    Source、以这些 ObjectType 为端点、且本次未被观察到的有效 Fact 置 `invalidated_at = now()`，
+    `properties.invalidation_reason = 'not_reobserved'`，写审计并计数。采集器只在整轮采集与脱敏都成功后才
+    声明 `complete: true`（`run.ts` 现有"先采集后提交"顺序已保证），三阶段各自声明自己的 ObjectType 集合。
+  - `explain` Fact 分支加 `lastObservation`；`get_object` 结果加 `lastObservedAt`；wire 变更 →
+    `pnpm contract:snapshot`；Explorer provenance 端点同步。
+- 不变量：I-S5-2。
+- 交付物：迁移、store、ingest、wire 与快照、Explorer 端点、`collectors/host-inventory` 声明 `window`、
+  DB-gated 集成测试（消失的容器 → 其 Facts 被失效；再出现 → 新 Fact，旧 Fact 保持失效）。
+- 验收：`accept_s3.sh` 增两步——停掉一个测试容器再跑采集，`traverse` 不再返回其 `runs_on`，`explain`
+  该 Fact 显示 `invalidated_at` 与 reason；二跑后所有仍存在容器的 Fact `last_observed_at` 前进。
+  依赖：S3.3、S5.1（同一写入点，同一所有者，S5.1 先合入）。
+
+#### S5.2 实现说明（2026-09-17，PR #193）
+
+- **迁移 `core/0026`**：`links.last_observation_id`（FK 到 `observations`）、`links.last_observed_at`、
+  `objects.last_observed_at`，以及观察窗口用的部分索引 `links_source_object_active_idx`。
+  `invalidation_reason` 是 0007 已有的**列**，不是设计草案写的 `properties.invalidation_reason`——
+  I4 触发器从不禁改 `invalidated_at` / `invalidation_reason`，也不涉及这三列。
+- **新鲜度只属于同源再观察**：`assertFact` 的幂等 no-op 路径在调用者带 `observationId` 时把两列推进
+  （`unchanged` 语义不变，无新行、无 outbox 事件）；异源同内容仍是佐证（返回既有 Fact、不动它的时钟）——
+  佐证不是再观察，窗口正是按 Fact 自己的 Source 判定的。`assert_fact`（人 / agent）不带 Observation，
+  两列不动，是有意的区别。插入时 `last_observation_id = observation_id`（新 Fact 的最近确认就是起源）。
+- **观察窗口的三处与草案不同，都是有意的**：（1）一轮只在**最后一次**提交上声明一个窗口，不是每阶段一个——
+  采集器四个阶段共用一个 Activity，阶段 2 与阶段 3 都写 Container 边，逐阶段窗口会把同一轮早一阶段刚写的
+  边判为"未再观察"；窗口起点取 Activity 的 `created_at`，因此一个窗口覆盖整轮。（2）`objectTypes` 只列本轮
+  **真正枚举过**的类型：固定的 Host / Image / ComposeProject / Container / Volume / Network / Endpoint，
+  配置了仓库路径时加 Repository，systemd / 进程树未 `skipped` 时各加一类；被跳过的子采集永远不会
+  让它的 Fact 失效。RAGFlow 阶段单独声明 `['KnowledgeBase','Document']`。（3）`observations` 允许为空——
+  但只能与 `window` 同时出现（zod `superRefine`），这是"最后一阶段什么都没采到也要关窗"的方式；
+  阶段 3 / 4 即使为空也照提交。
+- **失效 SQL**（`buildInvalidateUnobservedFactsQuery`）：同一工作区、`superseded_at` 与 `invalidated_at`
+  皆空、源对象类型在 `objectTypes` 内、`coalesce(last_observed_at, recorded_at)` **严格早于**窗口起点、
+  且 Fact 的 `coalesce(last_observation_id, observation_id)` 属于该 Source 的 Observation——两者都为空的
+  0018 之前的行按 `observations.activity_id = links.activity_id` 回退到 Activity 的 Source，所以遗留 28
+  的幻影 Container 边在首个带窗口的运行里一起退休。每个窗口一条 `facts_not_reobserved` 审计
+  （`resource_type='activity'`，payload 带 `sourceId / objectTypes / count / sample`），结果里 `factsInvalidated`
+  计数；不发 outbox 事件（与 `invalidate_fact` 一致）。Object 永不因缺席失效，只是 `last_observed_at`
+  停止前进。
+- **`core/0027` 同源优先（本项暴露的 S3.2 边界）**：0017 的 `find_active_fact_for_identity` 只返回最新的
+  一条活跃行，S3.2 文档写明"第三次断言只与最新那条比较"。窗口出现后这就是错的：采集器再观察一个已被
+  别的 Source 反驳过的身份（`accept_s3.sh` 冲突正向步骤留下的状态）会落在对方更新的那行上——异源异内容
+  → 再插一条 Fact、再开一个 Conflict，而自己那条没被碰的旧行随后被自己的窗口判为 `not_reobserved`。
+  0027 去掉 `limit 1`（`for update` 锁住该身份全部活跃行，只多不少）；`assertFact` 先解析本次断言的
+  origin，再逐行解析既有行，**建立在自己那一行上**（unchanged / touch / supersede），没有自己的行才以最新
+  行作佐证 / Conflict 的对手——单行时行为与 0017 完全一致。origin 逐行顺序解析、不再 `Promise.all`
+  （遗留 34 的同 client 并发 query）。S5.3 计划的 `core/0027` 顺延为 `core/0028`。
+- **门的观察有了 Source（I-S5-2）**：`observed-facts.ts` 为每个 Gatekeeper 惰性注册一个 `kind='gatekeeper'`
+  的 Source（owner 是共享的门 service Principal、`workspace` 可见、`metadata.gatekeeperId`；事务级
+  advisory lock 防并发重复），每次 `observe` / `apply` 结果在调用者的 Activity 上记一条 Observation 并作为
+  `observationId` 传给 `assertFact`；被观察 Object 的 `last_observed_at` 同步推进。门不声明窗口——一次
+  `observe` 是一个 Operation 的答复，不是某类对象的完整视图。`observed` 边的身份本就从 Gatekeeper Object
+  出发，两个门永远不共享身份，冲突语义无可见变化。**主机过渡**：S5.2 之前写入的门 Fact（无 Observation、
+  origin 是共享 Principal）与同一门的下一次观察是异源同内容 → 佐证，返回 `unchanged` 且不动——它保留旧溯源、
+  永远不会有 `lastObservedAt`；要迁移就 `invalidate_fact` 它，下一次观察写出带 Source 的新 Fact。
+- **I-S5-2**（`checkIS52`，进 `INVARIANT_CHECK_IDS` 与 `/internal/metrics`）：`epistemic_status='observed'`、
+  `recorded_at` 晚于迁移 0026 应用时刻、`observation_id` 为空的行。service 类 Handle 直接调 `assert_fact`
+  是唯一合法的产生方式，正该被计到——不是要修的 bug。历史行不回溯。
+- **wire**：`FactWire` 加 `lastObservationId / lastObservedAt`，`ObjectWire` 加 `lastObservedAt`，`explain`
+  的 Fact 分支加 `invalidatedAt / invalidationReason / lastObservation`（可空的 Observation 引用），
+  `submit_observations` 结果加 `factsInvalidated`、参数加 `window`（快照已重生成）。
+- **采集器**：`run.ts` 的 `RunSummary.factsInvalidated`（对旧内核的答复缺省 0）进 `run complete` 日志行。
+- **验收**：`accept_s3.sh` 新增 `collector_freshness_step`，放在冲突正向步骤**之后**（故意——run 2 就是
+  0027 的现场检查），用新的 compose 夹具 `accept-s3-ephemeral`（profile `accept-s3`）：起夹具 → 采集
+  （其 `runs_on` Fact 出现，起源即最近确认）→ 再采集（`factsAsserted=0`、`lastObservation` 前进、仍只有
+  一个 open Conflict）→ `docker compose rm -sf`（采集器连停止的容器也列，`stop` 不够）→ 再采集
+  （`factsInvalidated>=1`、`traverse` 无 `runs_on` 边、`explain` 显示 `not_reobserved`、`get_object` 仍 200）。
+- **测试**：`freshness.integration.test.ts`（六例：起源即最近确认、再观察推进时钟并退休缺席者、异源 Fact
+  在窗口之外、再出现是新 Fact、异源反驳后采集器仍建立在自己的行上、空窗口只退休本 Source 的 Fact）；
+  `observed-facts.integration.test.ts`（三例：首次观察注册 Source 并串起 Observation、同门再观察
+  unchanged 且最近确认前进、S5.2 前形态的 Fact 被佐证不动且正是 I-S5-2 计的行）；
+  `sql-store.same-origin.test.ts`（假 client 三例）；`queries.test.ts` / collector `run.test.ts` 相应用例。
+- **遗留 143 后续**（#1283，2026-11-16 合入，d9c8d95；core 0062）：`find_active_fact_for_identity` 并列时按 `id desc` 取（与 `recorded_at desc, id desc` 的「最新在前」一致，`for update` 加锁顺序随之固定）；`latest_fact_invalidated_for_identity` 并列时只有最新几行全部作废才回答「是」——并列组里有一行没作废，链条末端就在组内、可能仍活着，应重读。`conflicts.test.ts` 覆盖了这几种并列。
+
+### S5.3 数据与代码分离（关闭遗留 9，部分关闭 11）
+
+- 领域包：compose 把 `${NEXTTIME_DATA}/config/ontology` 只读挂到 kernel `/data/config/ontology`；
+  `seed-domain-pack` 缺省 `--dir` 指向它（参数已存在），镜像内 `ontology/` 只作缺省示例；
+  `runbooks/add-domain-pack.md` 改为"放文件 → seed"，不再重建 kernel。
+- Source 身份：`sources` 增 `name text` 列（从 `metadata.name` 回填），唯一索引
+  `(workspace_id, kind, name) where name is not null`；`register_source` 改为幂等：同 (kind, name) 已存在
+  且 owner / visibility 一致 → 返回既有行（结果加 `created: boolean`），不一致 → 409
+  `source_identity_conflict`。采集器删除状态文件与 `sourceStateFile` 配置；`accept_s3.sh` 删除"删缓存文件"
+  那步与头部的共享状态警告。
+- 工作区属性：`workspaces.purpose text check in ('standard','ephemeral') default 'standard'`、
+  `workspaces.expires_at timestamptz null`（迁移 `core/0027`，与 P-A2 的列同表）；`create-workspace
+  --purpose ephemeral --ttl 24h`；`delete-workspaces-matching.sh` 增 `--expired`（按 `expires_at < now()`
+  选择，仍走既有 delete-workspace 的主机侧清理）；验收脚本全部改用 `--purpose ephemeral`；平台"工作区"页
+  显示 purpose 与到期时间（只读）。
+- 验收：不重建 kernel 即可 seed 新版本领域包；采集器换工作区不需重置任何本地状态；`--expired` 只删过期的
+  ephemeral 工作区。依赖：S3.1、S3.3、P-A2。
+
+#### S5.3 实现说明（2026-09-18，PR #195）
+
+- **迁移 `core/0028`**（草案写的 0027 已被 S5.2 用掉）：`sources.name text` + 部分唯一索引
+  `sources_kind_name_uidx (workspace_id, kind, name) where name is not null`；从 `metadata.name` 回填，
+  **只回填在同 (workspace, kind) 内不重名的行**，重名的一组保持 `name` 为空（仍按 id 可达，行为与从前一致），
+  所以有 S5.3 之前历史的主机上迁移不会失败。`workspaces.purpose text not null default 'standard'
+  check in ('standard','ephemeral')`、`workspaces.expires_at timestamptz null`；平台面 `WORKSPACE_SELECT`
+  本就有表级 select，写只在 bootstrap 路径（超级用户），无新 grant。
+- **`register_source` 幂等**（`ingest-handlers.ts`）：先按 (kind, name) 查（RLS 可见范围）→ 同 owner 同
+  visibility 返回既有行 `created: false`；owner 不同或 visibility 不同 → 409 `source_identity_conflict`
+  （`SourceIdentityConflictError`，WS 归 `ILLEGAL_TRANSITION`）；查不到则按 `assertFact` 首次断言的同一形状
+  取事务级 advisory lock、重查、经 `substrate/epistemic` 的 `registerSource` 插入（`name` 列 + `metadata.name`
+  照写，给读 bag 的人）；插入撞唯一索引（别人的**私有**同名 Source，查询看不见）也归 409。结果 schema
+  `RegisterSourceResultWireSchema = SourceWire + created`，快照已重生成。`toWireSource` 的 `name` 改读列、
+  回落 `metadata.name`。门的 Source（S5.2）也写 `name = gatekeeperObjectId`，唯一索引成了它的第二道保险。
+- **采集器无状态**：`run.ts` 每轮都调 `register_source`（拿到同一个 id），删除 `sourceStateFile` /
+  `HOST_INVENTORY_SOURCE_STATE_FILE` 与状态文件读写；compose 去掉 `/data/state` 挂载；`host-env-init.sh`
+  不再建 `collectors/host-inventory/`（旧目录留着无害）；`accept_s3.sh` 删除"删缓存文件"那步与头部警告 (b)。
+  409 在采集器侧的含义写进 README：名字被本工作区别的 owner 占了，换 `HOST_INVENTORY_SOURCE_NAME`。
+- **领域包目录**：kernel 已只读挂 `/data/config`，不需要新挂载——compose 给 kernel 加 `DOMAIN_PACK_DIR=
+  /data/config/ontology`，`host-env-init.sh` 建 `config/ontology/`；`seed-domain-pack` 缺省 `--dir` 取
+  `resolveDomainPackDir()`（`DOMAIN_PACK_DIR` 存在则用，否则回落镜像自带 `ontology/`），输出行带 `from <dir>`。
+  `create-workspace` 播种 `platform-meta` / `entry-agent.yaml` 仍读镜像目录——那是平台资产，不是领域包。
+  `runbooks/add-domain-pack.md` 按现状重写（原文是 S3.1 之前写的"没有发布路径"）。
+- **ephemeral 工作区**：`create-workspace --purpose standard|ephemeral [--ttl <n>m|<n>h|<n>d]`（`--ttl` 只
+  对 ephemeral 合法，缺省 24h；`parseTtl` 纯函数有单测）；`list-workspaces` **追加**两列 `purpose`、
+  `expires_at`（`-` 表示不过期），`delete-workspaces-matching.sh --expired [--yes]` 按第 6 / 7 列选
+  `ephemeral && expires_at < now`（ISO UTC 字符串比较），regex 模式不变；四个验收 / 演练脚本改用
+  `--purpose ephemeral --ttl 7d`（7 天而不是草案例子的 24h：失败的一次验收第二天还看得到工作区）。
+  `PlatformWorkspaceWire` 加 `purpose` / `expiresAt`，工作区抽屉只读显示（用途 + 到期）。
+- **测试**：`ingest-handlers.integration.test.ts` 新增四例（同 caller 两次 → 一行、`created` true / false；
+  另一 visibility → 409；另一 principal 抢可见的名字 → 409；另一 principal 的私有同名 → 唯一索引 409）；
+  `bootstrap.test.ts` 加 `parseTtl` / `resolveDomainPackDir`；采集器 `run.test.ts` 改为"每轮注册、同 id"；
+  web 页面测试加 ephemeral 只读显示一例。
+- **主机过渡——采集器 Source 谱系必须先核对**：S5.3 之前每次跑 `accept_s3.sh` 都删掉采集器的状态文件、并把
+  token 覆盖成验收工作区的，真实采集器在重新铸 token 后会在生产工作区**再注册一个**同名 Source——生产工作区里
+  很可能有多行 `kind='host-inventory-collector'`、`metadata.name='host-inventory'`。0028 的回填遇到重名一律
+  不填 `name`，升级后的采集器 `register_source` 就会查不到、再建第三个 Source：既有 Fact 全变成"别的 Source
+  的"（同内容只算佐证、时钟不前进），S5.2 的窗口按新 Source 键控，遗留 28 的幻影边永远退不掉。
+  **应用步骤**：① 升级前记下 `${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json` 里的
+  `sourceId`；② `make migrate` 后在生产工作区查 `select id, name, created_at from sources where kind =
+  'host-inventory-collector' and metadata ->> 'name' = 'host-inventory'`；③ 若记下的那行 `name` 为空（说明有
+  重名），`update sources set name = 'host-inventory' where id = '<记下的 id>'`——采集器下一轮就接回自己的
+  谱系，窗口也按它键控；只有一行且已回填则什么都不用做。
+- **已知代价**：`register_source` 是 write 模式能力，`created: false` 的返回照样走 dispatch 的审计——采集器
+  每轮多一条 `register_source` 审计行（15 分钟一次），不是 bug。
+- **未做 / 边界**：`create_workspace` 平台能力不接受 `purpose`——ephemeral 是脚本 / 演示的东西，控制台建的都是
+  standard；`--expired` 仍走既有 `delete-workspace.sh` 的主机侧清理，不新增清理逻辑。
+
+### S5.4 prompt 契约修复与守卫
+
+- 背景：见上第 4 点；`retrospective-2026-09-11.md` §3.1 的教训（fake 侧不校验工具定义形状，S2 66 PASS 了几周
+  而真实供应商一直 400）属于同一类。
+- 设计：
+  - 修复 2026-09-09 审计仍开放的项（执行前按 main 重核；已知仍在：`ontology/ops-runner.yaml` 结果契约键名
+    与 `describe_operations`、`platform-extension/src/modes/worker.ts` 静态 Skills 段、
+    `deploy/worker-runtime/entrypoint.sh` 兜底 prompt 的开发者注记、`ontology/entry-agent.yaml` 对
+    `invoke_worker` 语义的描述与唯一的"金句"示例、注册表里 `search` / `traverse` / `explain` /
+    `record_decision` / `get_entry_context` / `report_turn` 的描述、MCP 五个别名描述）。
+  - prompt 契约守卫 `scripts/guards/prompt-contract.mjs`（进 `ci:guards`）：从 `ontology/*.yaml` 的
+    `systemPrompt` 抽取反引号标识符——工具名必须 ∈ 注册表 ∩ 该模式实际注册的工具（entry：
+    `ENTRY_TOOL_CAPABILITY_NAMES` + `<gate>.<op>`；worker：`report_result` + `<gate>.<op>`），结果契约键
+    必须 ∈ `WorkerResultContractSchema` 的键；允许名单放守卫文件里。
+  - 门工具描述：`gate-tools.ts` 与 `mcp/tool-projection.ts` 统一附加 mode 与 blast radius 一句，Worker
+    prompt 的"读描述判断 observe / execute"因此成立。
+  - fake-llm 校验工具定义形状：每个投影给模型的工具 `parameters` 必须是 `type: "object"` schema，否则
+    fake-llm 像真实供应商一样拒绝整个请求（把 §3.1 的失败模式搬进验收）。
+- 验收：`pnpm ci:guards` 能抓住一次故意写错的工具名；fake 模式 S2 在一个 `params_schema: null` 的 Operation
+  存在时失败（与真实供应商同一表现）。依赖：S3.9。
+
+#### S5.4 实现说明（2026-09-17）
+
+- **执行前逐条重核 2026-09-09 审计**（`prompt-audit-2026-09-09.md` H1–H6、M1–M10、L1–L4）：main 上已关闭
+  的直接跳过，未再改动：
+  - H6（`search` 描述声称返回 Facts、缺分页契约）：PR #132 已把描述改为"substring over
+    properties/identity...keyset-paginated (limit, cursor → nextCursor)"，与当前实现一致。
+  - M6 的 `search_graph` 别名（`reference-tool-aliases.ts`）：同一次改动已把描述改成"keyset-paginated,
+    the result carries nextCursor"，不再是"no counterpart here"。
+  - M2（`explain` 窄化到 Fact 自己的 Observation）：PR #132 已实现（`explain.ts` 的 `onlyObservationId`
+    参数），描述改写时按这个真实行为写（见下）。
+  仍开放、本次修的：H1、H2、H3、H4、H5、M2（`traverse`）、M3（`explain`）、M4（`record_decision`）、
+  M5（`get_entry_context`/`report_turn`）、M6 的其余四个别名（`get_provenance`/`get_causal_chain`/
+  `analyze_decision_impact`/`add_relationship`）、M7、M8、M9。**发现审计未覆盖的同类问题一并修**：
+  `ops-runner.yaml` 第 3 条里把 `propose_skill`/`propose_operation`/`record_decision` 当作 Worker
+  能直接调用的工具引用——`worker.ts` 只注册 `report_result` 与 `<gate>.<op>`，Worker 并无这三个能力；
+  改为只讲 `report_result` 的 `proposedSkill`/`proposedOperations` 字段与"Worker 没有 record_decision"。
+  `causal_chain`/`decision_impact` 的别名描述发现设计已变（`causal_chain` 现接受调用者可传的 `depth`
+  参数，审计写的"no counterpart"已过时）——按当前 `decisions.ts` 的 `causalChain`/`decisionImpact`
+  实现重写，并注明该别名本身不透传 `depth`。M10（entry-agent.yaml 里纯粹镜像工具表的清单）按审计本身
+  "可拒绝"的低置信度评估跳过，未改。
+- **prompt 与描述修复**：`ontology/ops-runner.yaml`（结果契约键改 camelCase、去 `describe_operations`
+  改为"读 `<gate>.<op>` 工具描述判断 mode"、去 I17/I3 编号）；`ontology/entry-agent.yaml`（重写
+  "asynchronous model" 一节，按 `entry.ts` 的 `resolveInvokeWorkerCallPlan` 真实语义——默认
+  `wait:false` 立即返回 `{taskId,status}`，仅 `wait:true` 才等最多 `timeout`/90 秒——只留一个准确示例；
+  "When you're done" 一节去掉不存在的 "Fact-asserting tools" 说法）；`worker.ts` 删除静态
+  "No Skills are loaded yet" 段落（Skill 早经 S2.14/S3.13 挂到 pi 默认 skills 目录），同步改
+  `worker.test.ts` 与模块头注释；`entrypoint.sh` 兜底 prompt 去掉 "stopgap (S1.5)"/"approval flow not
+  available" 等开发者注记，改写为准确的"未发布入口定义时的默认配置"说明；`capabilities.ts` 里
+  `traverse`/`explain`/`record_decision`/`get_entry_context`/`report_turn`/`invoke_worker` 六条描述
+  按各自实现重写（`search` 已是准确的，未改）；`packages/kernel/src/interfaces/mcp/
+  reference-tool-aliases.ts`（**注意**：任务简报写的路径是
+  `packages/platform-extension/src/mcp/reference-tool-aliases.ts`，但该文件与
+  `tool-projection.ts` 实际都在 `packages/kernel/src/interfaces/mcp/` 下——按代码实际路径改的）里
+  `get_provenance`/`get_causal_chain`/`analyze_decision_impact`/`add_relationship` 四条描述重写，
+  `search_graph` 未改（已准确）。改完跑 `pnpm contract:check` 通过，未触发 `pnpm contract:snapshot`
+  ——`docs/contracts/capabilities.json` 不含 `description` 字段，描述改动不影响该快照。
+- **`ontology/entry-agent.yaml` 发布机制**核实：`create-workspace`（`packages/kernel/src/cli/
+  bootstrap.ts`）只在**新建**工作区时把这份 yaml 播种为 v1 并发布；已存在的工作区要让这次修的 prompt
+  生效，owner 需要走 `propose_worker_definition` + `publish_worker_definition` 发一个新版本（`kind:
+  entry` 的 WorkerDefinition），这不是自动生效的——不在本任务范围内。
+- **守卫 `scripts/guards/prompt-contract.mjs`**（进 `ci:guards`，接在 `vocabulary.mjs` 之后）：从
+  `ontology/*.yaml` 的 `systemPrompt` 抽取反引号标识符（只认"裸标识符"或"裸标识符紧跟 `(`的调用示例"，
+  忽略含空格/连字符/冒号等的散文片段——`facts_to_assert`、`describe_operations` 这类真实漂移都是裸
+  标识符，这个窄范围抓得住）。entry 模式的工具集来自 `entry.ts` 的 `ENTRY_TOOL_CAPABILITY_NAMES`
+  常量（静态文本解析，按注释行过滤后正则抽取字符串字面量，不依赖 TS loader）与
+  `docs/contracts/capabilities.json` 的交集，加 `<gate>.<op>`；worker 模式的工具集是
+  `report_result`（`worker.ts` 的静态工具，不在注册表里）加 `<gate>.<op>`；ops-runner.yaml 额外接受
+  `WorkerResultContractSchema`（`@nexttime/shared` built dist）的键。非工具的反引号词（如
+  `timeout`/`taskId`/`context`/`executed`/`pending_approval`）在
+  `scripts/guards/prompt-contract.mjs` 的 `ALLOWED_NON_TOOL_WORDS` 常量里逐条带一行理由允许，不放宽
+  规则本身。自检 `scripts/guards/prompt-contract.test.mjs`（`node --test` 跑，21 个用例）用内存构造的
+  坏样本证明能抓住 H2 形状（虚构工具名）与 H1 形状（snake_case 契约键），从未改动真实 yaml；另外手动在
+  `ontology/ops-runner.yaml` 里临时改回 `describe_operations` 验证守卫确实拦截、随后还原，确认与
+  单测结论一致。
+- **门工具描述**：`gate-tools.ts`（entry/worker 共用）与 `interfaces/mcp/tool-projection.ts`
+  （各自独立实现，`.dependency-cruiser.cjs` 的 `no-cross-package-internal-import` 规则不让互相
+  import，两处保持同一逻辑）的 `gateToolDescription` 统一在描述末尾附加一句 mode（observe-class /
+  execute-class，并说明 execute 会先变成 ActionRequest 而非立即生效）与 `blast_radius`（有值才附加）。
+  新增 `packages/platform-extension/src/modes/gate-tools.test.ts`（8 个用例，纯函数测试，覆盖
+  observe/execute 两种 mode、有/无 blast_radius、有/无/空白 manifest 描述五种分支）；
+  `interfaces/mcp/tool-projection.ts` 自己的 `gateToolDescription` 是私有函数（未导出），其门投影
+  路径要走真实 DB 的 `dispatchCapability`，本任务未新增覆盖它的测试——与 `gate-tools.ts` 的实现逐字
+  对照过，是同一段逻辑；剩余风险见下。
+- **fake-llm 校验工具定义形状**：`deploy/fake-llm/server.mjs` 在 `handleChatCompletions` 解析完
+  JSON body、场景匹配之前，新增 `findInvalidToolSchema`——检查请求体 `tools[].function.parameters`
+  是否为 `type: "object"` 的 JSON Schema，不是就整请求 400（`invalid_request_error` /
+  `invalid_function_parameters`，仿真实 OpenAI 兼容供应商的错误体形状）。PR #129 的自检是
+  `deploy/accept-s2/fake-llm-scenario-selftest.mjs`（接入 CI `quality` job），补了三个用例：
+  `parameters: null` 拒绝、非 object 顶层 schema（`{type:'string'}`）拒绝、合法 schema 不受影响。
+  **核实结论**：`packages/platform-extension/src/tool-schema.ts` 的 `gateToolParameters`（W7/#156
+  已修）已经把三种 pi 模式（entry/worker/interactive）投影给模型的门工具 schema 统一归一成
+  object——这条校验不会让现有 CI 的 S1-lite / e2e 变红。**范围外发现，未改**：
+  `interfaces/mcp/tool-projection.ts` 的门投影路径（`buildToolCatalog`）对
+  `op.operation.params_schema` 只在其为 `undefined`/`null` 时才换成 `EMPTY_INPUT_SCHEMA`，一个
+  `params_schema: {}`（无 `type` 字段，`OperationSchema` 允许这个形状）会原样进入 MCP `tools/list`
+  的 `inputSchema`，不像 pi 模式那样经过 `gateToolParameters` 归一化——MCP 客户端（Claude Code 等）
+  是否会像 OpenAI 兼容供应商一样拒绝这种 schema 未验证；这条不在本任务允许改的范围（只允许改这两个
+  文件里的 `gateToolDescription`），留给后续任务。
+- **CI 接线**：`.github/workflows/ci.yml` 并不直接跑 `pnpm ci:guards`——它把各条守卫拆成独立 step
+  （`vocabulary.mjs`/`vocabulary.test.mjs`/`fake-llm-scenario-selftest.mjs` 在 `quality` job，
+  `check-kernel-purity.sh` 等在 `guards` job）。已在 `quality` job 里、紧跟"Vocabulary guard detector
+  unit tests (S3.7)"之后加两个 step——"Prompt-contract guard detector unit tests (S5.4)"
+  （`node --test scripts/guards/prompt-contract.test.mjs`）与"Prompt-contract guard (S5.4,
+  docs/development-tasks.md S5.4)"（`node scripts/guards/prompt-contract.mjs`），命名与位置照抄
+  vocabulary 那两步的写法；两者都跑在 `pnpm -r build`（同 job 更早的 "Build" step）之后，
+  `packages/shared/dist` 已存在，与 vocabulary 守卫共享同一前置条件。至此 CI 与 `pnpm ci:guards`
+  本地都会跑到 `prompt-contract.mjs`。
+
+### S5.5 加固批次（现有遗留 36 / 22 / 20 / 23 / 24 / 34 / 31 / 21）
+
+按风险排序，前三项先做、单独 PR：
+
+1. **遗留 36（P1）**：`create_connection` 的 `endpoint` 拒绝命中任何 `gate_instances.endpoint`（或宿主
+   `/i/` 路径）的地址；集成测试覆盖"owner 自连门指向宿主实例被拒"。按 STATUS 既定拟修，不再改形状。
+2. **遗留 22**：worker-supervisor `reconcile()` 恢复时以"标签值 ∪ 该 WorkerDefinition 当前已发布的
+   `egressDeny`"为准，复用分支检测到 `egressDeny` 变化时并入既有重建判定；补 reuse-then-reconcile 测试。
+3. **遗留 20**：两个门容器、caddy、postgres 补 `read_only` / `cap_drop: [ALL]` / `no-new-privileges`
+   （门是唯一持外部凭证的进程）；主机验收三份全跑。
+4. **遗留 23**：`query_decisions` / `list_conflicts` 的 keyset cursor 改用 `date_trunc('milliseconds', …)`
+   作排序键（与 #132 的 `search` 修法相同）；补同毫秒两行翻页测试。
+5. **遗留 24**：`find_active_fact_for_identity` 在 advisory lock 内重读时沿 `supersedes_id` 链取当前活跃行，
+   而不是按 `superseded_at is null` 过滤后返回 0 行；**不能**用唯一索引封住——异源同身份的 Fact 是 Conflict
+   语义下合法并存的两行。补三事务交错的集成测试。
+6. **遗留 34**：定位在 `withWorkspace` 的 client 上不等待就发第二条语句的路径（pg `DeprecationWarning`），
+   修复后在测试里把 pg warning 提升为失败（`process.on('warning')`），pg@9 前必须关闭。
+7. **遗留 31**：核实 Explorer 会话是否已由控制台会话取代（S4.1 起 `/api/explorer/session` 退役）；是则改写为
+   "logout / 禁用即时失效，rotate 不影响"并关闭，否则让 `rotate_api_key` 撤销该 principal 的 Explorer 会话。
+8. **遗留 21**：能力 `list_action_requests`（`status` 过滤、cursor 分页、human 通道）+ 控制台"审批历史"
+   只读列表（页面归 P-C 的运行状态页或工作区页，由 P-C 所有者定位置）。
+
+#### S5.5 遗留 31 实现说明（2026-09-18，PR #197）
+
+核实结论：Explorer 专属会话已在 S4.1 退役，遗留 31 的前提不成立，未改代码，按 STATUS 既定拟修关闭。
+证据：`packages/kernel/src/interfaces/explorer-contract/index.ts` 自身模块注释与 `registerExplorerRoutes`
+函数体注释均写明"W7's POST/DELETE /api/explorer/session were retired in S4.1: the console session
+cookie ... now authenticates these routes"；`authenticateExplorerCaller` 现只认两种凭证——
+`X-API-Key`（走 `resolveCaller`）或控制台会话 cookie（走 `resolveRequestCaller`，
+`application/gateway/resolve-caller.ts`）——没有第二套"Explorer 自己签发的会话"可供
+`rotate_api_key` 撤销。控制台会话（`nexttime_console_session`）按**用户**（`user_sessions` 表）而非按
+Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`，标记该行
+`revoked_at`）与 `disable_principal`（`application/gateway/auth.ts` 的 `lookupMembershipPrincipal`
+每次请求都重查 `principals.disabled_at is null`，非缓存值）都即时生效；`rotate_api_key`
+（`application/gateway/members-handlers.ts`）只更新 `principals.api_key_hash` 一列，不触碰
+`user_sessions` 或任何 Handle 会话，因此确实"rotate 不影响控制台会话"。
+
+#### S5.5 遗留 21 实现说明（2026-09-18，PR #197）
+
+- **能力 `list_action_requests`**（`packages/shared/src/capabilities.ts`，governance
+  组，`mode:'observe'`、`channel:'human'`、`minRole:'operator'`，与 `list_pending`/`get_action`
+  同组同权限）：`paramsSchema` `{status?: ActionRequestStatus | ActionRequestStatus[], gatekeeperId?:
+  string, limit?: number, cursor?: string}`，`.strict()`；`resultSchema`
+  `listEnvelope(wire.ActionRequestWireSchema)`——items 复用现有 `ActionRequestWireSchema` 原形（未新增
+  字段），未按任务简报字面的 `{items, nextCursor: string | null}` 实现，而是照 `nextCursor?: string`
+  （省略即无下一页）——这是 `docs/wire-contract-conventions.md` §3 与 `scripts/guards/vocabulary.mjs`
+  check (e) 对每个 `list_*` 能力的强制约定（`listEnvelope` 结构性检测 `{items: array}`），`list_pending`/
+  `search` 等全部同款；字面 `| null` 是不一致的形状，按既有约定实现更正。
+- **内核读**：`governance/approval/reads.ts` 新增 `listActionRequestsForApprover`——不限
+  `status`（`listPendingForApprover` 硬编码 `pending_approval`），可选 `status`/`gatekeeperId` 过滤，
+  keyset 游标排序键 `(date_trunc('milliseconds', requested_at), id)`（`action_requests` 表没有
+  `updated_at`/`created_at` 列，只有 `requested_at`——用它顶替 `search` 游标里 `updated_at` 的角色，同一套
+  "JS Date 只剩毫秒、Postgres 存微秒"截断手法，PR #132 `buildSearchQuery` 同款，非遗留 23 要修的
+  `query_decisions`/`list_conflicts` 那种未截断的旧模式）；可见性与 `listPendingForApprover`
+  完全一致（同一段 `capability_grants` `exists` 子句照抄，owner 见全部、其他角色只见命中自己
+  active grant 的行）——调用方看不见的 ActionRequest 即使已决也不出现，这条在已决行上同样成立（DB 集成
+  测试覆盖，见下）。cursor 编解码 `encodeActionRequestCursor`/`decodeActionRequestCursor` 是
+  `substrate/graph/queries.ts` `encodeSearchCursor`/`decodeSearchCursor` 的又一份私有拷贝（那个文件自己
+  的注释："a fourth private copy, deliberately — no shared helper refactor"，此为第五份，同款不共享）。
+  `DEFAULT_ACTION_REQUEST_LIST_LIMIT=50`/`MAX_ACTION_REQUEST_LIST_LIMIT=200`，与 `search` 的
+  `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT` 相同。Handler `listActionRequestsHandler`
+  （`application/gateway/handlers.ts`，紧邻 `listPendingHandler`/`getActionHandler`）超限 `limit`
+  截断并标 `truncated: true`，与 `searchHandler` 同款。
+- **Web**：控制台侧只读页放在**现有工作区页** `packages/web/src/components/ApprovalQueuePage.tsx`
+  （`/work/approvals`），不是 P-C 的"运行状态"页——核实 `platform-admin-design.md` §5 控制台信息架构表：
+  "待我审批"在"使用"组（人人可见的工作区级页），"运行状态"在"维护"组（`platform_status`，讲的是服务健康/
+  队列积压/备份时效，与 ActionRequest 审批历史无关）；审批历史是工作区级、I14 范围可见性数据，不是平台面
+  概念，理应跟审批队列同页。原"All"标签（会话级、client-side 缓存本会话见过的已决请求，代码里自带"kernel
+  gap"说明）替换为"History"标签，拆成独立子组件 `ApprovalHistoryTab`（同 `CatalogPage.tsx` 的
+  `OperationsTab`/`SkillsTab` 每标签一个组件、各自持有自己的 `useCapabilityList` 的写法）——只在切到
+  History 标签时才挂载、才发起 `list_action_requests` 调用，切回 Pending 不产生多余请求。History 标签有
+  状态下拉（`ACTION_REQUEST_STATUS_VALUES` 驱动）与游标"Load more"（`useCapabilityList` 的
+  `loadMore`/`loadingMore`/`loadMoreError`，`PlatformAuditPage.tsx`/`PlatformUsersPage.tsx`
+  同款"加载更多"）。已知限制：`ActionRequestWireSchema` 只带 `approvalDecisionId`（指向 `decisions`
+  表的不透明引用），不带审批人身份——按任务说明"复用既有 wire shape、不发明新形状"的约束，History
+  行不显示"谁批的"，只显示状态、动作种类、门、发起人（`onBehalfOf`）与时间戳
+  （requested/executed/failed）；要显示审批人需要新的 join 或新字段，超出本任务范围。
+- **测试**：kernel 单测 `governance/approval/reads.test.ts`（cursor 编解码往返/畸形输入）；DB
+  集成测试 `governance/approval/reads.integration.test.ts` 新增一个独立 `describe.runIf` 块——
+  status 过滤（单值/数组）、I14 可见性（owner 见全部含已决行；命中 grant 的 operator 只见匹配
+  action_kind 的行，含已决；不命中的 operator 一条也看不到）、同毫秒两行的 keyset 分页（`limit:1`
+  翻两页不漏不重）；web 组件测试扩到 `ApprovalQueuePage.test.tsx`（History 标签首次挂载才发起调用、
+  状态过滤变更重新请求、403 走 forbidden 空态、Load more 追加下一页）。均通过（本地 vitest；
+  DB 集成测试本地无 Postgres/Docker，只标注了 gate，CI 才真正跑）。
+
+#### S5.5 遗留 24 实现说明（2026-09-18，PR #198）
+
+- **缺陷形态**：`assertFact` 无既有行时取身份级 advisory lock 再读一次（PR #140），封住的是两事务：T2 的首次
+  `for update` 查找阻塞在 T1 正在 supersede 的行上，T1 提交后被阻塞的**那条语句**只按 EvalPlanQual 重检
+  被锁的那一行（已 superseded → 过滤掉），T1 插入的后继行不在该语句的快照里；但重读是新语句、新快照，看得到
+  后继。三事务：重读本身也是 `for update`，可以再阻塞在第三个事务对后继行的 supersede 上，醒来同样 0 行，
+  于是插入一条多余的活跃 Fact。
+- **修法**（S5.5 第 5 项"沿 supersedes_id 链取当前活跃行"的等价实现）：迁移 `core/0029`
+  `latest_fact_invalidated_for_identity(ws, link_type, source, target) → boolean | null`
+  （`security definer`，同 0017 的理由——最新行可能属于调用者看不见的私有 Source；只答一个布尔，不泄露行）。
+  `assertFact` 在 advisory lock 重读仍为空时进入有界循环：最新行存在且**未失效**（`recorded` 或
+  `superseded`）→ 再读一次 `find_active_fact_for_identity`；最新行已失效或根本没有行 → 新插入本来就正确，停；
+  上限 `MAX_ACTIVE_FACT_REREAD_ATTEMPTS = 5`，超限回落到修复前的"插入新行"（不破坏状态，只是可能多一条）。
+  **判 `invalidated_at` 而不是 `superseded_at`**：连续两次 supersede（T4 又 supersede 了 T3 的后继）时，
+  等调用者去问，最新行就是 T4 的新行——它自己没被 supersede，用 `superseded_at` 判会误读为"没有后继"、少读
+  一次；`recorded → superseded | invalidated` 互斥且终态，只有失效会让链真正终止。
+- **不用唯一索引封**：异源同身份的两条活跃 Fact 是 Conflict 语义下的合法并存（S5.5 原文）。
+- **测试**：`sql-store.active-fact-reread.test.ts`（假 client 六例：已找到行不问 / 无行停 / 已失效停 /
+  最新行 recorded 再读即得 / 最新行 superseded 再读得后继 / 到上限回落新插入）；
+  `substrate/epistemic/conflicts.test.ts` 新增四事务确定性集成测试：TX 占住 advisory lock 当"别的首次断言者"，
+  T3 supersede F0→F1 并挂起，T2 首查阻塞在 F0；T3 提交后 T2 0 行、等 advisory lock；T4 supersede F1→F2 并
+  挂起；TX 提交，T2 重读阻塞在 F1；T4 提交，T2 重读 0 行——修复前此处多插一条，修复后再读一次拿到 F2 并
+  supersede 成 F3，断言活跃行恰好 [F3]、无 Conflict。每一步都用 `settledWithin300ms` 证实 T2 确实在阻塞。
+
+#### S5.5 遗留 23 / 34 实现说明（2026-09-18，PR #199）
+
+- **遗留 23**：`substrate/epistemic/decisions.ts` `queryDecisions` 与 `conflicts.ts` `listConflicts` 的
+  keyset 查询改为 `order by date_trunc('milliseconds', <created_at|opened_at>) desc, id desc` 并按同一
+  截断值比较 cursor（PR #132 `buildSearchQuery` 同款）；cursor 解码顺带校验 id 半段是 uuid（它被绑定为
+  `::uuid`，手工构造的 cursor 不该变成 500）。`find_precedents` 的排序不分页、未改。集成测试
+  （`conflicts.test.ts`）直接插两条 `opened_at` / `created_at` 只差微秒的行，`limit: 1` 翻页两者都要出现。
+- **遗留 34**：不是"一条路径"——grep `Promise.all(` 得到十五处在同一个 `client` 上并发发查询的调用点：
+  `explain.ts` 三处（Activity / Fact / Decision 分支各取 principal / observation 引用）、`decisions.ts`
+  两处（`causalChain` 逐 Fact `explain`、`decisionImpact` 四条查询）、`agent-host-runtime.ts` 的入口
+  profile 解析、`governance/approval/routing.ts`、`reads.ts` 的 `getOperationStats`、
+  `agent-profile-handlers.ts` 两处、`governance/agent-profile/store.ts`、`platform-handlers.ts` 的
+  `loadPlatformWorkspace`、`explorer-read-service.ts` 两处、`gatekeeper-read-handlers.ts` 两处、
+  `handlers.ts` 的 `get_entry_context`。全部改为顺序 `await`；`get_gatekeeper` 的健康探测是 HTTP 调用，
+  先发起、两条 DB 读顺序跑、最后 await 探测。pg 内部把同 client 的并发 query 排队，所以之前只是一条
+  `util.deprecate` 的一次性警告，pg@9 会直接抛错。`packages/kernel/vitest.setup.ts`（`vitest.config.ts`
+  `setupFiles`）用 `process.on('warning')` 把这条 DeprecationWarning 变成抛错 → 测试运行失败，任何回归
+  在 CI 里立刻可见。主机日志里 2026-09-11 那次的具体路径无法回溯（警告只发一次、不带栈），十五处一并改。
+
+### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
+
+- **遗留 30**：真实模型下 docker_restart 一次 ActionRequest `executed`、容器已重启但 Task `failed` 且
+  result 为空。按 B6 先建复现回路：用 `accept_s2.sh --real` 的同一场景加 `--runs 10`，抓 Task / WorkerRun /
+  ActionRequest 三张表的状态时间线与 supervisor 日志；排序假设——(a) Worker 在 `await_decision=true` 超时后
+  结束 turn 没有再报结果，(b) `report_result` 在容器被 reaper 判超时之后到达，(c) approval 播报与
+  `report_task_result` 的 outbox 顺序颠倒。修复以"ActionRequest 已 executed 的 Task 不得以空 result 失败"
+  为验收。
+- **`queued` 崩溃缺口**：reaper 的周期清扫加一条——`status='queued'` 且 `updated_at < now() - 60s` 的 Task
+  置 `failed`，`failure_reason='spawn_lost'`（`create_task` 已下架，`queued` 只剩这一种来源，不重新 spawn）。
+  不变量 I-S5-3；chaos 脚本 `chaos-kill-kernel-mid-invoke.sh` 验证。
+- **遗留 26**：`accept_s2.sh` 的 cleanup 只 `rm -sf` 五个夹具服务，不 `down` 基础栈，S1→S2→S3 可连跑。
+- **遗留 25**：`interfaces/ws/server.test.ts` 的 WS 端到端用例给单独 `testTimeout`，复现三次以上再查根因。
+
+#### S5.6 实现说明（2026-09-18，PR #200）
+
+- **`queued` 崩溃缺口 + I-S5-3**：`application/task/reaper.ts` 新增 `reapLostQueuedTasks`——
+  `runTaskReaper`（沿用既有 30 秒 tick）每次额外扫一遍 `status='queued' and updated_at < now() - 60s`
+  （跨工作区，与既有时长超限扫描同一姿势：一条原生 `SELECT`，不经 `withWorkspace`），逐条经
+  `lifecycle.ts` 既有的 `failTaskRow` 置 `failed` / `failure_reason='spawn_lost'`——与其它清扫走同一条
+  受治理路径（转移表跳转 `queued→running→failed` 的合法多跳、`task.fail` 审计行、`TaskUpdated` outbox
+  事件），不是裸 `UPDATE`；不重新 spawn。`updated_at` 在一行还是 `queued` 期间从不被任何 UPDATE 语句
+  改写（核实过全部 `update tasks set ...` 调用点）——是"这行卡了多久"的精确代理，不是启发式。
+  `failure_reason` 列本身是自由文本（`migrations/task/0003` 自己的头注释），不是 enum/CHECK 约束，所以
+  **未加新迁移**（任务简报里"仅当是 enum 式 check 才加迁移"的条件不成立）。不变量 `I-S5-3`
+  （`substrate/audit/invariant-checks.ts`）进 `INVARIANT_CHECK_IDS`（`I-S5-2` 之后）与
+  `runInvariantChecks`：`status='queued' and updated_at < now() - 5min`，5 分钟阈值远宽于清扫自己的
+  60 秒，非零即说明清扫本身退化（同 I4/I7/I12 的"扫机制退化，不扫业务违规本身"姿势）。测试：
+  `reaper.integration.test.ts` 新增两例（DB-gated：陈旧 queued Task 被置 `spawn_lost` 并留审计行；新鲜
+  queued Task 不受影响）；`invariant-checks.integration.test.ts` 新增 I-S5-3 的 delta 式一例（陈旧行计
+  违规、新鲜行不计，仿 I6 既有例的"baseline + 按 id 归因"写法）。chaos 脚本
+  `scripts/chaos-kill-kernel-mid-invoke.sh`：结构上完全照抄 `chaos-kill-worker.sh`/`chaos-kill-entry.sh`
+  （POSIX sh、本地 `pass`/`fail`/`redact`，curl 经 caddy 打 `/api/cap/*`——两个既有脚本实际都没有走
+  `scripts/lib/accept-common.sh`/`run_driver`，按代码实际结构抄而非按任务简报字面描述）；场景：自建一次性
+  worker 定义（`propose_worker_definition` + `publish_worker_definition`，`create_task` 已下架后没有更轻的
+  办法造一个 `queued` Task）、后台起 `invoke_worker` 不等它返回就 `docker compose kill kernel`、
+  `docker compose up -d kernel`、`list_tasks` 找最新 Task 后 `get_task` 轮询到 `completed` 或
+  `failed`/`spawn_lost`——两种结果都算 PASS（崩溃窗口只有毫秒级，从容器外部去踩是概率性的），脚本打印
+  命中了哪一种；`chmod +x` 且 `git ls-files -s` 确认 `100755`（Windows 检出 `core.fileMode=false`，光
+  `chmod` 不会体现在 git 对象上，额外跑了 `git update-index --chmod=+x`）、`bash -n` 通过、无 CRLF。
+  `docs/runbooks/host-chaos.md` 补第三个脚本的目的、前置条件、跑法、期望输出、清理、常见问题。
+- **遗留 25 / 40（CI 偶发超时，均判定为 flaky-timeout，非产品缺陷）**：`interfaces/ws/server.test.ts`
+  的 WS 端到端用例（`'FakeAgentRuntime end-to-end: send → stream → message → turnEnded → history shows
+  both messages'`）单独给 `testTimeout: 15000`（vitest 默认 5s，该用例自己的 `waitUntil` 内部就有 5s
+  超时，几乎没有余量），一行注释引用遗留 25，未改测试语义。`packages/llm-proxy` 的 "kernel down then up"
+  用例同样给 `testTimeout: 15000`（引用遗留 40）；顺带定位到一处真实可改的时机问题——验证"kernel down
+  期间已有排队用量"那一步原来是固定 `sleep(150)` 赌"已经攒了一次失败 flush"，在 CI runner 争用下这个赌注
+  会输；改成轮询 `reporter.pending > 0`（新增局部 `waitUntil` helper，同 ws 测试文件里那个的写法）而不是
+  猜一个固定延迟，语义不变（仍然先断言 `receivedBatches` 为空、再走 `kernelUp=true` + `reporter.flush()`
+  的既有恢复路径），实测反而更快（本地全量 15 例 161ms 内跑完）。
+- **遗留 26 核实**：读了 `scripts/accept_s2.sh` 的 `cleanup_step`（当前实现，未改）——只对
+  `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
+  `accept-s2-restart-target` 六个夹具容器做 `docker compose --profile accept-s2 rm -sf`，从未调用
+  `down`，基础栈（postgres/kernel/caddy/…）不受影响，S1→S2→S3 可连跑——**#145 关闭无回归，未改动**
+  （STATUS 遗留 26 描述"五个夹具服务"，实际数的是六个，纯文档计数笔误，非代码问题，未改 STATUS 该行
+  措辞，按任务范围"row 26 untouched"）。
+- **遗留 30 — 根因（代码分析确认，非猜测）**：任务简报给的三个假设都不是字面成立的直接根因，但共同指向
+  同一个真实缺口：
+  - **(a) "Worker 在 await_decision=true 超时后结束 turn 没有再报结果"——不成立**：
+    `platform-extension/src/modes/worker.ts` 的 `agent_settled` 处理器**总是**调用 `report_task_result`
+    ——显式 `report_result` 工具调用给的契约，或者（模型压根没调用）一个兜底契约（"the Worker finished
+    with no report_result call..."）。`await_decision=true` 超时（`request-action-handler.ts` 的
+    `pollAndExecute`，25 秒预算）只是给门工具一个正常（不抛错）的 `{status:'pending_approval'|
+    'approved'}` 返回，不会让 turn "结束又不报"。
+  - **(b) "report_result 在容器被 reaper 判超时之后到达"——不是字面的根因，但方向对**：真正的触发不是
+    reaper 判超时了一个还活着的 WorkerRun，而是下面 (a)+(b) 的组合根因——Worker 自己**按时**发出的
+    report 因为 Task 状态不对被拒。
+  - **(c) "approval 播报与 report_task_result 的 outbox 顺序颠倒"——不成立**：`report_task_result` 是
+    单阶段能力（`worker-result-handler.ts` 自己的文档注释："deliberately single-phase (no
+    afterCommit)"），从不经 outbox——它和 `ActionRequestPending`/`ActionRequestUpdated` 之间没有任何
+    投递顺序关系可言。
+  - **真实根因**：`gatekeepers/docker/src/manifest.test.ts` 确认 `container.restart`（docker_restart
+    场景实际调用的 Operation）是 `blast_radius:medium, await_decision:false`。`request-action-handler.ts`
+    的 `runGovernedRequest` 对 `pending_approval && !awaitDecision` 直接返回（无 `afterCommit`）——门工具
+    `execute()`（`worker.ts`）看到非阻塞的 `pending_approval` 结果，"the agent loop is not blocked
+    waiting on a human decision"（工具自己的文档注释）。与此同时，`requestAction` 写行时只要
+    `resultingStatus==='pending_approval'` 就发 `ActionRequestPending`（`governance/approval/
+    transition-log.ts`，不看 `awaitDecision`），`reaper.ts` 的路由消费者收到后**不论
+    `awaitDecision`** 一律把 Task 挂 `waiting_approval`。真实模型看到"pending approval, actionRequestId
+    X"、没有工具可以轮询批准状态，合理地认为自己这一步做完了，随即（或 turn 自然结束触发兜底契约）调用
+    `report_task_result`——此时 Task 还是 `waiting_approval`，`completeTaskWithResult` 的
+    `transition(TASK_TRANSITIONS, 'waiting_approval', 'complete')` 在共享转移表（`@nexttime/shared` 的
+    `TASK_EDGES`）里没有这条边，直接抛 `IllegalTransition`——整个 `report_task_result` 事务（Facts /
+    evidence / Activity 全部）回滚，`worker.ts` 只记 `result=fail` 日志、`process.exit(0)`。稍后
+    ActionRequest 被批准并异步执行（`executed`，容器真的重启了），`ActionRequestUpdated` 把 Task 从
+    `waiting_approval` 无条件恢复到 `running`（`resumeTaskFromWaitingApproval`）——但它的 WorkerRun 早已
+    退出，下个 reaper tick 里 `reactToSupervisorStatus` 看到容器 `exited` 且 `task.status==='running'`，
+    判 `failed:'no_result'`。**正是**"ActionRequest 已 executed、容器已重启、Task failed 且 result 为
+    空"。这条链每一步都在代码里可查证，不依赖主机日志猜测。
+  - **修法**（`application/task/reaper.ts`，属允许改动的 `application/task/**`）：`ActionRequestPending`
+    路由消费者新增 `if (!actionRequest.awaitDecision) return;`——只在 Worker 自己的调用真的同步阻塞在
+    这个决定上（`awaitDecision:true`）时才把 Task 挂 `waiting_approval`，与 S2.3 自己的原始验收标准一致
+    （`governance/approval/await-decision.ts` 模块文档原文："await_decision=true 时 Task 进
+    waiting_approval"——这里此前一直没读这个字段，对 `false` 的行为从一开始就偏了文档）。`
+    ActionRequestUpdated` 一侧不用改：`resumeTaskFromWaitingApproval` 本就守着
+    `task.status==='waiting_approval'`，Task 从未进入该状态时天然是安全的空操作。测试：
+    `reaper.integration.test.ts` 既有例测的是真正阻塞的场景，但夹具此前写的是 `await_decision: false`
+    （路由从不读该字段，所以也过）——改为 `true`，挂起语义保持；新增一例（`await_decision: false`，仿
+    `container.restart` 的真实形状）断言 `ActionRequestPending` 之后 Task 仍是 `running`——回归了这条
+    修复；夹具抽成共享的 `seedPendingChildRequest(awaitDecision)`。**主机验证**（S5.7 的范围，未在本任务做）：
+    `accept_s2.sh --real --runs 10` 复跑 docker_restart 场景，确认失败率不再出现这个模式；本任务只能
+    证明代码路径，无法在这个环境里跑真实模型。
+
+### S5.7 真实模型回归常态化
+
+- 背景：W7 每场景只跑 3 次、一个供应商一个模型（STATUS §2.2 盲区）。
+- 设计：`accept_s2.sh --real` / `accept_s3.sh --real` 五个场景各 `--runs 10`，每次发版后在目标主机跑一轮，
+  数字（成功率、平均轮数、平均 token / 成本，按 `llm_usage` 的 jti → Handle → Task / Turn 汇总，
+  `scripts/report-usage.sh`）写 `docs/private/real-model-<date>.md`，摘要进 STATUS §2.2 的表；任一场景低于
+  8/10 记为该版本的已知问题。不做主机定时器（E7 类运维项排最后）。依赖：S5.4（fake 侧形状校验先于真实回归）。
+- **实现说明（2026-09-18，PR #202，W11-E；主机数字待首轮）**：`scripts/report-usage.sh`（POSIX sh，主机执行）
+  对 `llm_usage` 做窗口 / 分组聚合：`--workspace <uuid>`（不带 `--since` 时必填）、`--since` / `--until`
+  （`started_at` 上下界，`--until` 开区间）、`--by turn|handle|task`（默认 `turn`）、`--markdown`、
+  `--summary`（整窗口一行：calls / input / output / cache / total tokens、cost_usd、distinct turns、avg
+  tokens/turn、avg cost/turn；`total_tokens` 口径与内核 `sumTodayTokens` 一致）。三种 join 逐列对照迁移：
+  `--by turn` 按 `llm_usage.turn_id`；`--by handle` 左连 `capability_handles(workspace_id, jti)` 带出
+  `parent_jti` / `on_behalf_of`；`--by task` 用 `llm_usage.session_id = worker_runs.session_id` 再连
+  `tasks`——WorkerRun 自己的 session 正是它上报用量的 session，不必退化到 Handle 谱系；LEFT JOIN 让入口
+  agent 自身会话的用量以 `task_id=NULL` 报出。所有参数先过正则（uuid / ISO-8601 UTC）再拼 SQL。脚本不知道
+  场景标签（`llm_usage` 无此概念），场景边界只在 accept 脚本的 `RUN` / `REAL` 行：`host-accept-real-model.md`
+  §8 规定用"逐场景顺序跑完 `--runs` 次"把 `--by turn` 的时间序输出按场景分块、核对块大小与 `<n>`；§3 定
+  `--runs 3` 冒烟 / `--runs 10` 例行与 `<8/10` 已知问题阈值（脚本退出码不是信号源，必须人工读 `REAL` 行）；
+  §9 给 `docs/private/real-model-<date>.md` 模板（`make demo` 作第六场景）。SQL 未在真库执行（本机无
+  Docker），按迁移逐列核对，首次实跑在主机例行回归。
+- **主机首轮（2026-09-18，v0.13.0 → v0.13.1）**：`--runs 10` 各场景数字进 `STATUS.md` §2.2，供应商 /
+  模型 / 费用只在 `docs/private/real-model-2026-09-18.md`。`report-usage.sh` 在主机上首次实跑通过
+  （`--summary` 与 `--by turn` 的 SQL 均正确执行；`--by turn` 的时间序分块与场景一一对应，ssh 两场景
+  的 Worker 会话落在 `(none)` 一行——runbook §8 的拼接方法成立）。一轮就逼出两条 fake 路径测不到的
+  平台缺陷（遗留 30 第二根因 #208、遗留 44 / #210），见 `retrospective-2026-09-18.md` §6。
+
+### S5.8 交付与演示闭环（W11 最后一项，不扩大基座边界）
+
+- 背景（2026-09-16 维护者确认设计目标是"稳定、可演示、可复用、可交付"的闭环）：S5.1–S5.7 覆盖稳定与
+  可复用，可演示顺带受益，可交付最薄。闭环拆开——安装 → 接入 → 采集入图 → 对话 → 审批执行 → 溯源 →
+  升级 / 备份 / 恢复——其中接入到溯源由 S1 / S2 / S3 验收与 `--real` 证明，备份 / 恢复有 `drill-restore.sh`；
+  **安装到一台陌生主机**只有 runbook 没有验收，**内核 + 数据库迁移的升级 / 回滚**没有演练脚本（P-C 只覆盖
+  worker 运行时镜像的滚动重建），镜像发布推后意味着客户现场从源码构建、耗时未计。本项只给这些环各加一个
+  验收它的脚本，不新增任何能力或概念。
+- 交付物：
+  1. `scripts/drill-install.sh`：在一台只有 Docker 的干净主机上按 `runbooks/host-preflight.md` →
+     `host-bootstrap.md` → `host-checkout.md` 的顺序走到三份验收通过；脚本只做编排与计时，每一步失败即停并
+     指出对应 runbook 小节；记录总耗时（含源码构建）。跑不通的地方即交付缺口，回填 runbook。
+  2. `scripts/drill-upgrade.sh`：用上一发布版的数据目录 + `backup.sh` 产物 → 检出新版 → `make migrate` →
+     三份验收 → 用 `restore.sh` 回滚到备份并再跑 S1 验收；`runbooks/release.md` 增加"迁移是否可逆"一列，
+     不可逆的迁移必须在 CHANGELOG 里标注。
+  3. `make demo`（`scripts/demo.sh`）：`create-workspace --purpose ephemeral` → 采集器跑当前主机 → 三句预置
+     提问（谁依赖谁；这条边从哪来、最近何时确认；重启某个测试容器并走审批）→ 输出一页 Markdown 结果
+     （对象数、事实数、依赖链回答、审批卡片与执行状态、`explain` 的溯源链）。要求 15 分钟内完成；它同时是
+     S5.7 真实模型回归的场景之一，一份脚本两用。
+  4. 镜像发布决定的重评点：S5.7 五场景 10 次的数字出来后，若均 ≥ 8/10，把"构建 / 发布容器镜像到 GitHub"
+     从"稳定后再做"改为排期；源码构建路径保留作备选并在 `drill-install.sh` 里持续计时。
+- 验收：干净主机上 `drill-install.sh` 全绿并给出耗时；`drill-upgrade.sh` 从 v(n-1) 升到 v(n) 三份验收通过、
+  回滚后 S1 通过；`make demo` 15 分钟内产出结果页。依赖：S5.7；E7（备份定时器）仍按维护者决定排在最后，
+  不并入本项。
+- 不做：安装器 / 图形化安装、SaaS 多租户、面向具体客户的场景包（RouterOS 门等仍推后）。
+- **实现说明（2026-09-18，PR #204 item 3、PR #205 item 1 / 2；主机实跑待做，本机无 Docker，只做
+  `bash -n` / shellcheck / `ci:guards` 静态验证）**：
+  1. `scripts/drill-install.sh`（操作机执行，经 SSH 编排目标主机，同各 `host-*.md` 的 `ssh … 'sh -s' <`
+     方式）：`ssh-connectivity → guard-target → preflight → checkout → bootstrap → env-init → handle-keys →
+     write-env → compose-config → build（单独计时）→ postgres-up → migrate（容器化）→ stack-up → caddy-health →
+     accept-s1 / s2 / s3`（默认 fake provider）。GUARD：目标已有 `$CODE_DIR/.env` 或非空 `pgdata` 即拒绝、无绕过。
+     需要真实网络知识的 `KERNEL_BIND_ADDR` 与两个子网 CIDR 是必填输入，不猜；`REF` 支持分支或发布 tag。
+     **发现的交付缺口**：任务原文顺序（preflight → bootstrap → checkout）与 `runbooks/README.md` ① 矛盾，README
+     自身也不自洽（`host-checkout.md` §E3.3 依赖 `host-bootstrap.md` §E2 的 `secrets/pg_password`），脚本按唯一
+     满足依赖的交错顺序执行并记进 `host-drills.md`；CA 信任导入是客户端动作、Explorer 静态包可选、真实 provider
+     key 三份验收不需要（`accept_provider_up()` 自建 `accept/models.json`）——列为已知手动项。
+  2. `scripts/drill-upgrade.sh`（主机检出根目录执行；`--to <vX.Y.Z> --ack-live-restore` 缺一即拒）：preflight
+     → `BACKUP_NOW=1` 升级前 dump（永不删除）→ checkout v(n) → build → 迁移 `--dry-run` 再 apply → up → 三份
+     验收（gate）→ PROBE（切回 v(n-1) 代码在 v(n) schema 上跑 `accept_s1.sh`，非致命，作为可逆性证据）→ 回滚：
+     先 checkout / build / up v(n-1) 代码，**再** `restore.sh --target-db nexttime --i-know`（restore 的 trap 只
+     `start` 既有容器）→ S1 复跑（gate）。脚本先把自己复制到检出外再 `exec`（它要 `git checkout` 自己所在的
+     检出）；开始时在分支上就回到该分支。已知遗留：S3 临时工作区目录在 DB 回滚后成磁盘孤儿；版本专属手动步骤
+     会被 restore 撤销、真实升级需按发布说明补做。`runbooks/release.md` §6 迁移可逆性：定义（可逆 = v(n-1)
+     代码能在 v(n) schema 上跑、回退只回代码）、判定读 SQL 与 v(n-1) 调用方、回填 v0.10.1 / v0.11.0 / v0.12.0
+     （core 0025–0029 全部可逆；0027 经核实旧调用方只取 `rows[0]` / 判 `length === 0`）、不可逆需在合并 release
+     PR 前手工标注 CHANGELOG。
+  3. `make demo` / `scripts/demo.sh --model <provider/model> [--keep] [--out]`（`DEMO_MODEL` 必填、永不默认）：
+     preflight → `create-workspace --purpose ephemeral --ttl 1d` → `seed-domain-pack ops-assets-v1` →
+     `issue-service-handle` → 采集器 `--once`（`objectsUpserted` / `factsAsserted` 作对象数 / 事实数）→ Q1 依赖
+     问答 → Q2 kernel → postgres 边的来源与最近确认（另独立 `search → traverse → explain` 取溯源链）→ 一次性启用
+     `gatekeeper-docker` + 发布 `demo-ops-runner` → Q3 重启 `accept-s2-restart-target`（`send-and-wait
+     auto-approve` + 兜底轮询审批；判据同 `real_docker_restart_run`）→ Markdown 到 `${NEXTTIME_DATA}/demo/`
+     （每步耗时、`BUDGET ok|exceeded` 900s）→ 清理。**不碰生产采集器密钥**：Handle 写到 demo 私有文件、用
+     `docker compose run -e NEXTTIME_HANDLE_TOKEN_FILE -v …:ro` 只对这一次生效、清理无条件删除（主会话审出，
+     与 `accept_s3.sh` 覆盖共享文件的取舍不同）。不重构 accept 脚本，只复用 `driver.mjs` 子命令。
+  4. 镜像发布重评点：等 S5.7 主机数字。三条车道均不写 STATUS / development-tasks / runbooks 索引，由主会话收口
+     统一写（W10 的锚点冲突教训）；回顾见 `retrospective-2026-09-18.md`。
+  5. **主机首次实跑（2026-09-18）**：`drill-upgrade.sh --to v0.13.0` 从 tag 取出首跑——第一次在
+     `build-to` 因 npm registry 瞬断失败（迁移前、无副作用，切回分支重跑），第二次全绿、约 21 分钟、
+     `PROBE old-code-on-new-schema ok`；分阶段耗时与交付缺口回填 `runbooks/host-drills.md`"首次实跑
+     记录"。`make demo` 首跑到 Q3 `interrupted`：门在 Q1 / Q2 之后才连接，Q3 开始时 supervisor 重建
+     常驻入口容器撞上 Turn——#210 把 `worker_setup_step` 挪到首轮对话前（接入 → 采集 → 对话），平台
+     侧竞争记 STATUS 遗留 44；复跑结果见 STATUS §2.2。`drill-install.sh` 无干净主机，未实跑。
+
+### S5 明确不做（保持现状，记录理由）
+
+- 三个 `docker-socket-proxy` 实例收敛为一个运行时服务：三个消费者（supervisor 的 spawn / stop / start、
+  docker 门对客户任意容器的受治理操作、采集器只读）是三套不同的特权集与信任边界，三实例是正确的最小权限。
+  只把 allowlist 与消费者代码调用面的对应关系写进 `runbooks/operations.md`（遗留 11 的这一部分改为"记债"→
+  "决定保持"）。
+- 备份容器 root + `DAC_READ_SEARCH`：数据库已是 `pg_dump` 逻辑备份，root 仅用于跨 uid 读 `workspaces/`
+  等目录做 tar；改统一 gid 需要所有容器改 umask，收益小于风险。保持。
+- Object 属性的逐属性溯源：推后。
+- 场景层（RouterOS 门、网络领域包、Procedure）：2026-09-16 维护者决定推后。
+- P5（Trigger、`extension_ui_request`、CLI 清单解析）与 E7：不动。
+
+### S5 需要维护者决定的四项
+
+1. **与 W8 剩余项的先后**：推荐 S5 的 W9 三条并行车道（S5.1→S5.2、S5.4、S5.5 前三项）立即开工，与 P-B2b
+   文件互斥可并行；P-C / P-D 之后接 W10 / W11。或按 STATUS 原顺序先做完 P-B2b → P-C → P-D 再进 S5。
+2. **S5.1 推出方式**：目标主机先 `warn` 一轮再切 `reject`（推荐），还是直接 `reject`。
+3. **S5.2 失效语义放哪**：内核观察窗口 `window.complete`（推荐：采集器无状态、所有采集器共用一套机制）还是
+   采集器自己算 delta 调 `invalidate_fact`。
+4. **遗留 36 的修法**：按 STATUS 已记的拟修（拒绝命中宿主实例端点）做，还是改为每门独立 `gate_token`
+   （更彻底但改动面大，P-B1 的门自注册也要跟着变）。
+
+### S5 实施波次（2026-09-16 排定；2026-09-17 维护者确认按此开工，四项待决取推荐项：S5 先于 W8 剩余项、S5.1 主机先 `warn` 再 `reject`、失效语义在内核 `window.complete`、遗留 36 按端点拦截修）
+
+| 波次 | 项 | 范围（文件所有权） | 交付 |
+|---|---|---|---|
+| W9-A | **S5.1 → S5.2** 本体写入点强制；新鲜度与失效 | `substrate/graph/**`、`substrate/ontology/registry.ts`、`substrate/epistemic/explain.ts`、`gateway/ingest-handlers.ts`（校验与 window）、`shared/wire/graph.ts`、`docs/contracts`、`collectors/host-inventory`（`window` 声明）、迁移 core 0025 / 0026 | 违规 400 + 指标；幻影 Fact 失效；关闭 28 与复审 §4-1。**完成**（2026-09-18：#191 + #192、#193；多出迁移 core 0027，见 S5.2 实现说明） |
+| W9-B | **S5.4** prompt 契约修复 + 守卫 + 门工具描述 + fake 形状校验 | `ontology/*.yaml`、`deploy/worker-runtime/entrypoint.sh`、`platform-extension/src/modes/**`、`mcp/reference-tool-aliases.ts`、`mcp/tool-projection.ts`、`shared/capabilities.ts`（描述）、`scripts/guards/prompt-contract.mjs`、`deploy/fake-llm/**` | 修复与守卫同 PR。**完成**（2026-09-17：#190） |
+| W9-C | **S5.5 前三项** 36 → 22 → 20（各自单独 PR） | `gateway/connection-handlers.ts`、`worker-supervisor/src/**`（reconcile）、`docker-compose.yml` | 安全项先落。**完成**（2026-09-17：#186 / #187 / #188） |
+| W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0028（0027 已被 S5.2 用掉）、runbooks、web 工作区页只读字段 | 关闭 9；11 部分。**完成**（2026-09-18：#195） |
+| W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21。**完成**（2026-09-18：#197 遗留 21 / 31、#198 遗留 24 + core 0029、#199 遗留 23 / 34） |
+| W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3。**完成**（2026-09-18：#200；26 已由 #145 关闭、核实无回归；遗留 40 一并关闭；30 的主机 `--real` 复跑归 W11 S5.7） |
+| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿。**本地部分完成**（2026-09-18：#202 S5.7 工具与流程、#204 `make demo`、#205 两个演练 + release.md §6；回顾 `retrospective-2026-09-18.md`）。**主机侧完成**（同日：`drill-upgrade.sh` 全绿、真实升级到 v0.13.2、chaos / 指标 / S1、三轮 `--real --runs 10` 与 `make demo` 全绿，数字见 STATUS §2.2；`drill-install.sh` 无干净主机未跑；镜像发布重评见 STATUS §3）。**W11 完成，S5 收口** |
+
+W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/platform/**`、`packages/web` 平台页）互斥；
+W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。
+每波结束：主机应用、验收、`docs/STATUS.md` 更新。
+
+## 5c. S6 — 控制台完善（2026-09-19 立项，同日无人值守实施）
+
+背景：`console-completion-plan.md`（2026-09-18 维护者首次完整使用控制台后的七条问题 + 走查 B1–B7 +
+代码级核对 C1–C29）给出了逐条根因与波次；七项待决于 2026-09-19 取定（该文 §12，PR #216）。本节只记
+**实现说明**（改哪一层、怎么验的、留下什么边界），方案与验收句以该文为准，不复述。实施方式：主会话统筹，
+两波共十一条文件互斥车道（各自 worktree + 私有测试库），主会话审 diff 后线性合入 `s6/console-completion`，
+车道不写本文与 STATUS，实现说明随最终报告回传、由主会话收口时统一写入（`retrospective-2026-09-18.md` §4 的教训）。
+分支经同日收尾会话独立复验（`retrospective-2026-09-19.md` §2.3；推送 / 开 PR 被该会话的 supervisor 策略拦下）：推送、开 PR、合入、发版、主机应用由维护者决定。
+
+### S6-A0 视觉体系落地 + 紧急修复
+
+**令牌与字体（§5.9，C24 / C21）**
+- `packages/web/src/styles/tokens.css`：浅色成为 `:root` 缺省（`color-scheme: light`），深色改为
+  `prefers-color-scheme: dark` 覆盖；同名 56 个令牌、无深色专有名。§5.9 的中性 / 强调 / 语义值原样落入，新增
+  `--observe(-soft)`、`--muted(-soft)`、字号刻度 `--fs-11…24`、`--lh-tight 1.3` / `--lh-body 1.6`。`--muted` 取
+  `#626b7b` 而非 §5.9 的 `#6b7280`：后者在 `--muted-soft` 上只有 4.28:1，低于原则 6 的 4.5:1（实测 4.75）。
+  `--text-3` 在 `--bg` 上 4.43:1（`.page-description`）按规范保留，记为已知。
+- C24：`base.css` / `ui.css` / `pages.css` / `shell.css` 的 68 处 px 字号全部换刻度（10→11、11.5→12、12.5→13、
+  15→16、18→19、20→19），`ui.css:92` 的 `#fff` → `--text-on-accent`，选中 tab 的 `rgba()` 阴影改 1px 环
+  （原则 5）；主按钮 ink（`--text` 底）、`.btn` 36px、控件 min-height 36。
+- 字体随包自托管（§12 第 7 项）：`styles/fonts.css` `@import` @fontsource（IBM Plex Sans latin 400/500/600、
+  Plex Mono latin 400/500、Noto Sans SC 400/500——fontsource 本身按 unicode-range 切片，浏览器只拉页面用到的
+  片），Vite 打进 `dist/assets`（201 个 woff2，零外域引用）；`vite.config.ts` 的 `assetsInlineLimit` 排除
+  woff/woff2，因此 caddy CSP `font-src 'self'` 无需 `data:`。首屏静态上界：登录后首屏 582 KB、登录页 647 KB、
+  管理员概览 705 KB（两字重全算，实际更低）。副作用：CSS 因 204 条 `@font-face` 涨到 275 KB（107 KB gz），
+  `dist` 13 MB（含 fontsource 附带的 201 个未用 `.woff`）——可后续改手写 woff2-only `@font-face`。
+- 守卫：`scripts/guards/css-tokens.mjs`（进 `ci:guards`；收尾时补进 CI `quality` job——该 job 逐条列守卫、不跑 `ci:guards`）拒绝 `styles/` 里除 `tokens.css` / `fonts.css` 之外
+  的 `#hex` / `rgb(` / `hsl(` / px 字号，按 `file:line` 报；改前 70 处、改后 0。
+- C21：`deploy/caddy/Caddyfile` 全站 `Permissions-Policy`；SPA（`not path /explorer/*`）严格 CSP
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';
+  connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`；
+  `/explorer/*` 单独一块略宽（`img-src blob:`、`worker-src blob:`）。`style-src` 暂留 `'unsafe-inline'`：页面
+  仍有 83 处 `style={{…}}`，清理后收紧（§7）。`caddy validate` 通过；HSTS 缺席的既有注释不变。
+
+**UI kit 增补（`components/ui/*`，各带 vitest）**
+- `RefChip`（B3 / 原则 3）：五种引用（principal / gatekeeper / workerDefinition / object / actionRequest），名称 +
+  类型 + 截断 id + `CopyId`，无名时灰色虚线裸 id 回退；`useRefNames(source)` 把 `list_*` 结果折成 id→name。
+- `StatusChip` + `lib/status-tone.ts`：`Tone` 加 `observe`；新增 11 个机器（operationMode / blastRadius /
+  userStatus(+`pending_activation`) / workspaceStatus / workspacePurpose / gateInstance(+`awaiting_host`) /
+  gateHealth / gateTrust / connectorMode / serviceHealth / platformRole），运行时数组取自 shared Zod 枚举
+  `.options`，映射按 §5.9 六色一义；`components/platform/` 五个文件的手拼 `chip chip-*` 全部替换（C17）。
+- `ConfirmTier`：`tier: low | medium | high | irreversible`——low 立即执行 + 可撤销 toast；medium 内联卡；
+  high / irreversible 复用既有 `Drawer`（焦点陷阱 / Escape / 焦点回归），irreversible 档要求键入目标名 + 知情勾选。
+- **R-44 更正（2026-10-02 复审）——不可逆确认关闭再打开不再带着上次的输入（#446）**：上面说 irreversible 档要求键入目标名 + 知情勾选，但 `kit/confirm` 的 `IrreversibleTier` 把 `typed`、`acknowledged` 与上次错误放在关闭 / 重开后仍存活的状态里（档组件保持挂载，只有 portal 依赖 `open`），所以一次取消后重开同一个不可逆确认（如供应商删除行）是预填且可用的，离不可逆动作只差一次点击。现在 `IrreversibleTier` 在 `open` 变为 true 时于渲染期（"adjust state when a prop changes"，`openSeen`）重置重输名称、知情勾选与错误，对话框不会带着旧值绘制；`useConfirmRun` 新增 `clearError`；medium 档不动。测试：`kit/confirm.test.tsx`（失败一次不可逆尝试、取消、重开 → 名称为空、未勾选、无错误、按钮禁用；已验证在旧组件上失败）。
+- `ApprovalCard`（对话与审批页共用）、`ProvenanceChain`（自带窄 prop 类型，不引内核类型）、`FollowPill`、
+  `Launcher`（四步壳 + http / mcp / ssh / cli 种类选择）、`PageHeader` 加 `breadcrumb` / `primaryAction`。
+- 壳：侧栏 使用 / 治理 / 平台 三组（可见性规则同 runbook），底部连接状态 + `platform_overview.version.kernel`
+  （仅管理员读）+ 当前用户（`session.user` 或 `get_workspace.caller`）；门实例行加 详情 按钮作键盘路径（C13）。
+
+**C 系列文件级修复（§2b；测试见 §9 对应项）**
+- C1（P1）：`Session.apiKey`（`connectApiKey` 时捕获），两处 `<AccountPage>` 传 `apiKey` / `onClaimed` /
+  `onBound`；claim 成功后 `clearApiKey()` + `proceedAfterCookieAuth`，落到 `changePassword` / `noWorkspace` 时
+  拆掉仍在发布的旧会话。`App.test.tsx` 三例（API key 登录设密码、cookie 绑定卡、noWorkspace 绑定卡）。
+- C2：`useCapability` 加 `load` 选项，`useCapabilityList` 重载时沿 `nextCursor` 走到"读者已加载的行数"，不再截回
+  第一页。C3 / C7：审批页 `setDecided` 移出 `mutate` 更新器，推送后只 `get_action` 单行；任务页按推送状态本地
+  mutate，全量重载只作失败兜底。C4：`AccountPage` 用共享 `LOGIN_PATTERN`，映射 `invalid_login`。C5 / C6：
+  `ws-client` `rpc()` 30 s 缺省超时（`RpcTimeoutError`，-32000，可按调用覆盖，`errors.ts` 命名 `timeout`）；
+  `seenSequences` 只在分页期间使用，`onCaughtUp` 后退化为 `sequence > lastSeenSequence`。C8：找不到卡片时跳过
+  `set_auto_approved_action_kind` 并 toast。C9：`canManage` 以 `get_workspace.caller.role === 'owner'` 为准，403
+  推断只作 fallback。C10：内核拆出 `self_disable`（`last_admin` 保留真正的最后一位管理员）；客户端映射并把内核
+  `message` 作为副文案。C11：`AgentPolicyForm` 默认模型回退守卫。C12 / C15 / C16：http 实例必填 manifestSource、
+  endpoint 复用 URL 正则、`describedBy` 只指向真渲染的 hint。C14 / C18 / C19 / C20：目录 toast 带内核 message、
+  `isForbiddenError` 共享、scope 只收对象、访问页筛选控件不再中途换类型（提交时才改查询参数）。B6：11 处
+  "该能力尚未上线"死分支全删，`isNotFoundError` 随之删除。C23：`App.tsx`（673 行）拆为 `routes.tsx`（路由表，
+  顶部"add new pages here"）+ `session/useSessionMachine.ts` + `session/types.ts`，`App.tsx` 剩 88 行渲染开关；
+  `index.ts` 去掉 `console.log`。
+- W3 复现：`ChatPage.test.tsx` 用 `Object.defineProperty` 伪造几何，两种机制都复现——(a) 程序写 `scrollTop`
+  与其异步 `scroll` 事件之间又提交了一段流式文本，`atBottom` 翻 false；(b) 工具调用行结果原地增长
+  （`toolCalls.length` 不变）根本不触发滚动写入。修法在 S6-A 对话车道。
+
+### S6 遗留修复（42 / 43 / 44）与 B1
+
+- **遗留 44**：根因与 STATUS 行的假设不同——`resident-service.ts` 的 `spawn()` 本就在返回新容器 id 之前完成
+  stop → remove → createAndStart，`reconcile()` 也从不停容器（重建在 `spawn()` 的 `rotated` 分支：
+  `connect_gatekeeper` → 新 Grant → 内核 `ensureEntryHandle` 换发 → jti 变）。真正的缺口在 agent-host
+  `host.ts`：`handleStartTurn` 先占 `activeTurns[principal]` 再调 `/resident/spawn`，supervisor 在这次 spawn 里
+  `docker stop` 旧容器、旧 attach 流关闭，`handleContainerClosed` 只按 principal 查到这条尚未派给任何容器的新
+  Turn，报 `interrupted` 并删除，随后写给新容器的 `switch_session` 无人认领。修法：Turn 绑定唯一容器
+  （`ActiveTurn.containerId`，`ensureAttachment` 返回后、写任何命令前设定），`onLine` / `onClose` 监听器带所属
+  容器 id，非绑定容器的事件一律忽略，只在关闭的正是缓存的 attachment 时才丢弃它。未改 kernel / supervisor。
+  对话中途接门：`/resident/spawn` 只由 `handleStartTurn` 发起且同一 principal 同时只有一个 Turn，重建推迟到下一轮
+  Turn；既有暴露（未修）：`sweepIdle` 只按 Turn 开始时的 `touch` 计时，超过 `entryIdleTimeoutMs` 的 Turn 仍可能
+  被停。测试：`host.test.ts` 假 supervisor 加 `setSpawnInterceptor`，三例确定性复现，前两例在修复前失败。
+- **遗留 42**：`platform-extension/src/modes/worker.ts` 的 `report_result` 改为在工具调用内同步 POST
+  `report_task_result`；内核 `invalid_params`（可修）抛出 → pi `isError:true`，最多两次；`forbidden` /
+  `illegal_transition` / 其它以 `terminate:true` 的普通结果带着内核答复结束本轮（pi 只在 throw 时置 `isError`，
+  throw 不能终止批次，fake-llm 逐次重放最后一步会空转）；网络 / 超时 / 畸形响应仍由 `agent_settled` 兜底重发。
+  `agent_settled` 改用独立 `settled` 标志守卫退出（原 `if (resultAlreadyPosted) return` 会不退出、容器挂到
+  supervisor 超时）。`factsRejected` 不在 `ReportTaskResultWireSchema`（strict）里，上报成功后 best-effort
+  `get_task` 读回 `factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]` 按契约下标回显（含
+  I16 `meta_ontology_type`——#211 之后 I16 已是单条拒绝而非 403）。真 pi SDK 测试证明模型看得到并能改正、模型
+  重放 8 次撞永久 409 只 1 次模型调用 / 2 次 POST / 1 次退出。
+- **遗留 43**：Worker 无法轮询（`get_action` 是 human-only、`minRole: operator`），契约取"结果以 ActionRequest
+  状态为准"：`ontology/ops-runner.yaml` 改写 `await_decision=false` 一条并新增 "Reporting an action that was
+  still pending"（引用每个 `actionRequestId`、不写"未执行 / 失败"、不再调执行类工具去"查看"）；门工具
+  `pending_approval` 结果文本同句提示。守卫允许名单加 `actionRequestId`，`get_action` 故意不进并有单测。生产
+  工作区需发布新的 `kind: worker` 版本才生效。
+- **B1**：`packages/kernel/Dockerfile` runtime 阶段 `ARG KERNEL_VERSION=dev` → `ENV`（置于全部 COPY 之后）；
+  `docker-compose.yml` `kernel.build.args` 传 `${KERNEL_VERSION:-dev}`，删除运行时 `environment:` 同名项（compose
+  environment 会覆盖镜像 ENV，正是漂移原因）；值由构建 shell 导出 `export KERNEL_VERSION="$(git describe --tags
+  --abbrev=0) ($(git rev-parse --short HEAD))"`，渲染 `v0.13.2 (0fa5a1e)`；`drill-upgrade.sh` / `drill-install.sh`
+  每次 `docker compose build` 前导出；runbook release.md §3.1 / operations.md §4.2 / `.env.example`。本机实构镜像
+  核实 `Config.Env` 与容器内 `process.env`。
+
+### S6-A 内核能力（对话生命周期、approve.reason、审批过滤、审计分页、取消接入申请、export_prov）
+
+- **`archive_chat` / `unarchive_chat` / `rename_chat`**（迁移 core 0031 `chats.archived_at`）：workspace · human ·
+  member；本人的 Chat，owner 可归档 / 恢复他人可见（`visibility='workspace'`）的 Chat 但不能改名；他人私有 Chat
+  对 owner 仍是 404（`chats_visibility` RLS，"存在性不泄露"——未加 security-definer 绕过，隔离只紧不松，见
+  STATUS 遗留 45）。`ChatWire.archivedAt: string | null`，`list_chats{includeArchived?}` 缺省隐藏；审计
+  `chat.archive` / `chat.unarchive` / `chat.rename`；推送 `chat.metadata {title}` / `{archivedAt}` 只走单聊订阅。
+  归档不切断溯源：`explain(turn)` 集成测试。
+- **自动标题**：`sendChatMessage` 插入首条用户消息后 `update chats set title=$3 where … and title is null`
+  （前 40 个码点、单行），`rename_chat` / `new_chat{title}` 永不被覆盖。
+- **`approve{actionRequestId, reason?}`**（C25，§12 第 6 项）：`blastRadius === 'high'` 且无非空 reason →
+  `ApprovalReasonRequiredError`（`code = 'reason_required'`），HTTP 400 / WS `INVALID_PARAMS`；reason 进 Decision
+  `rationale.reason` 与 `action_request.approve` 审计 payload，与 `reject` 对称。`ActionRequestWire` 加
+  `decisionReason` / `decidedBy` / `decidedAt`（`.nullable().optional()`——`request_action` 自己的投影在
+  `action-request-wire.ts`，五个审批 handler 经 `withApprovalDecision` 装饰；后续可把决定字段并进
+  `toWireActionRequest(row, decision?)`）。accept-s2 两个 manifest 是 low / medium、S3 不走审批，验收 driver 不用改。
+- **`list_action_requests{taskId?, parentWorkerRunId?}`**（C28）：`taskId` → `getTaskWithWorkerRuns` → run id 集，
+  两者同给取交集，未知 Task 返回空页（不 404）；I14 与 keyset 分页不变。
+- **`audit_query{filter?, limit?, cursor?}`** → `{items, nextCursor?, truncated?}`：`substrate/audit/writer.ts`
+  `queryAuditPage` 按 `(date_trunc('milliseconds', created_at), id)` 排序比较（遗留 23 模式），缺省 100 / 上限
+  1000，`filter.limit` 旧形状仍认；同毫秒三行 `limit:1` 翻页不漏不重的用例。
+- **`cancel_connection_request{connectionRequestId}`**（C26）：`requested → cancelled`（0005 预留的边，无迁移），
+  本人或 owner，非 `requested` 为 409 `illegal_transition`；审计 `connection.request_cancelled`；无
+  `cancelled_at` 列（谁 / 何时在审计行）。
+- **`export_prov`** 加 `nodeId?`（与 `explain{nodeId}` 同一种无类型 id）：它导出的是围绕一个节点的 PROV 图，不是
+  `audit_query` 的筛选范围——方案 §6 的措辞把两者混了；审计记录列表由前端序列化已加载的页。
+
+### S6-A 内核能力（工作区 / 用户清除、列表过滤、C10、遗留 41）
+
+- **迁移 core 0030**：`workspaces.disabled_at timestamptz null` + `grant update (disabled_at)`；不回填（§12 第 3
+  项：既有 `disabled` 行 `disabled_at is null` 视为保留期已过）；`set_workspace_status` 用
+  `coalesce(disabled_at, now())` 落、启用清空。
+- **`purge_workspace{workspaceId, confirm?}`**（platform · human · admin）：级联在
+  `application/platform/purge-workspace.ts`，走 bootstrap 超级用户路径（app 角色无 `workspaces` /
+  `audit_records` 的 DELETE、不能关 `links_immutable_delete` / `audit_records_no_delete` 触发器），能力 handler
+  第一阶段只做前置检查（`workspace_active` / `retention_not_elapsed` / `default_workspace`，拒绝不写审计行），
+  `afterCommit` 跑级联并在同一事务 `select … for update` 复查；删除顺序由活表结构拓扑排序、方案 §4 顺序作平局；
+  边 (a) service Principal → `warnings[{kind:'service_handle_in_use', principalId, name, activeHandles}]`；
+  边 (b) 从 `pg_constraint` 枚举所有引用 `users(id)` 的 FK 显式检查（不靠捕获 FK 错误），从未激活且成员资格全在
+  本工作区的 User 随之删除；不传 `confirm` 即预览（计数 + 警告，不删）；`platform.workspace_purged` 审计行含
+  按表计数与 `params.workspaceId`。内核不能删主机文件：结果带 `taskIds` / `principalIds`，CLI / 脚本负责
+  `workspaces/tasks/<id>` 目录。
+- **`purge_user{userIds}`**：全程平台事务；六种跳过原因（`user_not_found` / `activated` / `platform_admin` /
+  `has_sessions` / `active_membership` / `referenced`）；禁用成员资格的 Principal `user_id` 置空、行保留作审计
+  谱系；每个用户一条 `platform.user_purged`。
+- **列表过滤**：`list_workspaces{status?, purpose?, includeExpired?}`（省略 = 今天行为；控制台缺省
+  `{status:'active', includeExpired:false}`），行加 `purpose` / `expiresAt` / `disabledAt` / `purgeable`；
+  `list_users{pendingOnly?, hideResidual?}`——残留 = 无密码 ∧ 有 ≥1 成员资格 ∧ 没有任何"未禁用且在 active +
+  standard 工作区"的成员资格。
+- **CLI / 脚本**：`bootstrap.js purge-workspace <id> [--yes|--dry-run] [--name] [--actor]`、
+  `purge-expired-workspaces [--yes] [--include-disabled]` 与能力同一函数；`delete-workspace` 变为 `force:true`
+  越权（审计 payload `forced: true`）；`--actor` → `NEXTTIME_PLATFORM_ADMINS[0]` → 无则不写审计行、只打 stderr
+  事件；`delete-workspace.sh` / `delete-workspaces-matching.sh` 不再直接 SQL，regex 模式拒绝不合格的匹配
+  （`--force` 覆盖），`--expired` 走 `purge-expired-workspaces` 列表模式。
+- **遗留 41 前半**：`accept_s3.sh` 把采集器 Handle 铸到 `${NEXTTIME_DATA}/accept/collector-s3-<ts>-<pid>.token`，
+  `docker compose run -e NEXTTIME_HANDLE_TOKEN_FILE -v …:ro` 只对本次 `--once` 生效，EXIT / INT / TERM / HUP /
+  PIPE trap 删除（fake 与 `--real` 两种模式都接），生产 `secrets/collector-host-inventory.token` 不再被写。
+  **后半**：采集器 interval 模式每轮失败日志带 `consecutiveFailures` / `kernelStatus`，连续
+  `HOST_INVENTORY_FAILURE_STREAK_ALERT`（缺省 3）轮转为 `error "collector failing repeatedly"`（不退出）；内核
+  新增不变量 `ops.collector_silent`（active + standard 工作区里 service Principal 的 Source 超
+  `collectorSilenceThresholdMs`（缺省 2h）无观察）进 `/internal/metrics`。方案 §8 写的 `I-S6-1` 按运维健康前缀
+  命名为 `ops.collector_silent`（与 `ops.outbox_stuck` 同类）。
+- **C10**：`setUserStatusHandler` 对自己抛 `self_disable`，`last_admin` 保留。
+- 测试：`platform-purge.integration.test.ts`（11 例）、`delete-workspace.integration.test.ts`（owner 用户级联）、
+  `bootstrap.test.ts` 纯函数、`invariant-checks.integration.test.ts` `ops.collector_silent`、
+  `collectors/host-inventory` `failure-streak.test.ts`。
+- **R-65 / R-66 更正（2026-10-02 复审，L4-8、L4-9）——清除不再锁表，出处查询有索引（#458）**：①R-65：`purgeWorkspace` 原来在删除循环前后对 `links` / `audit_records` 执行 `alter table … disable trigger`，该语句取 SHARE ROW EXCLUSIVE，与每个 INSERT 的 ROW EXCLUSIVE 冲突并持有到清除提交，整个级联期间**所有**工作区的能力调用都卡在审计插入、所有采集器 / Worker 的 Fact 写都卡在 `links`；级联本身也慢——每次父行删除对无索引的子列做外键探测，采集器密集的工作区约 O(行数²)。现改为在每表删除循环外包 `set local session_replication_role = replica`（不触发任何普通触发器、不取锁、仅本会话、事务结束含回滚即还原、不碰 `pg_trigger` 目录），循环一结束、触碰 `workspaces` 行 / 级联用户 / `platform.workspace_purged` 审计行**之前**立刻 `set local session_replication_role = origin`（开头的 capability handle 吊销仍在 origin 下，单调吊销触发器照常生效）；`LINKS_DELETE_TRIGGER` / `AUDIT_RECORDS_DELETE_TRIGGER` 常量删除。清除经 `skipRoleSwitch` 以登录角色运行（compose 里即超级用户 `POSTGRES_USER`，与旧 `alter table` 要求的表属主同一角色；`session_replication_role` 是 SUSET 参数，无新授权）。replica 同时跳过 Postgres 内部外键检查：删除顺序本就对 FK 安全（先子后父，自引用在同一条语句里清掉），补上的安全网是新守卫 `findForeignKeysOutsideCascade(client, tables)`——读 `pg_constraint`，返回每条指向级联表、而级联并不"按构造满足"的外键（子表也在级联内、且键里有 `workspace_id ↔ workspace_id` 一对才算满足）；有则在任何吊销 / 删除之前抛 `PurgeCascadeForeignKeyError`（预览同样抛；内部错误，与 `WorkspaceDeletionOrderCycleError` 同一姿态），并导出 `ForeignKeyOutsideCascade` 类型。今天对仓库里每个迁移守卫都为空（所有指向工作区作用域表的 FK 都是 `(workspace_id, x) → (workspace_id, id)` 且无 `ON DELETE` 动作）；将来有迁移让某张平台表指向 `principals` 之类，清除会在集成测试里大声失败而不是静默留孤儿行。replica 还会跳过的草稿删除守卫触发器（worker 0003 / core 0033）只约束 `nexttime_app`、本就放行此登录角色，无影响。清除删的行不变；`audit_records` 追加不变式（I4 / I11）不变：两个 append-only 触发器全程在目录里保持启用，清除后直接 delete 仍被拒，这唯一的审计覆盖现在对其它会话不可见，比以前更窄；`platform.workspace_purged` 在角色回到 `origin` 后、同一事务里写。②R-66：`observations` 原来只有主键，`link_visible_to_caller`（RLS 策略与显式读谓词里对每个候选 Fact 各算一次）、`resolveFactOrigin`（每个有前序行的 `assertFact`）、静默 Source 的 `max(created_at)` 都扫整个工作区的 Observation（最大的表、无保留策略，遗留 103）；`findAttributableTurn`（每条出网观察与每条 LLM 用量记录各跑一次）在 `activities(workspace_id, started_by, …)` 上无索引；`links.last_observation_id`（0026）是无索引的外键子列。core `0039_provenance_lookup_indexes` 只加索引：`observations_activity_idx (workspace_id, activity_id)`、`observations_source_idx (workspace_id, source_id, created_at)`、`links_last_observation_id_idx (workspace_id, last_observation_id) where last_observation_id is not null`（与 0018 的 `links_observation_id_idx` 同为部分索引）、`activities_started_by_idx (workspace_id, started_by, kind, created_at)`；不改数据 / 约束 / 授权、不改任何查询结果，`observations` 的保留 / 删除仍是遗留 103 的单独决定。回滚性：只回滚代码即可，v0.40.0 的 `alter table` 清除在新 schema 上照常运行（其外键探测反而更快）；`release.md` §6 加一行。**锁时间**：迁移 runner 把每个文件包在一个事务里，不能 `create index concurrently`，普通 `create index` 对 `observations` / `links` / `activities` 持 SHARE 直到文件提交——读不受影响，INSERT / UPDATE / DELETE 排队等待（不失败）；`apply-release.sh` 第 5 步迁移时旧内核仍在服务，所以采集器写入、Fact 写与 Turn 记账会在建索引期间暂停；`observations` 约 0.6 M 行，预估远小于一分钟（估计值，先用只读预检量）。主机侧：应用前跑 `pg_stat_user_tables` 预检（`observations` / `links` / `activities` 的 `n_live_tup` 与堆大小），应用后对三条查询（按 activity 取 source、按 source 取 `max(created_at)`、`findAttributableTurn` 的 running 查找）跑 `explain analyze` 确认走新索引，结果记 `docs/private/`。测试：`platform-purge.integration.test.ts` 新 describe"级联不取表锁，并保住引用保证（R-65）"（独立私有库）——`PoolLike` 代理让真实 `purgeWorkspace` 停在 `delete from "audit_records"` 之后，核对会话为 `replica`、清除后端在 `links` / `audit_records` 上不持强于 ROW EXCLUSIVE 的锁（`pg_locks`）、第二连接以 `lock_timeout = 2s` 给另一工作区插审计行成功（修复前超时）、到 `delete from workspaces` 时角色已回 `origin`；结束后目标工作区消失、并发写入的行已提交、两个触发器 `tgenabled = 'O'`、直接 delete 仍被拒；守卫用例建两张探针表（一张平台侧无 `workspace_id`、一张 FK 不配对 `workspace_id`），execute 与 preview 都抛 `PurgeCascadeForeignKeyError` 并点名两表、不删不吊销，探针删掉后同一工作区正常清除；`delete-workspace.integration.test.ts` 与其余 `platform-purge` 只改注释，仍断言完整级联，也就证明真实 schema 上守卫为空。
+
+### S6-A 对话页（W1 / W2 / W3）
+
+- **W3 两个根因都成立并已修**：(a) 页面自己写 `scrollTop` 触发的异步 `scroll` 事件把下一段流式文本量成"距底距离"；
+  (b) 跟随写入只由 `toolCalls.length` 驱动，原地增长的工具结果从不滚动。修法：底部哨兵 + `IntersectionObserver`
+  （rootMargin = `AT_BOTTOM_THRESHOLD_PX` 48，语义不变）+ `ResizeObserver`，跟随写入改为 `useLayoutEffect` 以
+  `[messages, turn]` 对象身份为键（`toolCallEnded` 生成新的 `turn` 对象）；jsdom 回退忽略 `scrollTop >=
+  lastWrittenTop` 的自触发事件；`ui/FollowPill` 只计持久化消息。两个 `test.fails` 翻为通过。
+- **生命周期**：`lib/chat-lifecycle.ts`（`chatTitle` / `isArchived`（`archivedAt` 为字符串才算归档，0031 之前的行
+  算活跃）/ `normalizeChatTitle`（镜像内核）/ `spliceChat` / `applyChatMetadata`）；列表一次
+  `list_chats{includeArchived:true}` 后客户端分 活跃 / 已归档 两个 tab，每次生命周期调用都 `mutate(spliceChat)`
+  不重读；归档确认 `ConfirmTier low` + 撤销 = `unarchive_chat`，由页面持有（splice 会卸载发起的行）；改名内联
+  编辑（Enter / Escape、IME 安全、空白客户端拒绝）；新对话占位"新对话 New chat"直到自动标题推送到达。
+- **头部**：`components/chat/ChatHeader.tsx` + `ModelSwitcher.tsx`——"模式 Mode：入口 agent · 模型 Model：
+  <select> · 来源 Source：工作区默认 / 我的覆盖"，选项 = `list_models` 目录 ∩ AgentPolicy `allowedModels`
+  （空 = 不限制），首项"工作区默认"= `set_agent_profile{model:null}`；选择后 `invalidateCapability` + toast
+  "下一轮生效"；Turn 进行中禁用（遗留 44 的规则）、403 后禁用；覆盖值不在允许清单内时标记而不隐藏。模式只显示。
+- **ChatPage 的 Turn 结束处理改为以 `metadata.turnStatus` 为门**：`{title}` / `{archivedAt}` 推送在 Turn 开始时到
+  达，原逻辑会误清 `TurnAlreadyRunningError`。归档的对话只读：composer 禁用 + 恢复按钮；内核侧同步加
+  `ChatArchivedError`（`send_chat_message` 409 `chat_archived`），不只靠前端。
+- **审批卡**：`ActionRequestCard` 改建在 `ui/ApprovalCard` 上，`reason` 随 `approve` 走（C25），高影响隐藏
+  "总是允许"（I8），`FALLBACK_BLAST_RADIUS = 'medium'`（持久化内容里 `blastRadius` 可选）；卡片保留
+  `.action-card-status` 钩子（e2e 依赖）。`ApprovalCard.onAlwaysAllow` 带已输入的 reason。
+- 测试：ChatPage 13、ChatListPage 10、ActionRequestCard 14、ModelSwitcher 4、ChatRenameForm 4、chat-lifecycle 9；
+  e2e `chat.spec.ts` 新增生命周期流程（本机 compose 栈 36 / 36 通过，回顾 §2.1）。已知：`list_chats` 只返回本人的 Chat，owner 归档他人可见 Chat
+  在 UI 上不可达（内核允许）。
+
+### S6-A 平台工作区 / 用户页（A1 / A6）、成员 / 访问（B3 / B4 / B5 / B7）
+
+- 工作区页缺省 `{status:'active', includeExpired:false}`；"残留" = 已停用 ∪ 已到期 ephemeral，内核单个筛选表达不了，
+  预设 `#/platform/workspaces?residue=1`（概览横幅链接，挂载与 hashchange 都读）读全量再用
+  `isResidueWorkspace`（`lib/platform-workspaces.ts`）客户端过滤；生命周期列显示"到期 …"或"禁用于 … · N 天后可清除 /
+  可清除"（7 天保留，`disabledAt === null` ⇒ 立即可清）。清除入口只在 `purgeable && !isDefault`：
+  `PurgeWorkspaceDrawer` 第一步直接 `http.call('purge_workspace',{workspaceId})` 预览（不走 `useCapability`
+  缓存，避免陈旧计数）——计数表、`purgedUsers`、每条 `service_handle_in_use` 警告带 `RefChip`；第二步
+  `ConfirmTier irreversible`（键入工作区名 + 知情勾选）→ `confirm:true` → 行 `mutate` 移除、toast 计数。停用后的行
+  原地 mutate 不重读（缺省筛选会把它丢掉，e2e"停用后再启用"依赖此）。409 在预览步走 `PlatformError`、确认步
+  以映射文案重抛给 `ConfirmTier`。
+- 用户页缺省 `hideResidual:true`（可切换）；"清理待激活用户"用 `pendingOnly` 列候选、勾选后
+  `ConfirmTier high` → `purge_user{userIds}`（上限 200）→ 逐行 outcome（跳过原因表以 wire 枚举定型）。
+- 成员 / 访问：principal / gatekeeper / worker-definition id → `RefChip`（访问页新增 `list_gatekeepers` 读只为名字）；
+  双语文案；B5：`list_grants` / `list_principals` 注册表无 cursor / limit，保持单页（不造参数）。B7：签发服务 Handle
+  TTL 缺省 30 天（方案 §5.6 的 30 / 365），上限从注册表 Zod schema `maxValue` 读；能力从 `listByChannel('handle')`
+  去掉 `<gate>.<op>` 模式行的清单勾选（与 `assertValidScope` 同一规则），`#ish-scope` 保留为校验过的粘贴框
+  （integrations e2e 用它）。
+- 概览：`验收残留 N 个工作区待清除` 横幅（同一谓词）；设置页 env-admin 登录名改 `tag mono`（标签不是状态）。
+- C22：`AppShell` / `WorkspaceDetailPanel` / `UserDetailPanel` 单测；e2e `workspaces.spec.ts` 加残留预设与清除流程
+  （本机 compose 栈通过）。路由：`routeFromHash` 只按路径匹配、`?query` 归页面。
+
+### S6-C 接入（A7 / B7 / C26 / §5.7 入口）
+
+- 一个启动器两处入口：`components/connect/ConnectSystemLauncher.tsx` 建在 `ui/Launcher` 上，`origin`
+  （workspace / platform）决定哪一侧是表单、哪一侧是"带链接的提示"，`platformAdmin` 让管理员在工作区页原地完成
+  平台侧；http / mcp 复用 `CreateGateInstanceForm` / `GateCredentialEntry`（凭证浏览器 → caddy → 门宿主，内核不见）
+  / `OnboardingWizardReview`（新增 `showDone`）不复制逻辑；平台侧前置条件显式化——实例 `discovered → enabled`
+  与接入包 `platform_preset`（一键 `set_connector_mode`），否则工作区目录看不到。ssh / cli：
+  `PackagedGateChecklist`（add-gatekeeper §4 的 compose 块 + `GATE_ID` / `GATE_CONNECTOR` / `KERNEL_URL` 与
+  secrets 三件套，只用 `<NEXTTIME_DATA>` / `<system>` 占位符），`useGateInstancePoll` 每 5 秒重查直到 announce。
+- 链接：工作区卡片的"平台实例"由 `list_available_gate_instances.gatekeeperId` 反查，管理员深链
+  `#/platform/integrations/<gateId>`（路由新增 `gateId` 段 + `hrefs.platformGateInstance`）；平台实例详情只有
+  `enabledWorkspaceCount`（线上契约无工作区列表——内核扩展候选）+ 当前工作区的门 `RefChip`。
+- B7：启用按钮只在 `discovered` / `lost`（`lost` 保留是因为 CI 种子只 announce 一次、180 s 后即 `lost`），
+  `enabled` 无按钮；状态 / 健康 `StatusChip`。C26：`requested` 行取消按钮 → `ConfirmTier medium` →
+  `cancel_connection_request`，行就地替换，403 / 409 / 404 文案在 `lib/connections.ts`。
+- Explorer 入口：`lib/explorer-probe.ts` 同源 GET `/explorer/`、以占位页标题 "Explorer bundle not built" 为判据、
+  失败即视为可用；`AppShell` 把 `useExplorerAvailable()` 传给 `Sidebar`，第三方链接改为"打开 Explorer（third-party）"
+  且只在 bundle 已构建时显示，原生 图谱 页成为 使用 组的固定入口。runbook：add-gatekeeper §4b、host-explorer 显隐。
+
+### S6-D 原生图谱页（A5）
+
+- 路由 `#/work/graph[?objectId&q&type&at]`（`lib/graph-route.ts`），`lib/router.ts` 只认路径。页面
+  `components/graph/*`：`list_types{kind:'object'}` 类型筛选 + `search{query, objectType?, limit:25, cursor}`
+  keyset 加载更多（空查询 = 最近更新）；对象视图**一次 `state_at{objectId, at}`**——`traverse` 的线上结果只有 id
+  （无 `direction`）渲染不了 Fact 行，`state_at` 同时给出 Object 与两个方向的全部 `FactWire`，`at = now` 时正是
+  `traverse` 深度 1 的活跃集合，换一个 `at` 就是"截至 As of"时间旅行；`at` 按页面挂载冻结（`sessionAt`）、只由
+  刷新推进（`useCapability` 以序列化参数作缓存键，每次渲染 `new Date()` 会无限重载），所有新鲜度按同一时刻判断。
+- 邻居按 linkType × 方向分组（出边在前，预览 8 行）、展开走面包屑轨迹（缓存渲染 + 后台复验）；内联 SVG 环形布局
+  （中心 + 至多 24 个邻居，边色取该邻居各 Fact 最差新鲜度），无物理引擎、无新依赖；每个节点 / 行都有键盘路径。
+- 新鲜度（`lib/graph-freshness.ts`，S5.2 语义）：冲突（open Conflict 任一侧或 `contradicted`）→ 被替代 → 已失效
+  （原因 `not_reobserved` 单列）→ 未观察（`assert_fact`、无时钟，故意灰而非琥珀）→ 新鲜（≤ 2h）→ 老化；只用
+  ok / warn / neutral / danger 四色；窗口 `OBSERVATION_WINDOW_MS` = 2h，注明是内核
+  `DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS` 的复述并印在图例里。
+- 名称：页面级 Object 缓存，搜索 / 聚焦结果灌入，渲染到的行按未见 id 调 `get_object`（去重、并发 4、失败 → 裸 chip）；
+  显示名 = 名称类属性，否则按本体 `identityKey` 顺序拼身份值（跳过 uuid 形状的外键）。冲突：
+  `list_conflicts{status:'open', limit:200}` 一次、客户端按 `factAId` / `factBId` 匹配。溯源抽屉
+  `explain{nodeId: factId}` → `ui/ProvenanceChain`，"在审计页打开" → `#/govern/audit?nodeId=`。
+- 内核缺口（记录未绕过）：`traverse` 线上无 `direction` 且只回 id；无批量 Object 读；`list_conflicts` 无对象 / Fact
+  筛选；观察窗口无能力暴露；ObjectType 无显示名提示。已知边界：单个 Object 的 Fact 不分页；深度 > 1 只能逐步展开；
+  冲突标记只覆盖前 200 条开放冲突；`sessionAt` 是浏览器时钟；`state_at` 的有效期过滤与 `traverse` 不同
+  （未来 `validFrom` / 过去 `validUntil` 不显示）；`RefChip` 缺 fact / conflict 种类（暂标为 对象）；e2e `graph.spec.ts` 在本机 compose 栈通过。
+- 测试：GraphPage 11、NeighbourList 3、NeighbourhoodView 2、ProvenanceDrawer 2、FreshnessChip 3 + 三个 lib 单测；
+  runbook web-console.md 新增"图谱页（S6-D）"。
+- **R-47 更正（2026-10-02 复审）——冲突面板并排显示两个 Fact 再解决（#445）**：上面的冲突标记 / `list_conflicts` 只给出两个不透明标签，面板让人"保留 Fact A / 保留 Fact B / 两个都作废"，没有值、来源或对象，选错一边就会作废正确的 Fact，并记录一条没有证据的原因的 Decision。内核：`explain` 对 Fact 额外返回 `sourceObjectId`、`targetObjectId`、`properties`（与 `FactWire` 同名字段，同一行、同一 RLS），属于增量线上变更，契约快照重新生成（`explain` 与 `causal_chain` 结果），PROV 图构造器按字段名取值，导出不变。控制台 `ConflictsPanel`：每行有"对比并解决 Review"，打开时才对两侧各读一次 `explain`（关闭的行不发请求），显示 A、B 两张卡片：关系与认知状态；两个 Object 的 RefChip（链接到对象视图，名字走页面 Object 缓存）；逐键的值，双方不一致的键用 warn 着色 / 描边，仅一侧有的键在另一侧标 `—`；来源（URI）与最近确认时间；断言者；**完整溯源**链接到该 Fact 的溯源（审计页 `?nodeId=`）。**解决 Resolve** 确认（medium 档、选择 + 必填原因不变）放在对比下方，两侧都读到后才提供，读取失败显示带重试的错误横幅且不提供解决。`lib/graph-view.ts` 的纯函数 `conflictSideView` / `conflictValueRows` / `formatFactValue`；`styles/graph.css` 只用令牌（卡片上下堆叠，因为搜索面板在任何宽度下都窄）。`resolve_conflict` 参数与档位、Decision 与冲突解决写入的内容都不变。测试：新增 `ConflictsPanel.test.tsx`（打开前不读取；两侧关系、解析名字的 Object、仅不一致的键被标记、来源、溯源链接；解决发送 `{conflictId, resolution, reason}` 并重载；读取失败显示重试且无解决，可恢复）、`graph-view.test.ts` 的 `conflictValueRows`、更新 `ExplainResultWire` 夹具、`epistemic-handlers.integration.test.ts`（`explain` 返回端点与值）。
+
+### S6-A 审批页 / 任务页 / 审计页 / 能力目录（B2 / C25 / C28 / A4 / C27 / A2）
+
+- **审批页**：详情 `components/approvals/ApprovalDetail.tsx` 建在 `ui/ApprovalCard` 上；`approve{reason?}` 高影响
+  必填（卡片在内核 400 之前先校验）；高影响 Approve 与所有 Reject 走 `ConfirmTier high`（影响清单：动作 / 目标 /
+  门 / 影响面 / 代表者 / 被阻塞的 Worker），确认层是详情 `Drawer` 的**同级**而非嵌套（两个 Drawer 都在 `document`
+  上监听 Escape；确认打开时详情的 `onClose` 经 ref 变为 no-op，测试证明 Escape 只关确认层）；内核错误让确认层保持
+  打开、行回退。History 显示 `decidedBy`（`RefChip`，名字来自 `list_principals`）/ `decisionReason` / `decidedAt`。
+  "总是允许"复选框语义与 e2e 选择器保留。名字目录 `approvals/useDirectoryNames.tsx`：`list_principals` 是
+  operator-only 且内核角色规则精确匹配，member / auditor 被拒后答 `[]` 不再重发。
+- **L8a-10 更正（2026-10-02 复审）——审批"目标"不再把门 uuid 当目标资源（#446）**：内核唯一的 `resource_scope` 写入点存的是 Gatekeeper 自己的 id，于是审批队列显示 `gate · kind → <gate uuid>`，详情 / 确认把这个 uuid 标成"目标 / 目标资源"，好像它是动作的目标；#407 曾为此把 copy-guard 基线 `approvals.uuid` 临时提到 1。现在 `approvals/useDirectoryNames.tsx` 的 `resourceScopeLabel(row, gatekeeperNames)`：范围等于该行自己的 `gatekeeperId` → `null`（门已按名字显示）；另一个已知门 id → 其名字；自由文本不变。用于队列的待决与历史行（行带 `data-gatekeeper-id`）、`ApprovalDetail`（目标行读"整个门 / The whole gate"，标题、高影响确认的目标 = 门名、影响行）、`LinkedApprovals`、`audit/ApprovalContext`。copy-guard 基线 `approvals.uuid` 回到 0（`"approvals": {}`，与 #407 之前完全一致的 blob）。持有者隔离 e2e（`e2e/approvals.spec.ts`）原来靠可见的门 uuid 找行，现改按 `data-gatekeeper-id`（`queueRowByGate` / `openRow`，绝非可见文案）；聊天卡片查找不变。聊天卡片 `ui/ApprovalCard` / `ActionRequestCard` 仍原样打印门范围的 `resourceScope`（属于另一条车道，有意没动，同一个 helper 以后可用）。审批 e2e 截图基线会少掉隔离行的 `→ <uuid>` 文本，若截图门禁触发，经 workflow_dispatch 路径重新生成。测试：`useDirectoryNames.test.tsx`、`ApprovalDetail.test.tsx`（"整个门"且无 uuid）、`ApprovalQueuePage.test.tsx`（行显示门名、无 uuid、无 "→"）。
+- **任务页 / 详情**：关联审批 = `approvals/LinkedApprovals`（`list_action_requests{taskId, limit:20}`，含已决，
+  keyset 加载更多，仅对打开的 Task 按推送重载）；`list_pending` 反查与其推送处理删除——C7 的断言改为"每次审批推送
+  一次任务范围的 `list_action_requests` 重取"；取消任务走 `ConfirmTier high`；`workerDefinition` / `onBehalfOf` 为
+  `RefChip`；"查看溯源"按 Task（`?resourceType=task&resourceId=`）与 WorkerRun 行（`worker_run`，两者由
+  `application/task/transition-log.ts` 写入）跳审计页。`list_tasks` 无参数、无分页（B5 不适用）。
+- **审计页**：`lib/audit.ts`——`auditHref` / `auditEntryFromHash`（`?nodeId` / `?resourceType&resourceId` /
+  `?actionRequestId` / `?actorPrincipalId` / `?action`）、`AUDIT_RESOURCE_TYPES`（内核实际写入的 26 个
+  `resourceType` 字面量，从 `application/ governance/ substrate/` grep 而来，不是已发布枚举）、
+  `auditActionSuggestions()`（工作区能力名 + 生命周期动作）、`explainView`（`ExplainResultWire` →
+  `ProvenanceChain` props + Decision + `activity.metadata` 的 taskId / workerRunId / actionRequestId 链接）、
+  `downloadJson`（Blob + `<a download>`）。`ExplainSection`（自动 `explain{nodeId}`，Decision 块在链之上，Fact /
+  Activity chip 页内再 explain，导出 `export_prov{nodeId}`）、`AuditLogSection`（`audit_query{filter?, limit:50,
+  cursor}` keyset；actor 选择器来自 `list_principals`，被拒时从一开始就是文本框、从不中途换控件；action 文本 +
+  datalist；资源类型枚举；行内 actor / 资源 `RefChip` 链接到各自页面；"导出本页"客户端序列化——`export_prov`
+  是围绕单节点的 PROV 图，不是审计范围）、`ApprovalContext`（`?actionRequestId=` → `get_action` 只读卡片 +
+  `parentWorkerRunId`）。验收句：Fact 节点一屏内 Fact → Activity →（WorkerRun chip）→ Source；从已执行审批一次点击
+  到审计页看到请求卡、`action_request.*` 行与决定的 explain（`governance.approval_decision` Activity 本身不再链到
+  WorkerRun，页面说明）。
+- **能力目录编辑器**：`lib/catalog.ts` 用 shared Zod（`ProposeSkillContentSchema` / `ProposeProcedureContentSchema` /
+  `workerDefinitionContentSchemaFor(kind)`）做表单校验与字段错误提取，`parseMarkdownBlocks` 无 HTML 预览；
+  `SkillEditor`（SKILL.md 表单 + 编辑 / 预览）→ `propose_skill{skill}` → 成功态里 `publish_skill`；
+  `ProcedureEditor`（有序类型化步骤 + JSON 视图）；`WorkerDefinitionEditor`（`kind` 版本化时锁定，model datalist
+  来自 `list_models`）→ `propose_worker_definition{definitionId?, kind, definition}` → 发布。内核事实（UI 里注明）：
+  Skill / Procedure 的"编辑"是**复制成新家族**（`propose_skill{skill}` / `propose_procedure{procedure}` 内容
+  schema `.strict()` 无家族 id；`ProposeSkillInput.skillId` 存在于 `application/worker/skills.ts` 但没有能力传它），
+  Skill 复制无法预填正文（`list_skills` 无 `markdown`、无 `get_skill`）；`list_worker_definitions` 只回已发布行，
+  新草稿不出现在 tab 里，发布从编辑器成功态做；三个 list 能力无 `limit` / `cursor`，目录保持单页。
+- 我的智能体：生效面板的 Skills / Systems / Worker definitions 以 `RefChip` 命名显示。
+- 测试：ApprovalDetail 7、ActionRequestDetail 5、TaskDetail 5、AuditPage 6、audit 7、catalog 9、三个编辑器各 3，
+  ApprovalQueuePage +5、CatalogPage +4；e2e `tasks.spec.ts` / `catalog.spec.ts` / `audit.spec.ts` 新增（本机 compose 栈通过，
+  `catalog.spec.ts` 一处过度断言在集成后修正）。
+  对话流里今天没有 Fact / Decision 卡片（`chat-message-content` 只有 task_update / action_pending /
+  action_update），方案 §5.5 的"对话里的 Fact / Decision 卡片加查看溯源"无落点；内联审批卡经"在审批页打开" →
+  审批页"查看溯源"两跳可达。
+
+### S6-B 模型与供应商（A3 / C29 / 遗留 19）
+
+- **llm-proxy 管理面**（`packages/llm-proxy/src/admin-api.ts` 等）：`/admin/providers*`，经 caddy `handle_path
+  /api/llm-admin/*`（`rewrite /admin{uri}`、要求 `X-Requested-With: nexttime`、排在 `/api/*` 之前）反代到
+  `llm-proxy:8082`。GET 列表（id、显示名、api 种类、base URL、鉴权头、`apiKeyEnv`、`credentialPresent` 布尔、
+  enabled、`source: file|store`、`overridesFile`、models、lastTest；列表级 `modelsJsonWrittenAt` / `modelsJsonError` /
+  `storeWritable`），POST / PUT / DELETE（对 yaml 供应商的 PUT 生成 store 覆盖——这就是"停用文件供应商"的做法；DELETE
+  只对 store 行，删掉覆盖即恢复 yaml 条目），`POST /providers/:id/test`（一次补全 + 一次**强制**工具调用，
+  `tool_choice` 按 api 种类；结果 `{completion, tool_call, latency_ms, error(去密钥、≤200 字), tested_at}`），
+  `POST /providers/:id/secret` → **501 `not_implemented`**（见下）。store `${NEXTTIME_DATA}/llm-proxy/providers.json`
+  （容器 `/data/state`，原子 `.tmp`+rename，损坏即报错），按名整体覆盖 yaml；文件条目永远 enabled；路由表实时
+  （`proxy.ts` 的 providers 变为查找函数）。每次变更原子重写 `${NEXTTIME_DATA}/config/models.json`（`config/` 目录改
+  rw 挂载，`llm-providers.yaml` / `handle.pub` / `egress-sources.json` / `ontology/` 以 `:ro` 覆盖；**启动从不写**——
+  `deploy/accept/docker-compose.fake.yml` 换掉 yaml 后不能碰生产文件，验收覆盖里 `MODELS_JSON_OUT_FILE` 指向
+  `accept/models.json`）；`make gen-models` 也合并 store，不会丢掉控制台新增的供应商。审计：代理 `level:"audit"`
+  日志行 + `POST /internal/llm-admin-audit` → 内核 `platform.llm_provider_{created|updated|deleted|tested}` 行
+  （`resource_id` 为空、`payload.resourceRef` 放 slug，与 `dispatch.ts auditResourceRef` 同一惯例；FK 违规 400
+  `unknown_actor`），两处都带 token `jti` / `sub`，永不带密钥。
+- **鉴权**：`packages/shared/src/llm-admin-token.ts`（`typ nt-llm-admin+jwt`、`aud llm-admin`、`sub` = user id、
+  `jti`、TTL ≤ 300 s；与 Handle / 门宿主 token 互不接受，双向有测试）；内核 `issue_llm_admin_token`（platform ·
+  human · admin，`application/gateway/llm-admin-handlers.ts`，用 Handle 签名私钥签，平台审计
+  `platform.llm_admin_token_issued`（resourceId = jti，payload 不含 token），结果 `{token, url:'/api/llm-admin',
+  jti, expiresAt}`）；代理 `admin-auth.ts` 用 `HANDLE_PUBLIC_KEY_FILE` 验证。web `lib/llm-admin.ts` 按 caller 缓存
+  token 到到期前 60 s，401 重试一次。
+- **页面** `components/platform/PlatformModelsPage.tsx`（`#/platform/models`）：供应商表（enabled / 凭证状态 /
+  最近测试 chip、来源标签）、新增 / 编辑抽屉（无密钥字段，鉴权头随 api 种类）、测试调用结构化结果、停用
+  `ConfirmTier high`、启用 `medium`、删除 store 行 `irreversible`，凭证状态附操作员步骤说明，
+  `storeWritable=false` / `modelsJsonError` 时禁写并提示。工作区侧 `list_platform_models` **零改动**：它每次调用
+  重读 `/data/config/models.json`，代理重写后工作区"模型与配额"与对话页头部立刻看到新供应商。
+- **C29**：`QuotaListEntryWireSchema` / `PolicyWireSchema` 早已在 `wire/governance.ts` 公开且与内核一致
+  （`KERNEL_VALIDATE_RESULTS=1` 强制）——runbook 缺口 9 的前提过时；`ModelsPage` 改为真实列渲染（配额：键 / 生效值 /
+  缺省 vs 覆盖 / 设置者 / 时间；策略：actionKindTag / blastRadius chip / 自动批准 / 请求者可批 / 设置者 / 时间）。
+- **遗留 19**（I18 "100% 时代理返回预算耗尽错误"）：内核 `GET /internal/llm-budget-exhausted`
+  （`interfaces/http/internal/llm-budget.ts`）列出今日超 `task.daily_cost_budget_usd`（jsonb 数字；JSON null = 不限）
+  或 `LLM_DAILY_TOKEN_BUDGET` 的工作区（`until` = 下一 UTC 零点，DB 时钟），超级用户池查询（与
+  `handle-revocations.ts` 同一窄例外），`llm_usage` 读仍在 `governance/llm-usage/service.ts`；代理 `budget-sync.ts`
+  每 15 s 同步、失败 fail-open，`proxy.ts` 对这些工作区在验证 Handle 后、读 body 与接触上游前回 **402
+  `budget_exhausted`**（两家官方 SDK 都会自动重试 429、都不重试 402）；内核事后止损（Task `failed:
+  budget_exhausted` + Handle 吊销 → 401）仍为兜底。
+- **被维护者决定阻塞的部分**：控制台写供应商密钥（`/providers/:id/secret`）——`console-completion-plan.md` §12 末
+  "触及有凭证系统的动作必经审批"是否约束管理员控制台操作未答。代码里没有任何路径接受密钥（输入 schema strict、审计
+  schema 无密钥字段），密钥仍走 `secrets/llm-proxy.env` 的 `<apiKeyEnv>` + `--force-recreate llm-proxy`，页面如实
+  显示"凭证：待操作员配置"。答"不过审批"→ 在同一 JWT + 审计后实现（代理侧加密存储或 env 文件写入）；答"要过审批"→ 先
+  设计审批流。
+- 其它判断（可否决）：`config/` 目录 owner 改为 10001（`scripts/host-llm-proxy-init.sh`；单文件 rw bind 不能被 rename
+  - **2026-09-22 维护者否决**上面 `config/` owner 改 10001 的判断：`models.json` 挪专用目录（S7-A，`STATUS.md` §3），`host-llm-proxy-init.sh` 不再 chown `config/`；S7-A 合入发版前主机不执行下面的主机应用步骤。
+  覆盖、`host-env-init.sh` 重跑会把组写清掉，故取 owner-only；文件仍 root 644、输入以 `:ro` 覆盖）；yaml 改动仍需重启
+  （bind 挂载文件 watch 不可靠）；`ProviderStore.upsert/remove` 无互斥（单管理员控制台，两次并发写可能丢一次）；
+  显示名写进 `models.json` 的 pi `name`，内核投影 `{id, provider, model}` 不带。测试：`admin-api.test.ts` 12（真实监听
+  端到端，含每条路由的鉴权、Handle → 401、原子重写、审计 + 内核事件、501、不可写重写）、`admin-auth` 7、
+  `provider-store` 8、`catalog` 4、`provider-test` 6、`budget-sync` 5；内核 `llm-admin.integration.test.ts` 3、
+  `llm-budget.test.ts` 3、`llm-admin-audit.test.ts` 3；web `PlatformModelsPage` 6。runbook：operations.md §12
+  "供应商管理（S6-B）"，`report-usage.sh --by provider`。
+
+### S6 主机应用注意（本地分支，尚未合入 / 发版）
+
+① 迁移 core 0030（`workspaces.disabled_at`，不回填——既有 `disabled` 行立即可清）与 0031（`chats.archived_at`），
+均可加、可空；② 构建前 `export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"`
+（B1；`.env` 里的 `KERNEL_VERSION` 已失效可删），重建 kernel / caddy / llm-proxy / agent-host / worker-runtime
+（platform-extension）/ collector-host-inventory；③ S6-B：先 `sudo -E sh scripts/host-llm-proxy-init.sh`（建
+`${NEXTTIME_DATA}/llm-proxy` 0750 10001、`config/` owner 10001），`up -d --force-recreate llm-proxy`（新挂载与 env）；
+④ 首次清除前：`sh scripts/delete-workspaces-matching.sh --expired`（不带 `--yes`）与 `bootstrap.js purge-workspace
+<id>`（dry-run）过一遍 `purgedUsers` 与 `service_handle_in_use` 警告，确认生产采集器 token 指向生产工作区；CLI 审计行
+需 `--actor <login>` 或 `NEXTTIME_PLATFORM_ADMINS`；⑤ 遗留 43 的 prompt 只对新发布的 `kind: worker` WorkerDefinition
+版本生效（`propose_worker_definition` + `publish_worker_definition`）；⑥ `ops.collector_silent` 若生产采集器超 2h 无
+观察会立刻 > 0；⑦ 验收：S1 → S2 → S3 复跑（`accept_s3.sh` 不再改写 `secrets/collector-host-inventory.token`），
+`--real --runs 10` 看 ssh_run_approve 摘要是否引用 actionRequestId、docker_restart 是否仍 7/10+，对话中途
+`connect_gatekeeper` 后发消息不再 `interrupted`（遗留 44），`EXPLORER_BUILD=1` 可选（原生图谱页已替代入口）；
+⑧ 控制台走查按 `console-completion-plan.md` §5 各节验收句，截图入 `docs/private/`。
+
+---
+
+## 5d. S7 — 稳定与平台面收尾（2026-09-22 立项）
+
+维护者 2026-09-22 取定原阻塞项 ①–⑥（`STATUS.md` §3）。S7 不新增一等概念：S7-A / B / C 收尾 S6 与遗留，S7-D / S7-E
+兑现 P-B2b 与 P-C（design `platform-admin-design.md` §6.4 / §6.5 / §6.7），P-D 剩余项并入 S7-E。车道文件互斥、
+各自 worktree + PR，同时 ≤ 3 条；主会话审 diff、线性合入、写本节与 STATUS。
+
+### S7-A / S7-B / S7-C（2026-09-22 派出）
+
+范围见 `STATUS.md` §3 表。S7-A 的两处决定：① store 与 yaml 供应商都可在控制台写密钥，按**供应商 id** 存 llm-proxy
+自有 `/data/state/keys.json`（0600、原子写、热更新），解析顺序"控制台密钥 → `process.env[apiKeyEnv]`"，
+store 供应商的 `apiKeyEnv` 变为可选；GET 只回 `credentialPresent` + `credentialSource`；审计不记值、不记指纹。
+⑤ `models.json` 挪 `${NEXTTIME_DATA}/models/`——不放 `${NEXTTIME_DATA}/llm-proxy/`，因为内核与 supervisor 要挂载
+`models.json` 所在目录，而那里有 `keys.json`。
+
+- **实现说明（2026-09-22 合入）**：S7-A #224——`packages/llm-proxy/src/key-store.ts`（`/data/state/keys.json`，0600，
+  tmp + chmod + rename，进程内 `Mutex` 串行，`ProviderStore` 共用）；`PUT` / `POST` / `DELETE /admin/providers/:id/secret`，
+  输入 `LlmProviderSecretInputWireSchema`（trim、≤ 4096、无控制字符），错误响应只带 zod v3 issue（不含输入值）；
+  审计动作 `provider_secret_set` / `provider_secret_cleared`（内核 `LlmAdminAuditEventSchema` 同步）；页面
+  `ProviderSecretForm`（清除走 ConfirmTier medium，不重输密码）。`models.json` 挪 `${NEXTTIME_DATA}/models/`：llm-proxy
+  改为四个只读单文件 / 目录挂载 + 可写 `models/`，内核只读挂 `models/`，supervisor 缺省宿主路径同步；既有主机迁移
+  `release.md` §3.2。S7-B #222——见 STATUS 遗留 46 / 47 / 55 / 56 关闭说明。S7-C #221——迁移 core 0032：审查把全量放宽
+  改窄为 `action = 'platform.workspace_purged'` 且 `payload -> 'attributedActor' is not distinct from 'false'::jsonb`
+  （最初写成 `->> … = 'false'`，键缺失时整式为 NULL、CHECK 放行，被 CI 上的负向集成测试抓出）；wire
+  `PlatformAuditRecordWire.actorUserId` 可空，页面经 `formatAuditActor` 显示"主机操作员（未署名）"。
+  - **R-23 更正（2026-10-02 复审）——密钥只发往它所属的上游**：上面的 key-store 说密钥"只发往供应商自己的上游"，
+    但上游是管理员可改的：`PUT` 把 `upstream_base_url` 指向任意主机再 `/test`，控制台密钥就发了出去；新建一个
+    `apiKeyEnv` 写成别家变量名（如另一个供应商的 key）的供应商同样能把运维的环境变量 key 带走（gate-host 对同一概念
+    的规则相反：目标一变就清凭证）。现在（`admin-api.ts`）：①`PUT` 改了上游（`upstreamKey` 比较：WHATWG 规范化，
+    忽略末尾斜杠；路径不同也算不同上游）先清控制台密钥再写供应商——清不掉（密钥目录不可写）整笔 503，绝不会出现
+    "上游已改、密钥还在"；审计 `provider_updated` 带 `upstreamBaseUrl: {from, to}` 与 `secretCleared`，另记
+    `provider_secret_cleared`（`reason: upstream_changed`）；改 `api` / 鉴权头不清（仍是同一主机）。`POST` 新建时
+    该 id 下残留的密钥（DELETE 的尽力清除失败才会有）一并清掉（`reason: new_provider`）。②`assertEnvKeyPairing`：
+    `apiKeyEnv` 指向的变量**已有值**时，只能与 yaml（含被覆盖遮住的条目——运维自己的声明）或另一个 store 供应商
+    已经为它配置的同一上游配对，否则 409 `api_key_env_not_allowed` 并记一行 warn；变量尚无值照旧允许（运维手册的
+    传统路径：先建供应商、再由运维加环境变量）；只在本供应商的（变量，上游）对真的变化时检查，改模型 / 显示名 /
+    启停不受影响。③`proxy.ts` 与 `provider-test.ts` 的上游 fetch 加 `redirect: 'error'`（L6-19：`follow` 会把
+    `x-api-key` 带到 3xx 指向的主机）。只在写入时检查：本修复之前已写入的 store 行不回溯校验。无迁移、无 wire 形状
+    变化（shared `wire/llm-admin.ts` 只改注释）。测试：`admin-api.test.ts` 的 R-23 组（改上游清密钥与审计、不改
+    上游保留、yaml 供应商的控制台密钥不随覆盖走、清不掉时 503 且不变、POST 清残留、已有值的变量配陌生上游 409、
+    改 yaml 供应商上游但保留其变量 409、同上游可共用、未设置的变量名允许、`upstreamKey`）、`proxy.test.ts` 与
+    `provider-test.test.ts` 的重定向用例。
+
+### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
+
+核实的事实（2026-09-22）：本体按包族 id（`deriveOntologyPackId(packName)`）分版本，`definition` 是
+`parseOntologyDefinition` 的校验输出而非 yaml 原样，存为 jsonb（键序不保留）；`publishOntologyDomainPack` 对同内容
+再发布也消耗下一个版本号；`create_workspace` 已在同一事务里以新 owner Principal 种 `platform-meta` 本体与入口
+WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefinition`）。
+
+- 决定 D1：**模块 = 本体包**（`ontology/modules.yaml` 索引：`name`、版本列表 `{file, version, notes, breaking}`）。
+  WorkerDefinition / Skill / Procedure 走 S6-A 的工作区编辑器；`promote_template`（跨工作区复制）继续推后。
+- 决定 D2：**"已安装版本"= 哈希匹配**。哈希 = 同一 `parseOntologyDefinition` 路径产出的定义做键排序规范化 JSON
+  后的 sha256；内核启动时对镜像内 `ontology/` 计算，**索引文件不存哈希**。工作区某族最新 `published` 定义的哈希
+  匹配到索引项 → 该版本；否则 "已定制"。
+- 决定 D3：`install_module` / `upgrade_module` 底层同一调用，**目标一律是索引最新版**（一次发布直达，不逐级）；
+  "族不存在 → v1、存在 → 下一版本"只指 `ontology_versions.version` 这个发布计数，与索引版本号无关（2026-09-23 更正：
+  原措辞在 S7-D 审查中被读成"装索引 v1 / 升到 `installedRow.version + 1`"）；目标版本哈希已等于
+  当前 → 不发布、直接返回（不空耗版本号）；当前为"已定制"或目标 `breaking: true` → 请求须带 `confirm: true`
+  （页面走 ConfirmTier）。`scope:'workspace'`、owner 动作（P-B2 决定 ①）；平台模块页只展示"装到 n 个工作区 /
+  m 个有新版"并跳到工作区能力目录。
+- 决定 D4：**默认模块**是平台设置 `defaultModules`（`set_default_modules`，`scope:'platform'`）；`create_workspace`
+  照 `seedPlatformMetaOntology` 的先例在同一事务里以新 owner Principal 发布——`proposed_by` = owner（FK 所需），
+  平台审计 `workspace.created` 的 details 记 `defaultModules`，Activity 记 `triggeredBy: create_workspace`：负责人
+  （管理员）与名下（owner）都可回答，不造系统 Principal。
+- e2e（design §9 P-B）：模块页把 `ops-assets` v2 装进第二个工作区。
+
+- **实现说明（2026-09-23 合入，#227）**：`application/platform/modules.ts`（索引读取、`hashOntologyDefinition` = 键排序
+  规范化 JSON 的 sha256、`classifyModuleState` 只按哈希判定、`installOrUpgradeModule(…, dir)` 直达最新版、跨越 breaking
+  或已定制须 `confirm`、`countModuleInstallations`）；能力组：平台两项在 `platform` 组、工作区三项在 `modules` 组
+  （`assertRegistryConsistent` 要求 `scope:'platform'` ⇒ `platform` 组）；`create_workspace` 的负责人记录是一行手写的
+  平台审计 `workspace.created`（details 含 `defaultModules` 与 `triggeredBy`），与 `purge_user` 的 `platform.user_purged`
+  同一做法——派发层的审计行不支持 handler 附加 details。
+
+### S7-E 运行层与运行状态（P-C，design §6.5 / §6.7）+ P-D 剩余
+
+核实的事实：内核 → supervisor 的 `POST /task/spawn` 已带可选 `image`（supervisor 按 `WORKER_IMAGE_ALLOWLIST`
+校验，403 `image_not_allowed`）；常驻入口容器由 **agent-host** 调 `/resident/spawn`，镜像取 supervisor env
+`WORKER_IMAGE`（`spawn-spec.ts`）；`spawn()` 在规格变化时先重建再返回（遗留 44 分析）；入口有效模型 =
+`agent_policies.default_model ?? workspaces.entry_model`，平台侧已可改（`set_entry_model` 由此覆盖）。
+
+- 决定 E1：**活动镜像是平台设置 `activeRuntimeImage`**（env `WORKER_IMAGE` 仍为缺省）；内核在 `task/spawn` 传它，
+  并经 agent-host 协议的 StartTurn 下发给 `/resident/spawn`（新增可选 `image`，同一 allowlist 校验——安全边界
+  留在 supervisor）。
+- 决定 E2：**滚动重建不引入 draining 状态**。入口容器在自己的下一个 Turn 开始时经 spawn 的规格漂移重建自然换到
+  新镜像，进行中的 Turn 不受影响（遗留 44 后 Turn 绑定容器 id）；`roll_entry_containers` 只是"现在就停掉空闲的"
+  加速项；盘点按 digest 不一致派生"待重建"，不建表、不存状态。只有测试证明存在缝时才加"拒绝新 Turn"。
+- 决定 E3：`rollback_runtime_image` = 活动镜像改回 `platform_settings_history` 里上一个值；`pi_drift` 读 CI 产出的
+  静态 JSON，不出网。
+- 决定 E4：`platform_status` 的备份项在遗留 6 落地前如实显示"未配置"；不做备份定时器。
+- 决定 E5：P-D 剩余只有 `set_platform_default_model`（平台设置，新工作区取值），与 E1 同一块 `platform_settings`
+  代码；控制在模型与供应商页，须在 S7-A 合入后开工。
+- 车道：E-后端（supervisor `GET /images` + 镜像 label、内核能力、`platform_status`）→ E-页面（运行层 / 运行状态），
+  页面依赖后端 wire shape。
+- 合入次序：S7-D 与 S7-E 都往 `platform-handlers.ts`、shared 能力注册表与 `docs/contracts/capabilities.json` 加行——
+  handler 各放新文件（`application/platform/modules.ts` / `runtime.ts`），共享文件只加注册行；每个 PR 合入前
+  rebase 并重跑 `contract:check`。
+
+---
+
+- **S7-E 实现说明（2026-09-23 合入，#229 / #230）**：`application/platform/runtime.ts`；`rollback_runtime_image` 取
+  `platform_settings_history` 里最近一个 `activeRuntimeImage` 与当前值不同的版本（缺键视为 JSON null = env 缺省），
+  连续回滚在最近两个镜像之间切换；未设置时的活动镜像由 supervisor `GET /images` 的 `defaultImage` 上报（内核不写死，
+  supervisor 不可达时如实为 `unknown`）；`roll_entry_containers` 按常驻容器所属工作区设上下文后查 `activities`
+  （`agent_turn` 且 `running`）跳过忙容器；`platform_status` 的三次库读串行（同一 `PoolClient`），两路 HTTP 探测并发。
+  `set_platform_default_model` 未知模型回 409 `unknown_model`（与 `create_workspace` / `update_workspace` 同一规则同一
+  码）；`update_platform_settings` 不再接受 `defaultEntryModel`。集成测试用独立新建库（`platform_settings` 是全局单行）。
+  **R-59 更正（2026-10-02 复审）**：`hasInFlightTurn` 原来以 nil principal 设上下文——`activities_visibility`（core 0003）
+  只让私有对话的主人看到其中的 Turn，于是真实的私有对话 Turn 永远看不见，遗留 64 的锁成立却守了个空检查，滚动会停掉正在跑
+  Turn 的常驻容器；现以该常驻容器自己的 principal 设上下文（它的 Turn 都在自己的对话或工作区可见对话里），不需要
+  security-definer 函数。集成测试改为经 `newChat` + `sendChatMessage` 开一个真实的私有对话 Turn。
+- **D-28 落实（2026-10-02 复审，维护者决定 D-28，L10-2）——`platform_status.backup` 按备份服务的 `last-success` 标记给出新鲜度，不再硬写"未配置"（#461）**：上面决定 E4 把备份项写死为"未配置"（内核、wire 注释、`operations.md`、控制台四处）；遗留 6 关闭、`backup` 服务每晚写 `${NEXTTIME_DATA}/backups/last-success` 之后，控制台仍报"未配置"：既是误报，备份真停了也显示一模一样，没有任何新鲜度信号。**挂载**：`docker-compose.yml` 内核服务只加 `${NEXTTIME_DATA}/backups/last-success:/data/backups/last-success:ro` 这一个文件、只读，`backups/` 目录、dump 与含供应商 key 的 `files-*.tgz` 都到不了内核；`scripts/validate-compose.mjs` 新增守卫：除 `backup` 外的服务不得挂 `backups/` 下除 `last-success` 以外的任何东西，且该文件只能 `:ro`（已验证对非 `:ro` 与整目录挂载都会失败）。**内核**：`application/platform/backup-status.ts`（`platform_status` 调用，从不抛错）读标记并推导状态；`fresh` / `stale` 与 `scripts/check-backup-freshness.sh` 同一规则——26 小时、按整分钟比较（正好 26 h 为 fresh，多一分钟即 stale）；文件缺失、不可读、是目录、超过 4 KiB、或没有可解析的 UTC `timestamp=` 行，一律显式 `unknown`，原因（ENOENT / EACCES / EISDIR …）写进 `detail`，永不再是"未配置"；路径可用 `BACKUP_LAST_SUCCESS_FILE` 覆盖。**wire 形状变更**（`PlatformStatusBackupWireSchema`，按 wire-contract-conventions §4 在本 PR 内破坏式修改，1.0 之前）：`{configured, detail}` → `{status: 'fresh'|'stale'|'unknown', lastSuccessAt: string|null, stale: boolean|null, maxAgeHours, detail}`，唯一消费者是控制台，同 PR 更新；契约快照 `platform_status` 结果 `backup` 删 `configured`、增 `status` / `lastSuccessAt` / `stale` / `maxAgeHours`。**控制台**（运行状态 → 备份卡）：新状态机 `backupFreshness` 的 StatusChip（正常 ok / 已过期 danger / 未知 neutral）、一句说明含处置、上次成功（绝对与相对时间）与过期阈值，内核 `detail` 收在"技术细节"之后，文案全部走 `t()`。**主机脚本**：`deploy/backup/backup.sh` 仍原地改写标记（文件 bind mount 跟 inode，绝不能先写临时文件再 rename），成功后新增 `chmod 644`；`scripts/host-env-init.sh` 与 `scripts/apply-release.sh` 在任何内核 `run` / `up` 之前，标记缺失则创建空文件，若上一次 `up` 已在该处留下空目录则先删掉——Docker 对不存在的 bind 源会建目录，从此 `backup.sh` 再也写不进标记。**主机不变量**：`backups/` 目录仍 `0:0 750`（bind mount 不穿越它，无需放宽）；标记是普通文件（非目录、非符号链接）`0:0 644`，内核以 uid 10001 经 bind mount 读，只看文件自身权限位；模式不对时卡片显示 `unknown` + `not readable`，内核与 `platform_status` 不受影响，`chmod 644` 即可。隔离只增不减：内核多读一个无密钥的时间戳文件，无写路径、无凭证。控制台只报新鲜度，"服务在跑""dump 仍在盘上"仍是主机侧 `check-backup-freshness.sh` 的事。无迁移，回滚只会回到旧占位，多出的挂载与空标记无害。测试：`backup-status.test.ts`（9 例：fresh、26 h00 fresh / 26 h01 stale、多条 `timestamp=` 取最后一条、坏 / 空时间戳、缺失、目录、超大、环境变量覆盖）；`platform-runtime.integration.test.ts`（真实标记 → `fresh` 与正确 `lastSuccessAt`；缺失 → `unknown` 且调用成功，开 `KERNEL_VALIDATE_RESULTS=1` 校验新 wire schema）；web `PlatformStatusPage.test.tsx`（fresh / stale / unknown，unknown 绝不出现"未配置"）、`StatusChip.test.tsx`、`e2e/status.spec.ts`（CI 里备份服务不跑，预建空标记 → chip `data-status="unknown"`）。
+
+## 5e. S8 — 产品化与修复（2026-09-23 立项）
+
+依据：`ui-audit-2026-09-23.md`（98 条：P0 4、P1 28、P2 47、P3 19；带截图与真实名称的完整版在 `docs/private/`）。审计的结论
+是**做法**问题而不是单页问题：控制台一直按"一组内核能力一页"来做，页面是 API 的投影而不是用户任务的投影；"完成"只覆盖
+内核链路（验收脚本经 API 证明），16 个 Playwright 用例按页面组织、只查元素在不在，没有旅程、截图或无障碍检查；§5.9 基线
+落成了令牌与组件样式，没有落成交互流程。最核心的闭环"让入口 agent 能执行"在控制台里走不通——2026-09-23 在生产默认
+工作区经维护者同意真跑，补上授权与已发布 Worker 之后链路端到端可用（Task 40 s 完成、0 条审批），但授权、启用、Worker
+三件事分散在三页、各缺一半（审计 J1–J8、R1–R9）。
+
+### 维护者决定（2026-09-23）
+
+- **F1 不加新功能。** `promote_template`（跨工作区复制）继续推后。"从模板创建 ops-runner"不算新功能：它把镜像里已随包的
+  `ontology/ops-runner.yaml` 经现有 `propose_worker_definition` / `publish_worker_definition` 路径暴露到页面（J7）。
+- **F2 审计问题全部进 S8。** 维护者可在私有审计页把个别条标"不修"，读回后从本计划删去。已有 S8 候选（遗留 48 / 49 /
+  59–67）一并归入；② 镜像发布、③ 遗留 6 / 58 仍排最后（09-22 决定不变）。
+- **F3 组件地基：Radix 原语 + shadcn/ui 式组件（拷入仓库，不作运行时依赖包），Tailwind v4 承载样式，主题 = §5.9 已定稿
+  令牌**（CSS 变量映射，外观不变）。数据表用 TanStack Table；对话 Markdown 用 react-markdown + remark-gfm（不开原始
+  HTML）。这推翻 web README "不引 UI 框架"的立场；路由仍用现有 hash 路由。`css-tokens` 守卫扩到 Tailwind：禁止任意
+  颜色 / 字号值类。严格 CSP 不受影响：Radix 的定位经 React `style`（CSSOM）写入，不受 `style-src` 约束，遗留 49 收紧
+  `'unsafe-inline'` 的目标照旧。
+- **F4 旅程驱动。** 工作单元是用户旅程，不是页面。六条：① 让入口 agent 能执行（门可用 → 授权成员 → 已发布 Worker →
+  对话委派）；② 接入一个新系统；③ 审批一个执行类动作；④ 追溯"agent 为什么这么说"；⑤ 清理验收残留；⑥ 添加成员并让其
+  可用。每条先写规格（步骤；空 / 错 / 无权限 / 窄屏状态；成功判据），再配一个 Playwright 旅程测试：CI 在 fake 栈上跑，
+  主机上只读冒烟。以后由这些测试去"点"，不再靠人工走查发现断点。
+- **F5 UX 合入门槛（CI）。** 三档截图回归（1440 / 1280 / 768，`toHaveScreenshot`，fake 栈固定数据、字体与时间）；axe
+  无 serious / critical；文案守卫（页面可见文本不得出现裸 UUID、原始枚举值、内部代号如 `P-B2a` / `I16` / "遗留 N"、环境
+  变量名）；界面语言中文为主，英文收进语言切换，`<html lang="zh-CN">`。每个 UI PR 附三档截图，经设计评审后合入（2026-09-24
+  维护者决定：不逐个交维护者，由持 §5.9 基线的评审 agent 批量独立评审或 advisor 过目，无阻断即合入；维护者只做 S8 最终旅程验收）。
+- **F6 内核只加读模型，不改领域模型。** `execution_readiness`（按成员：可用门 / 已授权门 / 可委派 Worker，缺项与去处）；
+  `resolve_refs`（批量 id → 名称 + 类型，含遗留 48 的批量 Object 读）；选择器数据源（成员、门、Operation、能力名）。
+
+### 波次
+
+车道文件互斥、各自 worktree + 分支 + PR，同时 ≤ 3 条；主会话审 diff 与三档截图、线性合入、写本节与 STATUS。
+
+| 波次 | 内容 | 审计条目 | 完成判据 |
+|---|---|---|---|
+| W0 主机运维（2026-09-25 09:59 UTC 前） | 采集器 Handle 重铸回生产默认工作区，核实观测回流；停 fake-llm；清孤儿入口容器与到期残留。按 runbook 执行，结果记 `docs/private/` | B1、R8、B6 主机部分；遗留 70 | 生产工作区最新观测回到当日；该工作区 `collector_silent` 只剩遗留 62 的旧 Source |
+| W1 基座 | **W1-A** 组件地基（F3）与系统性组件：PageHeader（S1）、窄屏导航（S2）、响应式数据表（S3）、中文为主的 i18n（S4 / S7 / S14）、令牌对比度 / 字号 / 命中区（S5 / S6 / S8）、时间格式化（S9 / PW1）、RefChip（S10）、就近 ConfirmTier（S13 / RT2）、Markdown 渲染（C2）、对话顶栏（C3）、主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8）、面包屑与分组命名（S12）。**W1-B** UX 门槛（F5）+ 旅程测试框架。**W1-C** 读模型（F6，含遗留 48） | S1–S10、S12–S14、C2、C3、L2、L3、L5、L8、PW1、RT2 | 三档截图基线建立并经独立设计评审认可（2026-09-24 改）；axe 与文案守卫进 CI；现有 16 个 e2e 在新组件上仍绿 |
+| W2 试点：旅程① | 统一授权流程（J6 / AX1 / R5 / U2）；启动器必经"启用 + 授权"（J2 / J5）；启用确认与旧注册关联（J3 / J4 / B7：`enable_gate_instance` 按 target / endpoint 识别已有 Gatekeeper 并关联，不再新建，给旧注册写可逆迁移）；Worker 编辑器选择器与模板（J7 / CW1 / CW2 / R6）；概览"执行就绪"（J1 / O1）；系统接入页收敛（SY1–SY4 / U5 / L4）；Operation 描述必填（CO1 / CO2）；`find_*` 匹配（B3）；`find_procedures` 白名单一致（B4）；`invoke_worker` 门参数（R4）；入口 prompt 契约（B2 / B8 / R9：全空指引、ops-runner 条件化、回复语言，`prompt-contract` 守卫加断言） | 见左；遗留 71–73 | 旅程①测试在 CI 通过；在全新工作区从零走通（不用 SQL、不用 CLI）；主机只读冒烟 |
+| W3 其余旅程与页面 | 旅程②–⑥；图谱（G1–G3）；我的（M1 / M2 / U4 / L10 / AC1）；成员与身份（S15）；审计与溯源（AU1 / J8 / S11 / PA1 / L9）；概览控制塔（L1 / O2 / O3）；工作区与用户（PW2 / PW3 / PU1）；集成与模块（PI1–PI3 / PM1）；模型（GM1 / PMo1）；设置（PS1）；运行状态（ST1 / ST2）；菜单范围说明（U1）；其余（C1 / C4 / CM1 / R7 / U3 / L6 / L7 / L11 / L12） | 见左 | 六条旅程测试全绿；审计 P0 / P1 清零（或经维护者标"不修"） |
+| W4 运行时与数据正确性 | Worker 产物持久化（R1）；门操作结果截断与 Worker 工具瘦身（R2）；观测结果回写图谱（R3）；验收脚本 trap 与停 fake-llm（B5）；清除工作区时回收入口容器 + 运行层容器状态列（B6 / RT1）；构建版本溯源与 pi 漂移（RT3 / 遗留 59）；遗留 60 / 61 / 62 / 64 / 65 / 66 / 67 | 见左；遗留 74–77 | 各项有正向用例；主机复跑 S1 / S2 / S3 |
+| 之后 | ② 镜像发布；③ 遗留 6 / 58 | — | — |
+
+**2026-09-25 重排**：W2 之后的波次按 `convergence-plan-2026-09-25.md` §6 改为 W3 已决遗留 + 地基、W4 旅程与页面（原 W3）、W5 运行时与数据正确性（原 W4）、W6 结构收敛、W7 升级与可观测；下表保留立项时的原始划分。
+
+顺序：W0 立即。W1-A 与 W1-C 文件互斥、可并行；W1-B 依赖 W1-A 的组件。W2 依赖 W1。W3 与 W4 在 W2 之后可并行（W4 大多是
+内核与脚本，与 W3 文件互斥）。
+
+**W1 拆分**（2026-09-24）。W1-A 面太大，一个 PR 无法评审；截图基线若在旧组件上建立，迁移后要整套重拍。因此：
+
+| 车道 | 内容 | 文件边界 | 依赖 |
+|---|---|---|---|
+| W1-A0 工具链地基 | Tailwind v4（`@tailwindcss/vite`，不引 preflight，`source(none)` + `@source` 只扫 `components/kit/`，旧类名不会撞上工具类）；`@theme inline` 把 §5.9 令牌映射为主题变量并清空默认色板 / 字号（`bg-red-500` 编译不出任何东西）；Radix 原语 + shadcn 式源码拷入 `src/components/kit/`（不放 `ui/`：Windows 下小写 `button.tsx` 与现有 `Button.tsx` 撞名）；`css-tokens` 守卫扩到 Tailwind 任意值类，并禁止新文件引用旧 `components/ui/*`（以现有引用者为白名单）；**零视觉变化**，不迁移任何页面 | `packages/web/**`（不含 `e2e/`、`playwright.config.ts`）、`scripts/guards/css-tokens*` | — |
+| W1-C 读模型 | `execution_readiness`（谓词复用委派执行时的授权检查，不另写一套）、`resolve_refs`（不可见 id 省略、不 404）、选择器数据源（既有 `list_*` 加 `q` 与分页）、遗留 48 读侧（`traverse` 方向与邻居名称、`list_conflicts` 筛选、观察窗口暴露、`GateInstanceWire` 工作区列表、`get_skill`、六个 `list_*` 分页）。**不做** `propose_skill` / `propose_procedure` 家族 id——那是写路径的领域变更，F6 不允许 | `packages/shared/src/**`、`packages/kernel/src/**`、`docs/contracts/**` | — |
+| W1-B UX 门槛与旅程框架 | 三档截图（基线在 CI 的 Linux 上生成、以产物回收，不在 Windows 本机生成）、axe、文案守卫、`<html lang="zh-CN">`、旅程测试骨架 | `packages/web/e2e/**`、`playwright.config.ts`、`.github/workflows/e2e.yml` | A0 合入 |
+| W1-A1… 系统性组件 | 每个系统性组件一个 PR：PageHeader（S1 / S12）→ 时间格式化（S9 / PW1）→ Markdown 与对话顶栏（C2 / C3）→ 响应式数据表（S3）→ 窄屏导航（S2）→ RefChip（S10，用 `resolve_refs`）→ 就近 ConfirmTier（S13 / RT2）→ i18n 中文为主（S4 / S7 / S14）→ 令牌对比度 / 字号 / 命中区（S5 / S6 / S8）→ 主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8） | `packages/web/src/**` | A0；RefChip 另依赖 C；截图随 B |
+
+截图评审（2026-09-24 维护者决定，替代原"截图认可是维护者关口"）：界面 PR 不逐个交维护者；几个 PR 攒一批，由持 §5.9 基线的
+评审 agent 对照三档截图独立评审（或 advisor 过目），无阻断即合入，结论记在 PR 与本节；维护者在 S8 验收时按旅程做页面验收。
+W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审对整套基线做。
+
+**W1 实现说明**（2026-09-24）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W1-A0 | #241 | Tailwind v4 只扫 `components/kit/`、不引 preflight；`@theme inline` 清空默认色板 / 字号并映射 §5.9 令牌；kit：button / dialog / sheet / tooltip / table；`css-tokens` 守卫拒 Tailwind 任意值类、拒新文件引用旧 `ui/*`（`scripts/guards/legacy-ui-importers.json` 只减不增）；根 `biome.json` 忽略 `tailwind.css`（Biome 1.9 解析不了 v4 语法）。构建对比：既有选择器零变化，CSS +5 kB、JS 0 | — |
+| W1-C | #243 | 新增 `execution_readiness`（复用 `computeChildHandleScope` 与建入口 Handle 的同一组函数，集成测试与 `find_workers` 交叉验证）、`resolve_refs`（对象 / 门 / 成员 / Worker 定义 / 审批请求，不可见 id 省略）、`list_capability_names`、`get_skill`；`traverse` 方向与邻居名称、`list_conflicts` 对象 / Fact 筛选、`list_gatekeepers` / `list_operations` 的 `q`、`GateInstanceWire.enablingWorkspaces`；六个 `list_*` keyset 分页（缺省 100、上限 500；生产最大 21 行，今日不丢行）。无迁移 | `resolve_refs` 补 Operation / Task / Chat / 工作区（RefChip 车道）；控制台列表须能翻页（S3 数据表车道）；readiness 复刻 `ensureEntryHandle` 的步骤，后续抽共享函数；观察窗口内核无对应（窗口由每轮 `window.complete` 驱动），转 W3 图谱 G1–G3 按每个 Source 最近完整窗口判断 |
+| W1-A1 | #245 | 旧样式表进 `@layer legacy`（位于 Tailwind utilities 之下，`tokens.css` 保持不分层），511 条既有规则逐字节不变；kit `page-header`（标题列最小宽度 + 操作区整体换行、面包屑 36 px 命中区）；导航数据抽到 `lib/nav.ts`，分组名统一"使用 / 治理 / 平台"，22 页迁移、11 页首次有面包屑；旧 `ui/PageHeader` 删除 | 面包屑 `aria-label` 仍为英文（i18n 车道） |
+| W1-A2 | #246 | kit `markdown`（react-markdown + remark-gfm，不渲染原始 HTML、不出 `<img>`、链接只放 http(s) / mailto），`React.lazy` 懒加载（主包 +1 kB gzip，独立分块 57 kB gzip）；`lib/format.ts` 一套 zh-CN 格式：绝对时间带时区标注、相对时间对称（"2 天后"），PW1 到期列修正 | `MessageBody` 一处行内 `style` 归遗留 49；访问页授权到期词序同 PW1（W3） |
+| W1-B | #244 | 三档截图门槛（27 个界面 + 2 个关键状态 × 1440 / 1280 / 768 = 87 张，CI Linux 生成，冻结时间、遮罩时间 / id / 对话气泡，`maxDiffPixelRatio` 0.01）；axe（serious / critical）与文案守卫（裸 UUID、原始枚举取自 `@nexttime/shared`、内部代号、环境变量名、runbook 路径）以棘轮基线入库，只减不增——起点 axe 220 个节点（`color-contrast` 213）、文案 7 个界面；`<html lang="zh-CN">`；六条旅程骨架（③ ⑥ 真跑，①②④⑤ `test.fixme` 写明步骤）。同一提交连续两次常规 run 全绿 | 重拍命令两处缺陷在 #248 修复（见下）；旅程 ③ 暴露遗留 78 |
+| W1-A5 | #250 | 路由级拆分：各页 `React.lazy` + 共享 `RouteBoundary`（分块加载失败给"刷新页面"），`vendor-react`、平台九页合一个分块；入口 806 → 37 kB（gzip 228 → 11 kB），Vite 500 kB 警告消失；截图零差异 | 遗留 49 的字体与行内样式两部分仍开放 |
+| W1-A4 | #252 | kit `data-table`（TanStack Table 8.21，只用排序引擎，≤ 768 卡片、供应商表关键列固定）；`useCapabilityList` 加 `truncated` 与 `autoLoadAll`，六个分页列表全部接上翻页；五页迁移。主会话复审补一处：`autoLoadAll` 在出错或游标原样返回时会无限重试 / 追加（先写两条复现用例再修） | — |
+| W1-A3 | #248 | ≤ 960 顶栏 + 抽屉导航（Radix 焦点陷阱），导航图标去重；顶栏常驻连接状态（全页只有一个 `ws-status`）；对话顶栏两行 + 溢出菜单。批量设计评审后在同一 PR 修：PageHeader 操作区不再 `flex-shrink-0`（系统接入 768 下第 4 个按钮被裁，S1 收尾）、面包屑 `<ol>` 默认缩进（无 preflight）、≤ 960 外壳显式两行（短页被垂直居中）；`chat.spec.ts` 直接断言助手回复渲染出 `<h2>` / `<strong>`（截图遮罩了气泡，C2 无法目视）。W1-B 的重拍命令修正：pnpm 11 把 `--` 原样传给 Playwright 致 `--update-snapshots` 失效；截图用例去掉 `serial`（一处失败跳过其余）；改 `--update-snapshots=all`，否则阈值以下的变化不写回、漂移累积 | 管理员登录辅助函数在窄屏同样依赖侧栏导航（当前无用例触发） |
+| — | #253 | `gate-host.spec.ts` / `integrations.spec.ts` 的目录可见性断言用一次性 `count()`，#250 懒加载后竞态变成两次都失败；改 `expect.poll` | — |
+| W1-A8 | #255 | `--text-3` 浅色 #6b7280 → #5f6672、深色 #8b94a5 → #98a0af（所有背景 ≥ 4.85:1，深色主题的缺口审计没截到）；去掉 `--fs-11`（19 处改 12 px）；侧栏分组标题去掉 `opacity`；复制按钮命中区 36 px；新增 `tokens-contrast.test.ts` 校验全部文字 × 背景组合。axe `color-contrast` 192 → 0 | 部分 12 px 小徽标偏挤（版式车道） |
+| W1-A6 | #256、#258 | `resolve_refs` 加 operation / task / chat / workspace（workspace 仅本工作区或平台管理员——管理员身份取自服务端校验过的会话 cookie，API key 与 Handle 通道拿不到）；kit `RefChip` 批量解析、会话内缓存、兜底"未知 / 已删除"；默认工作区与"授权给成员"改为选择器；每次运行都变的元素统一标 `data-volatile` 并在截图门槛遮罩。#256 因推送失败后仍触发了自动合并而缺基线，#258 补上 | 审计页 explain / reconstruct 的 id 输入无可枚举数据源，未改；`consoleUser` 注释误写"W1-C" |
+| W1-A7 | #257 | kit `confirm` 三档：低（执行 + 撤销）/ 中（锚定触发器的弹出确认，列影响——原"高 · 可逆"并入此档，强度不降）/ 不可逆（键入目标 + 知情勾选）；十处调用迁移，批量清除用户上调为不可逆；集成页模式下拉改为确认后才生效、取消恢复原值、停用在用连接器为不可逆；目录"弃用"加确认；运行层回滚就近确认、单镜像时禁用；顺带修审批页乐观更新的一帧空窗 | 门实例详情里自写的确认未迁移 |
+| W1-A9 | #259 | `t(zh, en)` + 语言切换（侧栏、抽屉、我的账户），中文为默认且英文不进 DOM，`<html lang>` 跟随；ts-morph 一次性脚本转换 141 个文件 1573 处，模块级映射等 190 处按设计留待后续（守卫 `i18n-pairs` 以棘轮基线记账，只减不增）；e2e 选择器转中文或 testid（管理员登录改按字段 id——必填星号进了无障碍名称）；87 张截图重拍，axe / 文案基线不变。主会话收尾时修正两处被改错的选择器与一条 CodeQL 提示 | 190 处未转换（如能力目录标签仍为英文）；守卫漏检含全角括号的双语字面量（"继承（不覆盖）Inherit …"）；S14 术语清理未做 |
+| W1-A10 | #263 | `lib/labels.ts`：界面渲染的每个线上枚举都有 `{ zh, en }` 标签，类型绑定共享枚举（新增枚举值未配标签即 typecheck 失败），7 个纯英文 StatusChip 状态机双语化；S14 点名的内部代号 / 遗留编号 / 环境变量名 / runbook 路径 / CLI 命令改为产品语言，运维确需的字面量收进"技术细节"折叠；i18n 余下 196 处清零，`i18n-pairs` 守卫补上全角标点紧贴英文的漏检（又抓出 3 处）。文案守卫 7 个界面 → 1。主会话收尾：审批行 e2e 改点标题（行中心落在复制按钮的 36 px 命中区上，`DataRow` 按设计忽略按钮上的点击） | 平台审计页 explain / reconstruct 的 id 输入仍裸 UUID（无可枚举数据源） |
+| W1-A11 | #266 | L2 每个视图只留一个墨色主按钮（集成页"新建门宿主实例"、我的账户两处降为次要，渲染测试断言）；L3 Operation 模式 / 影响级 / 可自动批准统一走 StatusChip（新增 `autoApprovable` 机）；L5 kit `section`：表单页一张卡 + 分割线（平台设置），仪表盘页独立卡片（概览、模型与配额、访问）；L8 kit `drawer-section`：元数据 / 相关链接 / 编辑固定三段、统一段标题（门实例、工作区、成员、供应商抽屉） | `ActionRequestDetail.tsx` 已无页面引用（孤儿组件）；其余混合内容抽屉未全量迁移 |
+| W1-A12 | #267 | 补齐漏译（审计 S4 后半）：系统接入的"连接请求 / 已注册系统"、我的智能体、平台设置、平台审计、运行状态、模型与供应商等处纯英文与"中文句。English sentence."整句对，约 50 个文件转 `t()`；`i18n-pairs` 守卫新增"≥ 3 词纯英文文案"与"中英整句粘连"两种检测（26 条单测），基线仅 1 条（访问页的 JSON 代码示例） | 3 词以下的英文短标签未全扫；译文未经母语审校 |
+
+- **后续（#614，47f6e27，2026-10-16）**：Tailwind 的 `@source` 从只扫 `components/kit/` 扩到整个 `src/`（不含 `*.test.ts(x)`）：`ActionFailure.tsx` 的 `line-clamp-4` 此前没有生成样式，单测只看 className、jsdom 不算布局所以没拦住（#614 UX MUST-1）。扩范围后真正挂到元素上的新工具类只有 `line-clamp-4`、`wrap-anywhere`、`flex-row`。**规则**：旧样式表在 `@layer legacy`、低于 `utilities`，所以控制台手写的样式类名必须避开 Tailwind 工具类名，否则工具类会盖过手写样式（写在 `styles/tailwind.css` 注释）；布局类的行为改动要有 e2e 断言（例如 `e2e/approval-failure-reason.spec.ts` 在 390 宽度下比较折叠前后高度），不能只靠 className 单测。
+- **后续（#1567，4d0c311，2026-11-20；遗留 245、538 内核部分，无迁移）**：`execution_readiness` 结果带两个字段。`agentsPaused`：实时读封印暂停，不改 `ready`、不加新的 `missing` 代码；只给读自己的人和身为人的所有者，操作员、服务 Principal 读别人的时不给（#501 P2-1）。`owners`：在用的人类所有者及当前名字，成员可读。两个字段线上可选。控制台就绪卡写所有者名字、状态栏 / 总览的暂停提示未做。同 PR 补了 #1565 上 #493 的去重键测试（遗留 914）。
+
+**W1 第二轮批量设计评审**（2026-09-24，87 张截图）：W1 无新引入的倒退；第一轮三处修复保持；S4 的折行根因已消（系统接入标题、成员 / 用户 / 模型表头、对话顶栏在三档宽度均单行）；L2 / L3 / L5 已落地。评审唯一 BLOCK 是 S4 的"补齐漏译"未完成 → W1-A12 修复。W1 至此收口。
+
+**W1 批量设计评审**（2026-09-24，按维护者同日的授权由 Sonnet 评审对照 §5.9 看 87 张截图）：首轮 BLOCK——系统接入 768 页头溢出；主会话复看另发现面包屑缩进与窄屏短页垂直居中。三处在 #248 修复并复看通过；其余界面与宽度符合 §5.9（对话顶栏、窄屏顶栏、表格卡片化、带时区的时间）。新的非阻断问题：集成页连接器 MODE 下拉在 768 截断（P3，并入 W3 的 S13 / PI1）。仍存在且已排后续车道：S4、PS1、S13 / PI1、L5。
+
+**W2 内核半段实现说明**（2026-09-24，UI 半段在 W1 之后）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W2-K1 | #249 | 入口 prompt 契约：`find_*` 全空时的三项前提指引、ops-runner 条件化、回复用用户的语言，`prompt-contract` 守卫加三条断言（B2 / B8 / R9，遗留 72）；`find_*` 分词匹配（CJK 双字切分、上限 32 个 token、参数化 SQL，空 `need` 列全部，遗留 71 / B3）；`find_procedures` 复用 `find_workers` 的启用白名单（B4）；`invoke_worker` 接受唯一的门名、报错列出可见门（R4）；随包 manifest 12 个 Operation 补描述、CLI 导入要求非空、OpenAPI / MCP 导入不再产出空描述（CO1）。CO2 核实无需改码：策略引擎只让 `low` 自动批准，manifest 已声明 `low`，生产上的是旧部署数据 | `deploy/accept-s2` 夹具仍无描述（W4 顺带） |
+| W2-K2 | #251 | `enable_gate_instance` 先按 endpoint 找本工作区已有 Gatekeeper：一个 → 关联（不新建 Gatekeeper / ConnectedSystem，只导入并发布新增的 Operation，结果带 `linkedExisting` 与 `drift`）；多个 → `ambiguous_existing_gatekeeper` 且不写入；零个 → 原路径。只关联不改写旧注册与已有 Operation 的治理字段。新增只读 `preview_gate_instance_enable`（与启用共用判定函数，报告待导入与已存在 Operation，`differs` 标出治理字段与门公告不一致）。回滚写进 `runbooks/add-gatekeeper.md` §11.1。不做跨工作区数据迁移：部署后由 owner 在控制台对每个旧注册的门点一次"启用" | 遗留 79（是否刷新陈旧的治理字段）；主机：生产工作区的 docker / ragflow 门各点一次启用并核对复用了旧 Gatekeeper |
+
+**W2 UI 半段实现说明**（2026-09-25 起）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W2-U1 | #269 | 统一授权（J6 / SY2 / U2 / AX1）：`components/access/GrantGateForm` + `GrantGateDrawer`，访问页主操作与每张系统卡片打开同一个抽屉；成员（`list_principals`）与门（`list_gatekeepers`，可多选）都用选择器，不再粘贴 id / JSON；"全部门"须显式勾选并经 `medium` 确认；只指向一个门时只读列出授权覆盖的已发布 Operation（执行类仍按审批规则）。卡片列出已授权成员并可撤销（R5）；Handle 能力勾选改为分组折叠（AX1）。启用前预览（J3 / J4）：`EnableGateConfirm` 读 `preview_gate_instance_enable`，列待导入 / 已存在 Operation（`differs` 标出），关联旧注册时显示差异，候选不唯一则禁止确认。启动器必经启用 + 授权（J2），第一步先列平台目录里的可用实例（J5）。系统接入页（SY1 部分 / SY3 / SY4 / U5 / L4）：一个主操作，直接注册门（标"旧路径"）与向导收进更多菜单；两类已接入系统归到同一节 | 合入前主会话去掉了车道原有的"按 Operation 收窄"勾选：`capability_grants.scope` 只存不校验（遗留 80），勾选是一个不生效的控制；访问页已有 scope 标为"范围备注（不限制授权）"。SY1 是部分完成（平台目录行与门卡片仍是两种形状，组件注释说明取舍）。卡片"已授权成员"只列指向该门的授权，"全部门"授权只在访问页显示为"任意"。`components/ActionRequestDetail.tsx` 已无代码引用（审批详情改用 `approvals/ApprovalDetail`），W3 审批车道顺带删除 |
+| W2-U2 | #272 | Worker 编辑器（J7）：能力 / 门 / Skill 改为目录选择器（`list_capability_names` / `list_gatekeepers` / 已发布 Skill），模型改下拉（含"留空 = 工作区默认"），新建只能是 Worker 定义（入口定义只能续写版本），去掉内部编号；"从模板创建（ops-runner）"把随包 `ontology/ops-runner.yaml` 经现有 propose / publish 路径暴露（TS 副本 + 读 YAML 的漂移测试，`yaml` 只作开发依赖）。Workers 标签（CW1 / CW2）：入口定义单列、不提供弃用；空态写清后果并给模板入口；行内操作可换行；模板按钮与"新建草稿"并排 | 合入前主会话去掉可见文案里的 API 名与原始 kind 值、修正"入口 Entry"中英并列、工具栏分组 |
+| W2-U3a | #273 | 执行就绪（J1）：`ExecutionReadinessCard` 放在工作区成员登录后的落地页（对话列表；平台概览是平台级、无工作区上下文，读不了 `execution_readiness`），列可用门 / 已授权门 / 可委派 Worker 与缺项（原因 + 去处链接）；`ExecutionPrerequisiteBar` 挂在系统接入 / 能力目录 / 访问三页，未就绪时说明三项前提与缺项，就绪后不显示（取代 #269 的静态提示）。控制塔（O1）：平台概览加"需要人处理"（服务健康 + 待激活用户）与近 30 天费用；待处理 / 运行中（跨工作区）与图谱新鲜度无现成读能力，未做假数，留 W3（G1 / O2 / O3） | 合入前返工：新文件不得扩 `legacy-ui-importers.json`（改用 kit + 本地复刻），kit 之外不用 Tailwind 工具类；内核补"有门却一个都没授权"的全局 `no_grant`（此前没有 Worker 时不报）；原因文案不再复述标签 |
+| W2-U2b | #274 | R6"我的草稿"：`list_worker_definitions` 加可选 `includeOwnDrafts`（默认行为不变；只多返回调用者自己提议的草稿，与 `list_skills` 同一可见性规则；`find_workers` / `invoke_worker` / `execution_readiness` 不走这条路径）；Workers 标签新增"我的草稿"区（仅非空时显示，可直接发布） | 不提供"继续编辑"：续写会新增一个草稿版本，而草稿没有丢弃能力（遗留 82） |
+| W2-K3 | #276 | 执行就绪语义修正：没有执行类能力的 Worker（ops-runner 模板的默认形状）声明了却未授权的门会被 `computeChildHandleScope` 静默丢掉而不是拒绝委派，原先"可委派"即"就绪"会在 Worker 碰不到任何系统时显示已就绪。现在 `ready` 还要求同一次计算出的子 Handle 至少带一个门；每个 Worker 报 `reachableGateCount`；被丢掉的门记按门的 `no_grant`；新增 `no_worker_gate`（已发布 Worker 都不声明门）。`delegable` 语义不变。线上契约仅增量 | 由 W2-U3b 读源码核对旅程①时发现 |
+| W2-U3b | #275 | 旅程①从 `test.fixme` 变为真跑：新建工作区与 owner（强制改密），全程走界面——空状态（就绪卡片两项缺失、三页前提条）→ 系统接入启用平台门（预览确认）→ 授权抽屉授权 → 缺项收窄为一项 → 能力目录从 ops-runner 模板创建、勾选该门、保存并发布 → 就绪卡片"已就绪"、三页前提条消失 → 对话收发 → 768 宽新建草稿 | CI 的 e2e 栈是 `AGENT_RUNTIME=fake`（只回显），没有 agent-host / worker-supervisor，任何消息都触发不了真实 `invoke_worker`：旅程①在 CI 里止于"三项前提齐备 + 对话可用"，委派本身由 `accept_s2`（主机）与维护者页面验收证明（遗留 83）。"无权限"状态与"委派前拦截"未覆盖（后者产品里尚无此机制）。CI 首跑抓到两处：新建工作区后详情抽屉自动打开、遮罩挡住登出（测试夹具修正）；≤960px 下点当前页的导航项不关抽屉、抽屉盖住页面（产品缺陷，同 PR 修复并加单测） |
+
+**W2 基线重拍流程**（本波实践，后续车道照做）：车道分支若在别的改界面 PR 合入前分出，合入前必须先把 main 合进来再重拍——两边都改了同一批截图，GitHub 的 update-branch 解不了二进制冲突；本地合并时冲突的截图保留本分支版本即可（随后整批重拍覆盖），不要用 `checkout --theirs` 覆盖工作区文件。推送后先 `git ls-remote` 核对远端 head，再单独开 auto-merge（`--match-head-commit`）。
+
+**W3 实现说明**（2026-09-25，按 `convergence-plan-2026-09-25.md` §4 / §6）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W3-K2 | #280 | 遗留 82：新能力 `discard_draft{kind, id, version}`，WorkerDefinition / Skill / Procedure 三类草稿共用；**只有提议者本人**能丢弃（I16：别人连草稿都看不见，不给 owner 越权），对非本人一律按"不存在"回应；只能删 `draft`，已发布 / 已弃用返回 409；硬删除 + 同事务审计。到期清理：内核周期任务（`DRAFT_EXPIRY_DAYS` 默认 30、`0` 关闭，`DRAFT_EXPIRY_INTERVAL_MS` 默认 6 小时，防重入），按 `created_at`（草稿行创建后不再原地修改），每删一条写审计，归属每个工作区惰性创建的 `__draft_reaper__` 服务主体。迁移 `worker/0003`：给应用角色 `DELETE` 授权 + 三张表的 `BEFORE DELETE` 触发器只放行草稿。遗留 84：从模板创建时按 `list_capability_names` 的 mode 选中"全部非执行类 + `request_action`"（等价于默认集合加执行申请，不写死清单），能力目录加载完之前按钮不可用；编辑器写明执行类仍需审批 | 合入前 CI 抓到触发器挡住了工作区清除（清除级联以连接登录角色运行、要删已发布定义）→ 主会话把触发器限定为 `current_user = 'nexttime_app'`。控制台"30 天"是写死的文案，未读内核配置。`__draft_reaper__` 会出现在"签发服务凭证"的主体下拉里（遗留 88） |
+| W3-F1 | #281 | `kit/notice / field / error-banner / status-chip / select`（沿用旧 CSS 类，截图零差异；`kit/select` 的类型强制要有可访问名称），4 个本地复刻文件改用 kit；PI1 平台集成页 5 个下拉补名称（axe 基线该页清零）；遗留 85 的侧栏连接状态 / 清除密钥 / 登出、平台概览默认工作区说明、系统接入空态、访问页服务主体提示改走 `t()`，连接状态加 `data-status` 供测试读取，8 个 e2e 文件随之更新；字体只打包 `.woff2`（Vite 插件在构建开始时由各 @fontsource 包生成 `fonts.css`、保留 `unicode-range`），`dist` 14 MB → 6.8 MB | `legacy-ui-importers.json` 仍 106（复刻文件本来就不在名单上）；登录页 "Log in"、对话 "Send" 仍是英文且被 e2e 按文字选取 |
+| W3-K1 | #282 | 遗留 79：新能力 `refresh_operation_governance{gatekeeperId, operationNames?}`（owner），与 `preview_gate_instance_enable` 共用同一个差异判定函数；原地更新（与发布 / 弃用同级的直接治理写入，不走草稿再发布），每个 Operation 一条审计（before / after / 放松·收紧·混合）；没有关联平台实例公告的门返回 `no_announced_manifest` 且不写入。控制台：门卡片"按公告刷新治理字段"，列出有差异的 Operation，只收紧用 medium 确认，含放松用不可逆档（重输门名）。遗留 81：`update_operation_description`（与 `publish_operation` 同级角色，去空白后非空、≤ 2000 字），原地更新 + 审计；`list_operations` / `get_gatekeeper` 带回描述；目录 Operation 行显示"未填写描述"并可编辑。遗留 75 前半：门工具结果回给模型时截断（默认 16 000 字符，`NEXTTIME_GATE_TOOL_RESULT_MAX_CHARS` 可调），worker 与 entry 两条门结果路径都用 | CI 首跑抓到一个真实缺陷：两处新增的逐 Operation 审计把 `gatekeeperId:name` 组合串写进 uuid 列 `audit_records.resource_id`，线上每次调用都会 500 → 改用 Operation 对象自己的 id、组合引用放 payload（测试夹具另修：平台表的公告写入改在平台上下文）。合并 main 时主会话顺带修了 5 处 i18n 守卫漏检的"插值模板里的中英对"（弃用 / 丢弃确认标题、模块升级按钮、服务凭证有效期提示、清理用户结果副标题）；守卫本身待补（遗留 85） |
+
+W3 合入顺序：#280 → #281 → #282；只有 #281、#282 改截图，#282 先合 main 再重拍。子代理开的 PR 标题两次不符合 Conventional Commits（`lint-pr-title` 失败），此后派发时写明标题格式。
+
+**W4 / W5 第一批实现说明**（2026-09-25，收敛方案 §10 四项决定落地 + W4-A / W4-B / W5-A / W5-B）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| §10 供应链 | #287 | 删 `renovate.json`（App 从未安装）与 auto-merge 的 renovate job；Dependabot 只做安全更新 / 告警，常规依赖升级按 W7 波次手动做（npm 的 Dependabot 版本更新在 pnpm workspace 里会 lockfile 失败，所以不恢复 `dependabot.yml`）；pgvector / postgres / alpine 按主机在跑的镜像钉 digest | 遗留 86 关闭 |
+| §10 授权 scope | #288 | `grant_capability` 不再接受 `scope`（strict schema 拒绝）；新授权写 `{}`，历史行照旧回显为"范围备注" | 遗留 80 收尾 |
+| W5-A | #290 | 遗留 74：结果契约的 `artifacts[]` 可带文本 `content`（每件 ≤ 32 000 字、每份 ≤ 8 件），随 `tasks.result` 持久，任务详情可读；容器内路径的旧产物显示"无法读取"。遗留 75 后半：Worker 每次门调用（observe 直调、execute 走到 executed / failed）在该 WorkerRun 自己的 `worker_run` Source 上写一条截断的 Observation（每条 ≤ 8 000 字、每次运行 ≤ 200 条），只写观测不写 Fact；刻意不挂在门调用自己的 Activity 上（避免一个 Activity 两个 Source 破坏单一来源判定）。无迁移 | 可见性与任务结果相同（工作区可见）。CI 首跑一处测试假设有误（无 `result_mapping` 的门本来不写 Observation），已改并补一例有映射的隔离测试 |
+| W4-A | #291 | 旅程④真跑：对话回复里的 id 经 `explain` 核实后才渲染为可点引用，点进溯源链；CI 用 API 夹具（本体发布 → 登记来源 → 提交观测）造一条 Fact。`verify_fact`（事实行"验证"）与 `resolve_conflict`（冲突面板）有了界面；四个推理链能力进审计页；新增只读能力 `graph_freshness`（工作区级）与图谱页新鲜度提示；审计流默认隐藏读操作、平台审计不再要求手输 UUID（文案守卫该页 UUID 2 → 0）；"Send"改"发送" | CI 抓到：全是读操作时审计流空白、768 宽溯源链横向溢出（主会话改为 960 以下单列 + 长 id 可断行）、`t()` 中文参数里夹英文（"事实 Fact"等，主会话修）。人不能附证据，`verify_fact` 多数会被拒（遗留 89） |
+| W5-B | #293 | 遗留 67：Task 其余无条件状态更新（`failTaskRow`、`terminateTask`、invoke 的两处）改为按当前状态条件更新，丢失竞争时不覆盖终态；遗留 78：`system.action_update` 钉在收到 `action_pending` 的那个对话；遗留 64：滚动入口容器与新 Turn 之间用按成员的 advisory lock 串行（`sendChatMessage` 开 Turn 前取事务级锁）；遗留 66：容器真正关闭时清掉 agent-host 的 `lastTouchAt` | `spawn.ts` 里 WorkerRun 的两处无条件状态更新同类问题未改（遗留 90） |
+| W4-B | #292 | 策略 / 配额可编辑（放松走不可逆档）；自助签发 MCP Handle（"不限"与显式范围分开，空数组 = 零能力）；Skill 编辑用 `get_skill` 预填；遗留 88：内核给内部服务主体标 `internal`，成员页与签发下拉过滤；S15 显示名统一取用户表、M1 可用 Worker 不含入口定义、M2 / U4 / L10 / AC1 我的智能体与账户页整理；"Log in"改"登录"（14 个 e2e 文件随改）；i18n 守卫新增"插值模板里的中英对"检测，找到 59 处，本车道修 8 处、其余 51 处先记基线 | CI 抓到新增的 axe `link-in-text-block`（行内链接只靠颜色区分）→ `.field-hint a` 加下划线；合并时旅程④ 还在选 "Log in"，主会话改 |
+
+本批合入顺序：#287 → #288 → #290 → #293 → #291 → #292；只有 #291、#292 改截图。经验：并行车道各自改了按钮文案时，别的车道新写的 e2e 仍会用旧文案选元素——合并前 `grep` 一遍旧文案。
+
+**W4 / W5 第二批实现说明**（2026-09-25，W5-C / W4-D / W4-C）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W5-C | #296 | 运维遗留九项：77 清除工作区时 kernel 经 worker-supervisor 新增的 `POST /resident/reclaim` 回收每个被清除成员的入口容器与数据目录（kernel 仍不持 docker 凭证），运行层常驻表加"容器"列、活动镜像卡片并入清单表；76 `accept_s2.sh` 统一 `on_exit` trap；60 `drill-upgrade.sh` 迁移已应用后失败打印 `HOST LEFT ON <tag>` 与回滚命令；61 egress-proxy 读 source map 失败重试一次、连续失败只记一行；62 `ops.collector_silent` 只计所属 service Principal 仍持有效 Handle 的 Source；63 验收正向出网探测有界重试（拒绝类探测不重试）；65 kernel 启动时校验默认模块名；58 备份含 `llm-proxy/` 与 `models/`（密钥文件权限原样进档）；59 `pi-drift.yml` 产出 `pi-drift.json` artifact | 历史遗留的已清除工作区数据目录未回填清理；59 的 artifact 需运维手动放到主机（不引入自动拉取）；备份归档现含真实密钥，按 `secrets/` 同等敏感度处理 |
+| W4-D | #297 | 对话列表显示最近活动与"运行中"（`ChatWire` 加只读 `lastActivityAt` / `hasRunningTurn`，无迁移）；消息角色中文标签；图谱搜索加宽、默认浏览按类型分组、表单对齐；任务行识别 `{intent}`；侧栏"治理 / 平台"分组加范围说明；短列表的指引行。i18n 基线清掉本车道 12 个文件 24 条。旅程②在 CI 真跑步骤①③④⑤（全新工作区 → 接入启动器选已接入的 CI 夹具系统 → 启用发布 → 系统接入页与能力目录可见） | 步骤②（填真实连接信息、测试连通）仍 `fixme`：需要 fake 栈之外能真实握手的目标系统。CI 首跑两处：已声明 Operation 列表只对管理员可见，断言改到启用预览；确认弹层在 Radix portal 里，要从 `page` 定位（主会话修） |
+| W4-C | #299 | 控制塔补三项读模型（`platform_overview` 加跨工作区待审批数、运行中任务数、图谱新鲜度，均排除验收残留工作区）；新只读能力 `platform_draft_residue`（跨工作区草稿计数，只给数量，I16）；控制塔两段式布局；工作区配置抽屉一次保存、用户表 sticky 列、集成页模式标签与实时 `transportKind`、门实例抽屉显示已启用的工作区、模块默认安装确认、工作区 × 模型只读矩阵、运行状态细节。旅程⑤：新页 `#/platform/residue`（工作区残留链到既有清除流程、草稿计数、已退出入口容器），CI 真跑工作区一类；该页进截图 / axe / 文案守卫 | O3 的用户数仍是总数（未排除残留）。CI 首跑三处：门测试结果改显示健康标签后 spec 改断言 `data-status`（行标签"健康"改"状态"，避免"健康健康"）；旅程⑤ 停用的夹具工作区留在共享 CI 库里，破坏了 `workspaces.spec.ts` 的空态断言——测试末尾改为重新启用（重新启用后它离开"只看残留"视图，断言相应改为行消失）。截图评审抓到 kit `DataTable` 的 `layout="sticky"` 缺陷（首次有页面在列放不下时用它）：非固定列被挤成一字一行、固定列之间留大空白——主会话改为表格取内容宽度、单元格不换行、固定列定宽，≤ 768px 只固定主列 |
+| W5 收尾 | #300 | 遗留 90：`spawn.ts` 的两处 WorkerRun 状态写与 `terminateWorkerRunRow` 都按预期旧状态条件更新 + rowCount；启动写丢竞态时经既有 `supervisorClient.terminate` 尽力停掉刚起的孤儿容器且不抛错（避免把一次取消误记成启动失败） | 复审改一处语义：取消与启动竞态时终止必须优先——`terminateWorkerRunRow` 重读后按新状态重试（有界），否则被取消的 Task 下会留一个 running、Handle 未吊销的运行 |
+
+本批合入顺序：#296 → #297 → #300 → #299；三个 web 车道都改截图，后合的先合 main 再重拍。经验：CI 的 e2e 各 spec 共用一个 Postgres，旅程测试留下的状态（停用的工作区）会破坏别的 spec 的空态断言——造了夹具就在测试末尾复原，与 `workspaces.spec.ts` 自己的"停用再启用"同一做法。
+
+**S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
+三档截图基线经独立设计评审认可（2026-09-24 维护者决定，不逐个交维护者）。
+
+**风险**：① 组件迁移面大——"先组件、后页面"，每页迁移一个 PR 并附截图对比；新旧组件并存期内以守卫禁止新代码引用旧
+`ui/*`。② 旧注册关联（J4）改的是生产治理数据——先在临时工作区复现并写可逆迁移与回滚步骤，主机应用前备份。③ 截图回归
+易抖——固定字体、时间与数据种子，只在 fake 栈跑，阈值从严到宽逐步调。
+
+## 5f. 底座化路线（2026-09-23 记录；2026-10-02 讨论结论见本节末，交付线立项为 S9，见 §5g）
+
+维护者 2026-09-23 重申产品核心：**一键部署、通用、模块化解耦，做成跨企业复用的通用底座**（"Enterprise Agent & Operational
+Graph OS"）。内核理念（图谱 + 本体 + 治理 + Worker 运行时）已是想要的形态；控制台产品化由 S8 承担。维护者决定**先完成
+S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排期。本节是讨论底稿，不是已定设计。
+
+### 按 OS 结构对照现状
+
+| OS 部件 | 本项目对应 | 现状 |
+|---|---|---|
+| 内核 | 图谱 + 本体 + 治理（Handle / 授权 / 审批 / 审计 / 溯源）+ Worker 运行时 | 强；三条设计底线已立住 |
+| 驱动 | 门（docker / http / ssh / mcp / cli）+ 采集器 | 可用；启用门按 endpoint 关联旧注册（遗留 73，#251 关闭——新旧两条接入路径仍在，但不再重复注册）；采集器是专用件，不随包装卸 |
+| 包管理 | 模块 | 弱：模块 = 本体包（§5d 决定 D1）；Worker 模板、Skill、Procedure、连接器预设、采集器不能随包装卸 |
+| 外壳 | 控制台 | S8 + 控制台产品化重构 + 收尾波次完成（2026-10-01，v0.34.0） |
+| 安装 / 升级 | `drill-install.sh` / `drill-upgrade.sh` + 迁移可逆性表 + `scripts/build-images.sh` | 半成品：无发布镜像（主机从源码构建，v0.17 / v0.21 / v0.22 / v0.23 的应用都被 npm / registry 抖动打断过）；干净主机安装未实跑；真实使用的发版应用脚本 `nt-apply.sh` 不在仓库里（只在主机 `/tmp` 与操作会话的临时目录）；迁移可逆性 PROBE 自 v0.16.0 起未获得 |
+| 运维与企业接入 | 备份、身份、审计导出 | 备份：compose `backup` 服务每日 dump + 打包（含 llm-proxy 密钥，遗留 58），恢复路径已在主机实测（#373），发版前查新鲜度；只在本机、无异地副本（遗留 102，2026-10-02 决定先不做）。身份：只有本地账号 + API key，OIDC 只在设计文档"之后"一行 |
+
+### 交付线（草案）
+
+目标："装得上、升得动、恢复得了"。
+- 版本化镜像发布（CI 构建、扫描、签名、推送），安装与升级不再依赖主机源码构建（2026-09-18 起多次被 registry 抖动打断）。
+- 一条命令在**干净主机**安装并跑通 S8 旅程①（`drill-install.sh` 首次实跑），主机差异收敛到一个 `.env` 与一个 secrets 目录。
+- 升级走发布镜像 + 迁移可逆性（`release.md` §6），失败自动提示回滚（遗留 60）。
+- 备份 / 恢复定时化并在运行状态页可见（遗留 6 / 58）。
+- 与 09-22 决定的关系：当时 ② 镜像发布、③ 备份"排到最后"；是否提前待讨论。
+
+### 扩展线（草案，候选 S9）
+
+跨企业复用落在"能力包"这一层：模块从"本体包"扩成**能力包**。讨论用的轻量领域模型：
+- **概念**：能力包（Pack）与其版本（PackVersion）；组件 = 本体包、WorkerDefinition 模板、Skill、Procedure、连接器预设
+  （门实例的非凭证配置）、采集器声明；安装记录（工作区 × PackVersion）。
+- **关系**：PackVersion 包含组件；工作区安装 PackVersion；组件发布后在工作区里是普通的 Operation / WorkerDefinition /
+  Skill / Procedure，带"来自哪个包"的溯源。
+- **不变量**：包**不携带凭证**，只声明需要哪些门 / 连接器；安装与升级走现有"提议 → 发布"治理路径，不绕过审批；卸载只
+  弃用组件，不删除已写入的事实；同一门只能有一个 Gatekeeper（先修遗留 73）。
+- **生命周期**：可用 → 已安装 → 可升级 → 已弃用；breaking 升级须确认（沿用 §5d 决定 D3）。
+- **权限**：平台管理员上架与维护包目录；工作区 owner 安装 / 升级 / 弃用。
+- **验证用的两个包**：运维基础包（ops-assets + ops-runner + docker / ssh 连接器预设 + 主机采集器，均为现成件）；另一个
+  不同领域的包（例如知识库：RAGFlow 连接器 + KnowledgeBase 本体 + 检索 Worker），证明通用性。
+- 同批候选：连接器接入路径统一（遗留 73 的根治）、OIDC、审计导出。
+
+### 明确不做（除非讨论后改变）
+
+应用市场与外部包仓库、多部署控制面、为扩展拆微服务、为本体上图数据库。
+
+### 待讨论的问题
+
+1. 交付线是否提前、与 S8 后段并行（改 09-22 决定）。
+2. 能力包的边界：一个包能否跨多个领域；包之间的依赖要不要建模；定制过的组件升级时怎么合并（沿用 D2"哈希判定已定制"？）。
+3. 连接器预设与门实例的关系：预设是平台级模板还是工作区级配置。
+4. OIDC 与现有"用户 / 工作区主体"两层身份的映射（审计 S15 暴露的"一人三名"要一并定）。
+5. "跨企业"的形态：每个企业一套自托管部署（当前假设）还是托管多租户——决定备份、升级与隔离的设计。
+
+### 讨论结论（2026-10-02）
+
+- **问题 5（跨企业形态）——维护者定：每个企业一套自托管部署。** 备份、升级、隔离都按单部署设计；不做托管多租户、
+  不做多部署控制面（与"明确不做"一致）。
+- **问题 1（交付线是否提前）——S8 已完成，交付线立项为 S9，排在扩展线之前**（§5g）。理由：09-22 决定"② 镜像发布、
+  ③ 备份排最后"里 ③ 已由 compose `backup` 服务 + C10 恢复修复完成，② 是唯一剩下的一项；它也是交付线第一项；
+  并且根治主机源码构建被出网抖动打断的问题。
+- **异地备份（遗留 102）——维护者定：先不做。** 交付线不含异地副本。
+- 问题 2–4 留到扩展线开工时定。当前默认建议（未决，供开工讨论）：一个包只覆盖一个领域；包间依赖先不建模，
+  只声明需要哪些门 / 连接器；定制过的组件升级沿用 D2 哈希判定，已定制则不覆盖、提示人工合并；连接器预设是平台级
+  无凭证模板，在工作区实例化为门实例配置；OIDC subject 与平台 User 一对一，工作区 Principal 仍由成员关系派生，
+  "一人三名"借此统一显示名。
+
+## 5g. S9 — 交付线：装得上、升得动、恢复得了（2026-10-02 立项）
+
+依据 §5f 讨论结论。目标是让"每个企业一套自托管"真正可交付：安装与升级不再依赖主机从源码构建，主机差异收敛到
+一个 `.env` 与一个 `secrets/`，发版应用流程入库、可复现。异地备份不在本阶段（遗留 102 推迟）。
+
+| 项 | 内容 | 验收 |
+|---|---|---|
+| D0 验证债 | v0.34.0 的 S5.7 真实模型回归（上一次是 2026-09-18 的 v0.13.2，此后 21 个版本未跑；期间 pi 0.84 → 0.99、撤回 D4、每轮重投射门工具、排除清单、入口 prompt 契约都改变了模型看到的工具面） | `host-accept-real-model.md` §8 全流程；计数进 STATUS §2.2；任一场景 `<8/10` 记已知问题并开修复车道 |
+| D1 版本化镜像发布 | 发版即构建、扫描、签名、推送全部平台镜像；主机按版本拉取并重打成 compose 现有的本地镜像名 | 一次发版在 registry 产出每个平台镜像的 `vX.Y.Z` tag + 签名 + SBOM / provenance；主机 `pull-images.sh vX.Y.Z` 后 `up -d --no-build` 通过 S1–S4 |
+| D2 发版应用脚本入库 | 把主机上实际使用的 `nt-apply.sh`（新鲜度检查 → 发版前 dump → 拉 / 建镜像 → 迁移 dry-run → 迁移 → `up` → S3 / S1 / S2 / S4 → `BACKUP_NOW` → 留 3 份发版前 dump → `--expired` 清理）收进仓库，主机差异只读 `.env` | 主机以入库脚本应用下一个版本，一次通过；`runbooks/release.md` 只指向这一个入口 |
+| D3 干净主机安装首跑 | `drill-install.sh` 在一台干净主机（或虚拟机）上用发布镜像首次实跑，跑通旅程 ① | 安装耗时、手动步骤数记入私有记录；runbook 顺序与脚本一致。**推迟**（2026-10-02 维护者：暂无干净虚拟机，先不测） |
+| D4 升级可逆性 | 补拿自 v0.16.0 起缺失的 PROBE（core 0030–0033、governance 0012、worker 0003）。2026-10-02 维护者选方案 (b)：不碰活库——不用 `drill-upgrade.sh` 的活库回滚，改为 CI 可逆性探针（新版本迁移 + 旧版本 kernel 测试套件） | 改动迁移的 PR 自动出可逆性结论；历史版本对补跑后 `release.md` §6 的"读代码推理"行附上实测 |
+
+### D0 实现说明（2026-10-02）
+
+- 主机 v0.34.0 按 `host-accept-real-model.md` §8 跑了一轮：S2 / S3 各 `--runs 10` + `make demo`，不加 `--keep`
+  （`llm_usage` 与工作区行照样保留，`report-usage.sh` 照查；fixture 与入口容器由脚本自己回收）。计数见 STATUS §2.2
+  v0.34.0 列；供应商 / 模型、token 与费用只在私有记录。非真实模型步骤 79 PASS / 0 FAIL。
+- **平台缺陷 1 条**（遗留 104，P1，#382）：门 `apply` 与读调用共用 15 s 超时，模型传 `timeoutSeconds:30` 的重启被记
+  `failed` 而实际执行了。修为 `apply` 独立 60 s 预算 + 超时即"结果未知"、交给 stale-executing reaper 幂等重放。
+  复审又记一条同类风险（遗留 105：自动批准的内联执行等待可超过扩展侧 30 s 超时）。
+- **场景设计 2 条**：docker_restart 的两次 `task=none` 不是模型没理解请求——入口 agent 先 inspect 容器、再在图谱里
+  找到上一轮的重启 Task / ActionRequest，判定"已完成、无需重复提交受治理动作"。同一句指令几分钟内重复 10 次时，
+  这是合理的去重。`accept_s2.sh` 第 2 轮起的请求改为注明"第 N 次：新的请求"（第 1 轮原句，保持与历史可比）；
+  v0.13.2 记为"prompt 契约"的三成 `task=none` 很可能同一模式，下一轮回归可验证。
+- **脚本缺陷 1 条**：`demo.sh` q2 与 `accept_s3.sh` 两处按 `identityKey.serviceName==='kernel'` 在 `search` 结果里找
+  kernel 容器，只读默认第一页（50 条）；主机容器增多到 71 个后 kernel 不在第一页。三处加 `limit:200`，demo 重跑全过。
+- 驱动的 RUN 行 `approved=none` 与 `action=executed` 并存不是治理缺口：库里 7 条 ActionRequest 都是
+  `require_approval` 且有人类批准决定，只是驱动没把批准 id 记进 RUN 行。
+
+### D1 设计（2026-10-02）
+
+- **触发**：release-please 用 `GITHUB_TOKEN` 打 tag、建 Release，这类事件不会触发其他工作流——镜像发布作为
+  `release-please.yml` 里依赖 release job 的后续 job，以 `release_created` 为条件；另留 `workflow_dispatch`（输入
+  已有 tag）用于补发历史版本与首次验证。
+- **镜像集合**：与 `image-scan.yml` 同一份平台镜像清单（kernel、agent-host、worker-supervisor、llm-proxy、
+  egress-proxy、caddy、worker-runtime、gatekeeper-docker、gatekeeper-ragflow、gate-host（gatekeeper-base）、
+  collector-host-inventory）。验收夹具（accept-s2 / fake-llm）不发布，仍按需在主机构建——它们只服务维护者验收。
+- **构建参数**：与 `build-images.sh` 同源（`pi.version`、platform-extension 版本、提交、`KERNEL_VERSION`），
+  控制台「pi 运行时」卡片依赖的标签与主机构建一致。
+- **registry 与命名**：GHCR，`ghcr.io/<owner>/nexttime-ai-<service>:vX.Y.Z`（另打 `sha-<短提交>`）；不打 `latest`。
+- **完整性**：build-push 产出 SBOM 与 provenance；cosign keyless 按 digest 签名（身份 = 本仓库的发版工作流）。
+- **主机侧与 compose 的接口不变**：`scripts/pull-images.sh vX.Y.Z` 逐个拉取、校验签名（`cosign verify`，
+  身份钉到本仓库工作流）、再 `docker tag` 成 compose 现有的本地名（`nexttime-ai-<service>`、worker-runtime
+  另打 `:pi-<版本>`），之后 `docker compose up -d --no-build`。worker-supervisor 的镜像白名单、平台设置
+  `activeRuntimeImage`、「pi 运行时」卡片都不需要改；`build-images.sh` 保留为源码构建回退。
+- **公开仓库红线**：CI 从干净检出构建，构建上下文不含 `.env` / `secrets/` / `docs/private/`（`.dockerignore`
+  另有一层）；镜像只含仓库里已公开的源码与依赖。
+
+### D1 实现说明
+
+- `.github/workflows/publish-images.yml`：`workflow_call`（`release-please.yml` 的 `publish-images` job，条件
+  `release_created`）+ `workflow_dispatch`（输入已有 tag）。十一路矩阵、`fail-fast: false`；检出 `refs/tags/<tag>`，
+  构建参数与 `build-images.sh` 同源，`org.opencontainers.image.revision` 取 tag 检出后的 `git rev-parse HEAD`
+  （不是工作流自身的 `github.sha`——补发历史 tag 时两者不同）；build-push `provenance: mode=max` + `sbom: true`；
+  `cosign sign --yes <image>@<digest>`；Trivy 扫已推送的 digest，SARIF 分类 `publish-<service>`，只报告。
+- `scripts/pull-images.sh`：第 0 遍先解析全部本地名（不碰网络），再拉取 → 验签 → 重打 tag 三遍，任一步失败不留下
+  一半重打的状态。本地名取自 `docker compose --profile build-only config --images <service>`——主机实测
+  （Compose 2.40）这条命令会连带打印 depends_on 链上的镜像且顺序不固定（kernel 会带出 postgres 的 pgvector），
+  所以只认恰好一条 `…-<service>` 形式的名字。验签：`ghcr.io/sigstore/cosign/cosign` 钉 digest 的容器，issuer =
+  GitHub Actions OIDC，身份正则钉到 `<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`（被调用的
+  可复用工作流就是 Fulcio 证书里的身份）；worker-runtime 额外核对 `ai.nexttime.pi-version` 标签等于检出的
+  `pi.version`。`--no-verify` 只能显式给出。
+- 本地无 Docker、无 actionlint：工作流与脚本只做了 `sh -n` 和主机上的 `config --images` 实测；第一次真实验证是合入后
+  对 v0.34.0 手动 dispatch `publish-images`。发布失败不影响发版本身——主机退回 `build-images.sh`。
+- ~~待维护者决定：GHCR 新包默认私有~~ 更正（2026-10-02 核实）：由公开仓库的工作流发布的包继承仓库可见性，11 个包
+  从第一次发布起就是公开的、匿名可拉，无需决定也无需改设置。
+- 主机首次 `--pull`（v0.35.0 重新应用）暴露两处脚本缺陷：主机有 root 的 0600 `~/.docker/config.json` 时，
+  `pull-images.sh` 把它挂给以非 root 运行的 cosign 容器 → "permission denied"，每个镜像都验签失败（签名本身与
+  身份正则无误——同一 digest 用精确正则匿名验签通过，证书身份即 `publish-images.yml@refs/heads/main`）；
+  `apply-release.sh` 以管道 `| sed` 判断拉取成败，取到的是 sed 的退出码，失败被当成成功、没有退回源码构建
+  （三遍式设计让验签失败发生在重打 tag 之前，本地镜像未被改动，栈不受影响）。修为匿名优先、失败且有配置时以
+  uid 0 挂配置重试并打印 cosign 报错；拉取退出码直接取自脚本。
+- **R-33 更正（2026-10-02 复审）——签名 job 里不再跑第三方扫描**：原来一个 job 同时持有 `packages: write` 与
+  `id-token: write`，并依次跑 docker login（`GITHUB_TOKEN` 留在 `~/.docker/config.json` 直到 post 步骤）、cosign、
+  `aquasecurity/trivy-action`（`TRIVY_PASSWORD` 就是 `GITHUB_TOKEN`）、`codeql-action/upload-sarif`；其中任何一步
+  被换成恶意提交，都能重推某个发布 tag 并以本工作流身份 keyless 签名，主机 `pull-images.sh` 照样验过。现在拆成两个
+  job：`build-sign`（`contents: read` + `packages: write` + `id-token: write`）只跑检出、Docker 自家的 buildx /
+  login / build-push、sigstore 的 cosign-installer 与 `cosign sign`，签名之后把 `<image>@<digest>` 作为 artifact
+  `digest-<service>` 交出（`actions/upload-artifact`，保留 1 天）；`scan`（`contents: read` +
+  `security-events: write`，无 `packages`、无 `id-token`、不给 Trivy 任何 registry 凭证——包是公开的，匿名拉取）
+  `needs: build-sign`、`if: !cancelled()`，按服务下载 digest（`actions/download-artifact` v8，摘要不符即失败），
+  校验形如 `ghcr.io/*/nexttime-ai-<service>@sha256:*` 后跑 Trivy 并上传 SARIF（分类 `publish-<service>` 不变，仍只
+  报告）；某个服务构建失败时它的扫描跳过，不影响其它。所有 action 仍钉完整提交 SHA（带版本注释）。`build-sign`
+  另拒绝在 `refs/heads/main` 以外运行：从别的分支 dispatch 会用主机验不过的签名覆盖发布 tag。`pull-images.sh`
+  验签从身份正则改为全部精确匹配：issuer、`--certificate-identity`
+  `https://github.com/<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`，外加
+  `--certificate-github-workflow-repository <owner>/<repo>` 与 `--certificate-github-workflow-ref refs/heads/main`
+  ——证书身份是被调用的可复用工作流，这两项是发起运行的那次调用（release-please 在 main 上、或从 main dispatch），
+  于是别的分支或别的仓库以 `…/publish-images.yml@main` 调用它签出的东西也不再通过。已发布的 v0.35–v0.38 都由
+  main 上的 release-please 调用签名，满足新条件。没有在 Docker 自家 action 与 cosign-installer 之外再换成手写 CLI：
+  gha 缓存只对 JS action 暴露运行时令牌，attestation 需要 docker-container builder，这些在 PR 上都无法实跑验证。
+  验证：本地 actionlint 1.7.12（带 shellcheck 0.11.0）对 `publish-images.yml` / `release-please.yml` 无告警，
+  `pull-images.sh` 过 `sh -n` 与 shellcheck；真实发布只在下一次发版发生。
+
+### D2 实现说明
+
+- `scripts/apply-release.sh` 即 v0.20.0 起每次主机应用实际执行的 `/tmp/nt-apply.sh`（不入库、主机重启即丢），步骤与
+  停止规则不变：新鲜度（只报告）→ 发版前 dump → 切 tag → 镜像 → 迁移 dry-run + 应用 → `up` → S3 / S1 / S2 / S4 →
+  `BACKUP_NOW` → 留 3 份发版前 dump；dump / 切 tag / 镜像 / 迁移失败都在 `up` 之前停下。
+- 相对 `/tmp` 版本的改动：`--pull` 走 `pull-images.sh`（拉取或验签失败退回源码构建并记一行 STEP，拉取成功则
+  `up -d --no-build`）；补上此前每次手工执行的 `delete-workspaces-matching.sh --expired --yes`（`NEXTTIME_DATA` 从
+  `.env` 导出——该脚本缺它会拒绝运行）；日志改到 `${NEXTTIME_DATA}/drills/`（`/tmp` 重启即丢）；验收失败计数，末行
+  `RESULT ok` / `RESULT acceptance-failures=<n>` / `RESULT failed-at=<step>`；启动时自我复制到临时文件再 `exec`
+  （切 tag 会改写脚本自身，同 `drill-upgrade.sh`）。
+- 验收：v0.35.0 主机用入库脚本应用（源码构建）通过；v0.35.1 用 `--pull` 通过——之后主机应用的常规方式是 `--pull`
+  （包本就公开），源码构建是自动回退。
+- **R-71 更正（2026-10-02 复审，L9-6 / L10-11）——失败后检出恢复到原 ref，迁移失败列出已提交的迁移文件（#452）**：原来 `apply-release.sh` 在检出之后、`up` 之前停下时，主机检出留在新 tag 上、也没有任何地方记下原 ref，之后手工的 `docker compose …` 会用新 compose 文件操作旧栈；迁移失败时也不说哪些迁移文件已经提交。现在：切 tag 之前日志写一行 `STEP checkout-from <ref> (<describe>)`；检出之后、`up` 之前的失败（检出、secrets、构建、迁移）由 `fail_before_up` 把检出切回原 ref，日志写 `STEP checkout restored to …`，git 切不回去时打印要手工执行的确切 `git checkout`。迁移失败时，切回之前先对比运行前后的 `schema_migrations`，对每个已提交的迁移打印 `STEP migrate committed <module>/<version>`（每个文件一个事务），并打印本次运行的发版前 dump 作为回滚点。**`up` 失败不恢复**：此时可能已有容器跑着新 tag，检出留在 tag 上，按 `release.md` §5 手工回滚，`checkout-from` 那行就是原 ref。重跑行为不变；检出已恢复，下一次运行的 dump 又是真正的 `nexttime-pre-…` 回滚点。`release.md` §3 同步改写，删去"检出已经在新 tag 上"那句。该脚本没有 CI 套件；本机对临时 git 仓库（tag `v0.1.0` / `v0.2.0`、origin、stub `docker`）演练：迁移在提交 `core/39` 之后失败 → 日志依次出现 `checkout-from … (v0.1.0)`、`migrate committed core/39`、回滚 dump、`checkout restored to v0.1.0`、`FAIL migrate`、`RESULT failed-at=migrate`，HEAD 回到 `v0.1.0`；迁移成功 → `migrate ok`、`up`、`STEP done`、`RESULT ok`，HEAD 在 `v0.2.0`；`sh -n` 通过。首次真实使用是下一次主机应用（v0.41.0，目标 tag 自己的那份脚本）。
+
+- **收尾波次（2026-10-04）——主机镜像按"最近两个发版"留存，不再无限堆积（#465）**：主机原来保留每个发版的全部镜像——到 v0.41.0 已有八个发版 × 十一个已发布镜像（每个发版约 2.8 GB，其中 worker-runtime 1.2 GB）外加旧 worker-runtime 回滚 tag，共 58 GB、其中 42.6 GB 可回收，磁盘已用 86 %，没有任何东西清理旧镜像。新增 `scripts/prune-images.sh`（POSIX sh，在主机检出根目录运行；与其他清扫脚本一致，缺省演练，加 `--yes` 才删），`scripts/apply-release.sh` 第 8 步在验收之后以 `--keep 2 --yes` 运行并记一行 `STEP images-retention`。范围只限能证明属于本项目的镜像：仓库 `nexttime-ai-*` 与 `ghcr.io/<owner>/nexttime-ai-*`，以及带本项目 `ai.nexttime.built-from` 标签的悬空镜像；别的项目的镜像、无标签悬空镜像、构建缓存只报告、绝不动。始终保留：任何容器（运行或停止）在用的镜像；带 `latest` tag 的镜像（compose 名与验收夹具——后者仅在缺失时重建）；最新 N 个发版版本（`vX.Y.Z`，缺省 2：当前发版加 release.md §5 的回滚目标）以及检出自身的 tag（主机回滚到更旧版本时）；`activeRuntimeImage` 与其历史里前一个不同的值（`rollback_runtime_image` 切回的就是它，见 pi-upgrade.md）。其余范围内的 tag 且镜像不被保留的才删，随后删本项目标签的、无容器使用的悬空镜像；一个镜像只在最后一个 tag 被删时才真正移除。策略取**按数量**（最近两个发版）而非按年龄：发版节奏不规则（两天出过六个版本，也有隔几周才发一版），按年龄会在慢的时期删掉回滚目标、在忙的时期留太多。验证：两个脚本 `sh -n` 通过；主机演练只读，保留 v0.40.0 与 v0.41.0、50 个镜像 id 受保护，预计移除 66 个旧发版 tag（v0.35.0–v0.39.0 × 11 个服务）、`nexttime-ai-worker-runtime:pi-0.87.1` 与 9 个带标签的悬空镜像，约 32 GB；`pre-v0.27.0` 因有容器在用而保留。合入后由主会话在主机上跑一次 `--yes`，结果记 `docs/private`。
+
+### D4 实现说明
+
+- `.github/workflows/reversibility-probe.yml`：服务容器 Postgres（与 CI `test` 同镜像同库）→ 检出 HEAD 与 BASE 两份 →
+  列出 HEAD 相对 BASE 新增的迁移、以及 BASE 已发布后又被改过的迁移文件（两者都没有就判"无 schema 差异"直接结束）→
+  HEAD 侧 `pnpm --filter "@nexttime/kernel..." build` 后用自己的 `dist/cli/migrate.js` 把库迁到 HEAD schema → BASE 侧
+  装依赖后跑 `pnpm --filter @nexttime/kernel test`，结论写进 step summary。
+- 为什么这就是 §6 的问题：kernel 是唯一直接连 Postgres 的服务；BASE 的 `runMigrations`（`planMigrations`）只遍历自己
+  知道的文件，库里更新的迁移记录被忽略，被改过的旧迁移报校验和不一致；少数套件自建私有库从头迁移，那是 BASE 配
+  BASE schema，无信号但不污染共享库（核对过没有任何测试 drop 共享库或改 `search_path`）。
+- 触发：改动 `packages/kernel/migrations/**` 的 PR（BASE = 最新发布 tag）；`workflow_dispatch` 补历史。非必过检查。
+- 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
+- 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
+- 声明式有意改变（#482，2026-10-08 合入）：此前探针红只能在 PR 里口头解释。现在 BASE 套件以 JSON reporter 运行，`scripts/reversibility-triage.mjs` 给结论：有意改变旧断言的迁移在 `packages/kernel/migrations/reversibility-deltas.json` 声明（迁移、被改变的 BASE 测试、HEAD 里替代它的新断言、`release.md` §6 依据）；只有 HEAD 新增的迁移激活声明；声明的测试必须真的失败，替代断言必须是本 PR 新增（不在 BASE 结果里）且在 HEAD 通过，被声明的 BASE 测试文件必须在 HEAD 有改动；报告的失败数、BASE 退出码、至少一个通过、跳过不超过 5% 必须对得上；文件级错误与未处理错误都算失败。未声明的失败照旧红，没有整体跳过。单元测试 `scripts/reversibility-triage.test.mjs` 在 CI `quality` 里跑。
