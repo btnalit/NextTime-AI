@@ -5,6 +5,7 @@ import {
   formatCountedRow,
   formatLiveApiKeyRow,
   formatScrubReport,
+  formatTailUnprovenRow,
   parseScrubRawSecretsArgs,
 } from './scrub-raw-secrets.js';
 
@@ -88,6 +89,16 @@ describe('formatScrubReport', () => {
         examples: [{ workspaceId: 'ws-1', id: 'system-2' }],
       },
     },
+    tailUnproven: {
+      turnReports: { rows: 3, examples: [{ workspaceId: 'ws-1', id: 'turn-2' }] },
+      decisions: { rows: 0, examples: [] },
+      toolCallRecords: { rows: 0, examples: [] },
+      taskInputs: { rows: 0, examples: [] },
+      factProperties: { rows: 0, examples: [] },
+      objectProperties: { rows: 0, examples: [] },
+      auditResults: { rows: 0, examples: [] },
+      auditPayloads: { rows: 1, examples: [{ workspaceId: null, id: 'audit-3' }] },
+    },
     liveApiKeys: {
       tables: 80,
       rows: 900,
@@ -104,7 +115,17 @@ describe('formatScrubReport', () => {
   it('ends a dry run with the one-line summary apply-release echoes, naming rows by id only', () => {
     const lines = formatScrubReport(result(false), undefined);
     expect(lines.at(-1)).toBe(
-      'scrub-raw-secrets: dry-run would-rewrite=10 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 auditPayloads=1 gateCallObservations=1 turnReportKeyShapes=1 decisionKeyShapes=0 toolCallRecordKeyShapes=0 connectedSystemDuplicates=1 liveApiKeys=2 batches=7',
+      'scrub-raw-secrets: dry-run would-rewrite=10 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 auditPayloads=1 gateCallObservations=1 turnReportKeyShapes=1 decisionKeyShapes=0 toolCallRecordKeyShapes=0 connectedSystemDuplicates=1 tailUnproven=4 liveApiKeys=2 batches=7',
+    );
+    // «收尾未证明» apart, each category with its own ids: a row to look at, not a secret count.
+    expect(lines).toContain(
+      'turnReports tail unproven (a row to look at, not a secret count; not rewritten): rows=3 ids=ws-1/turn-2,… (all 3: the "tail-unproven turnReports" lines)',
+    );
+    expect(lines).toContain(
+      'auditPayloads tail unproven (a row to look at, not a secret count; not rewritten): rows=1 ids=audit-3',
+    );
+    expect(lines).toContain(
+      'decisions tail unproven (a row to look at, not a secret count; not rewritten): rows=0',
     );
     expect(lines).toContain('connectedSystems: examined=10 would-rewrite=2 values=3');
     expect(lines).toContain(
@@ -175,6 +196,12 @@ describe('formatScrubReport', () => {
   it('prints each counted row by id, one line per row', () => {
     expect(formatCountedRow('taskInputs', { workspaceId: 'ws-1', id: 'task-1' })).toBe(
       'counted taskInputs ws-1/task-1',
+    );
+    expect(formatTailUnprovenRow('decisions', { workspaceId: 'ws-1', id: 'decision-1' })).toBe(
+      'tail-unproven decisions ws-1/decision-1',
+    );
+    expect(formatTailUnprovenRow('auditPayloads', { workspaceId: null, id: 'audit-3' })).toBe(
+      'tail-unproven auditPayloads audit-3',
     );
     expect(
       formatCountedRow('gateInstanceAddresses', { workspaceId: null, id: 'billing-api' }),

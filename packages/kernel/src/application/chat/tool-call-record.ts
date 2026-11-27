@@ -19,6 +19,7 @@ import {
   scrubSecretValues,
   scrubbedCut,
   secretFieldLiterals,
+  tailChecked,
 } from '../../governance/redaction/index.js';
 
 /**
@@ -179,6 +180,20 @@ export function rescrubStoredToolCallResult(
     },
     redactedValues,
   };
+}
+
+/** Whether the tail check alone (`tailChecked`, `docs/redaction-boundary-design-2026-11-27.md`
+ *  §4.2) would hide more in a stored record's result preview, read the way the record is read: its
+ *  escaped JSON strings decoded, then the rest of the text as it is (`rescrubStoredToolCallResult`).
+ *  For a row that rewrite leaves as it is, this is «收尾未证明» (`cli/scrub-raw-secrets.ts`'s
+ *  `tailUnproven`): the text after a mask does not pass the check — a secret left over, or only a
+ *  value an earlier release hid in part. Never a rewrite (design D3). */
+export function storedToolCallResultTailUnproven(content: Record<string, unknown>): boolean {
+  const result = content.result as { text?: unknown } | null | undefined;
+  if (content.kind !== TOOL_CALL_MESSAGE_KIND || typeof result?.text !== 'string') return false;
+  const name = typeof content.name === 'string' ? content.name : null;
+  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name), tailChecked);
+  return scrubOutsideSpans(fields.value, fields.decodedSpans, tailChecked).value !== result.text;
 }
 
 /** A runtime `message`'s content with secrets scrubbed from its string fields (only the values;

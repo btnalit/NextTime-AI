@@ -58,6 +58,8 @@ export type {
   RawSecretCategoryCounts,
   ScrubRawSecretsInput,
   ScrubRawSecretsResult,
+  TailUnprovenCategory,
+  TailUnprovenCounts,
 } from './scrub-raw-secrets.js';
 export {
   COUNTED_CATEGORIES,
@@ -65,6 +67,7 @@ export {
   RAW_SECRET_SCRUB_BATCH_SIZE,
   REWRITTEN_CATEGORIES,
   RawSecretScrubFailedError,
+  TAIL_UNPROVEN_CATEGORIES,
   scrubRawSecrets,
 } from './scrub-raw-secrets.js';
 export type { SystemPromptParts } from './instance-instructions.js';

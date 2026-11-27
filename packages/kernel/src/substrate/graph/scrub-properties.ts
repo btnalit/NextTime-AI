@@ -11,7 +11,11 @@ import { redactSecrets } from '../redaction/index.js';
  * observed facts, an ingest — gets it, including one added later. Idempotent: a second pass
  * replaces nothing.
  */
-export function scrubGraphProperties(properties: Record<string, unknown>): {
+export function scrubGraphProperties(
+  properties: Record<string, unknown>,
+  /** `RedactSecretsOptions.tailCheck`: false only for the scrub report. */
+  options: { readonly tailCheck?: boolean } = {},
+): {
   readonly properties: Record<string, unknown>;
   readonly redactedValues: number;
 } {
@@ -21,6 +25,7 @@ export function scrubGraphProperties(properties: Record<string, unknown>): {
     isSecretKey: namesASecretField,
     schemaLiterals: true,
     maxNodes: Number.POSITIVE_INFINITY,
+    ...options,
   });
   return {
     properties: scrubbed.value as Record<string, unknown>,

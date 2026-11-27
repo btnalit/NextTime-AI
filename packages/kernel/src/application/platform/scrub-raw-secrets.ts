@@ -17,11 +17,15 @@ import {
   redactSuspectedSecrets,
   repairSplitQuotedMasks,
   scrubSecretValues,
+  tailChecked,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
-import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
+import {
+  rescrubStoredToolCallResult,
+  storedToolCallResultTailUnproven,
+} from '../chat/tool-call-record.js';
 import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
 import { hashApiKey } from '../gateway/auth.js';
 import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate-observation.js';
@@ -118,6 +122,23 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
  * kept as `examples` — the sample the audit row carries, which must stay bounded.
  *
+ * **Tail unproven (`tailUnproven`, «收尾未证明»).** The rows above are found by the value rules as
+ * they read a stored row (`tailCheck: false` where the reading is the write path's), the count
+ * kept as it was: a row is counted, or rewritten, when that reading changes it — «密钥残留». Of
+ * the rows that reading leaves as they are, in the three rewritten categories from agent text and
+ * the five counted ones the value rules read (`TAIL_UNPROVEN_CATEGORIES`), those the tail check
+ * would hide more in (`docs/redaction-boundary-design-2026-11-27.md` §4.2–§4.3; class legacy 962)
+ * are counted apart, with their own ids and callback (`onTailUnproven`), so the few rows to look
+ * at are not lost among them: the text after a mask there does not pass the check. That is not a
+ * secret count — a value an earlier release hid only in part with harmless code after it
+ * (`TOKEN = [redacted]'hex');`) is counted as `TOKEN="[redacted]"<secret>y` is, and the check
+ * cannot tell them apart — so nothing is rewritten for it (design D3): the counts of the first
+ * host upgrade decide whether a later release does. The three rewritten categories are read by the
+ * check alone (`tailChecked`, a tool-call record's escaped JSON strings decoded as the rewrite
+ * reads them, `storedToolCallResultTailUnproven`); the five counted ones by their reading with the
+ * check (the write path's default). `gateCallObservations` is not split: a row is counted there
+ * by the rule a raw copy is now kept by, the check included (`gatePayloadKeptRaw`).
+ *
  * **Keys still issued (`liveApiKeys`).** Before anything is rewritten, every table in the `public`
  * schema is read once more, each text, JSON and text-array column of every row (but the two
  * credential hashes, `principals.api_key_hash` and `users.password_hash`): a person's chat message,
@@ -188,6 +209,20 @@ export const COUNTED_CATEGORIES = [
   'connectedSystemDuplicates',
 ] as const;
 export type CountedRawSecretCategory = (typeof COUNTED_CATEGORIES)[number];
+/** The categories whose rows the reading above leaves as they are are read with the tail check too
+ *  («收尾未证明», `tailUnproven`): the three rewritten from agent text and the five counted ones the
+ *  value rules read. */
+export const TAIL_UNPROVEN_CATEGORIES = [
+  'turnReports',
+  'decisions',
+  'toolCallRecords',
+  'taskInputs',
+  'factProperties',
+  'objectProperties',
+  'auditResults',
+  'auditPayloads',
+] as const;
+export type TailUnprovenCategory = (typeof TAIL_UNPROVEN_CATEGORIES)[number];
 export type RawSecretCategory = (typeof REWRITTEN_CATEGORIES)[number] | CountedRawSecretCategory;
 
 /** A counted row, by id only. */
@@ -206,6 +241,14 @@ export interface RawSecretCategoryCounts {
   /** Values hidden (or that would be) — rewritten categories only. */
   values: number;
   /** The first `MAX_EXAMPLES` affected rows — counted categories only. */
+  examples: CountedRawSecretRow[];
+}
+
+/** «收尾未证明» in one category: rows the reading of `RawSecretCategoryCounts` leaves as they are and
+ *  the tail check would hide more in — a row to look at, not a secret found. */
+export interface TailUnprovenCounts {
+  rows: number;
+  /** The first `MAX_EXAMPLES` (`onTailUnproven` gets all). */
   examples: CountedRawSecretRow[];
 }
 
@@ -247,6 +290,8 @@ export interface ScrubRawSecretsInput {
   readonly onCounted?: (category: CountedRawSecretCategory, row: CountedRawSecretRow) => void;
   /** Called with every row found holding a key still issued, uncapped, once its window is read. */
   readonly onLiveApiKey?: (row: LiveApiKeyRow) => void;
+  /** Called with every row «收尾未证明» (`tailUnproven`), uncapped, once its window is read. */
+  readonly onTailUnproven?: (category: TailUnprovenCategory, row: CountedRawSecretRow) => void;
 }
 
 export interface ScrubRawSecretsResult {
@@ -254,6 +299,8 @@ export interface ScrubRawSecretsResult {
   readonly batchSize: number;
   readonly batches: number;
   readonly categories: Readonly<Record<RawSecretCategory, RawSecretCategoryCounts>>;
+  /** «收尾未证明», apart from `categories` (theirs is «密钥残留»). */
+  readonly tailUnproven: Readonly<Record<TailUnprovenCategory, TailUnprovenCounts>>;
   readonly liveApiKeys: Readonly<LiveApiKeyCounts>;
   readonly auditRecordId: string | null;
 }
@@ -281,10 +328,20 @@ interface ScannedRow {
   readonly id: string;
 }
 
-/** What one row needs: nothing (`null`), a count, or a conditional rewrite. */
+/** What one row needs: nothing (`null`), a count, or a conditional rewrite — or, where nothing
+ *  else is found, a count apart (`tailUnproven`). */
 interface Finding {
   readonly values: number;
   readonly rewrite?: { readonly sql: string; readonly params: readonly unknown[] };
+  readonly tailUnproven?: true;
+}
+
+/** «收尾未证明»: nothing to rewrite or count, a row the tail check would hide more in. */
+const TAIL_UNPROVEN: Finding = { values: 0, tailUnproven: true };
+
+/** Whether the tail check alone would hide more in any of `texts` (non-strings skipped). */
+function tailUnproven(texts: readonly unknown[]): boolean {
+  return texts.some((text) => typeof text === 'string' && tailChecked(text).value !== text);
 }
 
 interface Scan {
@@ -575,7 +632,11 @@ const SCANS: readonly Scan[] = [
         }
         hidden += scrubbed.hidden;
       }
-      if (Object.keys(patch).length === 0) return null;
+      if (Object.keys(patch).length === 0) {
+        return tailUnproven([metadata.summary, ...(Array.isArray(decisions) ? decisions : [])])
+          ? TAIL_UNPROVEN
+          : null;
+      }
       return {
         values: hidden,
         rewrite: {
@@ -597,7 +658,7 @@ const SCANS: readonly Scan[] = [
     inspect: (row) => {
       const summary = (row as ScannedRow & { summary: string }).summary;
       const scrubbed = rescrubStoredText(summary);
-      if (scrubbed.value === summary) return null;
+      if (scrubbed.value === summary) return tailUnproven([summary]) ? TAIL_UNPROVEN : null;
       return {
         values: scrubbed.redactedValues,
         rewrite: {
@@ -614,7 +675,9 @@ const SCANS: readonly Scan[] = [
     inspect: (row) => {
       const content = (row as ScannedRow & { content: Record<string, unknown> }).content;
       const scrubbed = rescrubStoredToolCallResult(content);
-      if (scrubbed.value === content) return null;
+      if (scrubbed.value === content) {
+        return storedToolCallResultTailUnproven(content) ? TAIL_UNPROVEN : null;
+      }
       return {
         values: scrubbed.redactedValues,
         rewrite: {
@@ -776,10 +839,13 @@ const SCANS: readonly Scan[] = [
     window: workspaceKeyset('tasks', 'workspace_id, id, input', 'input is not null'),
     inspect: (row) => {
       const input = (row as ScannedRow & { input: unknown }).input;
-      const masked = redactSuspectedSecrets(input, { secretFields: true });
-      return JSON.stringify(masked.value) === JSON.stringify(input)
-        ? null
-        : { values: masked.count };
+      const changes = (tailCheck: boolean) => {
+        const masked = redactSuspectedSecrets(input, { secretFields: true, tailCheck });
+        return JSON.stringify(masked.value) === JSON.stringify(input) ? null : masked.count;
+      };
+      const count = changes(false);
+      if (count !== null) return { values: count };
+      return changes(true) === null ? null : TAIL_UNPROVEN;
     },
   },
   {
@@ -844,11 +910,10 @@ const SCANS: readonly Scan[] = [
   {
     category: 'factProperties',
     window: workspaceKeyset('links', 'workspace_id, id, properties', `properties <> '{}'::jsonb`),
-    inspect: (row) => {
-      const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
-      const { redactedValues } = scrubGraphProperties(properties);
-      return redactedValues > 0 ? { values: redactedValues } : null;
-    },
+    inspect: (row) =>
+      graphPropertiesFinding(
+        (row as ScannedRow & { properties: Record<string, unknown> }).properties,
+      ),
   },
   {
     category: 'objectProperties',
@@ -857,11 +922,10 @@ const SCANS: readonly Scan[] = [
       'workspace_id, id, properties',
       `properties <> '{}'::jsonb and object_type not in (${KERNEL_AUTHORED_OBJECT_TYPES.map((type) => `'${type}'`).join(', ')})`,
     ),
-    inspect: (row) => {
-      const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
-      const { redactedValues } = scrubGraphProperties(properties);
-      return redactedValues > 0 ? { values: redactedValues } : null;
-    },
+    inspect: (row) =>
+      graphPropertiesFinding(
+        (row as ScannedRow & { properties: Record<string, unknown> }).properties,
+      ),
   },
   {
     category: 'auditResults',
@@ -886,18 +950,23 @@ const SCANS: readonly Scan[] = [
         params: Record<string, unknown> | null;
       };
       const requestParams = params ?? {};
+      let hides: (tailCheck: boolean) => boolean;
       if (action === 'action_request.complete') {
         const metadata = payload.resultMetadata;
         if (metadata === null || typeof metadata !== 'object') return null;
-        const now = resultAuditFields(metadata as Record<string, unknown>, requestParams);
-        return JSON.stringify(now.resultMetadata) === JSON.stringify(metadata)
-          ? null
-          : { values: 1 };
+        hides = (tailCheck) =>
+          JSON.stringify(
+            resultAuditFields(metadata as Record<string, unknown>, requestParams, { tailCheck })
+              .resultMetadata,
+          ) !== JSON.stringify(metadata);
+      } else {
+        const reason = payload.reason;
+        if (typeof reason !== 'string') return null;
+        hides = (tailCheck) =>
+          reasonAuditFields(reason, requestParams, { tailCheck }).reason !== reason;
       }
-      if (typeof payload.reason !== 'string') return null;
-      return reasonAuditFields(payload.reason, requestParams).reason === payload.reason
-        ? null
-        : { values: 1 };
+      if (hides(false)) return { values: 1 };
+      return hides(true) ? TAIL_UNPROVEN : null;
     },
   },
   {
@@ -912,8 +981,10 @@ const SCANS: readonly Scan[] = [
         )
       ).rows,
     inspect: (row) => {
-      const { count } = findSuspectedSecrets((row as ScannedRow & { payload: unknown }).payload);
-      return count > 0 ? { values: count } : null;
+      const payload = (row as ScannedRow & { payload: unknown }).payload;
+      const { count } = findSuspectedSecrets(payload, { tailCheck: false });
+      if (count > 0) return { values: count };
+      return findSuspectedSecrets(payload).count > 0 ? TAIL_UNPROVEN : null;
     },
   },
   {
@@ -945,6 +1016,16 @@ const SCANS: readonly Scan[] = [
   },
 ];
 
+/** A Fact's or an Object's properties: counted as the graph store's value rules would now scrub
+ *  them, else «收尾未证明» where its reading with the tail check would. */
+function graphPropertiesFinding(properties: Record<string, unknown>): Finding | null {
+  const { redactedValues } = scrubGraphProperties(properties, { tailCheck: false });
+  if (redactedValues > 0) return { values: redactedValues };
+  return scrubGraphProperties(properties).redactedValues > 0 ? TAIL_UNPROVEN : null;
+}
+
+const TAIL_UNPROVEN_SET: ReadonlySet<RawSecretCategory> = new Set(TAIL_UNPROVEN_CATEGORIES);
+
 function emptyCounts(): RawSecretCategoryCounts {
   return { examined: 0, affected: 0, skipped: 0, values: 0, examples: [] };
 }
@@ -969,6 +1050,12 @@ export async function scrubRawSecrets(
     [...REWRITTEN_CATEGORIES, ...COUNTED_CATEGORIES].map((name) => [name, emptyCounts()]),
   ) as Record<RawSecretCategory, RawSecretCategoryCounts>;
   const rewrites = new Set<RawSecretCategory>(REWRITTEN_CATEGORIES);
+  const tailUnprovenCounts = Object.fromEntries(
+    TAIL_UNPROVEN_CATEGORIES.map((name): [TailUnprovenCategory, TailUnprovenCounts] => [
+      name,
+      { rows: 0, examples: [] },
+    ]),
+  ) as Record<TailUnprovenCategory, TailUnprovenCounts>;
   const liveApiKeys: LiveApiKeyCounts = { tables: 0, rows: 0, found: 0, keys: 0, examples: [] };
   const livePrincipals = new Set<string>();
   let batches = 0;
@@ -977,6 +1064,7 @@ export async function scrubRawSecrets(
     batchSize,
     batches,
     categories,
+    tailUnproven: tailUnprovenCounts,
     liveApiKeys,
     auditRecordId,
   });
@@ -1045,9 +1133,17 @@ export async function scrubRawSecrets(
           const last = rows.at(-1);
           if (!last) return null;
           const window = { ...emptyCounts(), examined: rows.length };
+          const unproven: CountedRawSecretRow[] = [];
           for (const row of rows) {
             const finding = scan.inspect(row);
             if (finding === null) continue;
+            if (finding.tailUnproven === true) {
+              if (!TAIL_UNPROVEN_SET.has(scan.category)) {
+                throw new Error(`scrub-raw-secrets: ${scan.category} has no tail-unproven count`);
+              }
+              unproven.push({ workspaceId: row.workspace_id, id: row.id });
+              continue;
+            }
             window.affected += 1;
             if (!rewrites.has(scan.category)) {
               window.examples.push({ workspaceId: row.workspace_id, id: row.id });
@@ -1061,6 +1157,7 @@ export async function scrubRawSecrets(
           }
           return {
             window,
+            unproven,
             cursor: { workspaceId: last.workspace_id ?? NIL_UUID, id: last.id },
             done: rows.length < batchSize,
           };
@@ -1076,6 +1173,13 @@ export async function scrubRawSecrets(
         for (const example of outcome.window.examples) {
           input.onCounted?.(scan.category as CountedRawSecretCategory, example);
           if (counts.examples.length < MAX_EXAMPLES) counts.examples.push(example);
+        }
+        for (const example of outcome.unproven) {
+          const category = scan.category as TailUnprovenCategory;
+          const unproven = tailUnprovenCounts[category];
+          input.onTailUnproven?.(category, example);
+          unproven.rows += 1;
+          if (unproven.examples.length < MAX_EXAMPLES) unproven.examples.push(example);
         }
         if (outcome.done) break;
       }
@@ -1107,6 +1211,7 @@ export async function scrubRawSecrets(
         batches,
         // Counts and ids only — never a value, never a key's hash.
         categories,
+        tailUnproven: tailUnprovenCounts,
         liveApiKeys,
       },
     }),

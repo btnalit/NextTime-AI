@@ -49,6 +49,9 @@ export interface SuspectedSecretsOptions {
   /** Also count every secret value under a field whose name names a secret — for call
    *  arguments, which fill fields. Leave off for a document, which declares them. */
   readonly secretFields?: boolean;
+  /** `RedactSecretsOptions.tailCheck`: false only for the scrub report's reading of a stored row
+   *  without the tail check. */
+  readonly tailCheck?: boolean;
 }
 
 /** At most this many paths go on the wire — the count stays exact. */
@@ -84,7 +87,7 @@ export interface SuspectedSecrets {
  *  stored draft), so the walk is unbounded. */
 function detect(
   value: unknown,
-  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'patterns'>,
+  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'patterns' | 'tailCheck'>,
 ): SuspectedSecrets & { readonly value: unknown } {
   const paths: string[] = [];
   const redacted = redactSecrets(value, {
@@ -100,10 +103,11 @@ function detect(
 
 function suspectedSecretsRule(
   options: SuspectedSecretsOptions,
-): Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals'> {
+): Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'tailCheck'> {
   return {
     ...(options.secretFields === true ? { isSecretKey: namesASecretField } : {}),
     schemaLiterals: true,
+    ...(options.tailCheck !== undefined ? { tailCheck: options.tailCheck } : {}),
   };
 }
 
@@ -152,8 +156,14 @@ export function redactSuspectedSecretsUpTo(
  *  under the same rule as the `params` copy (`redactSuspectedSecrets`, call-argument rule). Pass
  *  only those fields, never a whole payload: a payload's own fields (`credentialReview`,
  *  `suspectedSecretValues`) are named after secrets and would be replaced. */
-export function redactedForAudit(fields: Record<string, unknown>): Record<string, unknown> {
-  return redactSuspectedSecrets(fields, { secretFields: true }).value as Record<string, unknown>;
+export function redactedForAudit(
+  fields: Record<string, unknown>,
+  options: Pick<SuspectedSecretsOptions, 'tailCheck'> = {},
+): Record<string, unknown> {
+  return redactSuspectedSecrets(fields, { ...options, secretFields: true }).value as Record<
+    string,
+    unknown
+  >;
 }
 
 /** Only the values that are almost certainly a credential themselves, whatever field holds them
