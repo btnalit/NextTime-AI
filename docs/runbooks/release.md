@@ -716,6 +716,21 @@ Alpine 源——这是验收仍剩的出网点（遗留 139）。拉取或验签
 - **回滚**（见 §5，没有迁移）：只回退代码。回滚后回显的凭据又跟着结果交回。
 - 下一次主机升级的提示要带上本节。
 
+### 3.223 docker 门的列表只回摘要，labels 只在 `container.inspect` 回（遗留 966，0.70.1 之后的下一版）
+
+> 主机步骤：无；维护者本人：否
+
+没有迁移。
+
+- **以前**：`containers.list`、`compose.ls`、`compose.up` / `compose.down`（结果和 simulate）、`container.restart`（结果和 simulate）对每个容器都回整套 labels。compose 起的容器一个就有十几条（配置哈希、镜像摘要、compose 文件的路径和工作目录、镜像自带的 OCI 标签），十几个容器的列表有几万字符，超过 Worker 看得到的工具结果上限（16,000 字符）被从头截断，之后每次模型调用都把它重读一遍。v0.70.1 主机试验工作区实测：一次常规容器排查 34 秒耗尽预算，只调 `containers.list` 的一次只看到 18 个容器里的 14 个。
+- **现在**：除 `container.inspect` 外，每个 Operation 对每个容器只回 `id`、`name`、`image`、`state`、`status` 和 compose 的 `project`、`service`（容器没有这个 label 就不带这个键）；`compose.ls` 列在项目下的容器不再重复写 `project`。一个容器的 labels 用 `container.inspect` 读。内核按 `result_mapping` 写的观察事实（name、image、state、status）和 Container 对象的标识都不变。
+- **载荷预算**：`gatekeepers/docker/src/payload-budget.test.ts` 用 40 个 compose 容器的夹具（字段按真实长度，每个容器 18 条 labels）卡住列表类结果：每个容器不超过 320 个字符的紧凑 JSON，现在给模型的带缩进形式也要在 16,000 字符以下。实测 `containers.list` 11,845 字符（带缩进 13,766），以前的形状 56,858。以后门加字段把它撞破时，字段放进 `container.inspect`，或在同一个 PR 里写明理由调高预算。
+- **Operation 描述**：`containers.list`、`compose.ls`、`container.inspect` 的描述写明各回什么、哪个参数能缩小范围。描述不在 Operation 定义摘要里，也不算要复核的清单变化，所以门重启后直接生效，不会出现 `definition_mismatch`，也不需要 `confirm_gate_manifest`。已经发布的 Operation 行存的是发布时的描述，仍是旧文字，要换就在目录里改。
+- **不在这一版**：给模型的 JSON 不缩进，归遗留 967 的第一阶段（与按项截断一起改 `truncateToolResult`）；列表类的过滤与分页参数要改 `params_schema`，主机上要确认一次清单，和下一次 docker 清单改动合在一起做。
+- **升级影响**：没有需要手工执行的步骤，`gatekeeper-docker` 随 `docker compose up -d --no-build` 换成新镜像。升级前已经提交、还没批的 `container.restart`、`compose.up`、`compose.down` 审批，simulate 里仍是带 labels 的旧形状，批准后照常执行。核对：调一次 `containers.list`（比如让入口智能体列一次容器），结果里没有 `labels` 键，compose 起的容器每项有 `project`、`service`。
+- **回滚**（见 §5，没有迁移）：只回退代码，列表又带回全部 labels。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

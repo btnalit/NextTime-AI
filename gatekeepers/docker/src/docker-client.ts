@@ -34,10 +34,13 @@ export interface ContainerSummary {
   readonly state: string;
   /** A human-readable status string (`Up 3 hours`, `Exited (0) 2 minutes ago`, ...). */
   readonly status: string;
+  /** Every label. Read inside this gate (the agent-container check, compose grouping), and returned
+   *  as is only by `container.inspect` (legacy 966, `transport.ts` `listItemOf`). */
   readonly labels: Readonly<Record<string, string>>;
 }
 
-const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
+export const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
+export const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
 
 export interface ListContainersOptions {
   /** `false` restricts to running containers only; default (and docker ps's own default without

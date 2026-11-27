@@ -102,14 +102,7 @@ describe('docker gate transport (via GatekeeperBase, fake dockerode)', () => {
     expect(result.description).toContain('restart container "web"');
     expect(result.detail).toEqual({
       containers: [
-        {
-          id: 'c1',
-          name: 'web',
-          image: 'nginx:latest',
-          state: 'running',
-          status: 'Up 1 minute',
-          labels: {},
-        },
+        { id: 'c1', name: 'web', image: 'nginx:latest', state: 'running', status: 'Up 1 minute' },
       ],
     });
   });
@@ -223,6 +216,114 @@ describe('docker gate transport (via GatekeeperBase, fake dockerode)', () => {
     if (!first) throw new Error('manifest.json is empty');
     const bogus: Operation = { ...first, name: 'nonexistent.op' };
     await expect(transport.invoke(bogus, {}, {})).rejects.toThrow(/unknown operation/);
+  });
+});
+
+/**
+ * Legacy 966: every Operation but `container.inspect` returns each container as a list item — id,
+ * name, image, state, status, and its compose project and service — never its labels; one
+ * container's labels are what `container.inspect` is for. The facts the kernel writes from the
+ * result (`result_mapping`) are the same as before.
+ */
+describe('docker gate: labels only in container.inspect (legacy 966)', () => {
+  const LABELS = {
+    'com.docker.compose.project': 'app',
+    'com.docker.compose.service': 'web',
+    'com.docker.compose.config-hash': 'f'.repeat(64),
+    'com.docker.compose.project.working_dir': '/srv/app',
+    'org.opencontainers.image.revision': 'a'.repeat(40),
+  };
+  const WEB: FakeContainerSeed = { id: 'c1', name: 'app-web-1', image: 'app:1', labels: LABELS };
+  const DB: FakeContainerSeed = {
+    id: 'c2',
+    name: 'app-db-1',
+    image: 'postgres:17',
+    running: false,
+    labels: { ...LABELS, 'com.docker.compose.service': 'db' },
+  };
+  const LOOSE: FakeContainerSeed = { id: 'c3', name: 'scratch', image: 'busybox', labels: {} };
+  const ITEM_KEYS = ['id', 'image', 'name', 'project', 'service', 'state', 'status'];
+
+  const webItem = {
+    id: 'c1',
+    name: 'app-web-1',
+    image: 'app:1',
+    state: 'running',
+    status: 'Up 1 minute',
+    project: 'app',
+    service: 'web',
+  };
+
+  it('containers.list: the compose project and service, no labels; a container without them has neither key', async () => {
+    const { gate } = buildGate([WEB, LOOSE]);
+    const result = await gate.observe('containers.list', { all: true });
+    expect(result.data).toEqual([
+      webItem,
+      { id: 'c3', name: 'scratch', image: 'busybox', state: 'running', status: 'Up 1 minute' },
+    ]);
+    expect(result.observedFacts.map((f) => f.properties)).toEqual([
+      { name: 'app-web-1', image: 'app:1', state: 'running', status: 'Up 1 minute' },
+      { name: 'scratch', image: 'busybox', state: 'running', status: 'Up 1 minute' },
+    ]);
+  });
+
+  it("compose.ls: each project's containers as list items, without the project they are listed under", async () => {
+    const { gate } = buildGate([WEB, DB, LOOSE]);
+    const result = await gate.observe('compose.ls', {});
+    const { project: _project, ...listedWeb } = webItem;
+    expect(result.data).toEqual({
+      projects: [
+        {
+          project: 'app',
+          containerCount: 2,
+          containers: [
+            listedWeb,
+            {
+              ...listedWeb,
+              id: 'c2',
+              name: 'app-db-1',
+              image: 'postgres:17',
+              state: 'exited',
+              status: 'Exited (0) 1 minute ago',
+              service: 'db',
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('container.restart, compose.up and compose.down: results and simulate details carry list items', async () => {
+    const { gate } = buildGate([WEB, DB]);
+    const carried: unknown[] = [];
+    const restartSimulate = await gate.simulate('container.restart', { id: 'c1' });
+    carried.push(...(restartSimulate.detail as { containers: unknown[] }).containers);
+    carried.push((await gate.apply('container.restart', { id: 'c1' }, 'req-restart')).data);
+    for (const name of ['compose.up', 'compose.down']) {
+      const simulated = await gate.simulate(name, { project: 'app' });
+      carried.push(...(simulated.detail as { containers: unknown[] }).containers);
+      const applied = await gate.apply(name, { project: 'app' }, `req-${name}`);
+      carried.push(...(applied.data as { containers: unknown[] }).containers);
+    }
+    // restart: its simulate and its result; up: one target (db), then both; down: both, then both.
+    expect(carried).toHaveLength(9);
+    for (const container of carried) {
+      expect(Object.keys(container as object).sort()).toEqual(ITEM_KEYS);
+    }
+    expect(carried[1]).toEqual(webItem);
+  });
+
+  it('container.inspect returns every label', async () => {
+    const { gate } = buildGate([WEB]);
+    const result = await gate.observe('container.inspect', { id: 'app-web-1' });
+    expect(result.data).toEqual({
+      id: 'c1',
+      name: 'app-web-1',
+      image: 'app:1',
+      state: 'running',
+      status: 'Up 1 minute',
+      labels: LABELS,
+    });
   });
 });
 
