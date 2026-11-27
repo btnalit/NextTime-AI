@@ -1741,11 +1741,16 @@ select 'reconcile', count(*) from action_requests r
 - **第二步（遗留 906，另开 PR）**：去掉旧格式的识别规则，摘要和公钥从此不再被遮。开启条件是主机上不再有仍有效的旧格式 key。
   - 只有维护者能确认这一点：库里只存哈希，内核分不出一把 key 是新格式还是旧格式。
   - 和 §3.208 的处置同一时机做，结果记 `docs/private/`：
-    1. 升级到本版之后、签发任何新 key 之前，先只读列出持有 key 的 Principal（以表的属主运行）。这时它们的 key 全是旧格式：
+    1. **在 apply 之前**只读列出持有 key 的 Principal，作为基线（以表的属主运行）。这时它们的 key 全是旧格式：
 
        ```sql
        select workspace_id, id, kind from principals where api_key_hash is not null;
        ```
+
+       - 不能等到升级之后再列：`apply-release.sh` 自己跑的 S1–S4 验收会先签发带前缀的新 key，之后的清单里新旧混在一起，库里又分不出格式。
+       - 升级后把同一条查询再跑一次，和基线对照：两边都有的 Principal 仍持旧格式 key，要轮换。只在升级后出现的，是本次验收夹具新签的 key
+         （ephemeral 工作区，到期自动清理），不在轮换范围。
+       - 升级前没取基线的，把升级后清单里 ephemeral 验收工作区的 Principal 去掉，剩下的都当旧格式处理。
 
     2. 逐个轮换，做法同 §3.208 第 2 步，不限于清单上的：
        - `service`：Rotate API key，或者停用。
