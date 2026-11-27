@@ -677,6 +677,81 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     const mismatches = texts.map((text) => firstMismatch(text, true));
     expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
   });
+
+  it.each([
+    ['export API_TOKEN=a b c', `export API_TOKEN=${REDACTED} b c`, `export API_TOKEN=${REDACTED}`],
+    ['PGPASSWORD=a b c', `PGPASSWORD=${REDACTED} b c`, `PGPASSWORD=${REDACTED}`],
+    ['- password: a b c', `- password: ${REDACTED} b c`, `- password: ${REDACTED}`],
+    ['  token = a b c', `  token = ${REDACTED} b c`, `  token = ${REDACTED}`],
+    [`Bearer ${FAKE} b c`, `Bearer ${REDACTED} b c`, `Bearer ${REDACTED} b c`],
+  ])(
+    'held text that starts mid-line is not a line start to the rules read at one: %s',
+    (rest, midLine, lineStart) => {
+      // The stream reads what it holds on its own (stage 1b), and a cut can fall right where an
+      // `.env` line, a YAML item or a `Bearer` would start one. What a line's first pair reads to is
+      // the tail check's call, made on the text as it came with its line's state carried across
+      // pieces, so after `run ` the pair is no line's first at any cut — the stream would hide more
+      // than the whole text, not less, if it were (review #493 on #1619, item 2).
+      for (const before of ['run ', 'echo 中', 'a=1 ']) {
+        const text = `${before}${rest}`;
+        expect(scrubSecretValues(text).value).toBe(`${before}${midLine}`);
+        for (let at = 0; at <= text.length; at += 1) {
+          expect(stream([text.slice(0, at), text.slice(at)]).text).toBe(`${before}${midLine}`);
+        }
+        expect(stream([...text]).text).toBe(`${before}${midLine}`);
+      }
+      // At a line's start the same pair is the line's first, in the stream as in the whole text.
+      for (const before of ['', '\n', 'run x\n']) {
+        const text = `${before}${rest}`;
+        expect(scrubSecretValues(text).value).toBe(`${before}${lineStart}`);
+        for (let at = 0; at <= text.length; at += 1) {
+          expect(stream([text.slice(0, at), text.slice(at)]).text).toBe(`${before}${lineStart}`);
+        }
+      }
+    },
+  );
+
+  it.each(['api_key', 'password', 'token', 'secret', 'apiKey'])(
+    'known limit (legacy 920): %s right after a hidden key, cut between the name and its value',
+    (name) => {
+      // A name right after a hidden key is one only as the whole text reads it, after the key's
+      // mask; on the text as it came it is the end of the key's word, so the stream does not hold
+      // from it, and a cut after `name: ` or inside ` = ` emits the name and reads the value on its
+      // own. A plain value is hidden as the whole text hides it. After an escaped-quote value the
+      // stream shows the quotes and the rest of the line that the whole text hides; after a
+      // `\\,-----BEGIN` one it hides the words that the whole text shows. The value itself is hidden
+      // at every cut. The tail check's line state does not reach it: on the text as it came there
+      // is no name to carry. Holding a name at the end of a hidden value closes these and opens
+      // others (`Authorization: ` right after a key), so they stay with legacy 920, pinned so that a
+      // change shows (review #493 on #1619, item 3).
+      const key = 'ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+      const cases = [
+        [': ', String.raw`\\"a b\\" c`, String.raw`\\"${REDACTED}\\" c`],
+        [': ', String.raw`a\\,-----BEGIN x y`, REDACTED],
+        [' = ', String.raw`\\"a b\\" c`, String.raw`\\"${REDACTED}\\" c`],
+        [' = ', String.raw`a\\,-----BEGIN x y`, REDACTED],
+      ];
+      for (const [separator = '', value = '', streamed = ''] of cases) {
+        const head = `${key}${name}${separator}`;
+        const text = `${head}${value}`;
+        const whole = scrubSecretValues(text).value;
+        expect(whole).toBe(
+          value.startsWith('a')
+            ? `${REDACTED}${name}${separator}${REDACTED} x y`
+            : `${REDACTED}${name}${separator}${REDACTED}`,
+        );
+        // `: ` is cut apart after its blank; ` = ` after either blank or the `=`.
+        const apart = new Set(
+          separator === ': ' ? [head.length] : [1, 2, 3].map((n) => head.length - 3 + n),
+        );
+        for (let at = 0; at <= text.length; at += 1) {
+          const out = stream([text.slice(0, at), text.slice(at)]).text;
+          expect(out).toBe(apart.has(at) ? `${REDACTED}${name}${separator}${streamed}` : whole);
+          expect(out).not.toContain('a b');
+        }
+      }
+    },
+  );
 });
 
 describe('createSecretStreamScrubber — the stream stays live', () => {

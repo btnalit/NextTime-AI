@@ -155,7 +155,9 @@ export async function acceptance(group: string, part = 1, parts = 1): Promise<vo
       readFileSync(join(import.meta.dirname, 'stream-baseline.json'), 'utf8'),
     ) as StreamBaseline
   ).generators;
-  describe(`${label}: rows whose stream is not their whole text (I-R3 b), held to stream-baseline.json`, () => {
+  // A run of some generators (`--generators`) leaves other groups with none: no suite for them,
+  // as for the corpus above (Vitest fails a suite with no test).
+  if (names.length > 0) describe(`${label}: rows whose stream is not their whole text (I-R3 b), held to stream-baseline.json`, () => {
     for (const name of names) {
       it.skipIf(before === undefined || !readsCiSample(run))(name, () => {
         const mine = results.filter((result) => result.generator === name);
