@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   GATE_TOOL_RESULT_MAX_CHARS,
   LONG_STRING_CHARS,
   NOTE_MAX_CHARS,
+  PRIVATE_KEY_BLOCK,
   paramNames,
   renderToolResult,
 } from './tool-result.js';
@@ -176,9 +178,23 @@ describe('renderToolResult: long strings', () => {
     const unended = shownText(`${'log line\n'.repeat(150)}${marker('BEGIN')}\n${keyBody}`);
     expect(unended.text).not.toContain('KKKK');
     expect(unended.note).toMatch(/data\.text: 400 of \d+ characters \(start\)\./);
+    // A block that never ends, then a whole one: the kernel reads the first to the second's END.
+    const twoKeys = `${'x'.repeat(500)}${marker('BEGIN')}\n${`${'A'.repeat(63)}\n`.repeat(40)}${marker('BEGIN')}\n${`${'B'.repeat(63)}\n`.repeat(3)}${marker('END')}\nlast line`;
+    const cutTwo = shownText(twoKeys);
+    expect(cutTwo.text).not.toContain('AAAA');
+    expect(cutTwo.text.endsWith(' ...] last line')).toBe(true);
     // A key whose BEGIN line is in the tail stays whole there, for the kernel to find.
     const whole = `${'log\n'.repeat(700)}${marker('BEGIN')}\nKKKK\n${marker('END')}\nend`;
     expect(shownText(whole).text).toContain(`${marker('BEGIN')}\nKKKK\n${marker('END')}`);
+  });
+
+  it("find a private-key block by the kernel's own rule (review #493 on #1629)", () => {
+    // Read as text: the kernel is a separate package, and the rule is a plain literal there.
+    const kernel = readFileSync(
+      new URL('../../../kernel/src/substrate/redaction/secret-values.ts', import.meta.url),
+      'utf8',
+    );
+    expect(kernel).toContain(`/${PRIVATE_KEY_BLOCK.source}/g`);
   });
 
   it('are cut at code points: no half of a surrogate pair is left, and the count is in code points', () => {

@@ -162,13 +162,21 @@ function plainKey(key: string, place: number): string {
 }
 
 /**
+ * The kernel's private-key rule, as it is in kernel `substrate/redaction/secret-values.ts` (a test
+ * here reads it there): a block runs from its BEGIN line to the first END line after it, or to the
+ * end of the text when none comes. Exported for that test.
+ */
+export const PRIVATE_KEY_BLOCK =
+  /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|$)/g;
+
+/**
  * Where a long string's kept tail starts: at most `STRING_TAIL` code points before its end, and
  * only at the start of a line — a value's name is on its own line before it (`password=…`,
  * `Authorization: Bearer …`, a JSON object in a string), so a tail that begins inside a line could
  * show a value without the name the kernel's redaction finds it by. No line starts there: no tail.
- * And no tail begins inside a PEM block whose `-----BEGIN` line was left out: it starts after the
- * block's `-----END` line instead (the kernel finds a private key by its BEGIN line), and when the
- * block never ends there is no tail (the kernel masks an unended block to the end of the text).
+ * And no tail begins inside a private-key block as the kernel reads the whole string: the kernel
+ * finds a block by its BEGIN line, which would be left out. The tail starts on the line after the
+ * block ends instead, and a block that runs to the end leaves no tail (review #501, #493 on #1629).
  */
 function tailStart(value: string): number {
   let at = retreat(value, STRING_TAIL);
@@ -177,17 +185,15 @@ function tailStart(value: string): number {
     if (newline === -1) return value.length;
     at = newline + 1;
   }
-  const opened = value.lastIndexOf('-----BEGIN', at - 1);
-  if (opened !== -1 && value.indexOf('-----END', opened) === -1) return value.length;
-  for (;;) {
-    const end = value.indexOf('-----END', at);
-    if (end === -1) return at;
-    const begin = value.indexOf('-----BEGIN', at);
-    if (begin !== -1 && begin < end) return at;
+  for (const block of value.matchAll(PRIVATE_KEY_BLOCK)) {
+    if (block.index >= at) break;
+    const end = block.index + block[0].length;
+    if (end <= at) continue;
     const newline = value.indexOf('\n', end);
     if (newline === -1) return value.length;
     at = newline + 1;
   }
+  return at;
 }
 
 /** The long strings of `value`, kept head and tail; the cuts made, in order. */
