@@ -48,6 +48,7 @@
   （2026-10-02 决定），发版前用 `gh api …/dependabot/alerts?state=open` 查开放告警并手工修
   （接口对会话返回 403 时以 `pnpm audit` 为准，`pr-gate release` 已包含）；常规依赖升级
   不交给 bot，按收敛方案的波次手动做（2026-09-25 决定，Renovate 已移除）。
-- 主机应用与验收：按 `docs/runbooks/` 执行，报告进 `docs/host-upgrades/`（主机别名、地址、路径写成占位符；
-  密钥类、模型供应商与花费只记 `docs/private/`，维护者 2026-11-27 定），不改主机上项目目录之外
+- 主机应用与验收：按 `docs/runbooks/` 执行，报告进 `docs/host-upgrades/`（主机别名、地址、路径写成占位符，
+  账号与工作区写角色名、不写 id 或 id 前缀；密钥类、模型供应商与花费只记 `docs/private/`，维护者 2026-11-27 定，
+  约定见 `docs/host-upgrades/README.md`），不改主机上项目目录之外
   的任何东西，不触碰主机上其他既有服务。
