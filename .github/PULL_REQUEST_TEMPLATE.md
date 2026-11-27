@@ -33,6 +33,17 @@
       `e2e/` 下用到它们的定位器；web-e2e 在 PR 头上为绿。
 - [ ] **控制台截图**：改到的页面附 1440 与 390 两张截图（含一个出错或空态），贴在下面。
 
+## 风险级与评审
+
+<!-- CI 绿后贴 `node scripts/review-route.mjs --base origin/main` 的前两行（risk、seats），并直接找这些席位评审
+     （docs/runbooks/dev-loop.md §3）。席位在 PR 评论里给裁定行；合并线程合并前跑 `node scripts/pr-gate.mjs merge <PR>`。 -->
+
 ## 主机验收记录（如适用）
 
 <!-- 跑了哪个 runbook、在哪台主机、关键输出/截图。不适用就删掉这一节。 -->
+
+## 合入后由合并线程写入的状态
+
+<!-- 不改 docs/STATUS.md、docs/development-tasks.md、docs/status-history.md；在这里写合入后要记什么：
+     关闭哪条遗留、STATUS 与实现说明里的一两句、发版说明可写的话。没在本 PR 修的发现逐条写建议的档：
+     「阶段内处理」或「挂起：<一句理由>」（docs/runbooks/dev-loop.md §4）。纯文档 PR 可以删掉这一节。 -->
