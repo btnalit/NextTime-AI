@@ -60,11 +60,14 @@ export function checkProblems(runs, required, mustSucceed = []) {
 /**
  * Whether a verdict given on `verdictHead` still covers the pull request's head: it does when
  * every commit after it only merges the base branch in (the steward's update-branch before a
- * merge). `commits` is the pull request's own commits, oldest first: `[{ sha, parents }]`.
+ * merge). `commits` is the pull request's own commits, oldest first: `[{ sha, parents: [sha…] }]`;
+ * `onBase(sha)` says whether a commit is on the base branch. A merge counts when one of its
+ * parents is — a merge of some other branch does not. What a merge commit changes by hand while
+ * resolving conflicts is not seen here.
  */
-export function verdictCovers(verdictHead, commits) {
+export function verdictCovers(verdictHead, commits, onBase) {
   const at = commits.findIndex((c) => c.sha.startsWith(verdictHead));
-  return at >= 0 && commits.slice(at + 1).every((c) => c.parents >= 2);
+  return at >= 0 && commits.slice(at + 1).every((c) => c.parents.length >= 2 && c.parents.some(onBase));
 }
 
 const check = (name, problems, pass) => ({ name, ok: problems.length === 0, detail: problems.length === 0 ? pass : problems.join('; ') });
@@ -77,8 +80,8 @@ function commonChecks(pr, runs, behindBy, required, mustSucceed) {
   ];
 }
 
-/** Merge checks. `input`: { pr, runs, behindBy, files, commits, comments, map, steward }. */
-export function mergeChecks({ pr, runs, behindBy, files, commits, comments, map, steward }) {
+/** Merge checks. `input`: { pr, runs, behindBy, files, commits, onBase, comments, map, steward }. */
+export function mergeChecks({ pr, runs, behindBy, files, commits, onBase, comments, map, steward }) {
   const routed = route(map, files);
   const needsUx = routed.seats.includes('ux');
   const checks = commonChecks(pr, runs, behindBy, needsUx ? [...REQUIRED_CHECKS, 'web-e2e'] : REQUIRED_CHECKS, needsUx ? ['web-e2e'] : []);
@@ -90,7 +93,7 @@ export function mergeChecks({ pr, runs, behindBy, files, commits, comments, map,
     const v = verdicts.get(seat);
     if (!v) missing.push(`${seat}: no verdict`);
     else if (v.verdict !== 'pass') missing.push(`${seat}: ${v.verdict}`);
-    else if (!verdictCovers(v.head, commits)) {
+    else if (!verdictCovers(v.head, commits, onBase)) {
       missing.push(`${seat}: passed ${v.head}, but the head ${pr.head.sha.slice(0, 8)} has later changes`);
     }
   }
@@ -169,7 +172,10 @@ function main() {
       runs,
       behindBy,
       files: pullFiles(slug, number),
-      commits: pages(`repos/${slug}/pulls/${number}/commits`).map((c) => ({ sha: c.sha, parents: c.parents.length })),
+      commits: pages(`repos/${slug}/pulls/${number}/commits`).map((c) => ({ sha: c.sha, parents: c.parents.map((p) => p.sha) })),
+      // On the base branch: the base is not behind it. Asked only for the parents of merge commits
+      // pushed after a verdict.
+      onBase: (sha) => JSON.parse(gh(`repos/${slug}/compare/${pr.base.ref}...${sha}`)).ahead_by === 0,
       // A seat may answer in a comment or in a review body; the latest of either counts.
       comments: [
         ...pages(`repos/${slug}/issues/${number}/comments`).map((c) => ({ at: c.created_at, body: c.body })),

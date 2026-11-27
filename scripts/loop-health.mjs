@@ -42,6 +42,10 @@ const DEEPEN = 'git fetch --shallow-since=<8 天前的日期> origin main';
 const daysBetween = (from, to) => Math.floor((to - from) / DAY);
 const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 
+// A finding registered before anyone could tell its tier (docs/runbooks/dev-loop.md §4): it is
+// written as a parked row so the ledger guard accepts it, and reported here until it has a tier.
+const UNTRIAGED = /^开放（挂起：待分档/;
+
 /** Counts of the rows that are still open work, by level and by P3 tier. */
 export function legacyCounts(rows) {
   const open = rows.filter(isOpenRow);
@@ -54,6 +58,7 @@ export function legacyCounts(rows) {
     p3: p3.length,
     inStage: p3.filter((r) => rowTier(r.status) === 'in_stage').length,
     parked: p3.filter((r) => rowTier(r.status) === 'parked').length,
+    untriaged: p3.filter((r) => UNTRIAGED.test(r.status)).map((r) => r.id),
     closedInTable: rows.filter((r) => rowState(r.status) === 'closed').length,
     blockers: rows.filter(isReleaseBlocker).map((r) => r.id),
   };
@@ -160,6 +165,9 @@ export function assess(input) {
         `「阶段内处理」档 ${c.inStage} 条，超过上限 ${cfg.legacy.inStageWipCap}`,
         '重新分档：留下用户可见的错误与削弱不变量、隔离、凭据路径、审计的，其余改挂起并写理由',
       );
+    }
+    if (c.untriaged.length > 0) {
+      add('legacy-untriaged', 'act', '协调线程', `${c.untriaged.length} 条遗留写着「待分档」：${c.untriaged.join('、')}`, '定成「阶段内处理」或「挂起：理由」（dev-loop.md §4）');
     }
     if (c.blockers.length > 0) {
       add('release-blockers', 'watch', '合并线程', `标着「发版前必须关闭」的开放遗留：${c.blockers.join('、')}`, '关闭之前不合 release PR');

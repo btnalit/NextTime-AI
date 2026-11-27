@@ -9,20 +9,24 @@
 ## 1. 怎么开始
 
 维护者在主机检出目录的本地会话里，给出本次的升级简报，并说明按本手册执行。检出目录此时还在旧版本上，
-先取目标版本的文件（本手册在目标 tag 上没有时，取 `origin/main` 的）：
+先把目标版本的文件取到项目里 gitignored 的 `docs/private/`（本手册在目标 tag 上没有时，取 `origin/main` 的）：
 
 ```
 git fetch -q origin --tags
-git show vX.Y.Z:docs/runbooks/release.md > /tmp/release-vX.Y.Z.md
-git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
+mkdir -p docs/private/upgrade-vX.Y.Z
+git show vX.Y.Z:docs/runbooks/release.md > docs/private/upgrade-vX.Y.Z/release.md
+git show vX.Y.Z:scripts/apply-release.sh > docs/private/upgrade-vX.Y.Z/apply-release.sh
 ```
+
+之后的 `--prefetch` 与 `--pull` 都从检出目录的根用这份 `apply-release.sh` 跑。
 
 ## 2. 规则（整个会话都适用）
 
 1. **流程以目标 tag 的 `release.md` 为准。** 简报只说读哪些节、什么时候做；SQL 和命令照节里的原文执行。
    简报与手册不一致时以 `release.md` 为准，并告诉维护者。
 2. **只读，除非步骤写明要改。** SQL 的执行方式、用哪个数据库角色，见 `release.md` §3 开头「本节命令的执行方式」。
-3. **不碰项目目录之外的任何东西**，不碰主机上其他既有服务。
+3. **不碰项目目录之外的任何东西**，不碰主机上其他既有服务。会话自己不在项目目录外写文件；
+   `apply-release.sh` 运行时在系统临时目录放一份自身的副本并在结束时删掉，是它的设计，不算例外之外的改动。
 4. **结果记进 `docs/private/`**（新文件，带日期）：每条查询的计数、每一步的 `RESULT` 行、日志文件名、审计 id。
    不记密钥、token、Handle、key 的值或片段；对话里同样只说计数和 id。
 5. **被本地权限检查拦下就停**，等维护者在这个会话里批准，或由他自己加允许规则；不换写法重试，不自己加规则。

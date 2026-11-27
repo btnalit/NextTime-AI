@@ -9,10 +9,11 @@
 
 ## 阶段 / 波次结束
 
-- 波次合入、主机验收、发版之后，在同一 PR 或紧随的 docs PR 里更新 `docs/STATUS.md`
-  （状态与证据、波次进度、遗留增删）。关闭遗留的改动必须落到 STATUS 的遗留表：多线程协作时
-  `docs/STATUS.md`、`docs/development-tasks.md`、`docs/status-history.md` 只由合并线程成批写，
-  其他 PR 不改它们，在正文「合入后由合并线程写入的状态」一节写明要记什么、关哪条；单会话工作时自己改。
+- 波次合入、主机验收、发版之后，`docs/STATUS.md` 要更新（状态与证据、波次进度、遗留增删），
+  关闭遗留的改动必须落到 STATUS 的遗留表。多线程协作时 `docs/STATUS.md`、`docs/development-tasks.md`、
+  `docs/status-history.md` 只由合并线程在随后的成批记录里写（`docs/runbooks/dev-loop.md` §6），
+  其他 PR 不改它们，在正文「合入后由合并线程写入的状态」一节写明要记什么、关哪条；
+  单会话工作时在同一 PR 或紧随的 docs PR 里自己改。
 - 实现细节追加到 `docs/development-tasks.md` 对应任务的"实现说明"；评估与反思写
   `docs/retrospective-*.md`，STATUS 只链接不复制。
 

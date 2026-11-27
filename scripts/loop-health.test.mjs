@@ -45,9 +45,19 @@ test('legacyCounts: open work by level and tier; accepted and closed rows are no
       row(900, '开放（阶段内处理）'),
       row(901, '开放（挂起：只多遮）'),
       row(902, '开放（发版前必须关闭）', 'P2'),
+      row(903, '开放（挂起：待分档）'), // parked for the guard, still waiting for a tier
     ),
   );
-  assert.deepEqual(c, { open: 6, p1: 1, p2: 3, p3: 2, inStage: 1, parked: 1, closedInTable: 1, blockers: [902] });
+  assert.deepEqual(c, { open: 7, p1: 1, p2: 3, p3: 3, inStage: 1, parked: 2, untriaged: [903], closedInTable: 1, blockers: [902] });
+});
+
+test('assess: a row waiting for its tier is the coordinator\'s to settle', () => {
+  const findings = assess(quiet({ legacy: rows(row(900, '开放（挂起：待分档）'), row(901, '开放（挂起：只是排版）')) }));
+  const f = find(findings, 'legacy-untriaged');
+  assert.equal(f.level, 'act');
+  assert.equal(f.owner, '协调线程');
+  assert.match(f.message, /1 条.*900/);
+  assert.equal(find(assess(quiet()), 'legacy-untriaged'), undefined);
 });
 
 test('legacyFlow: closed, registered and net between two readings', () => {

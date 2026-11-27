@@ -35,7 +35,8 @@ const merge = (over = {}) =>
     runs: GREEN,
     behindBy: 0,
     files: ['packages/kernel/src/a.ts'],
-    commits: [{ sha: HEAD, parents: 1 }],
+    commits: [{ sha: HEAD, parents: ['p0'] }],
+    onBase: (sha) => sha.startsWith('main'),
     comments: [verdict('kernel')],
     map: MAP,
     steward: false,
@@ -52,15 +53,19 @@ test('latestVerdicts: the last line of each seat wins', () => {
 });
 
 test('verdictCovers: the head itself, or only merges of main after it', () => {
+  const onBase = (sha) => sha.startsWith('main');
   const commits = [
-    { sha: 'aaaaaaa1', parents: 1 },
-    { sha: 'bbbbbbb2', parents: 1 },
-    { sha: 'ccccccc3', parents: 2 },
+    { sha: 'aaaaaaa1', parents: ['p0'] },
+    { sha: 'bbbbbbb2', parents: ['aaaaaaa1'] },
+    { sha: 'ccccccc3', parents: ['bbbbbbb2', 'main1'] },
   ];
-  assert.equal(verdictCovers('bbbbbbb', commits), true); // then a merge of main only
-  assert.equal(verdictCovers('ccccccc', commits), true);
-  assert.equal(verdictCovers('aaaaaaa', commits), false); // bbbbbbb2 is a later change
-  assert.equal(verdictCovers('ddddddd', commits), false); // not a commit of this pull request
+  assert.equal(verdictCovers('bbbbbbb', commits, onBase), true); // then a merge of main only
+  assert.equal(verdictCovers('ccccccc', commits, onBase), true);
+  assert.equal(verdictCovers('aaaaaaa', commits, onBase), false); // bbbbbbb2 is a later change
+  assert.equal(verdictCovers('ddddddd', commits, onBase), false); // not a commit of this pull request
+  // A merge of some other branch is a change like any other.
+  const other = [...commits.slice(0, 2), { sha: 'ccccccc3', parents: ['bbbbbbb2', 'feature1'] }];
+  assert.equal(verdictCovers('bbbbbbb', other, onBase), false);
 });
 
 test('checkProblems: required checks must have run; nothing failed or still running', () => {
@@ -97,9 +102,9 @@ test('mergeChecks: every seat the paths require has passed this head', () => {
   const blocked = merge({ files, comments: [verdict('kernel'), verdict('credentials', HEAD.slice(0, 8), 'block')] });
   assert.match(blocked.find((c) => c.name === 'reviews').detail, /credentials: block/);
   // A push after the verdict needs a new one; a merge of main does not.
-  const commits = [{ sha: '1111111aaaa', parents: 1 }, { sha: HEAD, parents: 1 }];
+  const commits = [{ sha: '1111111aaaa', parents: ['p0'] }, { sha: HEAD, parents: ['1111111aaaa'] }];
   assert.deepEqual(failed(merge({ commits, comments: [verdict('kernel', '1111111')] })), ['reviews']);
-  commits[1].parents = 2;
+  commits[1].parents = ['1111111aaaa', 'main1'];
   assert.deepEqual(failed(merge({ commits, comments: [verdict('kernel', '1111111')] })), []);
 });
 
