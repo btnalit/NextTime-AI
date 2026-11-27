@@ -51,7 +51,7 @@ function splitMask(r: Rng): Row {
     // JSON text, a tool result's stdout (legacy 916): the value quoted `"…"` in the line, written
     // `\"…\"` in the JSON, its opening `\"` taken for the value. A tab is `\t` there, which no
     // separator took.
-    const line = `${before}${pair.replace('\t', ' ')}"${value}${inside}"${after}`;
+    const line = `${before}${pair.replaceAll('\t', ' ')}"${value}${inside}"${after}`;
     const json = JSON.stringify({ stdout: line });
     return { t: json.replace(`\\"${value}`, `${MASK}"${value}`), req: [value], stored: true };
   }
