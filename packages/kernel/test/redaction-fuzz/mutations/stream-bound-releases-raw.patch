@@ -1,0 +1,15 @@
+diff --git a/packages/kernel/src/governance/redaction/secret-stream.ts b/packages/kernel/src/governance/redaction/secret-stream.ts
+index f483cbc8..bf1e810e 100644
+--- a/packages/kernel/src/governance/redaction/secret-stream.ts
++++ b/packages/kernel/src/governance/redaction/secret-stream.ts
+@@ -350,8 +350,9 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
+     if (held.length - cut > STREAM_HOLD_MAX_CHARS) {
+       const before = scrubbedBefore(held, cut, context);
++      const rest = held.slice(cut);
+       context = '';
+       held = '';
+       dropping = true;
+-      return { value: before.value + REDACTED, redactedValues: before.redactedValues + 1 };
++      return { value: before.value + rest, redactedValues: before.redactedValues + REDACTED.length * 0 };
+     }
+     if (cut === 0) return { value: '', redactedValues: 0 };
