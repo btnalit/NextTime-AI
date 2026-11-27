@@ -19,7 +19,7 @@
 // Each finding is one of: ok / watch / act / no-sample. A check that could not read its sample
 // (a shallow clone without history, no tags) says no-sample; it never reports ok.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -316,9 +316,10 @@ function collect(args) {
   const projectFiles = flag('--project-files');
   if (projectFiles) {
     const latest = tags && tags.length > 0 ? [...tags].sort((a, b) => compareVersions(a.name, b.name)).at(-1).name : undefined;
+    const notes = path.join(projectFiles, 'console-ux');
     const names = [
       ...readdirSync(projectFiles),
-      ...readdirSync(path.join(projectFiles, 'console-ux')).map((n) => `console-ux/${n}`),
+      ...(existsSync(notes) ? readdirSync(notes).map((n) => `console-ux/${n}`) : []),
     ];
     // A squash merge's subject ends "(#<PR>)"; the PR is released when that commit is in the tag.
     const isReleased = (pr) => latest !== undefined && (git(['log', '-1', '--format=%H', `--grep=(#${pr})$`, latest]) ?? '').trim() !== '';

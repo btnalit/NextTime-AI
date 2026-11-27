@@ -10,7 +10,7 @@
 //       a release-please PR · required checks green · not behind main · the hand-written notes
 //       are in the body · no open legacy row marked 「发版前必须关闭」 · `pnpm audit` clean
 //
-// A review seat passes a head by a comment on the pull request carrying one line (it is
+// A review seat passes a head by a comment or review on the pull request carrying one line (it is
 // bookkeeping against a missed review, not authentication — every thread posts as the same user):
 //   <!-- review-verdict seat=<seat> head=<commit sha, 7+ hex> verdict=pass|block -->
 // The latest line of a seat counts. It covers the head while every later commit of the pull
@@ -170,7 +170,13 @@ function main() {
       behindBy,
       files: pullFiles(slug, number),
       commits: pages(`repos/${slug}/pulls/${number}/commits`).map((c) => ({ sha: c.sha, parents: c.parents.length })),
-      comments: pages(`repos/${slug}/issues/${number}/comments`).map((c) => c.body),
+      // A seat may answer in a comment or in a review body; the latest of either counts.
+      comments: [
+        ...pages(`repos/${slug}/issues/${number}/comments`).map((c) => ({ at: c.created_at, body: c.body })),
+        ...pages(`repos/${slug}/pulls/${number}/reviews`).map((c) => ({ at: c.submitted_at, body: c.body })),
+      ]
+        .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''))
+        .map((c) => c.body),
       map: readMap(),
       steward: flags.includes('--steward'),
     });
