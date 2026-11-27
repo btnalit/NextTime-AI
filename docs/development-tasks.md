@@ -178,6 +178,8 @@
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
+- 实现说明（遗留 966，#1625，2026-11-27 合入，1e389fd，release.md §3.223）：`containers.list`、`compose.ls` 的每一项改成摘要（`ContainerListItem` / `listItemOf`：id、name、image、state、status，compose 的 project、service；`compose.ls` 的项不带 `project`），labels 只在 `container.inspect` 回。`payload-budget.test.ts` 按每个容器 320 字符卡住 40 个容器的列表（实测 11,845 字符，以前 56,858），这是内置门带载荷预算测试的第一个，以后的内置门照这个约定加。给模型的 JSON 不缩进归 967 阶段 1；过滤与分页、已发布行的旧描述、`status` 两处写法见遗留 974–976。
+
 ### S2.6 平台元本体与 WorkerDefinition 注册表
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
