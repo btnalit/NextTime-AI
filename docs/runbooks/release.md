@@ -50,8 +50,9 @@ workflow**（防止递归触发）。后果：release-please 开的这个 releas
 2. 调 REST 的 update-branch：`gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch -f expected_head_sha=<head>`。
    合并提交由维护者账号经 web-flow 推上去，不是 `GITHUB_TOKEN`，所以 `guards`/`quality`/`test` 会正常跑。
 3. 新 head 以 `branches/<分支名>` 读到的为准（`pulls/<N>` 的 `head.sha` 可能晚几分钟），等它上面的检查全绿、落后 0。
-4. 核对正文仍是 release-please 写的那份，再把手写说明 PATCH 进去，马上合并。release-please 发现正文和它要生成的不同时会重写 PR，
-   所以说明最后才写。
+4. 核对正文仍是 release-please 写的那份，再把手写说明 PATCH 进去，然后跑 `node scripts/pr-gate.mjs release <PR>`
+   （它要查正文里的手写说明，所以必须在 PATCH 之后跑），最后一行是 `RESULT ok` 就马上合并。release-please 发现正文和它要生成的
+   不同时会重写 PR，所以说明最后才写。
 
 release PR 落后 0 而又需要 CI 时，没有正当的办法，告诉协调线程等下一个 main 提交。
 
