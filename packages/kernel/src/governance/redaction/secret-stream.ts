@@ -165,6 +165,31 @@ function backslashesBefore(text: string, index: number): number {
 
 /** A `"` and the blanks after it, as far as `NOT_A_KEYS_QUOTE` looks for a `:` or `=`. */
 const BLANKS_AFTER_A_QUOTE = /"[ \t]{1,8}$/;
+
+const isQuote = (char: string): boolean => char === '"' || char === "'";
+
+/** Where, in `raw` before `cut`, text starts that is written right against a quote before it,
+ *  where how a `"…"` or `'…'` value closed by that quote reads turns on what comes at the cut or
+ *  after it; `-1` where none does. Such a value reads on past its quote as the rest of its word
+ *  (`restOfTheWord` in `secret-values.ts`), unless that rest is text up to another quote with a
+ *  `:` or `=` after it, a key's (`token="x"x,passwordx": …`), which the text before the cut would
+ *  not see: the cut falls in that text while more of it may come, or after its quote and up to
+ *  eight blanks while what comes is the `:` or `=` or nothing yet. Linear: it reads back over one
+ *  word. */
+function wordToComeAt(raw: string, cut: number): number {
+  const next = raw.charAt(cut);
+  let end = cut;
+  while (end > 0 && cut - end < 8 && (raw.charAt(end - 1) === ' ' || raw.charAt(end - 1) === '\t'))
+    end -= 1;
+  const afterItsQuote = isQuote(raw.charAt(end - 1));
+  if (afterItsQuote ? next !== ':' && next !== '=' && next !== '' : end < cut || /\s/.test(next)) {
+    return -1;
+  }
+  let at = afterItsQuote ? end - 1 : end;
+  while (at > 0 && !/[\s'"]/.test(raw.charAt(at - 1))) at -= 1;
+  return isQuote(raw.charAt(at - 1)) && (afterItsQuote || at < end) ? at : -1;
+}
+
 /** Blanks, or nothing: what may stand between a value still open and a pair read as inside it. */
 const BLANKS_ONLY = /^[ \t]*$/;
 
@@ -237,6 +262,7 @@ function safeCut(raw: string, context: string): number {
       cut -= blanks[0].length;
       moved = true;
     }
+    const word = wordToComeAt(raw, cut);
     // Nor inside a match, nor where a bare value would end before the next pair that the whole
     // text reads on past, its value opening with a secret's key (`bareValueEndsToCome`). Nor after
     // a match whose quoted value is still open, blanks alone after it: what comes next may be a
@@ -245,12 +271,16 @@ function safeCut(raw: string, context: string): number {
     // value rules read it, whatever name they took (review #501 on #1591). Nor before where the
     // text read past a match to settle how it reads ends, or where that read reached the end:
     // a JSON string closed short of a pair in it, as JSON goes on to the next key (`settledAt`;
-    // review #501 on #1593).
+    // review #501 on #1593). Nor after a match whose value its quote closes, in text right
+    // against that quote or after it and another quote, while what comes may still be of it or
+    // a key's `:` or `=`: whether the value reads on as the rest of its word turns on it
+    // (`wordToComeAt`; legacy 937).
     for (const { start, end, open, settledAt } of spans) {
       const at = start - context.length;
       if (
         at < cut &&
         (end - context.length > cut ||
+          end - context.length === word ||
           end === read.length ||
           (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))) ||
           (settledAt !== undefined &&
