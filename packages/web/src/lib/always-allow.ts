@@ -1,11 +1,48 @@
+import { shortDigest } from './format.js';
 import type { Translate } from './i18n.js';
 
 /** A pending request's published definition as `list_pending` / `get_action` report it (legacy
  *  218): `version` is the one the gate publishes now (`null`: none — a draft only, deprecated, or
- *  removed by the gate), `requestIsCurrent` whether this request was made under that version. */
+ *  removed by the gate), `requestIsCurrent` whether this request was made under that version.
+ *  Legacy 216 ② (#1565): `requestDigest` is the definition the request was made under (`null`: it
+ *  named none, or it is older than digests), `requestVersion` the newest version the gate
+ *  published with that definition (`null`: none was — made against a draft, say). Absent from a
+ *  kernel that predates them. */
 export interface PublishedDefinition {
   readonly version: number | null;
   readonly requestIsCurrent: boolean;
+  readonly requestDigest?: string | null;
+  readonly requestVersion?: number | null;
+}
+
+/** The definition a stale request was made under, as a sentence names it: 「v2 的定义
+ *  （sha256:…）」 when it was published as a version, 「未发布过的定义（sha256:…）」 when it never was,
+ *  `null` when the request carries no digest. `requestVersion` is the newest version published
+ *  with that definition, never "the version the request was made under", so it is the
+ *  definition, not the version, that is named. */
+function requestDefinitionName(published: PublishedDefinition, t: Translate): string | null {
+  const digest = published.requestDigest;
+  if (digest === null || digest === undefined) return null;
+  const short = shortDigest(digest);
+  return published.requestVersion !== null && published.requestVersion !== undefined
+    ? // Led by a space: it follows a Chinese verb (「按 v2 的定义」).
+      t(
+        ` v${published.requestVersion} 的定义（${short}）`,
+        `the definition of v${published.requestVersion} (${short})`,
+      )
+    : t(
+        `一份未发布过的定义（比如草稿，${short}）`,
+        `a definition never published as a version (a draft, for example; ${short})`,
+      );
+}
+
+/** Whether the definition named is one the gate never published as a version. */
+function neverPublished(published: PublishedDefinition): boolean {
+  return (
+    published.requestDigest !== null &&
+    published.requestDigest !== undefined &&
+    (published.requestVersion === null || published.requestVersion === undefined)
+  );
 }
 
 /** Why "总是允许" is not offered on a pending request whose definition is known: `unpublished`
@@ -48,37 +85,60 @@ export function alwaysAllowUnpublishedText(
   );
 }
 
-/** This request was made under an earlier definition than the one published now. */
-export function alwaysAllowStaleRequestText(t: Translate, publishedVersion: number): string {
+/** This request was made under another definition than the one published now (`version`). */
+export function alwaysAllowStaleRequestText(
+  t: Translate,
+  published: PublishedDefinition & { readonly version: number },
+): string {
+  const publishedVersion = published.version;
+  const name = requestDefinitionName(published, t);
+  const made =
+    name === null
+      ? t('这条请求是按旧定义发起的', 'This request was made under an earlier definition')
+      : t(`这条请求是按${name}发起的`, `This request was made under ${name}`);
   return t(
-    `这条请求是按旧定义发起的，门上现在发布的是 v${publishedVersion}，所以这里不能选「总是允许」：它只能给你看过的定义。在 v${publishedVersion} 的请求上再选，工作区所有者也可以在「模型与配额」的策略表里确认。`,
-    `This request was made under an earlier definition, and the gate now publishes v${publishedVersion}, so “Always allow” is not offered here: it covers only a definition you have seen. Choose it on a request made under v${publishedVersion}; the workspace owner can also confirm it in the policy table under Models & Quotas.`,
+    `${made}，门上现在发布的是 v${publishedVersion}，所以这里不能选「总是允许」：它只能给你看过的定义。在 v${publishedVersion} 的请求上再选，工作区所有者也可以在「模型与配额」的策略表里确认。`,
+    `${made}, and the gate now publishes v${publishedVersion}, so “Always allow” is not offered here: it covers only a definition you have seen. Choose it on a request made under v${publishedVersion}; the workspace owner can also confirm it in the policy table under Models & Quotas.`,
   );
 }
 
 /** Legacy 216 ①: which definition a pending request was made under, for an approver who is not
  *  offered "总是允许" (a high-impact action, or no right to write rules) and so never reads the
- *  sentence beside that option. The wire says only the version published now and whether the
- *  request matches it — an older request's own version is not on the wire (legacy 216 ②), so it
- *  reads as "an earlier definition". `null` when the row carries no such read. */
+ *  sentence beside that option. Legacy 216 ② (#1565): an older request names its own definition
+ *  (`requestDefinitionName`); a row from before digests reads as "an earlier definition". `null`
+ *  when the row carries no such read. */
 export function requestDefinitionText(
   published: PublishedDefinition | undefined,
   t: Translate,
 ): string | null {
   if (published === undefined) return null;
+  const name = requestDefinitionName(published, t);
   if (published.version === null) {
-    return t(
+    const none = t(
       '门上现在没有已发布的定义（草稿、已弃用或被门删掉）。',
       'The gate publishes no definition of it now (a draft, deprecated, or removed by the gate).',
     );
+    return name === null ? none : t(`按${name}发起；${none}`, `Made under ${name}. ${none}`);
   }
-  return published.requestIsCurrent
+  if (published.requestIsCurrent) {
+    return t(
+      `按门上现在发布的 v${published.version} 的定义发起。`,
+      `Made under the definition of v${published.version}, the version the gate publishes now.`,
+    );
+  }
+  if (name === null) {
+    return t(
+      `按旧定义发起，门上现在发布的是 v${published.version}。`,
+      `Made under an earlier definition; the gate now publishes v${published.version}.`,
+    );
+  }
+  return neverPublished(published)
     ? t(
-        `按门上现在发布的 v${published.version} 发起。`,
-        `Made under v${published.version}, the version the gate publishes now.`,
+        `按${name}发起，与门上现在发布的 v${published.version} 不同。`,
+        `Made under ${name}, which differs from the v${published.version} the gate publishes now.`,
       )
     : t(
-        `按旧定义发起，门上现在发布的是 v${published.version}。`,
-        `Made under an earlier definition; the gate now publishes v${published.version}.`,
+        `按${name}发起，门上现在发布的是 v${published.version}。`,
+        `Made under ${name}; the gate now publishes v${published.version}.`,
       );
 }
