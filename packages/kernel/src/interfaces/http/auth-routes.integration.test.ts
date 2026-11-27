@@ -1378,6 +1378,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         try {
           const app = appWithKeys();
           const cookie = await loginAs(app, login, password);
+          const rowsBefore = (await passwordChangedRows(login)).length;
           const response = await changePassword(
             app,
             cookie,
@@ -1386,6 +1387,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
           expect(response.statusCode).toBe(400);
           expect(response.json()).toMatchObject({ ok: false, error: { code: 'weak_password' } });
+          // Legacy 965: refused before anything changes, so no row (review #493 on #1627).
+          expect(await passwordChangedRows(login)).toHaveLength(rowsBefore);
         } finally {
           await withAdminClient(pool, (client) =>
             updatePlatformSettings(
@@ -1473,7 +1476,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           login,
           required: false,
           consoleSessionsRevoked: otherConsoleSessions,
-          membershipsRevoked: 1,
+          membershipCredentialsCleared: 1,
         });
         expect(JSON.stringify(row?.payload)).not.toContain('correct horse');
 

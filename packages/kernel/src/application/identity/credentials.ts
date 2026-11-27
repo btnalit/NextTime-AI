@@ -279,7 +279,8 @@ export async function changeOwnPassword(
         // temporary password), or one the person chose to make.
         required: user.mustChangePassword,
         consoleSessionsRevoked: revocation.consoleSessionIds.length,
-        membershipsRevoked: revocation.principalIds.length,
+        // The memberships stay: their API keys and sessions are cleared (review #501 on #1627).
+        membershipCredentialsCleared: revocation.principalIds.length,
       },
     });
     return revocation;
