@@ -121,11 +121,13 @@ describe('previewDisplayText', () => {
     );
   });
 
-  it('indents the JSON of a result the Worker\u2019s tool shortened and keeps its note line (legacy 967)', () => {
+  it('shows the note line of a result the Worker\u2019s tool shortened first, then its JSON indented (legacy 967)', () => {
     const note = '[The result was shortened to fit: data.items: 2 of 9 items.]';
     const text = `{"data":{"items":[1,2]}}\n\n${note}`;
+    // Review UX on #1629: the note comes before the JSON, so a long result's box shows it without
+    // scrolling to the end.
     expect(previewDisplayText({ text, totalChars: text.length, truncated: false })).toBe(
-      `${JSON.stringify({ data: { items: [1, 2] } }, null, 2)}\n\n${note}`,
+      `${note}\n\n${JSON.stringify({ data: { items: [1, 2] } }, null, 2)}`,
     );
     // A blank line that does not start a note, or JSON that does not parse, is left alone.
     const pending = '{"a":1}\n\npending approval';

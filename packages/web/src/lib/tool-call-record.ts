@@ -141,12 +141,14 @@ export function previewDisplayText(value: ToolCallPayloadPreview): string {
     return visibleJson(JSON.stringify(JSON.parse(trimmed), null, 2));
   } catch {
     // Legacy 967: a gate tool's result the Worker's tool shortened is compact JSON and a note line
-    // (`@nexttime/shared` `splitToolResultNote`): the JSON indented, the note as it is.
+    // (`@nexttime/shared` `splitToolResultNote`): the note first, as it is, then the JSON indented.
+    // Review UX on #1629: the result box scrolls within a fixed height, and thirty indented items
+    // run past it, so a note at the bottom was out of sight.
   }
   const { json, note } = splitToolResultNote(trimmed);
   if (note === undefined) return visibleLines(value.text);
   try {
-    return `${visibleJson(JSON.stringify(JSON.parse(json), null, 2))}\n\n${visibleLines(note)}`;
+    return `${visibleLines(note)}\n\n${visibleJson(JSON.stringify(JSON.parse(json), null, 2))}`;
   } catch {
     return visibleLines(value.text);
   }
