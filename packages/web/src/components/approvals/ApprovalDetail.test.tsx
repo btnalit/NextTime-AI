@@ -390,6 +390,21 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(stale.textContent).toContain('工作区所有者');
   });
 
+  it('legacy 216 ②: the page names the definition the older request was made under', () => {
+    renderDetail({
+      publishedDefinition: {
+        version: 3,
+        requestIsCurrent: false,
+        requestDigest: `sha256:${'0f'.repeat(32)}`,
+        requestVersion: 2,
+      },
+    });
+    const stale = screen.getByTestId('approval-always-allow-stale');
+    expect(stale.textContent).toContain('这条请求是按 v2 的定义');
+    expect(stale.textContent).toContain('0f0f0f0f0f0f）');
+    expect(stale.textContent).toMatch(/门上现在发布的是\s*v3/);
+  });
+
   it('no published version of the action (a draft, deprecated or removed): "总是允许" is not offered, and the page says why (UX acceptance of #592)', () => {
     renderDetail(
       { publishedDefinition: { version: null, requestIsCurrent: false } },
