@@ -1518,6 +1518,10 @@ describe('a value read with escapes and the next pair (review #493, #501 on #158
 });
 
 describe('a pair that starts inside a value and goes on past it (legacy 934)', () => {
+  // Where text is written right against a value's closing quote, the counts here are one fewer
+  // since legacy 937, the text the same: that text is the rest of the value's word, one mask with
+  // it (`'[redacted]'[redacted]`, `restOfTheWord`), where it was a value of its own, hidden by the
+  // v0.70.0 floor or by a pair read from it. Read without the rest of the word, each counts as before.
   it.each([
     [
       'a name in a "…" value after a `,`',
