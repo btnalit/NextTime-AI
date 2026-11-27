@@ -71,7 +71,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 node packages/kernel/test/redaction-fuzz/run.mjs --write-corpus-baseline
 ```
 
-只许变小；变大说明有回退，评审时看这个文件的 diff。加一种格式：在 `generators/real-formats.ts` 加生成器，重写基线。
+只许变小：重写时有一行变大，`run.mjs` 拒绝写并列出那几行，要写得加 `--allow-baseline-growth`；变大说明有回退，评审时看这个文件的 diff。加一种格式：在 `generators/real-formats.ts` 加生成器，重写基线。
 
 ## 流与整段的基线
 
@@ -85,7 +85,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-corpus-baseline
 node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # 只认 CI 小样本、全部生成器
 ```
 
-只许变小；加生成器时一起重写。这 13 个生成器多出来的行归遗留 920（实时流与整段不一致，阶段 1b 后重测）。
+只许变小（`rows` 变大时同样拒绝写，`atRelease` 只记不卡）；加生成器时一起重写，新生成器的行不算变大。这 13 个生成器多出来的行归遗留 920（实时流与整段不一致，阶段 1b 后重测）。
 
 ## 变异
 
