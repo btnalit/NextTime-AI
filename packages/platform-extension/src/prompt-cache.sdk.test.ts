@@ -508,4 +508,75 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
     );
     expectEachRequestReadsThePreviousWrite(requests);
   });
+  it('worker mode: the budget notice goes last and uncached, the breakpoint stays on the history, and each call still reads the previous write (legacy 967)', async () => {
+    process.env.NEXTTIME_MODE = 'worker';
+    process.env.TASK_ID = 'task-cache-test';
+    // The fake endpoint reports 10 input and 5 output tokens per call: 15 charged each. With 60
+    // left, the third call is the first with less than three calls' worth left.
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: { input: 'Check obj-1 and report what it is.', tokenBudget: 60, tokensUsed: 0 },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'get',
+            operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+          },
+        ],
+      },
+    }));
+    kernel.setHandler('observe_operation', () => ({
+      ok: true,
+      result: { status: 'ok', data: { obj1: 'host' } },
+    }));
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { status: 'completed' },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    anthropic = await startFakeAnthropic([
+      { toolUse: { name: 'inventory_get', input: {} } },
+      { toolUse: { name: 'inventory_get', input: {} } },
+      { toolUse: { name: 'inventory_get', input: {} } },
+      { toolUse: { name: 'report_result', input: { summary: 'obj-1 is a host.', findings: [] } } },
+    ]);
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    await waitFor(() => exitSpy.mock.calls.length > 0);
+    logSpy.mockRestore();
+
+    const requests = anthropic.requests;
+    expect(requests).toHaveLength(4);
+    const notice = 'NextTime budget notice';
+    for (const [index, request] of requests.entries()) {
+      const messages = messagesOf(request);
+      const last = messages[messages.length - 1];
+      const points = breakpoints(request);
+      expect(points).toHaveLength(1);
+      if (index < 2) {
+        expect(JSON.stringify(request)).not.toContain(notice);
+        expect(points[0]?.[0]).toBe(messages.length - 1);
+        continue;
+      }
+      // The notice is the last message, byte-identical on both calls, and carries no marker; the
+      // breakpoint sits on the tool result before it.
+      expect(textOf(last)).toContain(notice);
+      expect(stripMarkers(last)).toBe(
+        stripMarkers(messagesOf(requests[2] as Json)[messagesOf(requests[2] as Json).length - 1]),
+      );
+      expect(JSON.stringify(last)).not.toContain('cache_control');
+      expect(points[0]?.[0]).toBe(messages.length - 2);
+      expect(JSON.stringify(messages[messages.length - 2])).toContain('tool_result');
+    }
+    // The call that first carries the notice still reads what the call before it wrote, and the
+    // call after it reads what it wrote: the notice never sits inside a cached prefix.
+    expectEachRequestReadsThePreviousWrite(requests);
+    expect(cachedPrefix(requests[3] as Json)).not.toContain(notice);
+  });
 });

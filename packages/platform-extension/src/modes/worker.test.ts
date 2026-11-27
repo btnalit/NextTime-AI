@@ -7,6 +7,7 @@ import { UNBOUND_SOURCE_CODE, UNBOUND_SOURCE_MESSAGE } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
+import { BUDGET_HINT_TEXT } from './budget.js';
 import { holdsCapability, registerWorkerMode, toSearchQuery } from './worker.js';
 
 /**
@@ -980,6 +981,128 @@ describe('registerWorkerMode', () => {
 
     expect(result).toBeUndefined();
     errorSpy.mockRestore();
+  });
+
+  describe('budget notice (legacy 967 stage 1)', () => {
+    function assistantEnd(input: number, output: number) {
+      return {
+        message: {
+          role: 'assistant',
+          content: [],
+          usage: { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output },
+        },
+      };
+    }
+
+    /** A provider payload whose last message is `lastText` with pi-ai's breakpoint on it. */
+    function payloadEndingWith(lastText: string) {
+      return {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'history' }] },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: lastText, cache_control: { type: 'ephemeral' } }],
+          },
+        ],
+      };
+    }
+
+    beforeEach(() => {
+      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    });
+
+    function handler(name: string): Handler {
+      const found = fake.handlers.get(name);
+      if (!found) throw new Error(`${name} handler not registered`);
+      return found;
+    }
+
+    it('goes last, once less than three times the last call’s charge is left, and stays with the same text; the breakpoint moves off it', async () => {
+      kernel.setHandler('get_task', () => ({
+        ok: true,
+        result: { input: 'x', tokenBudget: 10_000, tokensUsed: 6000 },
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const context = handler('context');
+      const messageEnd = handler('message_end');
+      const beforeRequest = handler('before_provider_request');
+
+      const first = await context({ messages: [] }, fakeCtx());
+      expect(first.messages.map((m: { customType?: string }) => m.customType)).toEqual([
+        'nexttime-worker-context',
+      ]);
+      // No notice on this call: a request is left as pi-ai built it.
+      const untouched = payloadEndingWith(BUDGET_HINT_TEXT);
+      beforeRequest({ payload: untouched });
+      expect(untouched.messages[1]?.content[0]).toHaveProperty('cache_control');
+
+      messageEnd(assistantEnd(900, 100), fakeCtx()); // 3000 left, 3 × 1000 = 3000: not yet
+      expect((await context({ messages: [] }, fakeCtx())).messages).toHaveLength(1);
+
+      messageEnd(assistantEnd(900, 101), fakeCtx()); // 1999 left, 3 × 1001 = 3003
+      // Only an assistant message is a model call.
+      messageEnd(
+        { message: { role: 'toolResult', content: [], usage: { input: 99_999 } } },
+        fakeCtx(),
+      );
+      const second = await context({ messages: [] }, fakeCtx());
+      expect(second.messages.map((m: { customType?: string }) => m.customType)).toEqual([
+        'nexttime-worker-context',
+        'nexttime-worker-budget-notice',
+      ]);
+      const notice = second.messages[1];
+      expect(notice.role).toBe('custom');
+      expect(notice.display).toBe(false);
+      expect(notice.content).toBe(BUDGET_HINT_TEXT);
+
+      const payload = payloadEndingWith(BUDGET_HINT_TEXT);
+      beforeRequest({ payload });
+      expect(payload.messages[1]?.content[0]).not.toHaveProperty('cache_control');
+      expect(payload.messages[0]?.content[0]).toHaveProperty('cache_control');
+
+      messageEnd(assistantEnd(1, 0), fakeCtx());
+      const third = await context({ messages: [] }, fakeCtx());
+      expect(third.messages[1]?.content).toBe(BUDGET_HINT_TEXT);
+      expect(
+        logSpy.mock.calls.filter(([line]) => String(line).includes('check=budget_notice')),
+      ).toEqual([['nexttime-worker check=budget_notice result=shown charged=8001 budget=10000']]);
+      logSpy.mockRestore();
+    });
+
+    it('is never given for a Task without a budget, and the breakpoint is left where pi-ai put it', async () => {
+      kernel.setHandler('get_task', () => ({
+        ok: true,
+        result: { input: 'x', tokenBudget: null, tokensUsed: 0 },
+      }));
+      const context = handler('context');
+      await context({ messages: [] }, fakeCtx());
+      handler('message_end')(assistantEnd(1_000_000, 0), fakeCtx());
+      const result = await context({ messages: [] }, fakeCtx());
+      expect(result.messages).toHaveLength(1);
+      const payload = payloadEndingWith(BUDGET_HINT_TEXT);
+      handler('before_provider_request')({ payload });
+      expect(payload.messages[1]?.content[0]).toHaveProperty('cache_control');
+    });
+
+    it('counts a compaction pi gives no usage for, conservatively', async () => {
+      kernel.setHandler('get_task', () => ({
+        ok: true,
+        result: { input: 'x', tokenBudget: 200_000, tokensUsed: 0 },
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const context = handler('context');
+      await context({ messages: [] }, fakeCtx());
+      handler('message_end')(assistantEnd(10_000, 500), fakeCtx());
+      expect((await context({ messages: [] }, fakeCtx())).messages).toHaveLength(1);
+      handler('session_before_compact')(
+        { preparation: { tokensBefore: 150_000, settings: { reserveTokens: 16_384 } } },
+        fakeCtx(),
+      );
+      handler('session_compact')({ compactionEntry: { summary: 's' } }, fakeCtx());
+      // 10,500 + 150,000 + 13,107 = 173,607: 26,393 left, under 3 × 10,500.
+      expect((await context({ messages: [] }, fakeCtx())).messages).toHaveLength(2);
+      logSpy.mockRestore();
+    });
   });
 
   it('agent_settled after an accepted report_result posts nothing more and still exits 0 exactly once (the exit must not depend on the post having happened here)', async () => {

@@ -324,6 +324,8 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
     await waitFor(() =>
       kernel.requests.some((request) => request.capability === 'report_task_result'),
     );
+    // The run's own exit lands on this test's spy, not the next one's (leftover 55).
+    await waitFor(() => exitSpy.mock.calls.length > 0);
 
     // What the model read back is the tool result message of its second call's context.
     const toolResult = capturedContexts[0]?.messages.find(
@@ -343,6 +345,96 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
     expect(note).toContain('To narrow it, this Operation takes: all, name.');
     // The note is the platform's words (N6): nothing of the answer in it.
     expect(note).not.toMatch(/stack-service|registry|value-|com\.example/);
+  });
+
+  it('a Task near its token budget gets the notice and reports what it has before the kernel would stop it (legacy 967, design §4.2 and §7)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'docker',
+            name: 'containers.list',
+            operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+          },
+        ],
+      },
+    }));
+    const TOKEN_BUDGET = 40_000;
+    const EARLIER_RUNS = 2_000;
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        input: 'check every container',
+        tokenBudget: TOKEN_BUDGET,
+        tokensUsed: EARLIER_RUNS,
+      },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    // About 3,000 characters per answer: the conversation grows by that much each call.
+    const containers = Array.from({ length: 30 }, (_, i) => ({
+      name: `svc-${i}`,
+      state: 'running',
+      note: 'x'.repeat(60),
+    }));
+    kernel.setHandler('observe_operation', () => ({
+      ok: true,
+      result: { status: 'ok', data: { containers } },
+    }));
+    kernel.setHandler('report_task_result', () => ({ ok: true, result: { status: 'completed' } }));
+
+    const localFauxProvider = registerFauxProvider();
+    fauxProvider = localFauxProvider; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    const noticeAt: boolean[] = [];
+    // A model that would keep listing forever: it only stops when told to.
+    const step = (context: Context) => {
+      const last = context.messages[context.messages.length - 1];
+      const lastText = last?.role === 'user' ? JSON.stringify(last.content) : '';
+      const told = lastText.includes('NextTime budget notice');
+      noticeAt.push(told);
+      return told
+        ? fauxAssistantMessage(
+            fauxToolCall('report_result', {
+              summary: 'Listed the containers several times; stopped on the budget notice.',
+              findings: ['Not checked: the containers’ logs.'],
+            }),
+            { stopReason: 'toolUse' },
+          )
+        : fauxAssistantMessage(fauxToolCall('docker_containers_list', {}), {
+            stopReason: 'toolUse',
+          });
+    };
+    localFauxProvider.setResponses(Array.from({ length: 60 }, () => step));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const started = await startWorkerSession(localFauxProvider, tmpDir);
+    session = started.session; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    // The run's own exit lands on this test's spy, not the next one's (leftover 55).
+    await waitFor(() => exitSpy.mock.calls.length > 0);
+    logSpy.mockRestore();
+
+    // The notice came after a few calls, on the last one only, and the model reported then.
+    expect(noticeAt.length).toBeGreaterThan(3);
+    expect(noticeAt.slice(0, -1).every((told) => !told)).toBe(true);
+    expect(noticeAt[noticeAt.length - 1]).toBe(true);
+    const reports = kernel.requests.filter(
+      (request) => request.capability === 'report_task_result',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.params).toMatchObject({ findings: ['Not checked: the containers’ logs.'] });
+
+    // What the kernel would have charged the Task: its earlier runs plus every call of this one,
+    // the four counts in full. Still within the budget, so the run ends completed with its
+    // result instead of failing as budget_exhausted.
+    const charged = started.events.reduce((sum, event) => {
+      if (event.type !== 'message_end' || event.message.role !== 'assistant') return sum;
+      const { input, output, cacheRead, cacheWrite } = event.message.usage;
+      return sum + input + output + cacheRead + cacheWrite;
+    }, EARLIER_RUNS);
+    expect(charged).toBeLessThanOrEqual(TOKEN_BUDGET);
+    // And the run did use most of it: the notice is not given far too early.
+    expect(charged).toBeGreaterThan(TOKEN_BUDGET / 2);
   });
 
   it('a kernel rejection of report_result reaches the model as isError:true through pi’s real wiring, the corrected call lands, and the process still exits 0 (leftover 42)', async () => {
