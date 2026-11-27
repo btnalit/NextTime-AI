@@ -44,455 +44,455 @@
 
 ---
 
-> E、R、S1–S9（§1–§5g）已完成，原文在 `archive/development-tasks-e-r-s1-s9.md`（2026-11-27 移出），节号与标题不变。下面只留标题，便于按节号查。
+> E、R、S1–S9（§1–§5g）已完成，原文在 `archive/e-r-s1-s9/development-tasks.md`（2026-11-27 移出），节号与标题不变。下面只留标题，便于按节号查。
 
 ## 1. E — 环境准备（目标主机）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E1 验证 gVisor
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E2 目录树与密钥目录
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E3 代码检出与 `.env`
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E4 Postgres
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E5 Docker 日志轮转与 live-restore
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E6 收敛 0.0.0.0 端口
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E7 平台备份定时器
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### E8 caddy TLS 与静态服务
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 2. R — 仓库骨架
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### R1 monorepo 骨架
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### R2 迁移机制与连接池
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### R3 CI
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### R4 领域类型、转移表、capability 注册表
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 3. S1 — 一个用户能聊，每轮入图
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.1 核心表迁移（含隔离列）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.2 graph store 最小实现
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.3 gateway human 通道 + audit + explain
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.4 chat 模块与 WS RPC
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.5 每用户一个常驻入口容器：agent 镜像、supervisor 最小实现、agent-host 事件桥
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.6 platform-extension `entry` 模式
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.7 `llm-proxy` 独立服务
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.8 web：登录与对话
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.9 Handle 最小实现（入口 Handle）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.10 S1 验收脚本
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.11 出网代理
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S1.12 最小备份（compose 内，不改主机）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 4. S2 — 能经审批做事，动态拉起 Worker
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.1 治理表迁移
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.2 Policy 引擎
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.3 ActionRequest 状态机与审批队列
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.4 通用门：协议、基类、四种传输、接口清单、命令策略表
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.5 `docker` 预置清单与 `ragflow` 门实例
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.6 平台元本体与 WorkerDefinition 注册表
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.7 `find_workers` 与 `invoke_worker`
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.8 worker-supervisor
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.9 `worker` 模式扩展与结果契约
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.10 审批卡片与任务视图（web）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.11 chat 与 Task 联动
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.12 S2 验收脚本
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.13 连接系统流程与清单导入
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S2.14 Skill、Procedure 与提议流程
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5. S3 — 图有内容、看得见、找得到
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.1 本体注册表与本体 v1
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.2 冲突检测
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.3 采集器 `host-inventory`（TS）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.4 `gatekeeper-ragflow` 与本体 v2
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.5 Explorer 契约与挂载
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.6 MCP gateway 与 `interactive` 模式
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.7 语义一致性校验
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.8 不变量监控与混沌
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.9 S3 验收脚本
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.10 运行手册与测试策略文档
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.11 中台控制面（管理员面）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.12 Skills / MCP / 第三方能力的统一接入与治理
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.13 每用户智能体配置：AgentProfile / AgentPolicy
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.14 web 重构为控制台
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3.15 pi 升级契约与漂移检测
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S3 实施波次（2026-09-09 排定）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5a. S4 — 平台管理（W8，2026-09-11 立项，同日按维护者要求修订为平台级用户目录）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S4.1 用户目录与登录
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### P-A1 身份、用户与管理面骨架
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### P-A2 使用面收口
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### P-B 集成与模块
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### P-C 运行层与运行状态
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### P-D 模型与供应商
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5b. S5 — 基座打磨（2026-09-16 立项）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5 本体修正（增量）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5 新增不变量（进 `substrate/audit/invariant-checks.ts` 与 `/internal/metrics`）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.1 本体约束在写入点强制（I2 落地）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.2 新鲜度与失效（Epistemic 闭环，关闭遗留 28）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.3 数据与代码分离（关闭遗留 9，部分关闭 11）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.4 prompt 契约修复与守卫
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.5 加固批次（现有遗留 36 / 22 / 20 / 23 / 24 / 34 / 31 / 21）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.7 真实模型回归常态化
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5.8 交付与演示闭环（W11 最后一项，不扩大基座边界）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5 明确不做（保持现状，记录理由）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5 需要维护者决定的四项
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S5 实施波次（2026-09-16 排定；2026-09-17 维护者确认按此开工，四项待决取推荐项：S5 先于 W8 剩余项、S5.1 主机先 `warn` 再 `reject`、失效语义在内核 `window.complete`、遗留 36 按端点拦截修）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5c. S6 — 控制台完善（2026-09-19 立项，同日无人值守实施）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A0 视觉体系落地 + 紧急修复
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6 遗留修复（42 / 43 / 44）与 B1
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A 内核能力（对话生命周期、approve.reason、审批过滤、审计分页、取消接入申请、export_prov）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A 内核能力（工作区 / 用户清除、列表过滤、C10、遗留 41）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A 对话页（W1 / W2 / W3）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A 平台工作区 / 用户页（A1 / A6）、成员 / 访问（B3 / B4 / B5 / B7）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-C 接入（A7 / B7 / C26 / §5.7 入口）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-D 原生图谱页（A5）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-A 审批页 / 任务页 / 审计页 / 能力目录（B2 / C25 / C28 / A4 / C27 / A2）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6-B 模型与供应商（A3 / C29 / 遗留 19）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S6 主机应用注意（本地分支，尚未合入 / 发版）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5d. S7 — 稳定与平台面收尾（2026-09-22 立项）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S7-A / S7-B / S7-C（2026-09-22 派出）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### S7-E 运行层与运行状态（P-C，design §6.5 / §6.7）+ P-D 剩余
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5e. S8 — 产品化与修复（2026-09-23 立项）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 维护者决定（2026-09-23）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 波次
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5f. 底座化路线（2026-09-23 记录；2026-10-02 讨论结论见本节末，交付线立项为 S9，见 §5g）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 按 OS 结构对照现状
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 交付线（草案）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 扩展线（草案，候选 S9）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 明确不做（除非讨论后改变）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 待讨论的问题
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### 讨论结论（2026-10-02）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5g. S9 — 交付线：装得上、升得动、恢复得了（2026-10-02 立项）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### D0 实现说明（2026-10-02）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### D1 设计（2026-10-02）
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### D1 实现说明
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### D2 实现说明
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ### D4 实现说明
 
-已完成，原文在 `archive/development-tasks-e-r-s1-s9.md` 同名一节。
+已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
 ## 5h. S10 — 底座演进：可升级运行时 · 受治理的自进化 · 能力包（2026-10-04 立项，11 项决定全部落定）
 

@@ -17,11 +17,11 @@
 | 线上契约与语义约定 | `wire-contract-conventions.md`、`contracts/*.json`（`pnpm contract:check`） |
 | 怎么部署、验收、演练、排障 | `runbooks/README.md` 起步；验收 `runbooks/accept-s1.md`、`runbooks/host-accept-s2.md`、`runbooks/host-accept-s3.md`、`runbooks/host-accept-s4.md`（每个已接入系统走一遍真实内核路径） |
 | 已完成波次与阶段的历史记录 | `status-history.md`（含 2026-11-13 之前的时间线和已关闭遗留） |
-| 已完成阶段（E、R、S1–S9）的任务拆解与实现说明，0.63.0 及之前版本的主机步骤（release.md §3.1–§3.132） | `archive/development-tasks-e-r-s1-s9.md`、`archive/release-host-steps-3.1-3.132.md` |
+| 已完成阶段（E、R、S1–S9）的任务拆解与实现说明，0.63.0 及之前版本的主机步骤（release.md §3.1–§3.132） | `archive/e-r-s1-s9/development-tasks.md`、`archive/release-host-steps-3.1-3.132.md` |
 | 测试分层与命令 | `testing.md` |
 | 自动化与发布 | `runbooks/automation.md`、`runbooks/release.md`、`CHANGELOG.md` |
 | 收敛期方案（S8 W3 起的波次、问题清单、已决遗留的落地设计） | `convergence-plan-2026-09-25.md` |
-| 底座化路线与 S9 交付线 | `archive/development-tasks-e-r-s1-s9.md` §5f（讨论结论）/ §5g（S9） |
+| 底座化路线与 S9 交付线 | `archive/e-r-s1-s9/development-tasks.md` §5f（讨论结论）/ §5g（S9） |
 | 下一阶段 S10：pi 可升级运行时、受治理的自进化、能力包（含 OpenMetadata 定位与 8 个自进化项目调研） | `s10-evolution-plan-2026-10-04.md`（方案与决定）/ `development-tasks.md` §5h（任务拆分） |
 | 新主线 S11：目标级执行（GoalRun / PlanRevision / StepRun）与平台管理员 Agent；全局排号推进计划 | `goal-orchestration-and-admin-agent-plan-2026-10-16.md`（方案与分叉）/ `global-roadmap-2026-10-16.md`（波次、任务号、依赖与验收，排序以它为准）/ `development-tasks.md` §5i（任务拆分） |
 | 阶段评估与设计反思 | `ui-audit-2026-09-23.md`（控制台审计，S8 依据）、`retrospective-2026-09-09.md`、`retrospective-2026-09-18.md`、`retrospective-2026-09-19.md`（S6 无人值守实施）、`code-review-2026-09-04.md`、`code-review-2026-09-10.md`、`code-review-2026-10-02.md`（v0.35.1 全项目复审 + 遗留盘点；修复波次计划在其 §8，待决策在 §7）、`retrospective-s11-w3-admin-agent.md`（S11 W3 平台管理员智能体回顾与 D-W5 证据包，#986） |
