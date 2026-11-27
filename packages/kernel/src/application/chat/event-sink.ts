@@ -4,6 +4,7 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import {
   type SecretStreamScrubber,
   createSecretStreamScrubber,
+  tailCountsOf,
 } from '../../governance/redaction/index.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
@@ -179,15 +180,26 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
    *  console shows the pause only then, not for every `[redacted]` that ends the live text. */
   function publishText(
     event: AgentRuntimeEvent,
-    text: { readonly value: string; readonly redactedValues: number; readonly paused?: true },
+    text: {
+      readonly value: string;
+      readonly redactedValues: number;
+      readonly redactedTails?: number;
+      readonly redactedTailChars?: number;
+      readonly paused?: true;
+    },
   ): void {
-    if (text.redactedValues > 0) {
+    // A stream reports a tail's characters as they come, maybe in a later piece than the tail.
+    if (text.redactedValues > 0 || (text.redactedTailChars ?? 0) > 0) {
       log(
         JSON.stringify({
           level: 'warn',
           msg: 'chat event sink: replaced secret-looking values in the live text of a Turn',
           turnId: event.turnId,
           redactedValues: text.redactedValues,
+          ...(text.redactedTails !== undefined ? { redactedTails: text.redactedTails } : {}),
+          ...(text.redactedTailChars !== undefined
+            ? { redactedTailChars: text.redactedTailChars }
+            : {}),
         }),
       );
     }
@@ -426,6 +438,7 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                 msg: 'chat event sink: replaced secret-looking values in, or cut, a runtime message before storing it',
                 turnId: event.turnId,
                 redactedValues: scrubbed.redactedValues,
+                ...tailCountsOf(scrubbed),
                 cut: scrubbed.cut,
               }),
             );

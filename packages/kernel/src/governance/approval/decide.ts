@@ -313,7 +313,7 @@ export async function approveActionRequest(
     // as written.
     extraAuditPayload: {
       ...(reason ? redactedForAudit({ reason }) : {}),
-      ...credentialReviewAudit(suspectedSecretValues),
+      ...credentialReviewAudit(suspectedSecretValues, suspectedSecrets),
     },
   });
 

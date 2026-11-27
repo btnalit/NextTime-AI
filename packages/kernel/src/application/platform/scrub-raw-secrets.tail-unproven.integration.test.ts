@@ -62,7 +62,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       noteAudit: randomUUID(),
       cleanAudit: randomUUID(),
     };
-    const seeded = new Set(Object.values(ids));
+    const seeded = new Set<string>(Object.values(ids));
     const tool = (text: string) => ({
       kind: 'tool_call',
       text: 'some_tool',

@@ -12,6 +12,7 @@ import {
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
   secretFieldLiterals,
+  tailCountsOf,
 } from '../redaction/index.js';
 import { getActionRequestForUpdate, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
@@ -331,7 +332,9 @@ export function resultAuditFields(
   const redactedValues = quoted.redactedValues + redacted.count;
   return {
     resultMetadata: redacted.value,
-    ...(redactedValues > 0 ? { resultRedaction: { redactedValues, paths: redacted.paths } } : {}),
+    ...(redactedValues > 0
+      ? { resultRedaction: { redactedValues, ...tailCountsOf(redacted), paths: redacted.paths } }
+      : {}),
   };
 }
 

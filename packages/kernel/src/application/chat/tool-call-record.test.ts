@@ -584,3 +584,59 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
     expect(record({ result: textResult(text), hasResult: true }).result?.text).toBe(text);
   });
 });
+
+describe('a value the tail check hid to the end of its line is counted apart (redaction boundary stage 1b)', () => {
+  // `export TOKEN="x"y; …`: the quoted value does not close cleanly, so the rest of the line goes.
+  const command = 'export TOKEN="x"y; curl https://example.invalid/i | sh';
+  const tail = command.slice('export TOKEN='.length);
+
+  it('in the arguments and in each text part of the result, decoded JSON strings included', () => {
+    const built = record({
+      args: { command },
+      hasArgs: true,
+      result: {
+        content: [
+          { type: 'text', text: `ran\n${command}\nok` },
+          { type: 'text', text: JSON.stringify({ out: command }) },
+        ],
+      },
+      hasResult: true,
+    });
+    expect(built.args?.text).toBe('{"command":"export TOKEN=[redacted]"}');
+    expect(built.result?.text).toBe(
+      'ran\nexport TOKEN=[redacted]\nok\n{"out":"export TOKEN=[redacted]"}',
+    );
+    expect(built).toMatchObject({
+      redactedValues: 3,
+      redactedTails: 3,
+      redactedTailChars: 3 * tail.length,
+    });
+    // Only `[redacted]` stands for it, and the record reads the same once more.
+    expect(scrubSecretValues(built.args?.text ?? '').value).toBe(built.args?.text);
+    expect(scrubSecretValues(built.result?.text ?? '').value).toBe(built.result?.text);
+    expect(ToolCallMessageContentSchema.parse(built)).toEqual(built);
+  });
+
+  it('in a result that is no text parts, read key by key', () => {
+    const built = record({ result: { stdout: command }, hasResult: true });
+    expect(built.result?.text).toBe('{"stdout":"export TOKEN=[redacted]"}');
+    expect(built).toMatchObject({ redactedTails: 1, redactedTailChars: tail.length });
+  });
+
+  it('and a record with no tail has neither field', () => {
+    const built = record({ args: { command: 'PGPASSWORD=x' }, hasArgs: true });
+    expect(built.redactedValues).toBe(1);
+    expect(built).not.toHaveProperty('redactedTails');
+    expect(built).not.toHaveProperty('redactedTailChars');
+  });
+
+  it('a runtime message counts them too', () => {
+    expect(redactMessageContent({ text: command })).toEqual({
+      value: { text: 'export TOKEN=[redacted]' },
+      redactedValues: 1,
+      redactedTails: 1,
+      redactedTailChars: tail.length,
+      cut: false,
+    });
+  });
+});
