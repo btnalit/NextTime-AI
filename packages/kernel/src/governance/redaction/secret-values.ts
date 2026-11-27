@@ -4,3 +4,4 @@
  * governance/redaction stays the one import for everything above the substrate.
  */
 export * from '../../substrate/redaction/secret-values.js';
+export { type TailChecked, tailChecked } from '../../substrate/redaction/tail-check.js';

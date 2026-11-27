@@ -450,9 +450,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(detail.statement).toBe('rotate the key, the old one is API_KEY=[redacted]');
         expect(detail.planRevision.reason).toBe('retry with Authorization: [redacted]');
         expect(detail.revisions[0]?.reason).toBe('retry with Authorization: [redacted]');
+        // A bare value at the head of its line with more text after it: the tail check (stage
+        // 1b, legacy 962) hides the rest of the line too.
         expect(detail.planRevision.plan.steps[0]?.input).toEqual({
           step: 'a',
-          command: "PGPASSWORD=[redacted] psql -c 'select 1'",
+          command: 'PGPASSWORD=[redacted]',
         });
         expect(detail.planRevision.plan.acceptance).toEqual([
           { kind: 'requester_confirm', key: 'ok', prompt: 'Does TOKEN=[redacted] still work?' },

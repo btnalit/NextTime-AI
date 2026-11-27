@@ -55,7 +55,9 @@ describe('redactToolArgs — values that are secrets wherever they appear', () =
     ],
     ['a vendor key', 'key sk-ant-api03-abcdefghijklmnopqrstuv end', `key ${REDACTED} end`],
     ['a GitHub token', 'ghp_abcdefghijklmnopqrstuvwxyz0123', REDACTED],
-    ['an upper-case env secret', 'PGPASSWORD=hunter2 psql', `PGPASSWORD=${REDACTED} psql`],
+    // Redaction boundary stage 1b: a bare value at the head of a line with more after it is read
+    // to the end of the line.
+    ['an upper-case env secret', 'PGPASSWORD=hunter2 psql', `PGPASSWORD=${REDACTED}`],
     [
       'a query-string secret',
       '/login?user=a&password=hunter2&x=1',
@@ -548,8 +550,11 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
         result: textResult(as(`run TOKEN="x"${SECRET} now`)),
         hasResult: true,
       });
+      // Live, the tail check reads the text right against the closing quote as an unclean close
+      // and hides from the value to the end of the line (redaction boundary stage 1b); a stored
+      // row is rewritten by the rules alone (design D3).
+      expect(live.result?.text).toBe(as(`run TOKEN=${REDACTED}`));
       const now = as(`run TOKEN="${REDACTED}"${REDACTED} now`);
-      expect(live.result?.text).toBe(now);
       const text = as(`run TOKEN="${REDACTED}"${SECRET} now`);
       const once = rescrubStoredToolCallResult(stored(text));
       expect(once).toEqual({

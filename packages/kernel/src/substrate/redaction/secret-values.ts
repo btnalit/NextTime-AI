@@ -9,6 +9,7 @@ import {
   sliceKeepingPairs,
 } from '@nexttime/shared';
 import * as released from './secret-values-v0.70.0.js';
+import { type Segment, TailMasker, tailChecked, tailMarks } from './tail-check.js';
 
 /**
  * substrate/redaction/secret-values: the kernel's one definition of "a value that looks like a
@@ -1596,10 +1597,30 @@ export function secretMatches(secretPattern: SecretPattern, text: string, from =
 export interface Scrubbed<T> {
   readonly value: T;
   readonly redactedValues: number;
+  /** Of those, the values the tail check hid to the end of their line, a value read after a
+   *  secret's name that did not close cleanly (`tail-check.ts`), and the characters (UTF-16 code
+   *  units) of the text read those tails hid, each from where it starts to the end of its line.
+   *  Present only when above 0. A tail is a value in `redactedValues` too. */
+  readonly redactedTails?: number;
+  readonly redactedTailChars?: number;
+}
+
+/** `scrubbed` with `tails` tails that hid `tailChars` characters, the fields present only when
+ *  there are any. */
+export function withTailCounts<T extends Scrubbed<unknown>>(
+  scrubbed: T,
+  tails: number,
+  tailChars: number,
+): T {
+  const { redactedTails: _tails, redactedTailChars: _chars, ...rest } = scrubbed;
+  return (tails > 0 ? { ...rest, redactedTails: tails, redactedTailChars: tailChars } : rest) as T;
 }
 
 interface WalkState {
   count: number;
+  /** Of `count`, tails, and the characters they hid (`Scrubbed.redactedTails`). */
+  tails: number;
+  tailChars: number;
   nodes: number;
   chars: number;
   omitted: boolean;
@@ -1609,6 +1630,8 @@ interface WalkState {
   readonly bounded: boolean;
   /** Hidden as literals in every string, before the patterns run (`RedactSecretsOptions`). */
   readonly literals: readonly string[];
+  /** `RedactSecretsOptions.tailCheck`. */
+  readonly tailCheck: boolean;
   /** The key rule over every string that is JSON text, before the literals
    *  (`RedactSecretsOptions.jsonTextFields`). */
   readonly jsonTextKey: ((key: string) => boolean) | undefined;
@@ -1886,28 +1909,72 @@ export function withFloor(
   floor: readonly released.ValuePattern[],
   readFrom: number,
 ): Scrubbed<string> {
+  const { value, redactedValues } = floorReading(text, patterns, floor, readFrom, false);
+  return { value, redactedValues };
+}
+
+/** A reading, and with `placed` where in the text it read each stretch of it comes from
+ *  (`Segment`): what the composition with the tail check takes (`composeWithTailCheck`). */
+interface FloorReading extends Scrubbed<string> {
+  readonly segments?: readonly Segment[];
+}
+
+/** The segments of what `reading` made of `text`, its runs (`runsOf`) as characters. */
+function segmentsOf(runs: readonly Run[], value: string): Segment[] {
+  const segments: Segment[] = [];
+  let from = 0;
+  for (const run of runs) {
+    segments.push({ at: run.at >= 0 ? run.at : -1, text: value.slice(from, from + run.length) });
+    from += run.length;
+  }
+  return segments;
+}
+
+/** `withFloor`, and the segments of its reading with `placed`. */
+function floorReading(
+  text: string,
+  patterns: readonly SecretPattern[],
+  floor: readonly released.ValuePattern[],
+  readFrom: number,
+  placed: boolean,
+): FloorReading {
   const own = readWith(text, ownPasses(patterns, readFrom));
   const old = readWith(text, releasedPasses(floor, readFrom));
-  if (old.value === text || old.value === own.value) return own;
+  const ownOnly = (runs?: readonly Run[]): FloorReading =>
+    placed
+      ? {
+          value: own.value,
+          redactedValues: own.redactedValues,
+          segments: segmentsOf(runs ?? runsOf(text, own), own.value),
+        }
+      : own;
+  if (old.value === text || old.value === own.value) return ownOnly();
   const runs = runsOf(text, own);
   const hidden = shownOnlyBy(keptOf(runs), keptOf(runsOf(text, old)));
-  if (hidden.length === 0 && runs.every(({ at }) => at !== WROTE_OTHER)) return own;
+  if (hidden.length === 0 && runs.every(({ at }) => at !== WROTE_OTHER)) return ownOnly(runs);
   let value = '';
   let redactedValues = own.redactedValues;
+  const segments: Segment[] = [];
   // In a stretch of hidden text: its one mask is written, and it counts one value more unless it
   // holds a mask of this file's reading, whose value is counted.
   let masking = false;
   let ownMask = false;
   const hide = (isOwnMask: boolean): void => {
-    if (!masking) value += REDACTED;
+    if (!masking) {
+      value += REDACTED;
+      if (placed) segments.push({ at: -1, text: REDACTED });
+    }
     masking = true;
     ownMask ||= isOwnMask;
   };
-  const show = (shown: string): void => {
+  const show = (at: number, until: number): void => {
     if (masking && !ownMask) redactedValues += 1;
     masking = false;
     ownMask = false;
-    value += shown;
+    if (until > at) {
+      value += text.slice(at, until);
+      if (placed) segments.push({ at, text: text.slice(at, until) });
+    }
   };
   let index = 0;
   for (const run of runs) {
@@ -1924,13 +1991,13 @@ export function withFloor(
         at = Math.min(next.end, runEnd);
       } else {
         const until = Math.min(next?.start ?? runEnd, runEnd);
-        show(text.slice(at, until));
+        show(at, until);
         at = until;
       }
     }
   }
-  show('');
-  return { value, redactedValues };
+  show(0, 0);
+  return placed ? { value, redactedValues, segments } : { value, redactedValues };
 }
 
 /** What each match of v0.70.0's rules covers in `text`, of those that start at `from` or after
@@ -1972,12 +2039,14 @@ export function floorReadSpans(text: string, from = 0): { start: number; end: nu
   return spans;
 }
 
-/** `text` with the literals, then every value pattern, replaced. */
+/** `text` with the literals, then every value pattern, replaced — `SECRET_VALUE_PATTERNS` composed
+ *  with the tail check unless `tailCheck` is false (`RedactSecretsOptions.tailCheck`). */
 function scrubPlain(
   text: string,
   literals: readonly string[],
   patterns: readonly SecretPattern[],
   readFrom = 0,
+  tailCheck = true,
 ): Scrubbed<string> {
   let out = text;
   let redactedValues = 0;
@@ -1987,6 +2056,10 @@ function scrubPlain(
     out = literal.value;
   }
   const floor = FLOORS.get(patterns);
+  if (floor !== undefined && patterns === SECRET_VALUE_PATTERNS && readFrom === 0 && tailCheck) {
+    const composed = composeWithTailCheck(out, floor);
+    return { ...composed, redactedValues: redactedValues + composed.redactedValues };
+  }
   const read =
     floor === undefined
       ? readWith(out, ownPasses(patterns, readFrom))
@@ -1994,26 +2067,98 @@ function scrubPlain(
   return { value: read.value, redactedValues: redactedValues + read.redactedValues };
 }
 
+/**
+ * `text` read by `SECRET_VALUE_PATTERNS` (with their floor) and by the tail check together
+ * (`docs/redaction-boundary-design-2026-11-27.md` §4.3): the value rules read the text, the check
+ * reads the same text, and what it hides is hidden in what they kept (`TailMasker`) — every
+ * character shown is one they show. Then the check reads that once more, and what it hides there is
+ * hidden too: where the rules hid a value further than the check reads it (the `&` after it, say),
+ * the mask stands against text the check then reads as an unclean close, and the result is the
+ * text the check leaves as it is (`tailChecked` of it changes nothing). The check alone is
+ * `STORED_REWRITE_SECRET_PATTERNS`'s never (design D3), and a list of a caller's own never
+ * gets it; a stream composes the same way in its own steps (`secret-stream.ts`).
+ */
+function composeWithTailCheck(
+  text: string,
+  floor: readonly released.ValuePattern[],
+): Scrubbed<string> {
+  const checked = tailMarks(text);
+  let first: Scrubbed<string>;
+  if (checked.marks.length === 0) {
+    first = withFloor(text, SECRET_VALUE_PATTERNS, floor, 0);
+  } else {
+    const read = floorReading(text, SECRET_VALUE_PATTERNS, floor, 0, true);
+    const masker = new TailMasker();
+    masker.add(read.segments ?? []);
+    const value = masker.compose(text.length, checked.marks) + masker.finish();
+    first = { value, redactedValues: read.redactedValues + masker.redactedValues };
+  }
+  const again = tailChecked(first.value);
+  return withTailCounts(
+    { value: again.value, redactedValues: first.redactedValues + again.redactedValues },
+    checked.tails + again.tails,
+    checked.tailChars + again.tailChars,
+  );
+}
+
+/** What `scrubSecretValues` makes of `text` after `readAfter` with the value rules alone (no tail
+ *  check), and where each stretch of it comes from in `text` (`Segment`): a stream's step, which
+ *  composes with the check over the stream itself (`secret-stream.ts`). */
+export function placedSecretValues(
+  text: string,
+  options: { readonly readAfter?: string } = {},
+): Scrubbed<string> & { readonly segments: readonly Segment[] } {
+  const before = options.readAfter ?? '';
+  const floor = FLOORS.get(SECRET_VALUE_PATTERNS) ?? [];
+  const read = floorReading(before + text, SECRET_VALUE_PATTERNS, floor, before.length, true);
+  const segments: Segment[] = [];
+  let skip = before.length;
+  for (const segment of read.segments ?? []) {
+    if (skip > 0 && segment.at >= 0) {
+      // What came before is kept as it was: no match starts in it.
+      const taken = Math.min(skip, segment.text.length);
+      skip -= taken;
+      if (taken < segment.text.length) {
+        segments.push({ at: segment.at + taken - before.length, text: segment.text.slice(taken) });
+      }
+      continue;
+    }
+    segments.push(
+      segment.at >= 0 ? { at: segment.at - before.length, text: segment.text } : segment,
+    );
+  }
+  return {
+    value: read.value.slice(before.length),
+    redactedValues: read.redactedValues,
+    segments,
+  };
+}
+
 function scrubInto(text: string, state: WalkState): string {
+  // Each part read counts its tails here; its values are summed by whoever reads it.
+  const plain = (part: string): Scrubbed<string> => {
+    const scrubbed = scrubPlain(part, state.literals, state.patterns, 0, state.tailCheck);
+    state.tails += scrubbed.redactedTails ?? 0;
+    state.tailChars += scrubbed.redactedTailChars ?? 0;
+    return scrubbed;
+  };
   if (state.jsonTextKey !== undefined) {
     // The strings of JSON text decoded too (legacy 916), then the rest of the text as it is.
-    const fields = redactSecretFieldsInJsonText(text, state.jsonTextKey, (value) =>
-      scrubPlain(value, state.literals, state.patterns),
-    );
-    const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, (part) =>
-      scrubPlain(part, state.literals, state.patterns),
-    );
+    const fields = redactSecretFieldsInJsonText(text, state.jsonTextKey, plain);
+    const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, plain);
     state.count += fields.redactedValues + rest.redactedValues;
     return rest.value;
   }
-  const plain = scrubPlain(text, state.literals, state.patterns);
-  state.count += plain.redactedValues;
-  return plain.value;
+  const scrubbed = plain(text);
+  state.count += scrubbed.redactedValues;
+  return scrubbed.value;
 }
 
 function freshState(options: RedactSecretsOptions = {}): WalkState {
   return {
     count: 0,
+    tails: 0,
+    tailChars: 0,
     nodes: options.maxNodes ?? MAX_WALK_NODES,
     chars: options.maxChars ?? Number.POSITIVE_INFINITY,
     omitted: false,
@@ -2021,18 +2166,25 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     onRedacted: options.onRedacted,
     patterns: options.patterns ?? SECRET_VALUE_PATTERNS,
     literals: options.literals ?? [],
+    tailCheck: options.tailCheck ?? true,
     jsonTextKey: options.jsonTextFields === true ? options.isSecretKey : undefined,
   };
 }
 
 /** `text` with every secret-looking value replaced. Linear in `text`; a caller holding text of
- *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`; a rewrite of rows
- *  already stored passes `STORED_REWRITE_SECRET_PATTERNS`. `readAfter` is text that came right
- *  before `text`, already read: the patterns look back into it where a match starts (a `.` before a
- *  name), and never start one in it (`secret-stream.ts`). */
+ *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`, with the tail
+ *  check (`tailCheck`, as `RedactSecretsOptions`'); a rewrite of rows already stored passes
+ *  `STORED_REWRITE_SECRET_PATTERNS`, which never gets it (design D3). `readAfter` is text that came
+ *  right before `text`, already read: the patterns look back into it where a match starts (a `.`
+ *  before a name), and never start one in it — the value rules alone, a step of a stream, which
+ *  composes the tail check over the stream itself (`secret-stream.ts`). */
 export function scrubSecretValues(
   text: string,
-  options: { readonly patterns?: readonly SecretPattern[]; readonly readAfter?: string } = {},
+  options: {
+    readonly patterns?: readonly SecretPattern[];
+    readonly readAfter?: string;
+    readonly tailCheck?: boolean;
+  } = {},
 ): Scrubbed<string> {
   const patterns = options.patterns ?? SECRET_VALUE_PATTERNS;
   const before = options.readAfter ?? '';
@@ -2040,8 +2192,15 @@ export function scrubSecretValues(
     const read = scrubPlain(before + text, [], patterns, before.length);
     return { value: read.value.slice(before.length), redactedValues: read.redactedValues };
   }
-  const state = freshState({ patterns });
-  return { value: scrubInto(text, state), redactedValues: state.count };
+  const state = freshState({
+    patterns,
+    ...(options.tailCheck !== undefined ? { tailCheck: options.tailCheck } : {}),
+  });
+  return withTailCounts(
+    { value: scrubInto(text, state), redactedValues: state.count },
+    state.tails,
+    state.tailChars,
+  );
 }
 
 /** Whether a character code is JSON whitespace. */
@@ -2436,6 +2595,13 @@ export interface RedactSecretsOptions {
    *  and one that echoes the call's arguments must hide a field as they did (legacy 185). In the
    *  same walk, so it reads what the walk reads and no more (legacy 819). */
   readonly jsonTextFields?: boolean;
+  /** Whether `SECRET_VALUE_PATTERNS` are read together with the tail check (`tail-check.ts`,
+   *  `composeWithTailCheck`; design §4.2–§4.3), which hides the rest of a line from a value read
+   *  after a secret's name that did not close cleanly. Defaults to true; other patterns never get
+   *  it. Only the scrub report passes false, to read a stored row as the value rules alone read it
+   *  and tell what the check adds («收尾未证明», `application/platform/scrub-raw-secrets.ts`) —
+   *  `tail-check.guard.test.ts` holds every other caller to the default. */
+  readonly tailCheck?: boolean;
 }
 
 export interface RedactedValue extends Scrubbed<unknown> {
@@ -2618,5 +2784,9 @@ export function redactSecrets(value: unknown, options: RedactSecretsOptions = {}
     'plain',
     options.onRedacted === undefined ? undefined : '',
   );
-  return { value: redacted, redactedValues: state.count, omitted: state.omitted };
+  return withTailCounts(
+    { value: redacted, redactedValues: state.count, omitted: state.omitted },
+    state.tails,
+    state.tailChars,
+  );
 }
