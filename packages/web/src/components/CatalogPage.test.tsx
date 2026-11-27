@@ -6828,3 +6828,68 @@ describe('CatalogPage: the new-draft address opened directly (legacy 668)', () =
     expect(screen.queryByTestId('skill-editor-drawer')).toBeNull();
   });
 });
+
+describe('CatalogPage — what a published Skill version was published on (legacy 539)', () => {
+  const workspace = {
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 1,
+    gatekeeperCount: 0,
+    caller: { id: 'p-me', role: 'member', displayName: 'Me', kind: 'human' },
+  };
+
+  function catalog(status: 'published' | 'draft', publishEvidence?: unknown) {
+    const row = { id: 'sk-1', version: 1, status, name: 'restart-web', description: 'd' };
+    return scriptedHttp({
+      get_workspace: () => workspace,
+      list_skills: () => ({ items: [row] }),
+      get_skill: () => ({
+        ...row,
+        markdown: '# body',
+        ...(publishEvidence === undefined ? {} : { publishEvidence }),
+      }),
+      list_draft_evaluations: () => ({ items: [] }),
+    });
+  }
+
+  it('a published version shows the evaluation it was published on', async () => {
+    renderPage(
+      catalog('published', {
+        evaluation: {
+          id: 'ev-1',
+          verdict: 'better',
+          reason: 'above_baseline',
+          observationId: null,
+        },
+        acknowledgedFailures: 0,
+        acknowledgements: [],
+      }),
+      'skills',
+    );
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const record = await within(detail).findByTestId('skill-publish-record');
+    expect(within(record).getByTestId('skill-publish-record-evaluation').dataset.verdict).toBe(
+      'better',
+    );
+  });
+
+  it('a published version whose publish kept no evidence says so', async () => {
+    renderPage(catalog('published', null), 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(await within(detail).findByTestId('skill-publish-record-none')).toBeTruthy();
+  });
+
+  it('no section where get_skill did not say (a Handle), nor on a draft', async () => {
+    renderPage(catalog('published'), 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('skill-detail-body');
+    expect(within(detail).queryByTestId('skill-publish-record')).toBeNull();
+    cleanup();
+
+    renderPage(catalog('draft', null), 'skills');
+    const draft = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(draft).findByTestId('skill-detail-body');
+    expect(within(draft).queryByTestId('skill-publish-record')).toBeNull();
+  });
+});

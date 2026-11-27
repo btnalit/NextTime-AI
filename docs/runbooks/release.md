@@ -27,7 +27,7 @@
    ——单包 manifest，tag 不带包名前缀），并创建一个同名 GitHub Release，Release 说明取自
    `CHANGELOG.md` 对应那一节。
 4. 平时不用管这个 PR——它会自己维护到最新状态。什么时候合并不是自动的，要有人决定"现在要不要切一个
-   版本发出去"。**维护者 2026-11-07 定**：一个阶段做完整之后的大版本由协调者把控发版，不用等维护者批准。合并线程合入前照常做这几件事：手写发版说明（升级须知、已知问题、回滚），核对 release PR 落后 main 为 0、CI 全绿，并查开放的 Dependabot 告警。告警接口对线程是 403 时，用 `pnpm audit` 代查。STATUS 遗留表里标着「发版前必须关闭」的遗留没关之前，不合 release PR（例如遗留 681，见 §3.150）。主机升级仍由维护者决定（第 6 条）。
+   版本发出去"。**维护者 2026-11-07 定**：一个阶段做完整之后的大版本由协调者把控发版，不用等维护者批准。合并线程合入前跑 `node scripts/pr-gate.mjs release <PR>`，最后一行是 `RESULT ok` 才合。它检查的是：手写发版说明（升级须知、已知问题、回滚）在正文里，release PR 落后 main 为 0、CI 全绿，`pnpm audit` 干净（开放的 Dependabot 告警接口对线程返回 403，以它代查），STATUS 遗留表里没有标着「发版前必须关闭」的开放遗留（例如遗留 681，见 §3.150）。主机升级仍由维护者决定（第 6 条）。
 5. **生产 apply 之前先预演（#488，v0.43.0 起）**：tag 出来后在 Actions → `staging` 手动 dispatch，`to` = 待应用的
    tag（走 `--pull`，验签发布镜像），在一次性 runner 上从上一个发布版升上去并跑 S3→S1→S2→S4；需要真实模型回归时勾
    `real_model`（`staging-real-model` environment，仅 main 触发，不设人工审批，见 `staging-rehearsal.md` §4）。步骤、成本上限与它复现不了的东西见
@@ -44,20 +44,17 @@ workflow**（防止递归触发）。后果：release-please 开的这个 releas
 （`guards`/`quality`/`test`，分支保护要求的三个必过检查）、`codeql.yml`、`pr-title.yml`
 **都不会自动跑**——分支保护会一直显示"必过检查未运行"，PR 合不了。
 
-**合并 release PR 前，必须先手动让 `pull_request` 事件真的触发一次**，两种做法任选：
+**合并 release PR 前，要让 `pull_request` 事件真的触发一次。** 不推空 commit，也不把 PR 关了再开（`CLAUDE.md`「开发闭环」）。做法：
 
-```
-# 方式一：给 release PR 分支推一个空 commit（人的操作，不是 GITHUB_TOKEN，会正常触发 pull_request）
-git fetch origin release-please--branches--main
-git checkout release-please--branches--main
-git commit --allow-empty -m "chore: trigger CI"
-git push
+1. 正文先不动，等 release PR 落后 main 1 个提交（随便一个 docs PR 合入就会这样）。
+2. 调 REST 的 update-branch：`gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch -f expected_head_sha=<head>`。
+   合并提交由维护者账号经 web-flow 推上去，不是 `GITHUB_TOKEN`，所以 `guards`/`quality`/`test` 会正常跑。
+3. 新 head 以 `branches/<分支名>` 读到的为准（`pulls/<N>` 的 `head.sha` 可能晚几分钟），等它上面的检查全绿、落后 0。
+4. 核对正文仍是 release-please 写的那份，再把手写说明 PATCH 进去，然后跑 `node scripts/pr-gate.mjs release <PR>`
+   （它要查正文里的手写说明，所以必须在 PATCH 之后跑），最后一行是 `RESULT ok` 就马上合并。release-please 发现正文和它要生成的
+   不同时会重写 PR，所以说明最后才写。
 
-# 方式二：直接在 GitHub UI 上把这个 PR 关闭再重新打开（Close pull request → Reopen）
-```
-
-两种方式效果一样：都会补发一次 `pull_request` 事件，`guards`/`quality`/`test` 正常跑起来，跑绿
-之后就能正常合并（分支保护 + `allow_auto_merge` 已经开着，合并方式不变）。
+release PR 落后 0 而又需要 CI 时，没有正当的办法，告诉协调线程等下一个 main 提交。
 
 **镜像签名碰上 Rekor 409 时（v0.65.0 遇到过）**：发布 run 的 `build-sign` 在 `cosign sign` 这一步报 `createLogEntryConflict`（409，透明日志里已有同样的条目），这是 Sigstore 那边的问题，与代码无关，镜像已经推上去了，只是没签上。先「Re-run failed jobs」一次；还失败的话，不要再重跑整个 release run，在 Actions 手动 dispatch `publish-images`（`tag` = 这个版本），它会重新构建、签名并扫描全部 11 个镜像；成功后再手动 dispatch 一次 `release-channel`，写出 `channel.json`。tag 和 GitHub Release 不受影响，不用重做。
 
@@ -1741,11 +1738,16 @@ select 'reconcile', count(*) from action_requests r
 - **第二步（遗留 906，另开 PR）**：去掉旧格式的识别规则，摘要和公钥从此不再被遮。开启条件是主机上不再有仍有效的旧格式 key。
   - 只有维护者能确认这一点：库里只存哈希，内核分不出一把 key 是新格式还是旧格式。
   - 和 §3.208 的处置同一时机做，结果记 `docs/private/`：
-    1. 升级到本版之后、签发任何新 key 之前，先只读列出持有 key 的 Principal（以表的属主运行）。这时它们的 key 全是旧格式：
+    1. **在 apply 之前**只读列出持有 key 的 Principal，作为基线（以表的属主运行）。这时它们的 key 全是旧格式：
 
        ```sql
        select workspace_id, id, kind from principals where api_key_hash is not null;
        ```
+
+       - 不能等到升级之后再列：`apply-release.sh` 自己跑的 S1–S4 验收会先签发带前缀的新 key，之后的清单里新旧混在一起，库里又分不出格式。
+       - 升级后把同一条查询再跑一次，和基线对照：两边都有的 Principal 仍持旧格式 key，要轮换。只在升级后出现的，是本次验收夹具新签的 key
+         （ephemeral 工作区，到期自动清理），不在轮换范围。
+       - 升级前没取基线的，把升级后清单里 ephemeral 验收工作区的 Principal 去掉，剩下的都当旧格式处理。
 
     2. 逐个轮换，做法同 §3.208 第 2 步，不限于清单上的：
        - `service`：Rotate API key，或者停用。
