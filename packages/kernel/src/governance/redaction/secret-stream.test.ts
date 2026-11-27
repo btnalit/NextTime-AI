@@ -485,6 +485,18 @@ const SHAPES = [
   `--token 'x'a' =  1`,
   `token='x'y'  = 1`,
   `TOKEN=""${FAKE}"         : 1`,
+  // The same after a `\"…\"` value, a `"…"` one with `\"` in it, and one closed by a quote a
+  // backslash escapes, and a key's escaped quote after the text (legacy 948). Cut right after a
+  // `"`, the text before it reads as if that quote ended it (`scrubbedBefore`); and a value inside
+  // one read on to a blank, not closed, that goes on past the next pair as that value does.
+  `{"cmd":"APIKEY=\\"TOKEN=\\"\\"${FAKE}\\"\\"\\""}`,
+  `token=\\"x\\"${FAKE} y`,
+  `password="a\\"b"${FAKE} y`,
+  `password="a\\"${FAKE} y`,
+  `password: '\\'a${FAKE} y`,
+  `token=\\"x\\"x,passwordx\\": \\"${FAKE}\\"`,
+  `password="a\\"b":${FAKE}`,
+  `run APIKEY="api_key: '${FAKE}':token=\\"a token=""\\"${FAKE}" : `,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
