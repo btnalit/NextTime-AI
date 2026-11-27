@@ -71,6 +71,27 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     },
   );
 
+  it.each([
+    ['api_key=a\\\\,-----BEGIN x y', `${REDACTED}api_key=${REDACTED} x y`, 2],
+    ['password=\\\\"a b\\\\" c', `${REDACTED}password=${REDACTED}`, 3],
+  ])(
+    'reads what it holds on its own, as the whole text reads a name right after a hidden key: %s',
+    (rest, scrubbed, values) => {
+      // The whole text reads the name as after the key's mask. Read after the key's last characters,
+      // as the stream read what it held until review #493 on #1619 (eight of them), the name was no
+      // name there, the tail check hid the rest of the line, and the two differed at almost every cut.
+      const text = `ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ${rest}`;
+      expect(scrubSecretValues(text)).toMatchObject({ value: scrubbed, redactedValues: values });
+      for (let at = 0; at <= text.length; at += 1) {
+        expect(stream([text.slice(0, at), text.slice(at)])).toEqual({
+          text: scrubbed,
+          redactedValues: values,
+        });
+      }
+      expect(stream([...text])).toEqual({ text: scrubbed, redactedValues: values });
+    },
+  );
+
   it.each(TEXTS.map((text) => [text.slice(0, 32), text]))(
     'one character at a time, and in uneven pieces, the same: %s…',
     (_label, text) => {

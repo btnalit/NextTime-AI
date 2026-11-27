@@ -1526,21 +1526,6 @@ describe('the name rules read together, each on the text as it is written (legac
       redactedValues: 1,
     });
   });
-
-  it('reads the pairs from where it is told, looking back into what comes before', () => {
-    // After a `.` the name rule takes no name, as in the whole text; and no match starts in what
-    // was read before (`secret-stream.ts`).
-    const text = `password: "a ${FAKE}"`;
-    expect(readByRules(text, { readAfter: '"hi".' })).toEqual({
-      value: text,
-      redactedValues: 0,
-    });
-    expect(readByRules(`'${FAKE} b'`, { readAfter: 'token: ' })).toEqual({
-      value: `'${FAKE} b'`,
-      redactedValues: 0,
-    });
-    expect(readByRules(text).value).toBe(`password: "${REDACTED}"`);
-  });
 });
 
 describe('a secret key after an escaped quote is no value (legacy 929)', () => {

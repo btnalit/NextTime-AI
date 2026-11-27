@@ -2101,37 +2101,15 @@ function composeWithTailCheck(
   );
 }
 
-/** What `scrubSecretValues` makes of `text` after `readAfter` with the value rules alone (no tail
- *  check), and where each stretch of it comes from in `text` (`Segment`): a stream's step, which
- *  composes with the check over the stream itself (`secret-stream.ts`). */
+/** What `scrubSecretValues` makes of `text` with the value rules alone (no tail check), and where
+ *  each stretch of it comes from in `text` (`Segment`): a stream's step, which composes with the
+ *  check over the stream itself (`secret-stream.ts`). */
 export function placedSecretValues(
   text: string,
-  options: { readonly readAfter?: string } = {},
 ): Scrubbed<string> & { readonly segments: readonly Segment[] } {
-  const before = options.readAfter ?? '';
   const floor = FLOORS.get(SECRET_VALUE_PATTERNS) ?? [];
-  const read = floorReading(before + text, SECRET_VALUE_PATTERNS, floor, before.length, true);
-  const segments: Segment[] = [];
-  let skip = before.length;
-  for (const segment of read.segments ?? []) {
-    if (skip > 0 && segment.at >= 0) {
-      // What came before is kept as it was: no match starts in it.
-      const taken = Math.min(skip, segment.text.length);
-      skip -= taken;
-      if (taken < segment.text.length) {
-        segments.push({ at: segment.at + taken - before.length, text: segment.text.slice(taken) });
-      }
-      continue;
-    }
-    segments.push(
-      segment.at >= 0 ? { at: segment.at - before.length, text: segment.text } : segment,
-    );
-  }
-  return {
-    value: read.value.slice(before.length),
-    redactedValues: read.redactedValues,
-    segments,
-  };
+  const read = floorReading(text, SECRET_VALUE_PATTERNS, floor, 0, true);
+  return { value: read.value, redactedValues: read.redactedValues, segments: read.segments ?? [] };
 }
 
 function scrubInto(text: string, state: WalkState): string {
@@ -2174,24 +2152,15 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
 /** `text` with every secret-looking value replaced. Linear in `text`; a caller holding text of
  *  unbounded size bounds it first. `patterns` defaults to `SECRET_VALUE_PATTERNS`, with the tail
  *  check (`tailCheck`, as `RedactSecretsOptions`'); a rewrite of rows already stored passes
- *  `STORED_REWRITE_SECRET_PATTERNS`, which never gets it (design D3). `readAfter` is text that came
- *  right before `text`, already read: the patterns look back into it where a match starts (a `.`
- *  before a name), and never start one in it — the value rules alone, a step of a stream, which
- *  composes the tail check over the stream itself (`secret-stream.ts`). */
+ *  `STORED_REWRITE_SECRET_PATTERNS`, which never gets it (design D3). */
 export function scrubSecretValues(
   text: string,
   options: {
     readonly patterns?: readonly SecretPattern[];
-    readonly readAfter?: string;
     readonly tailCheck?: boolean;
   } = {},
 ): Scrubbed<string> {
   const patterns = options.patterns ?? SECRET_VALUE_PATTERNS;
-  const before = options.readAfter ?? '';
-  if (before !== '') {
-    const read = scrubPlain(before + text, [], patterns, before.length);
-    return { value: read.value.slice(before.length), redactedValues: read.redactedValues };
-  }
   const state = freshState({
     patterns,
     ...(options.tailCheck !== undefined ? { tailCheck: options.tailCheck } : {}),

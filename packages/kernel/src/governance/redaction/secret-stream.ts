@@ -195,9 +195,15 @@ function wordToComeAt(raw: string, cut: number): number {
 /** Blanks, or nothing: what may stand between a value still open and a pair read as inside it. */
 const BLANKS_ONLY = /^[ \t]*$/;
 
-/** Where the text that is safe to emit ends — everything from here on is held back. `context` is
- *  the end of what was emitted before `raw`, which the patterns look back into (`CONTEXT_CHARS`). */
-function safeCut(raw: string, context: string): number {
+/** Where the text that is safe to emit ends — everything from here on is held back. `raw` is read
+ *  on its own, as `placedBefore` and `flush` read what is cut from it, not after the last
+ *  characters emitted. Those are the text as it came, and right after a value another rule hid, the
+ *  whole text reads what follows as after the mask, not after the value's last characters
+ *  (`<ntk key>api_key=a\\,-----BEGIN x`): read after them, as eight of them were until review #493
+ *  on #1619, the name was no name there, the tail check hid the rest of the line, and stream and
+ *  whole text differed at almost every cut. Elsewhere a cut falls after a blank or a CJK character,
+ *  or where a match, a secret's name, a quote, a run of backslashes or a `-----BEGIN` starts. */
+function safeCut(raw: string): number {
   let cut = raw.length;
   while (cut > 0 && !BREAKS_A_SECRET_RUN.test(raw.charAt(cut - 1))) cut -= 1;
 
@@ -233,14 +239,11 @@ function safeCut(raw: string, context: string): number {
   // What the value rules read does not turn on the cut: read once, not again each time the cut
   // moves back (review #493 on #1593: a line of JSON members, each settled at the next key, moved
   // it back one member at a time, and read the whole text again each time).
-  const read = context + raw;
   const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open' | 'settledAt'>[] = [
-    ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
-      secretMatches(valuePattern, read, context.length),
-    ),
-    ...bareValueEndsToCome(read, context.length),
+    ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) => secretMatches(valuePattern, raw)),
+    ...bareValueEndsToCome(raw),
     // And v0.70.0's, which every text is read with as well (legacy 939).
-    ...floorReadSpans(read, context.length),
+    ...floorReadSpans(raw),
   ];
   for (let moved = true; moved; ) {
     moved = false;
@@ -278,17 +281,15 @@ function safeCut(raw: string, context: string): number {
     // a key's `:` or `=`: whether the value reads on as the rest of its word turns on it
     // (`wordToComeAt`; legacy 937).
     for (const { start, end, open, settledAt } of spans) {
-      const at = start - context.length;
       if (
-        at < cut &&
-        (end - context.length > cut ||
-          end - context.length === word ||
-          end === read.length ||
-          (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))) ||
-          (settledAt !== undefined &&
-            (settledAt - context.length > cut || settledAt === read.length)))
+        start < cut &&
+        (end > cut ||
+          end === word ||
+          end === raw.length ||
+          (open === true && BLANKS_ONLY.test(raw.slice(end, cut))) ||
+          (settledAt !== undefined && (settledAt > cut || settledAt === raw.length)))
       ) {
-        cut = at;
+        cut = start;
         moved = true;
       }
     }
@@ -304,12 +305,11 @@ function safeCut(raw: string, context: string): number {
  *  that keeps the quote from closing one, as what follows does, and the character is taken off
  *  again — unless a value took it in (one opened by that quote, or a bare one that ends with an
  *  escaped quote), when the text is read on its own. */
-function placedBefore(text: string, cut: number, context: string): Placed {
-  const options = { readAfter: context };
+function placedBefore(text: string, cut: number): Placed {
   if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.slice(cut, cut + 10))) {
-    return placedSecretValues(text.slice(0, cut), options);
+    return placedSecretValues(text.slice(0, cut));
   }
-  const read = placedSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`, options);
+  const read = placedSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`);
   const last = read.segments.at(-1);
   if (
     read.value.endsWith(KEEPS_A_QUOTE_OPEN) &&
@@ -321,7 +321,7 @@ function placedBefore(text: string, cut: number, context: string): Placed {
     if (last.text.length > 1) segments.push({ at: last.at, text: last.text.slice(0, -1) });
     return { value: read.value.slice(0, -1), redactedValues: read.redactedValues, segments };
   }
-  return placedSecretValues(text.slice(0, cut), options);
+  return placedSecretValues(text.slice(0, cut));
 }
 type Placed = ReturnType<typeof placedSecretValues>;
 
@@ -350,25 +350,19 @@ export interface SecretStreamScrubber {
   flush(): Scrubbed<string>;
 }
 
-/** How much of the text already emitted the patterns look back into before what is held — as far
- *  as one looks behind where a match starts (`\u4e2d` before a key, `.` before a name) — so that
- *  the held text reads as the whole text reads it there. No match starts in it: it was read. */
-const CONTEXT_CHARS = 8;
-
 /**
  * The stream composes as a whole text does (`docs/redaction-boundary-design-2026-11-27.md` §4.3),
  * in steps that each hold what they cannot settle yet:
  *   1. the value rules read the text up to `safeCut` — what they made of it, placed in the text
  *      (`placedBefore`);
  *   2. the tail check reads the text as it came (`TailReader`, its line's state carried across
- *      pieces, not read again from `CONTEXT_CHARS`), and what it hides is hidden in what the rules
- *      kept, as far as its marks are final (`TailMasker`);
+ *      pieces), and what it hides is hidden in what the rules kept, as far as its marks are final
+ *      (`TailMasker`);
  *   3. the check reads that composed text once more, as a whole text's second reading does.
  * What all three hold together is bounded by `STREAM_HOLD_MAX_CHARS` as the rules' hold alone was:
  * past it, what is final is emitted, then one `[redacted]`, and the stream pauses.
  */
 export function createSecretStreamScrubber(): SecretStreamScrubber {
-  let context = '';
   let held = '';
   /** Where `held` starts in the text since the last flush. */
   let heldAt = 0;
@@ -440,10 +434,9 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
   function take(slice: string): StreamPiece {
     held += slice;
     steps.reader.push(slice);
-    const cut = safeCut(held, context);
+    const cut = safeCut(held);
     if (cut > 0) {
-      place(placedBefore(held, cut, context));
-      context = (context + held.slice(0, cut)).slice(-CONTEXT_CHARS);
+      place(placedBefore(held, cut));
       held = held.slice(cut);
       heldAt += cut;
     }
@@ -458,7 +451,6 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
   }
 
   function restart(): void {
-    context = '';
     held = '';
     heldAt = 0;
     steps = freshSteps();
@@ -487,7 +479,7 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
     flush() {
       let out: StreamPiece = { value: '', redactedValues: 0 };
       if (!dropping) {
-        place(placedSecretValues(held, { readAfter: context }));
+        place(placedSecretValues(held));
         out = said(composeTo(true));
       }
       restart();
