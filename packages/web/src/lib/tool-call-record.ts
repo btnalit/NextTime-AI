@@ -1,4 +1,4 @@
-import { visibleJson, visibleLines } from '@nexttime/shared';
+import { splitToolResultNote, visibleJson, visibleLines } from '@nexttime/shared';
 import type {
   ToolCallMessageContent,
   ToolCallOutcome,
@@ -139,6 +139,14 @@ export function previewDisplayText(value: ToolCallPayloadPreview): string {
   if (!looksJson) return visibleLines(value.text);
   try {
     return visibleJson(JSON.stringify(JSON.parse(trimmed), null, 2));
+  } catch {
+    // Legacy 967: a gate tool's result the Worker's tool shortened is compact JSON and a note line
+    // (`@nexttime/shared` `splitToolResultNote`): the JSON indented, the note as it is.
+  }
+  const { json, note } = splitToolResultNote(trimmed);
+  if (note === undefined) return visibleLines(value.text);
+  try {
+    return `${visibleJson(JSON.stringify(JSON.parse(json), null, 2))}\n\n${visibleLines(note)}`;
   } catch {
     return visibleLines(value.text);
   }

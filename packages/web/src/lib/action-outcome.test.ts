@@ -5,6 +5,7 @@ import {
   actionTargetLabel,
   failureKindOf,
   failureReading,
+  topLevelFieldsOf,
   waitingReason,
   waitingShortLabel,
 } from './action-outcome.js';
@@ -157,6 +158,82 @@ describe('actionOutcomeOfToolResult (legacy 287)', () => {
     expect(
       actionOutcomeOfToolResult(cutInCode.slice(0, cutInCode.indexOf('_disabled')))?.kind,
     ).toBe('outcome_unknown');
+  });
+
+  it('reads compact JSON, and the JSON before the note of a result the Worker\u2019s tool shortened (legacy 967)', () => {
+    const outcome = {
+      id: 'a1',
+      status: 'failed',
+      failureKind: 'refused',
+      reason: 'operation_disabled: off',
+      data: { items: [1, 2] },
+    };
+    expect(actionOutcomeOfToolResult(JSON.stringify(outcome))).toMatchObject({
+      kind: 'failed',
+      id: 'a1',
+    });
+    const shortened = `${JSON.stringify(outcome)}\n\n[The result was shortened to fit: data.items: 2 of 90 items.]`;
+    expect(actionOutcomeOfToolResult(shortened)).toMatchObject({ kind: 'failed', id: 'a1' });
+    expect(
+      actionOutcomeOfToolResult(JSON.stringify({ content: [{ type: 'text', text: shortened }] }))
+        ?.kind,
+    ).toBe('failed');
+  });
+
+  it('reads a compact result cut by characters, or a compact preview cut short, by its own top-level fields', () => {
+    // The envelope as it was around data cut by characters (`tool-result.ts` `characterCut`).
+    const characterCut =
+      '{"id":"a1","status":"executing","outcomeInDoubt":{"since":"2026-11-27T00:00:00Z","reason":null},"data":{"lines":["x","y' +
+      '}\n\n[Its data was cut at 20 of 9000 characters: what stands for it above is not complete JSON.]';
+    expect(actionOutcomeOfToolResult(characterCut)?.kind).toBe('in_doubt');
+    const kinded = JSON.stringify({
+      id: 'a1',
+      status: 'failed',
+      failureKind: 'not_delivered',
+      reason: `gate_token_unavailable: ${'z'.repeat(400)}`,
+    });
+    expect(actionOutcomeOfToolResult(kinded.slice(0, 80))?.kind).toBe('not_run');
+    const reasoned = JSON.stringify({
+      id: 'a1',
+      status: 'failed',
+      reason: `operation_disabled: ${'w'.repeat(400)}`,
+    });
+    expect(actionOutcomeOfToolResult(reasoned.slice(0, 80))?.kind).toBe('failed');
+    expect(actionOutcomeOfToolResult(reasoned.slice(0, reasoned.indexOf('_disabled')))?.kind).toBe(
+      'outcome_unknown',
+    );
+    // Only its own fields: a `failureKind` or an `outcomeInDoubt` inside its data says nothing.
+    const nested = JSON.stringify({
+      id: 'a1',
+      status: 'failed',
+      data: { failureKind: 'not_delivered', outcomeInDoubt: { since: 'x' } },
+      reason: `gatekeeper "g1" is not registered${'v'.repeat(400)}`,
+    });
+    expect(actionOutcomeOfToolResult(nested.slice(0, 150))?.kind).toBe('outcome_unknown');
+    const executing = JSON.stringify({
+      id: 'a1',
+      status: 'executing',
+      data: { outcomeInDoubt: {} },
+    });
+    expect(actionOutcomeOfToolResult(executing.slice(0, -1))?.kind).toBe('running');
+  });
+
+  it('reads the top-level fields of a JSON object as far as its text goes', () => {
+    expect([...topLevelFieldsOf('{"id":"a\\"1","n":3,"o":{"x":"}"},"s":"cut sh')]).toEqual([
+      ['id', 'a\\"1'],
+      ['n', '3'],
+      ['o', '{'],
+      ['s', 'cut sh'],
+    ]);
+    expect([...topLevelFieldsOf(JSON.stringify({ a: [1, { b: ']' }], c: true }, null, 2))]).toEqual(
+      [
+        ['a', '['],
+        ['c', 'true'],
+      ],
+    );
+    expect([...topLevelFieldsOf('[1,2]')]).toEqual([]);
+    expect([...topLevelFieldsOf('{"a":{"b":1')]).toEqual([['a', '{']]);
+    expect([...topLevelFieldsOf('plain text')]).toEqual([]);
   });
 
   it('is null for a result that is not an action outcome', () => {

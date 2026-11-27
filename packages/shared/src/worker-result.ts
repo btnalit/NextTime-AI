@@ -90,8 +90,8 @@ export type WorkerResultEvidence = z.infer<typeof WorkerResultEvidenceSchema>;
  *  filesystem; the kernel still never touches a Worker's workspace mount, matching every other
  *  field of this contract). `ARTIFACT_CONTENT_MAX_CHARS` bounds one artifact, `MAX_ARTIFACTS_PER_
  *  CONTRACT` how many a single contract may carry — together they cap one Task row's worst case
- *  (a few hundred KB), not the whole-contract 16 000-char gate-tool-result truncation `platform-
- *  extension/src/modes/gate-tools.ts`'s `truncateToolResult` applies to what the *model* sees.
+ *  (a few hundred KB), not the whole-contract 16 000-char gate-tool-result cap `platform-
+ *  extension/src/modes/tool-result.ts`'s `renderToolResult` applies to what the *model* sees.
  *  `content` is optional (text only, per the ops-runner prompt) — an artifact the Worker could not
  *  or chose not to inline (binary, or larger than the cap) keeps `path` alone as a description of
  *  what was produced, honestly unopenable once the container is gone; the web task page renders

@@ -7,12 +7,8 @@ import { WorkerResultContractSchema, namesASecretField } from '@nexttime/shared'
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError, refusalText } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import {
-  type AllowedOperationWire,
-  gateToolDescription,
-  gateToolName,
-  truncateToolResult,
-} from './gate-tools.js';
+import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import { paramNames, renderToolResult } from './tool-result.js';
 import { ToolCallReporter } from './worker-tool-calls.js';
 
 /**
@@ -33,8 +29,9 @@ import { ToolCallReporter } from './worker-tool-calls.js';
  * to wait for.
  *
  * S8 W3-K1 (leftover 75 first half, docs/STATUS.md §4 row 75): every gate tool result this mode
- * returns to the model goes through `gate-tools.ts`'s `truncateToolResult` — a real inventory-scan
- * Worker's own raw output alone burned ~120k token (59% of one Task's budget) with no cap.
+ * returns to the model is capped — a real inventory-scan Worker's own raw output alone burned ~120k
+ * token (59% of one Task's budget) with no cap. Legacy 967 stage 1: it goes through
+ * `tool-result.ts`'s `renderToolResult` — compact JSON, cut by whole items with a note line.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -58,6 +55,7 @@ function buildGateTool(
   usedNames: Set<string>,
 ): ToolDefinition {
   const { name, label } = gateToolName(op, usedNames);
+  const narrowingParams = paramNames(op.operation.params_schema);
 
   return {
     name,
@@ -93,11 +91,10 @@ function buildGateTool(
         // executed while the approval landed seconds later. A Worker Handle has no tool to read an
         // ActionRequest's later status (`get_action` is human-only, operator role), so the only
         // truthful summary cites the id and defers to the ActionRequest.
-        const simulateText = truncateToolResult(
+        const simulateText =
           result.simulate !== undefined
-            ? JSON.stringify(result.simulate, null, 2)
-            : '(no simulated effect reported)',
-        );
+            ? renderToolResult(result.simulate)
+            : '(no simulated effect reported)';
         const actionRequestId = typeof result.id === 'string' ? result.id : 'unknown';
         return {
           content: [
@@ -111,7 +108,7 @@ function buildGateTool(
       }
 
       return {
-        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
+        content: [{ type: 'text', text: renderToolResult(result, { narrowingParams }) }],
         details: result,
       };
     },

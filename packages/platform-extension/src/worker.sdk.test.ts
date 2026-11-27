@@ -265,6 +265,86 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
     // session/fauxProvider disposal now happens unconditionally in `afterEach` (leftover 55).
   });
 
+  it('an 18-container list over the cap reaches the model as JSON with the first containers and a note naming 18 (legacy 967, design §7)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'docker',
+            name: 'containers.list',
+            operation: {
+              mode: 'observe',
+              params_schema: {
+                type: 'object',
+                properties: { all: { type: 'boolean' }, name: { type: 'string' } },
+              },
+            },
+          },
+        ],
+      },
+    }));
+    // 18 containers with every label, the shape before legacy 966: well over 16,000 characters.
+    const containers = Array.from({ length: 18 }, (_, i) => ({
+      id: `${String(i).padStart(2, '0')}${'c'.repeat(62)}`,
+      name: `stack-service-${i}`,
+      image: `registry.example.invalid/stack/service-${i}:1.0@sha256:${'d'.repeat(64)}`,
+      state: 'running',
+      labels: Object.fromEntries(
+        Array.from({ length: 14 }, (_, j) => [
+          `com.example.label-${j}`,
+          `value-${i}-${j}-${'v'.repeat(40)}`,
+        ]),
+      ),
+    }));
+    const answer = { status: 'ok', data: { containers }, observedFactCount: 18 };
+    expect(JSON.stringify(answer).length).toBeGreaterThan(16_000);
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'list the containers' } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { objects: [] } }));
+    kernel.setHandler('observe_operation', () => ({ ok: true, result: answer }));
+    kernel.setHandler('report_task_result', () => ({ ok: true, result: { status: 'completed' } }));
+
+    const localFauxProvider = registerFauxProvider();
+    fauxProvider = localFauxProvider; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    const capturedContexts: Context[] = [];
+    localFauxProvider.setResponses([
+      () =>
+        fauxAssistantMessage(fauxToolCall('docker_containers_list', {}), { stopReason: 'toolUse' }),
+      (context) => {
+        capturedContexts.push(context);
+        return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'listed' }), {
+          stopReason: 'toolUse',
+        });
+      },
+    ]);
+
+    const started = await startWorkerSession(localFauxProvider, tmpDir);
+    session = started.session; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    await waitFor(() =>
+      kernel.requests.some((request) => request.capability === 'report_task_result'),
+    );
+
+    // What the model read back is the tool result message of its second call's context.
+    const toolResult = capturedContexts[0]?.messages.find(
+      (message) => message.role === 'toolResult',
+    );
+    const part = toolResult?.role === 'toolResult' ? toolResult.content[0] : undefined;
+    const text = part?.type === 'text' ? part.text : '';
+    const [json = '', note = ''] = text.split('\n\n');
+    const shown = JSON.parse(json) as typeof answer;
+    expect(shown.status).toBe('ok');
+    expect(shown.observedFactCount).toBe(18);
+    const kept = shown.data.containers.length;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(18);
+    expect(shown.data.containers).toEqual(containers.slice(0, kept));
+    expect(note).toContain(`data.containers: ${kept} of 18 items.`);
+    expect(note).toContain('To narrow it, this Operation takes: all, name.');
+    // The note is the platform's words (N6): nothing of the answer in it.
+    expect(note).not.toMatch(/stack-service|registry|value-|com\.example/);
+  });
+
   it('a kernel rejection of report_result reaches the model as isError:true through pi’s real wiring, the corrected call lands, and the process still exits 0 (leftover 42)', async () => {
     kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
     kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));

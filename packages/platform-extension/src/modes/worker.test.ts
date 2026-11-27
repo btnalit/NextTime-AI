@@ -255,7 +255,7 @@ describe('registerWorkerMode', () => {
     expect(executed.details).toEqual({ id: 'ar-1', status: 'executed' });
   });
 
-  it('a gate tool truncates a result larger than the cap (S8 W3-K1, leftover 75 first half)', async () => {
+  it('a gate tool cuts a result larger than the cap by whole items and says so (S8 W3-K1; legacy 967)', async () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
@@ -264,16 +264,17 @@ describe('registerWorkerMode', () => {
             gatekeeperId: 'gk-1',
             gateName: 'inventory',
             name: 'stock.list',
-            operation: { params_schema: { type: 'object' }, mode: 'observe' },
+            operation: {
+              params_schema: { type: 'object', properties: { sku_prefix: { type: 'string' } } },
+              mode: 'observe',
+            },
           },
         ],
       },
     }));
     // Comfortably over the default 16_000-char cap once JSON.stringify'd.
-    const hugeResult = {
-      status: 'ok',
-      items: Array.from({ length: 2000 }, (_, i) => ({ sku: `SKU-${i}`, qty: i })),
-    };
+    const items = Array.from({ length: 2000 }, (_, i) => ({ sku: `SKU-${i}`, qty: i }));
+    const hugeResult = { status: 'ok', data: { items }, observedFactCount: 2000 };
     kernel.setHandler('observe_operation', () => ({ ok: true, result: hugeResult }));
     const sessionStart = fake.handlers.get('session_start');
     if (!sessionStart) throw new Error('session_start handler not registered');
@@ -285,13 +286,42 @@ describe('registerWorkerMode', () => {
 
     const [firstPart] = result.content;
     const text = firstPart?.type === 'text' ? firstPart.text : '';
-    const fullLength = JSON.stringify(hugeResult, null, 2).length;
-    expect(fullLength).toBeGreaterThan(16_000);
-    expect(text.length).toBeLessThan(fullLength);
-    expect(text).toContain('more characters omitted');
-    expect(text).toContain('the full result is not shown');
-    // `details` still carries the untruncated result — only the model-facing text is capped.
+    const [json = '', note] = text.split('\n\n');
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    const shown = JSON.parse(json) as typeof hugeResult;
+    expect(shown.status).toBe('ok');
+    expect(shown.observedFactCount).toBe(2000);
+    expect(shown.data.items).toEqual(items.slice(0, shown.data.items.length));
+    expect(note).toContain(`data.items: ${shown.data.items.length} of 2000 items.`);
+    expect(note).toContain('To narrow it, this Operation takes: sku_prefix.');
+    // `details` still carries the whole result — only the model-facing text is capped (N2).
     expect(result.details).toEqual(hugeResult);
+  });
+
+  it('a gate tool result within the cap is its compact JSON (legacy 967)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'stock.get',
+            operation: { params_schema: { type: 'object' }, mode: 'observe' },
+          },
+        ],
+      },
+    }));
+    const answer = { status: 'ok', data: { sku: 'X', qty: 3 }, observedFactCount: 1 };
+    kernel.setHandler('observe_operation', () => ({ ok: true, result: answer }));
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+
+    const tool = fake.tools.get('inventory_stock_get');
+    if (!tool) throw new Error('gate tool not registered');
+    const result = await tool.execute('call-1', {}, undefined, undefined, fakeCtx());
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(answer) }]);
   });
 
   it('a gate tool returns (does not throw) the simulate text and actionRequestId on pending_approval — the loop is not blocked', async () => {

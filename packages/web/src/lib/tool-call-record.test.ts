@@ -121,6 +121,21 @@ describe('previewDisplayText', () => {
     );
   });
 
+  it('indents the JSON of a result the Worker\u2019s tool shortened and keeps its note line (legacy 967)', () => {
+    const note = '[The result was shortened to fit: data.items: 2 of 9 items.]';
+    const text = `{"data":{"items":[1,2]}}\n\n${note}`;
+    expect(previewDisplayText({ text, totalChars: text.length, truncated: false })).toBe(
+      `${JSON.stringify({ data: { items: [1, 2] } }, null, 2)}\n\n${note}`,
+    );
+    // A blank line that does not start a note, or JSON that does not parse, is left alone.
+    const pending = '{"a":1}\n\npending approval';
+    expect(
+      previewDisplayText({ text: pending, totalChars: pending.length, truncated: false }),
+    ).toBe(pending);
+    const cut = `{"data":"abc\n\n${note}`;
+    expect(previewDisplayText({ text: cut, totalChars: cut.length, truncated: false })).toBe(cut);
+  });
+
   it('shows a bidi override as \\u{XXXX} whether the text is JSON, cut or plain (review of #593)', () => {
     expect(
       previewDisplayText({

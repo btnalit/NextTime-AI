@@ -3,12 +3,9 @@ import { type AgentProposalTargetsWire, getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError, refusalText } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
-import {
-  type AllowedOperationWire,
-  gateToolDescription,
-  truncateToolResult,
-} from './gate-tools.js';
+import { type AllowedOperationWire, gateToolDescription } from './gate-tools.js';
 import { resolveInvokeWorkerCallPlan } from './invoke-worker-call.js';
+import { paramNames, renderToolResult } from './tool-result.js';
 
 /**
  * `admin` mode (S11 AA4c-2; docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §5, the
@@ -176,7 +173,14 @@ function buildGateObserveTool(
         params,
       });
       return {
-        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
+        content: [
+          {
+            type: 'text',
+            text: renderToolResult(result, {
+              narrowingParams: paramNames(op.operation.params_schema),
+            }),
+          },
+        ],
         details: result,
       };
     },
