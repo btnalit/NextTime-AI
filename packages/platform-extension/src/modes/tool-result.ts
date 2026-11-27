@@ -167,7 +167,8 @@ function plainKey(key: string, place: number): string {
  * `Authorization: Bearer …`, a JSON object in a string), so a tail that begins inside a line could
  * show a value without the name the kernel's redaction finds it by. No line starts there: no tail.
  * And no tail begins inside a PEM block whose `-----BEGIN` line was left out: it starts after the
- * block's `-----END` line instead (the kernel finds a private key by its BEGIN line).
+ * block's `-----END` line instead (the kernel finds a private key by its BEGIN line), and when the
+ * block never ends there is no tail (the kernel masks an unended block to the end of the text).
  */
 function tailStart(value: string): number {
   let at = retreat(value, STRING_TAIL);
@@ -176,6 +177,8 @@ function tailStart(value: string): number {
     if (newline === -1) return value.length;
     at = newline + 1;
   }
+  const opened = value.lastIndexOf('-----BEGIN', at - 1);
+  if (opened !== -1 && value.indexOf('-----END', opened) === -1) return value.length;
   for (;;) {
     const end = value.indexOf('-----END', at);
     if (end === -1) return at;

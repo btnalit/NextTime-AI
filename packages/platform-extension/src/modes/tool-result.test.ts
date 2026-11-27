@@ -172,6 +172,10 @@ describe('renderToolResult: long strings', () => {
     const cutPem = shownText(pem);
     expect(cutPem.text).not.toContain('KKKK');
     expect(cutPem.text.endsWith(` ...] ${'after\n'.repeat(10)}`)).toBe(true);
+    // Its BEGIN line was left out and the string ends before its END: no tail at all.
+    const unended = shownText(`${'log line\n'.repeat(150)}${marker('BEGIN')}\n${keyBody}`);
+    expect(unended.text).not.toContain('KKKK');
+    expect(unended.note).toMatch(/data\.text: 400 of \d+ characters \(start\)\./);
     // A key whose BEGIN line is in the tail stays whole there, for the kernel to find.
     const whole = `${'log\n'.repeat(700)}${marker('BEGIN')}\nKKKK\n${marker('END')}\nend`;
     expect(shownText(whole).text).toContain(`${marker('BEGIN')}\nKKKK\n${marker('END')}`);
