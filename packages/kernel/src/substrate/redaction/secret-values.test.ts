@@ -3303,6 +3303,12 @@ describe('a value with an escaped quote closed right against more of its word (l
       `"token": "${REDACTED}"api-key\\" = \\"${REDACTED}token: ${REDACTED}`,
       3,
     ],
+    [
+      'a pair right after a backslash past the first escaped quote (review #493 on #1600)',
+      `token: " api_key=\\\\\\"C:\\TOKEN='\\"'"x'\\\\\\"x${FAKE} y`,
+      `token: "${REDACTED}"${REDACTED}TOKEN='${REDACTED}'${REDACTED}`,
+      3,
+    ],
   ])('hides what main hides where a pair crosses it: %s', (_label, text, hidden, values) => {
     expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);
     expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
