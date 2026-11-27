@@ -17,7 +17,7 @@
 | 线上契约与语义约定 | `wire-contract-conventions.md`、`contracts/*.json`（`pnpm contract:check`） |
 | 怎么部署、验收、演练、排障 | `runbooks/README.md` 起步；验收 `runbooks/accept-s1.md`、`runbooks/host-accept-s2.md`、`runbooks/host-accept-s3.md`、`runbooks/host-accept-s4.md`（每个已接入系统走一遍真实内核路径） |
 | 已完成波次与阶段的历史记录 | `status-history.md`（含 2026-11-13 之前的时间线和已关闭遗留） |
-| 已完成阶段（E、R、S1–S9）的任务拆解与实现说明，0.63.0 及之前版本的主机步骤（release.md §3.1–§3.132） | `archive/e-r-s1-s9/development-tasks.md`、`archive/release-host-steps-3.1-3.132.md` |
+| 已完成阶段（E、R、S1–S9）的任务拆解与实现说明，主机已走过的版本的主机步骤（release.md §3.1–§3.132、§3.133–§3.220） | `archive/e-r-s1-s9/development-tasks.md`、`archive/release-host-steps-3.1-3.132.md`、`archive/release-host-steps-3.133-3.220.md` |
 | 测试分层与命令 | `testing.md` |
 | 自动化与发布 | `runbooks/automation.md`、`runbooks/release.md`、`CHANGELOG.md` |
 | 收敛期方案（S8 W3 起的波次、问题清单、已决遗留的落地设计） | `convergence-plan-2026-09-25.md` |
