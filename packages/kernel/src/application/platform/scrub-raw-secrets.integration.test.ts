@@ -102,6 +102,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         `logged "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\\\\\""`,
         // Legacy 921: tool output cut short inside a quoted value, which no rule read as one.
         `read {"user":"bob","password": "${PLAIN} and the rest`,
+        // Legacy 937: a quoted value hidden to its closing quote, the rest of its word kept.
+        `set TOKEN="[redacted]"${PLAIN} first`,
       ],
       model: 'm',
     };
@@ -659,6 +661,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'posted payload={\\"password\\":\\"[redacted]\\"}',
           'logged "cmd": "export API_TOKEN=\\\\\\"[redacted]\\\\\\""',
           'read {"user":"bob","password": "[redacted]',
+          'set TOKEN="[redacted]"[redacted] first',
         ],
         model: 'm',
       });

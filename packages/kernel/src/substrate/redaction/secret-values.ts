@@ -167,13 +167,26 @@ function decodesToUserPass(value: string): boolean {
  *  string, once or twice over) too: only `ESCAPED_QUOTED` reads a value that opens with
  *  backslashes and a quote, closed by as many. A value whose closing quote is not on its line
  *  (`UNCLOSED`) is written without one: it never ends with its quote, which a closed one does,
- *  and is never its opening quote alone. */
+ *  and is never its opening quote alone. One read on past its closing quote as the rest of its
+ *  word (`restOfTheWord`) is written as the two it is, each masked: its quoted part, closed, and
+ *  the rest of the word (`"[redacted]"[redacted]`). Its quotes are kept where they stand: the
+ *  rules after these read the text they rewrote, and a quote left out there pairs the quotes
+ *  after it the other way (`{"token": ""x"…_password": "…"}`). */
 function redactedValue(value: string): string {
   const opening = OPENING_QUOTE.exec(value)?.[0];
   if (opening === undefined) return REDACTED;
+  if (wordClosedAt(value, opening) !== -1) return `${opening}${REDACTED}${opening}${REDACTED}`;
   return value.endsWith(opening.slice(-1))
     ? `${opening}${REDACTED}${opening}`
     : `${opening}${REDACTED}`;
+}
+
+/** Where in `value`, which opens with `opening`, the quote stands that closed its quoted part,
+ *  when it read on past that quote as the rest of its word (`restOfTheWord`: `"x"<密钥>`); else
+ *  `-1`. Such a value holds its own `"` or `'` again and does not end with it, as no other value
+ *  the name rules read does. */
+function wordClosedAt(value: string, opening: string): number {
+  return opening.length === 1 && !value.endsWith(opening) ? value.indexOf(opening, 1) : -1;
 }
 
 /** Returns the replacement for one match, or `undefined` to keep it as it is. */
@@ -377,8 +390,32 @@ const PLAIN_QUOTED = String.raw`"[^"\r\n]*"`;
  *  no value after any other name (`UNCLOSED`). Tried only where no `"` follows on the line, at
  *  which `PLAIN_QUOTED` closes it, so it reads no next pair (`NEXT_SECRET_PAIR`) in. */
 const UNCLOSED_AFTER_A_QUOTED_KEY = String.raw`(?<="[^"\\\r\n]{1,128}"[ \t]{0,8}:[ \t]{0,8})"[^"\r\n]+`;
-const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*'|${UNCLOSED}|${bareValue('')})`;
-const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${PLAIN_QUOTED}|'[^'\r\n]*'|${UNCLOSED}|${UNCLOSED_AFTER_A_QUOTED_KEY}|${bareValue('&')})`;
+/** The rest of a word that a `"…"` or `'…'` value is closed right against (`TOKEN=""<密钥>""`,
+ *  `token="x"<密钥>`, `token='x'<密钥> …`), read as a bare run reads it (`bareValue`), to a blank or
+ *  a quote. Stopped at its quote, the value was the `""` alone, and the text after it was kept, in
+ *  every version (`APIKEY=\"TOKEN=""<密钥>""\"`; legacy 937). It starts with no character that
+ *  may follow a value's closing quote (`AFTER_A_QUOTED_VALUE`), nor a key's `:` or `=`
+ *  (`token: "password": …`, read by that key's own pair), a `\` or a quote, nor a backtick or the
+ *  full-width punctuation that ends a phrase of Chinese text (`，。、；：！？）」』】》`): what follows
+ *  there closes the code span a value is written in (`` `API_TOKEN="…"` ``) or the phrase, and
+ *  read on, the mask took it with the text up to the next blank; not after a quote a
+ *  backslash escapes, which may be one of the value's own (`password="a\"b"c`); and not where the
+ *  text up to the next quote is a key, a `:` or `=` after that quote (`token="x"x,passwordx": …`):
+ *  the quote it is closed against opens that key, which a rule after these reads on the text they
+ *  rewrote. It ends before a secret's name and its separator (`SECRET_NAME_AND_SEPARATOR`:
+ *  `token="x"api_key: …`): that pair is read by its own rule, from where it starts, as after any
+ *  value; read in, it was inside the value of a pair that crossed this one, read on past where
+ *  this one ended, and its own value was kept. Written as the two it is (`redactedValue`). */
+const restOfTheWord = (notInIt: string): string => String.raw`(?:${moreOfTheWord(notInIt)})?`;
+/** `restOfTheWord`, of at least one character. */
+const moreOfTheWord = (notInIt: string): string => {
+  const char = String.raw`(?:[^\s'"${notInIt}\\]|\\\\|\\(?!"))`;
+  return String.raw`(?<!\\["'])(?=[^\s'"\\:=,;)}\]&.|<>\x60，。、；：！？）」』】》])(?![^\s'"]*["'][ \t]{0,8}[:=])(?:(?!${SECRET_NAME_AND_SEPARATOR})${char})+`;
+};
+const quotedWord = (notInIt: string): string =>
+  String.raw`${PLAIN_QUOTED}${restOfTheWord(notInIt)}|'[^'\r\n]*'${restOfTheWord(notInIt)}`;
+const ENV_VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${quotedWord('')}|${UNCLOSED}|${bareValue('')})`;
+const VALUE = String.raw`(${ESCAPED_QUOTED}|${QUOTED}|${quotedWord('&')}|${UNCLOSED}|${UNCLOSED_AFTER_A_QUOTED_KEY}|${bareValue('&')})`;
 const NOT_ALREADY_REDACTED = String.raw`(?!(?:\\+"|["'])?\[redacted\])`;
 /** The quote a quoted value opens with — `"`, `'`, or the backslashes before a `"`. */
 const OPENING_QUOTE = /^(?:\\+"|["'])/;
@@ -664,6 +701,44 @@ const NAMED_VALUES: ValuePatternsReadTogether = {
   together: [ENV_PAIR, NAME_PAIR, FLAG_PAIR, ESCAPED_JSON_NAME_PAIR, JSON_NAME_PAIR],
 };
 
+/** `NOT_ALREADY_REDACTED`, but where the mask an earlier release wrote for a `"…"` or `'…'` value
+ *  has more of its word right against its closing quote, which that release kept as written
+ *  (`TOKEN="[redacted]"<密钥>`, written for `TOKEN="x"<密钥>` or `TOKEN=""<密钥>`; legacy 937,
+ *  review #493 on #1597): there the value is read again, as the quoted value and the rest of its
+ *  word that it is, and hidden. Not where that rest is a mask already, as the rules write such a
+ *  value now (`"[redacted]"[redacted]`), nor where they read no rest at all (`moreOfTheWord`: a
+ *  `，` after the quote, a key's quote and `:`, a secret's name): a row written from now on is not
+ *  rewritten again. For rows already stored only (`STORED_NAMED_VALUES`). */
+const notAlreadyRedactedInStore = (notInIt: string): string => {
+  const more = String.raw`(?!\[redacted\])${moreOfTheWord(notInIt)}`;
+  return String.raw`(?!(?!"\[redacted\]"${more}|'\[redacted\]'${more})(?:\\+"|["'])?\[redacted\])`;
+};
+
+/** `rule` with its value read as in `notAlreadyRedactedInStore`. */
+function readingStoredMasks(rule: ValuePattern, notInIt: string, value: string): ValuePattern {
+  if (rule.value === undefined) return rule;
+  return {
+    ...rule,
+    pattern: new RegExp(rule.pattern.source, rule.pattern.flags),
+    value: {
+      names: rule.value.names,
+      pattern: new RegExp(`${notAlreadyRedactedInStore(notInIt)}${value}`, 'y'),
+    },
+  };
+}
+
+/** `NAMED_VALUES` over rows already stored: the env-line, name and `--flag` rules also read a
+ *  mask an earlier release left with more of its word (`notAlreadyRedactedInStore`). */
+const STORED_NAMED_VALUES: ValuePatternsReadTogether = {
+  together: [
+    readingStoredMasks(ENV_PAIR, '', ENV_VALUE),
+    readingStoredMasks(NAME_PAIR, '&', VALUE),
+    readingStoredMasks(FLAG_PAIR, '&', VALUE),
+    ESCAPED_JSON_NAME_PAIR,
+    JSON_NAME_PAIR,
+  ],
+};
+
 /** Applied in order to every string. Exported for `secret-stream.ts`, which must know where a
  *  match starts and ends (`secretMatches`). */
 export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
@@ -706,10 +781,13 @@ export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
  * bytes in base64url, so masking it there would lose every digest and public key in that history for
  * good: such a value is counted by row id instead (`PLATFORM_KEY_SHAPE_PATTERNS`), for the keys
  * still valid among them to be found and rotated. What is written from now on is masked by the full
- * set.
+ * set. Its name rules read one thing more, which only rows an earlier release wrote hold: a quoted
+ * value's mask with the rest of its word kept after it (`STORED_NAMED_VALUES`; legacy 937).
  */
 export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
-  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY);
+  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY).map(
+    (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
+  );
 
 /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
  *  counts. */
@@ -936,6 +1014,13 @@ function restOfValue(match: ReadMatch, from: number, text: string): string | und
     return closing.endsWith(text.slice(from, match.end)) ? undefined : `${REDACTED}${closing}`;
   }
   if (from <= match.valueAt) return text.slice(from, match.valueAt) + redactedValue(value);
+  const closedAt = opening === undefined ? -1 : wordClosedAt(value, opening);
+  if (opening !== undefined && closedAt !== -1) {
+    // A word (`redactedValue`): the rest of its quoted part and its quote, then the rest of it.
+    const quoteAt = match.valueAt + closedAt;
+    if (from < quoteAt) return `${REDACTED}${opening}${REDACTED}`;
+    return from === quoteAt ? `${opening}${REDACTED}` : REDACTED;
+  }
   const closing =
     opening !== undefined && value.length > opening.length && value.endsWith(opening.slice(-1))
       ? opening
@@ -959,6 +1044,9 @@ interface TakenMatch {
    *  value is not quoted or not closed. */
   closingQuote: string;
   closingQuoteAt: number;
+  /** Where the value it ends with starts, when that value is a word read on past the quote that
+   *  closed its quoted part (`restOfTheWord`), which is then `closingQuote`; else `-1`. */
+  wordAt: number;
   /** The quote the value it ends with opens with, when that value is not closed; else `''`. */
   openQuote: string;
   /** The same of the last value left out inside it since a match last crossed it, and where that
@@ -974,22 +1062,34 @@ interface TakenMatch {
 }
 
 /** The quote that closes `match`'s value, and where it starts — or, when the value is quoted but
- *  not closed, the quote it opens with. */
+ *  not closed, the quote it opens with. A value read on past that quote as the rest of its word
+ *  (`restOfTheWord`: `"x"<密钥>`) is closed by it, as it was before it read on: it holds its own `"`
+ *  or `'` again, where no value opened by one and not closed does. */
 function quotesOf(
   match: ReadMatch,
   text: string,
-): Pick<TakenMatch, 'closingQuote' | 'closingQuoteAt' | 'openQuote' | 'jsonStrings'> {
+): Pick<TakenMatch, 'closingQuote' | 'closingQuoteAt' | 'wordAt' | 'openQuote' | 'jsonStrings'> {
   const value = text.slice(match.valueAt, match.end);
   const opening = OPENING_QUOTE.exec(value)?.[0];
   const jsonStrings = match.jsonStrings ?? 0;
   if (opening === undefined) {
-    return { closingQuote: '', closingQuoteAt: -1, openQuote: '', jsonStrings };
+    return { closingQuote: '', closingQuoteAt: -1, wordAt: -1, openQuote: '', jsonStrings };
+  }
+  const closedInIt = jsonStrings === 0 ? wordClosedAt(value, opening) : -1;
+  if (closedInIt !== -1) {
+    return {
+      closingQuote: opening,
+      closingQuoteAt: match.valueAt + closedInIt,
+      wordAt: match.valueAt,
+      openQuote: '',
+      jsonStrings,
+    };
   }
   if (!closedByItsQuote(value, opening, jsonStrings)) {
-    return { closingQuote: '', closingQuoteAt: -1, openQuote: opening, jsonStrings };
+    return { closingQuote: '', closingQuoteAt: -1, wordAt: -1, openQuote: opening, jsonStrings };
   }
   const closingQuoteAt = match.end - opening.length;
-  return { closingQuote: opening, closingQuoteAt, openQuote: '', jsonStrings };
+  return { closingQuote: opening, closingQuoteAt, wordAt: -1, openQuote: '', jsonStrings };
 }
 
 /** How many strings a value is a JSON string written in (`ValuePattern.jsonStrings`); `0` for one
@@ -1072,6 +1172,7 @@ function goOnTo(match: TakenMatch, quote: string, text: string, jsonStrings: Jso
   match.end = next.found ? next.at + quote.length : next.at;
   match.closingQuote = next.found ? quote : '';
   match.closingQuoteAt = next.found ? next.at : -1;
+  match.wordAt = -1;
   match.openQuote = next.found ? '' : quote;
 }
 
@@ -1268,6 +1369,20 @@ function readTogether(
         last.insideOpenEnd = first.end;
         last.insideOpenJsonStrings = first.jsonStrings ?? 0;
       }
+      // Its value holds the quote that closed the quoted part of the word the match taken ends
+      // with (`restOfTheWord`): that word was closed by a quote not its own, and goes on past it,
+      // as where such a pair crosses it (`TOKEN='\"x\"=\"'<密钥>"&…`).
+      if (
+        inside &&
+        first.replacement !== undefined &&
+        last.wordAt !== -1 &&
+        first.start > last.wordAt &&
+        last.closingQuoteAt >= first.valueAt + openingQuoteLength(first, text) &&
+        last.closingQuoteAt < first.end
+      ) {
+        last.crossedAt = last.end;
+        goOnTo(last, last.closingQuote, text, last.jsonStrings);
+      }
     } else if (
       last !== undefined &&
       first.start >= last.end &&
@@ -1291,6 +1406,7 @@ function readTogether(
       last.end = first.valueAt + quote.length;
       last.closingQuote = quote;
       last.closingQuoteAt = first.valueAt;
+      last.wordAt = -1;
       last.openQuote = '';
       last.insideOpenQuote = '';
       last.settledAt = jsonGoesOnAfterItsClose(text, first.valueAt, last.jsonStrings);
@@ -1334,6 +1450,8 @@ function readTogether(
         append(last, text.slice(last.end, first.end));
       } else if (last.masked && rest.startsWith(REDACTED)) {
         append(last, rest.slice(REDACTED.length));
+        // A word's rest is masked (`redactedValue`); the value after it is another one.
+        if (last.wordAt !== -1) last.values += 1;
       } else {
         append(last, rest);
         last.values += 1;

@@ -466,6 +466,25 @@ const SHAPES = [
   `{"log": "{\\"passwordx\\": \\"a token: \\"}", "password:k": " ${FAKE}"}`,
   `{"passwordx": "a token: "} and ${FAKE}"`,
   `[{"passwordx": "a token: "}] [{"password:k": " ${FAKE}"}]`,
+  // A quoted value closed right against more of its word, inside a `\"…\"` value too; text right
+  // against its quote up to a key's quote and `:`, which the value does not read in, with `"` and
+  // `'`; a JSON key after it, and one after an empty value; a code span's backtick after it,
+  // which the value does not read on to (legacy 937).
+  `TOKEN=""${FAKE}""`,
+  `token='x'${FAKE} y`,
+  `APIKEY=\\"TOKEN=""${FAKE}""\\"`,
+  `token="x"x,passwordx": "${FAKE}"`,
+  `token='x'x,api_key': '${FAKE}'`,
+  `token="x"x,"api_key": "${FAKE}"`,
+  `{"token": ""x"password": "${FAKE}"}`,
+  `\`API_TOKEN="${FAKE}"\` x`,
+  // A `'…'` key's quote and blanks, then its `:` or `=`, which the cut after them waits for, past
+  // more than one blank; and a quote nine blanks before a `:`, no key's (reviews #493 and #501 on
+  // #1597).
+  `token='x'a'\t: 1`,
+  `--token 'x'a' =  1`,
+  `token='x'y'  = 1`,
+  `TOKEN=""${FAKE}"         : 1`,
 ];
 
 /** What surrounds a shape: nothing; prose; CJK and a newline; an apostrophe, an unclosed quote,
@@ -594,10 +613,13 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
   // the other one pinned here before, stream as the whole text now (`SHAPES`). This one does too
   // since every text is read with v0.70.0's rules as well (legacy 939): v0.70.0 reads the value
   // after `token: ` on to the end of the line, and the stream does not cut inside what it reads.
+  // The `note:` written right against the `""` after `API_TOKEN=` is hidden with it since a quoted
+  // value is read on to the end of a word closed right against it (legacy 937). Cut in two, the
+  // stream still shows the last value where main's did as well (legacy 920).
   it.each([
     [
       String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
-      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"note: a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
+      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"${REDACTED} a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
     ],
   ])(
     'quotes many deep on a line, which main streamed apart from the whole, stream as it: %s',
@@ -648,6 +670,16 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
     expect(createSecretStreamScrubber().push('token=x,"password": "note": ').value).toBe(
       `token=${REDACTED}"password": "${REDACTED}": `,
     );
+  });
+
+  it("holds text right against a value's closing quote while a key's quote and `:` may still come (legacy 937)", () => {
+    // Cut where the key's name starts, the text before it read `x,` as the rest of the value's
+    // word; the whole text reads it as the key's.
+    const scrubber = createSecretStreamScrubber();
+    expect(scrubber.push(`token='x'x,api_key': '${FAKE}' ok`).value).toBe(
+      `token='${REDACTED}'x,api_key': '${REDACTED}' `,
+    );
+    expect(scrubber.flush().value).toBe('ok');
   });
 
   it('lets a value still open go once more than blanks follows it (legacy 934)', () => {
