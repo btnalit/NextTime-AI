@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DISPLAY_NAME_MAX_LENGTH, LOGIN_MAX_LENGTH } from '@nexttime/shared';
+import { DISPLAY_NAME_MAX_LENGTH, LOGIN_MAX_LENGTH, maskSecretFields } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
@@ -1476,9 +1476,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           login,
           required: false,
           consoleSessionsRevoked: otherConsoleSessions,
-          membershipCredentialsCleared: 1,
+          membershipAccessRevoked: 1,
         });
         expect(JSON.stringify(row?.payload)).not.toContain('correct horse');
+        // No field reads as a secret's: the audit pages and the kernel's reads mask by name, and a
+        // count under `…Credentials…` showed as `[redacted]` (web-e2e on #1627).
+        expect(maskSecretFields(row?.payload)).toEqual(row?.payload);
 
         expect((await me(app, making)).statusCode).toBe(200);
         expect((await me(app, other)).statusCode).toBe(401);
