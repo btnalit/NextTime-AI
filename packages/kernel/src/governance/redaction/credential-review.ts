@@ -157,8 +157,8 @@ export function redactedForAudit(fields: Record<string, unknown>): Record<string
 }
 
 /** Only the values that are almost certainly a credential themselves, whatever field holds them
- *  (`HIGH_CONFIDENCE_SECRET_PATTERNS`: a PEM private key, a JWT, a vendor key, an issued-looking
- *  `Bearer` / `Authorization: token` value, a `Basic` user:password, a URL's literal password),
+ *  (`HIGH_CONFIDENCE_SECRET_PATTERNS`: a PEM private key, a JWT, a vendor key, a platform API key
+ *  with its `ntk_` prefix, an issued-looking `Bearer` / `Authorization: token` value, a `Basic` user:password, a URL's literal password),
  *  with no field-name rule. For refusing content
  *  outright: a field's name alone (`pageToken`, `accessKeyId`) is too often an ordinary cursor or
  *  id, and the other value patterns hit ordinary query text (`|= "Authorization: failed"`,
@@ -353,8 +353,8 @@ export function redactedPathsIn(value: unknown): readonly string[] {
 
 /**
  * An observe-class Operation's params carrying a value that is almost certainly a credential,
- * whatever field holds it (`findCredentialValues`: a PEM private key, a JWT, a vendor key, an
- * issued-looking `Bearer` or `Authorization: token` value, a `Basic` user:password, a URL's
+ * whatever field holds it (`findCredentialValues`: a PEM private key, a JWT, a vendor key, a
+ * platform API key with its `ntk_` prefix, an issued-looking `Bearer` or `Authorization: token` value, a `Basic` user:password, a URL's
  * literal password). Refused before anything reaches the gate: an observation runs with no
  * approval (design doc §11 "观察免审"), so nobody would see a credential an agent was talked into
  * sending. A gate authenticates with the credentials configured on it, never with one in a call's

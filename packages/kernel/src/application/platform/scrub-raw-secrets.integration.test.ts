@@ -89,8 +89,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       otherObservation: randomUUID(),
     };
     const turnMetadata = {
-      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}`,
-      decisions: [`use PGPASSWORD=${FAKE}`, 'keep the plain one', `pin ${KEY_SHAPE}`],
+      // `--password`: a quoted value written with \" as releases before legacy 918 split it.
+      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}; --password [redacted]"${PLAIN}\\"`,
+      decisions: [
+        `use PGPASSWORD=${FAKE}`,
+        'keep the plain one',
+        `pin ${KEY_SHAPE}`,
+        // A quoted value written with \" as releases before legacy 918 split it.
+        `ran sh -c "export API_TOKEN=[redacted]"${PLAIN}\\""`,
+        // Review #501 on #1575: a JSON body inside a string, and a value inside one twice over.
+        `posted payload={\\"password\\":\\"${PLAIN}\\"}`,
+        `logged "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\\\\\""`,
+        // Legacy 921: tool output cut short inside a quoted value, which no rule read as one.
+        `read {"user":"bob","password": "${PLAIN} and the rest`,
+        // Legacy 937: a quoted value hidden to its closing quote, the rest of its word kept.
+        `set TOKEN="[redacted]"${PLAIN} first`,
+      ],
       model: 'm',
     };
     const decisionsOnlyMetadata = { decisions: ['keep it', `pin ${KEY_SHAPE}`], model: 'm' };
@@ -102,7 +116,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       outcome: 'done',
       args: { text: '{"password":"[redacted]"}', totalChars: 30, truncated: false },
       result: {
-        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "x": "${KEY_SHAPE}"\n}`,
+        // `cmd`: a quoted value as releases before legacy 916 split it (`\` taken for the value).
+        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
         totalChars: 70,
         truncated: false,
       },
@@ -315,7 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             ids.agentDecision,
             ids.turn,
-            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE}`,
+            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE} and before that --password [redacted]"${PLAIN}\\"`,
             ids.approvalDecision,
             ids.approvalActivity,
             `approved; PGPASSWORD=${FAKE}`,
@@ -637,12 +652,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       const after = await snapshot();
 
       expect(after.turn).toEqual({
-        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}`,
-        decisions: ['use PGPASSWORD=[redacted]', 'keep the plain one', `pin ${KEY_SHAPE}`],
+        summary: `ran env: CAPABILITY_HANDLE=[redacted]; digest ${KEY_SHAPE}; --password \\"[redacted]\\"`,
+        decisions: [
+          'use PGPASSWORD=[redacted]',
+          'keep the plain one',
+          `pin ${KEY_SHAPE}`,
+          'ran sh -c "export API_TOKEN=\\"[redacted]\\""',
+          'posted payload={\\"password\\":\\"[redacted]\\"}',
+          'logged "cmd": "export API_TOKEN=\\\\\\"[redacted]\\\\\\""',
+          'read {"user":"bob","password": "[redacted]',
+          'set TOKEN="[redacted]"[redacted] first',
+        ],
         model: 'm',
       });
       expect(after.agentDecision).toBe(
-        `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=[redacted]`,
+        `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=[redacted] and before that --password \\"[redacted]\\"`,
       );
       // A person's Decision is not agent text: out of this scrub's scope.
       expect(after.approvalDecision).toBe(`approved; PGPASSWORD=${FAKE}`);
@@ -650,9 +674,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         ...toolContent,
         result: {
           ...toolContent.result,
-          text: `{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]",\n  "x": "${KEY_SHAPE}"\n}`,
+          text: `{\n  "user": "bob",\n  "password": "[redacted]",\n  "note": "token=[redacted]",\n  "cmd": "export API_TOKEN=\\"[redacted]\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
         },
-        redactedValues: 3,
+        redactedValues: 4,
       });
       expect(after.cleanTool).toEqual(cleanToolContent);
       // The platform's copy loses what could carry a credential; the Gatekeeper keeps its own.

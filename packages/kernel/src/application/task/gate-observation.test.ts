@@ -193,6 +193,35 @@ describe('gatePayloadKeptRaw — what the scrub counts (legacy 817)', () => {
     expect(gatePayloadKeptRaw(storedBefore({ rows: rows(400) }))).toBe(false);
   });
 
+  it('a result stored cut reads its strings decoded: a secret on its own line is found (legacy 916)', () => {
+    const log = `start\nPGPASSWORD=${PLAIN}\ndone`;
+    const before = storedBefore({ log, rows: rows(400) });
+    expect(before.truncated).toBe(true);
+    // The text holds the line after `\n`, which the value patterns over it pass.
+    expect(before.payload).toContain(`\\nPGPASSWORD=${PLAIN}`);
+    expect(gatePayloadKeptRaw(before)).toBe(true);
+    // Written now, it is hidden in the kept copy, which is not counted, with or without the marker.
+    const { payloadRedacted: _, ...unmarked } = storedNow({ log, rows: rows(400) });
+    expect(unmarked.payload).toContain('"log":"start\\nPGPASSWORD=[redacted]\\ndone"');
+    expect(gatePayloadKeptRaw(unmarked)).toBe(false);
+  });
+
+  it('a result stored cut inside its last string reads that string decoded too', () => {
+    const payload = { rows: rows(1), log: `start\nPGPASSWORD=${PLAIN}\n${'x'.repeat(10_000)}` };
+    const before = storedBefore(payload);
+    expect(before.truncated).toBe(true);
+    expect(before.payload).toMatch(/"log":"start\\nPGPASSWORD=hunter2-plain-word\\nx+… \[/);
+    expect(gatePayloadKeptRaw(before)).toBe(true);
+    const { payloadRedacted: _, ...unmarked } = storedNow(payload);
+    expect(gatePayloadKeptRaw(unmarked)).toBe(false);
+    // A quoted value the kept copy hid: read as written, its `\\"[redacted]\\"` would change.
+    const quoted = { rows: rows(1), log: `export API_TOKEN="${PLAIN}"\n${'x'.repeat(10_000)}` };
+    const { payloadRedacted: __, ...kept } = storedNow(quoted);
+    expect(kept.payload).toContain('API_TOKEN=\\"[redacted]\\"');
+    expect(gatePayloadKeptRaw(kept)).toBe(false);
+    expect(gatePayloadKeptRaw(storedBefore(quoted))).toBe(true);
+  });
+
   it('a row written now is marked as the kept copy and never counted', () => {
     for (const payload of [
       { database: { user: 'app', password: PLAIN } },

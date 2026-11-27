@@ -10,9 +10,12 @@ import {
 } from '../../governance/connections/index.js';
 import {
   STORED_REWRITE_SECRET_PATTERNS,
+  type Scrubbed,
   findSuspectedSecrets,
+  platformApiKeys,
   platformKeyShapes,
   redactSuspectedSecrets,
+  repairSplitQuotedMasks,
   scrubSecretValues,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
@@ -31,12 +34,14 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *
  * **Rewritten** — copies people read, scrubbed the way the write path now scrubs them:
  *   - `turnReports`: an agent Turn's `activities.metadata.summary` / `.decisions` (`report_turn`,
- *     legacy 183) — every secret-looking value but a platform API key's shape
- *     (`STORED_REWRITE_SECRET_PATTERNS`; see `*KeyShapes` below);
+ *     legacy 183) — a quoted value written with `\"` that an earlier release split rewritten as it
+ *     is written now (`repairSplitQuotedMasks`), then every secret-looking value but a platform API
+ *     key's shape (`STORED_REWRITE_SECRET_PATTERNS`; see `*KeyShapes` below);
  *   - `decisions`: the `summary` of a Decision whose Activity is an agent Turn (`record_decision`,
  *     legacy 183) — likewise;
- *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — the key rule
- *     over JSON text, then the value patterns but the key's shape (application/chat's
+ *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — a split quoted
+ *     value rewritten likewise, the key rule over JSON text, its escaped strings scrubbed decoded
+ *     (legacy 916), then the value patterns but the key's shape over the rest (application/chat's
  *     `rescrubStoredToolCallResult`);
  *   - `selfConnectionAddresses`: the copy of a self-connected gate's `target` / `endpoint` the
  *     platform plane shows (`workspace_self_connections`, core 0045) — copied from a Gatekeeper
@@ -99,7 +104,7 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *     dump only; Observations are insert-only (core 0035 revokes UPDATE), the provenance of what
  *     was observed, so — like a Fact — none is rewritten here;
  *   - `turnReportKeyShapes` / `decisionKeyShapes` / `toolCallRecordKeyShapes`: a row of the three
- *     rewritten categories above still holding a platform API key standing alone (43 base64url
+ *     rewritten categories above still holding a pre-prefix platform API key standing alone (43 base64url
  *     characters, `PLATFORM_KEY_SHAPE_PATTERNS`; legacy 168 review). The rewrite leaves that shape:
  *     it is any 32 bytes in base64url — a digest, a public key — and a rewrite cannot be undone, so
  *     the row is listed by id for the keys still valid among them to be found and rotated. Read
@@ -118,7 +123,8 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * credential hashes, `principals.api_key_hash` and `users.password_hash`): a person's chat message,
  * an agent's reply, an Operation call's `action_requests.params`, a Worker's report, a note, a
  * proposal — wherever a key could have been pasted or echoed, not only where the scans above look.
- * Every value of a platform API key's shape in them is hashed the way `principals.api_key_hash`
+ * Every platform API key in them — a prefixed one (`ntk_…`, legacy 906) or a value of the shape
+ * keys had before the prefix (`platformApiKeys`) — is hashed the way `principals.api_key_hash`
  * stores a key (`hashApiKey`) and looked up there. A match is a key still issued, listed
  * (`onLiveApiKey`, and the first `MAX_EXAMPLES` as `examples`) by ids only: the table and the row's
  * primary key (its `ctid` for a table without one), the Principal holding the key (one key per
@@ -138,8 +144,9 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
  * no UPDATE on `decisions` or `chat_messages`, core 0035 / 0008). A rewrite is conditional on the
  * value it read (`… and <column> = <what was read>`), so a row changed in between is left as it is
- * (`skipped`) for the next run. A rewrite changes a value only to the mask, so a second run finds
- * nothing to do.
+ * (`skipped`) for the next run. A rewrite only hides more of a value, as the mask. A second run
+ * finds nothing to do in almost every row, but not in all: in a few, the rules read the rewritten
+ * value on and hide a little more (release.md §3.219: a third run finds nothing more).
  *
  * **Audit.** An executing run writes one platform audit row, `cli.raw_secrets_scrubbed`, with the
  * counts — also when it fails part-way, so the windows that did commit are on record
@@ -346,6 +353,17 @@ function connectedSystemRewrite(
 /** What a rewrite of these rows hides: every value pattern but a platform API key's shape. */
 const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 
+/** Agent text as stored, scrubbed the way it is written now: a quoted value an earlier release
+ *  split (`[redacted]"…\"`) written whole first (`repairSplitQuotedMasks`), then `STORED_REWRITE`. */
+function rescrubStoredText(text: string): Scrubbed<string> {
+  const repaired = repairSplitQuotedMasks(text);
+  const scrubbed = scrubSecretValues(repaired.value, STORED_REWRITE);
+  return {
+    value: scrubbed.value,
+    redactedValues: repaired.redactedValues + scrubbed.redactedValues,
+  };
+}
+
 /** How many values of a platform API key's shape `text` holds (0 for a non-string). */
 function keyShapes(text: unknown): number {
   return typeof text === 'string' ? platformKeyShapes(text).length : 0;
@@ -368,16 +386,16 @@ function shownRowKey(row: readonly string[]): string[] {
   );
 }
 
-/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key shape in
- *  `value` as read: every string at any depth, object keys included. The shapes themselves go no
- *  further than this function. */
+/** The hash `principals.api_key_hash` would hold (`hashApiKey`) of every platform API key in
+ *  `value` as read, prefixed or of the pre-prefix shape (`platformApiKeys`): every string at any
+ *  depth, object keys included. The keys themselves go no further than this function. */
 function keyShapeHashes(value: unknown): Set<string> {
   const hashes = new Set<string>();
   const stack: unknown[] = [value];
   while (stack.length > 0) {
     const next = stack.pop();
     if (typeof next === 'string') {
-      for (const shape of platformKeyShapes(next)) hashes.add(hashApiKey(shape));
+      for (const key of platformApiKeys(next)) hashes.add(hashApiKey(key));
     } else if (Array.isArray(next)) {
       for (const item of next) stack.push(item);
     } else if (next !== null && typeof next === 'object') {
@@ -500,7 +518,7 @@ function scrubbedStrings(values: readonly unknown[]): { values: unknown[]; hidde
   let hidden = 0;
   const out = values.map((value) => {
     if (typeof value !== 'string') return value;
-    const scrubbed = scrubSecretValues(value, STORED_REWRITE);
+    const scrubbed = rescrubStoredText(value);
     hidden += scrubbed.redactedValues;
     return scrubbed.value;
   });
@@ -545,7 +563,7 @@ const SCANS: readonly Scan[] = [
       const patch: Record<string, unknown> = {};
       let hidden = 0;
       if (typeof metadata.summary === 'string') {
-        const scrubbed = scrubSecretValues(metadata.summary, STORED_REWRITE);
+        const scrubbed = rescrubStoredText(metadata.summary);
         if (scrubbed.value !== metadata.summary) patch.summary = scrubbed.value;
         hidden += scrubbed.redactedValues;
       }
@@ -578,7 +596,7 @@ const SCANS: readonly Scan[] = [
     window: decisionWindow,
     inspect: (row) => {
       const summary = (row as ScannedRow & { summary: string }).summary;
-      const scrubbed = scrubSecretValues(summary, STORED_REWRITE);
+      const scrubbed = rescrubStoredText(summary);
       if (scrubbed.value === summary) return null;
       return {
         values: scrubbed.redactedValues,

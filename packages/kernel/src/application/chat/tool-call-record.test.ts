@@ -1,6 +1,6 @@
 import { ToolCallMessageContentSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { REDACTED } from '../../governance/redaction/index.js';
+import { REDACTED, scrubSecretValues } from '../../governance/redaction/index.js';
 import {
   MESSAGE_TEXT_MAX_CHARS,
   TOOL_CALL_ARGS_PREVIEW_CHARS,
@@ -9,6 +9,7 @@ import {
   redactMessageContent,
   redactToolArgs,
   redactToolResult,
+  rescrubStoredToolCallResult,
 } from './tool-call-record.js';
 
 /** A Handle-shaped compact JWT (header `{"alg":"EdDSA"}`). Synthetic — `.gitleaks.toml` allows
@@ -331,5 +332,250 @@ describe('legacy 819 — reading stops, a secret never shows', () => {
     expect(reply.cut).toBe(true);
     expect(reply.value.text).not.toContain('qz7');
     expect(String(reply.value.text).startsWith('a'.repeat(MESSAGE_TEXT_MAX_CHARS - 20))).toBe(true);
+  });
+});
+
+describe('review #493 on #1571 — a key on its own line of a tool’s JSON output', () => {
+  /** A platform API key as minted before legacy 906, and with its prefix. Synthetic —
+   *  `.gitleaks.toml` allows `abcdefghijklmnopqrstuvwxyz`. */
+  const OLD_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+  const KEY = `ntk_${OLD_KEY}`;
+
+  it('is hidden in the live result and in the record — `\\n` before it is a line break', () => {
+    // A Handle the same way (review #501 on #1571).
+    for (const key of [KEY, OLD_KEY, HANDLE]) {
+      // `cat` of a file holding only the key: the result's text part is JSON, so the line break
+      // before the key reaches the scrub as `\n`.
+      const result = textResult(JSON.stringify({ stdout: `line1\n${key}\n`, code: 0 }));
+      const live = redactToolResult(result, 'bash');
+      expect(JSON.stringify(live.value)).not.toContain(key.slice(-20));
+      expect(live.redactedValues).toBe(1);
+      const stored = record({ result, hasResult: true });
+      expect(stored.result?.text).toBe(JSON.stringify({ stdout: `line1\n${REDACTED}\n`, code: 0 }));
+    }
+  });
+});
+
+describe('legacy 916 — a secret on its own line of a tool’s JSON output, by its name', () => {
+  /** Synthetic — `.gitleaks.toml` allows `abcdefghijklmnopqrstuvwxyz`. */
+  const SECRET = 'FAKEabcdefghijklmnopqrstuvwxyz';
+  /** `env` through a capability: its stdout reaches the scrub as JSON text, each line after `\n`. */
+  const dump = JSON.stringify({
+    stdout: `HOME=/workspace\nPGPASSWORD=${SECRET}\nAWS_SECRET_ACCESS_KEY=${SECRET}9\n`,
+    code: 0,
+  });
+  const hidden = JSON.stringify({
+    stdout: `HOME=/workspace\nPGPASSWORD=${REDACTED}\nAWS_SECRET_ACCESS_KEY=${REDACTED}\n`,
+    code: 0,
+  });
+
+  it('is hidden in the live result and in the record, counted the same', () => {
+    const result = textResult(dump);
+    const live = redactToolResult(result, 'some_tool');
+    expect(live.value).toEqual(textResult(hidden));
+    expect(live.redactedValues).toBe(2);
+    const stored = record({ name: 'some_tool', result, hasResult: true });
+    expect(stored.result?.text).toBe(hidden);
+    expect(stored.redactedValues).toBe(2);
+  });
+
+  it('a stored record that kept it is rewritten the same way, once', () => {
+    const stored = { ...record({ name: 'some_tool' }), result: { text: dump }, redactedValues: 0 };
+    const once = rescrubStoredToolCallResult(stored);
+    expect(once.value).toMatchObject({ result: { text: hidden }, redactedValues: 2 });
+    expect(once.redactedValues).toBe(2);
+    expect(rescrubStoredToolCallResult(once.value)).toEqual({
+      value: once.value,
+      redactedValues: 0,
+    });
+  });
+
+  it('the rewrite leaves a bare platform-key shape on its own line, as it leaves one anywhere', () => {
+    // One-way, and that shape is any 32 bytes in base64url: the scrub counts it instead.
+    const text = JSON.stringify({ stdout: 'line1\nFAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ\n' });
+    const stored = { ...record({ name: 'some_tool' }), result: { text }, redactedValues: 0 };
+    expect(rescrubStoredToolCallResult(stored)).toEqual({ value: stored, redactedValues: 0 });
+  });
+
+  it('an arg’s secret value the result quotes is hidden though JSON escaped a character of it', () => {
+    // A quote and a backslash: the JSON text carries `\"` and `\\`, so the literal is not in it.
+    const args = { password: 'pa"ss\\word-9' };
+    const result = textResult(JSON.stringify({ stdout: `login pa"ss\\word-9 failed` }));
+    const live = redactToolResult(result, 'some_tool', args);
+    expect(JSON.stringify(live.value)).not.toContain('word-9');
+    const stored = record({ name: 'some_tool', args, hasArgs: true, result, hasResult: true });
+    expect(stored.result?.text).toBe(JSON.stringify({ stdout: `login ${REDACTED} failed` }));
+    expect(stored.redactedValues).toBe(1 + 1);
+  });
+
+  it('a quoted value is hidden once and the text stays JSON (review #493 on #1573)', () => {
+    const stdout = `export API_TOKEN="${SECRET}"\nok`;
+    const result = textResult(JSON.stringify({ stdout }));
+    const expected = JSON.stringify({ stdout: `export API_TOKEN="${REDACTED}"\nok` });
+    const live = redactToolResult(result, 'some_tool');
+    expect(live).toMatchObject({ value: textResult(expected), redactedValues: 1 });
+    const stored = record({ name: 'some_tool', result, hasResult: true });
+    expect(stored.result?.text).toBe(expected);
+    expect(stored.redactedValues).toBe(1);
+  });
+
+  it('a result past its read bound is cut inside a string, which is still read (review #493)', () => {
+    const result = textResult(
+      JSON.stringify({ stdout: `start\nPGPASSWORD=${SECRET}\n${'x'.repeat(40_000)}`, code: 0 }),
+    );
+    const live = redactToolResult(result, 'some_tool');
+    expect(JSON.stringify(live.value)).not.toContain(SECRET);
+    expect(live.redactedValues).toBe(1);
+    const stored = record({ name: 'some_tool', result, hasResult: true });
+    expect(stored.result?.text).toContain(`start\\nPGPASSWORD=${REDACTED}\\n`);
+    expect(stored.result?.truncated).toBe(true);
+    expect(stored.redactedValues).toBe(1);
+    // A preview stored cut the same way is rewritten the same way.
+    const text = JSON.stringify({ stdout: `start\nPGPASSWORD=${SECRET}\n` }).slice(0, -3);
+    const old = { ...record({ name: 'some_tool' }), result: { text }, redactedValues: 0 };
+    expect(rescrubStoredToolCallResult(old)).toMatchObject({
+      value: { result: { text: `{"stdout":"start\\nPGPASSWORD=${REDACTED}\\` } },
+      redactedValues: 1,
+    });
+  });
+
+  describe('a quoted value the text pass split before legacy 916, stored (coordinator, #1573)', () => {
+    /** As the value patterns over the text as written left it before legacy 916: `\` taken for
+     *  the value. */
+    const split = (stdout: string) =>
+      JSON.stringify({ stdout }).replace(`\\"${SECRET}\\"`, `${REDACTED}"${SECRET}\\"`);
+    const stored = (text: string) => ({
+      ...record({ name: 'some_tool' }),
+      result: { text },
+      redactedValues: 1,
+    });
+
+    it.each([
+      ['an env line', 'API_TOKEN='],
+      ['an export', 'export X_TOKEN='],
+      ['a YAML key', 'password: '],
+      ['a header, no space', 'X-Api-Key:'],
+      ['a --password flag', '--password '],
+      ['a query string', 'api_key='],
+    ])('is rewritten as the value patterns write it now, once, the JSON whole: %s', (_l, name) => {
+      const stdout = `a ${name}"${SECRET}" b\nok`;
+      const text = split(stdout);
+      expect(text).toBe(`{"stdout":"a ${name}${REDACTED}"${SECRET}\\" b\\nok"}`);
+      const once = rescrubStoredToolCallResult(stored(text));
+      const fixed = JSON.stringify({ stdout: `a ${name}"${REDACTED}" b\nok` });
+      // What the value patterns over the text as written make of it now (legacy 918).
+      expect(scrubSecretValues(JSON.stringify({ stdout })).value).toBe(fixed);
+      expect(once).toMatchObject({ value: { result: { text: fixed }, redactedValues: 2 } });
+      expect(once.redactedValues).toBe(1);
+      expect(JSON.parse(fixed)).toEqual({ stdout: `a ${name}"${REDACTED}" b\nok` });
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
+    });
+
+    it('leaves plain text alone, where a quoted mask is the mask written whole (review #493)', () => {
+      for (const text of [
+        `export TOKEN="${REDACTED}"\nrun --name app\necho \\"done\\"`,
+        `TOKEN="${REDACTED}" and later \\"x\\"`,
+        // JSON, then a raw line break: a string never holds one, so the mask's quote closed one.
+        `{"a":"${REDACTED}"}\nlog \\"x\\"`,
+        // A log line starts as JSON would; the mask stands after its own quote (review #501).
+        `[INFO] password="${REDACTED}" msg=\\"x\\"`,
+        `{worker} TOKEN="${REDACTED}" next \\"y\\"`,
+      ]) {
+        expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+          value: stored(text),
+          redactedValues: 0,
+        });
+      }
+    });
+
+    it('repairs plain text too, as it is written now (legacy 918)', () => {
+      const plain = `sh -c "export API_TOKEN=\\"${SECRET} x\\" && run"`;
+      const now = `sh -c "export API_TOKEN=\\"${REDACTED}\\" && run"`;
+      const live = record({ result: textResult(plain), hasResult: true });
+      expect(live.result?.text).toBe(now);
+      const text = `sh -c "export API_TOKEN=${REDACTED}"${SECRET} x\\" && run"`;
+      const once = rescrubStoredToolCallResult(stored(text));
+      expect(once).toEqual({
+        value: { ...stored(text), result: { text: now }, redactedValues: 2 },
+        redactedValues: 1,
+      });
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
+    });
+
+    it('reads JSON text after leading white space (review #493)', () => {
+      const text = ` \n${split(`a API_TOKEN="${SECRET}" b`)}`;
+      expect(text).toContain(`${REDACTED}"${SECRET}`);
+      expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+        value: {
+          ...stored(text),
+          result: { text: ` \n{"stdout":"a API_TOKEN=\\"${REDACTED}\\" b"}` },
+          redactedValues: 2,
+        },
+        redactedValues: 1,
+      });
+    });
+
+    it('leaves JSON that is valid alone, where a closing quote follows a mask', () => {
+      for (const text of [
+        `{"a":"${REDACTED}"}`,
+        `["x","${REDACTED}"]`,
+        `{"password":"${REDACTED}","note":"say \\"hi\\""}`,
+        `["${REDACTED}",1,true,null,"a\\"b"]`,
+        `{"a":"${REDACTED}"}\n{"b":"x\\"y"}`,
+        `{"a":"x ${REDACTED}","b":"\\\\"}`,
+        `{"a":"${REDACTED}","b":"c\\\\"}`,
+      ]) {
+        expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+          value: stored(text),
+          redactedValues: 0,
+        });
+      }
+    });
+
+    // Legacy 937 (review #493 on #1597): an earlier release hid a quoted value to its closing
+    // quote and kept the rest of its word, written right against that quote, as it was.
+    it.each([
+      ['plain text', (text: string) => text],
+      ['a JSON string', (text: string) => JSON.stringify({ stdout: text })],
+    ])('hides the rest of the word an earlier release kept after a quoted value: %s', (_l, as) => {
+      const live = record({
+        result: textResult(as(`run TOKEN="x"${SECRET} now`)),
+        hasResult: true,
+      });
+      const now = as(`run TOKEN="${REDACTED}"${REDACTED} now`);
+      expect(live.result?.text).toBe(now);
+      const text = as(`run TOKEN="${REDACTED}"${SECRET} now`);
+      const once = rescrubStoredToolCallResult(stored(text));
+      expect(once).toEqual({
+        value: { ...stored(text), result: { text: now }, redactedValues: 2 },
+        redactedValues: 1,
+      });
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
+    });
+
+    it.each([
+      ['masks and quotes', `{"a":"${`${REDACTED}"x`.repeat(15_000)}"}`],
+      ['a mask, then text', `{"a":"${REDACTED}"${'x'.repeat(200_000)}`],
+      ['split masks', `{"a":"${`${REDACTED}"x\\" `.repeat(12_000)}"}`],
+    ])('%s × 200 KB within 1 s', (_name, text) => {
+      rescrubStoredToolCallResult(stored(text.slice(0, 1_000)));
+      const started = performance.now();
+      rescrubStoredToolCallResult(stored(text));
+      expect(performance.now() - started).toBeLessThan(1_000);
+    });
+  });
+
+  it('leaves a result with nothing to hide byte for byte, escapes and all', () => {
+    const text = '{"stdout":"\\u4e2d\\/ok\\n","code":0}';
+    expect(record({ result: textResult(text), hasResult: true }).result?.text).toBe(text);
   });
 });

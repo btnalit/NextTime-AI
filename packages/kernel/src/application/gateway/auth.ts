@@ -3,6 +3,7 @@ import type { PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { PLATFORM_API_KEY_PREFIX } from '../../governance/redaction/index.js';
 
 /**
  * application/gateway/auth: the human channel — `Authorization: Bearer <API key>` → sha256 →
@@ -119,9 +120,15 @@ const API_KEY_BYTES = 32;
  * CLI's key generation + sha256 hashing path ... factor a shared function if needed, no duplicate
  * hashing code"). Never logged; the caller is responsible for returning it to its caller exactly
  * once and storing only `hashApiKey(...)` of it.
+ *
+ * `ntk_` and 32 random bytes in base64url, 47 characters (legacy 906): the prefix is what every
+ * redaction recognises it by (substrate/redaction `PREFIXED_PLATFORM_KEY`), so a key pasted
+ * anywhere is hidden without hiding the digests and public keys that share its 43-character tail.
+ * Keys minted before the prefix keep authenticating — only their hash is stored, and a lookup by
+ * hash does not care what the key looks like.
  */
 export function generateApiKey(): string {
-  return randomBytes(API_KEY_BYTES).toString('base64url');
+  return `${PLATFORM_API_KEY_PREFIX}${randomBytes(API_KEY_BYTES).toString('base64url')}`;
 }
 
 /**
