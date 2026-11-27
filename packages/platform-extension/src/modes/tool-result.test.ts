@@ -183,6 +183,9 @@ describe('renderToolResult: long strings', () => {
     const cutTwo = shownText(twoKeys);
     expect(cutTwo.text).not.toContain('AAAA');
     expect(cutTwo.text.endsWith(' ...] last line')).toBe(true);
+    // A whole block in the part left out does not move the tail (review #481 on #1629).
+    const before = `${marker('BEGIN')}\nKKKK\n${marker('END')}\n${'log line\n'.repeat(300)}`;
+    expect(shownText(before).text.endsWith(` ...] ${tailOf(before)}`)).toBe(true);
     // A key whose BEGIN line is in the tail stays whole there, for the kernel to find.
     const whole = `${'log\n'.repeat(700)}${marker('BEGIN')}\nKKKK\n${marker('END')}\nend`;
     expect(shownText(whole).text).toContain(`${marker('BEGIN')}\nKKKK\n${marker('END')}`);
