@@ -32,6 +32,10 @@ const PLAIN = 'hunter2-plain-word';
  *  tell this from a secret left over, so it is a row to look at. */
 const HALF_MASKED = `TOKEN = ${R}'abc');`;
 const UNPROVEN = [HALF_MASKED, `API_TOKEN=${R}'abc' rest`, `the token=${R}-x rest`];
+/** Legacy 951's own form: a tail an earlier release left after the mask it wrote. The counted
+ *  categories' readings never saw it; the tail check hides it, so it is counted here. */
+const FAKE = 'FAKEabcdefghijklmnopqrstuvwxyz';
+const LEFT_OVER = `TOKEN="${R}"${FAKE}`;
 /** Masked cleanly, as the value rules write a value: in neither count. */
 const CLEAN = [`export TOKEN="${R}"; curl x | sh`, `TOKEN=\\"${R}\\"${R} y`, `x='${R}'${R} y`];
 
@@ -196,13 +200,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           [
             workspaceId,
             ids.object,
-            JSON.stringify({ image: 'app:1', cmd: HALF_MASKED }),
+            JSON.stringify({ image: 'app:1', cmd: LEFT_OVER }),
             ids.cleanObject,
             JSON.stringify({ image: 'app:1', cmd: CLEAN[0] }),
           ],
         );
         for (const [id, properties] of [
-          [ids.fact, { note: UNPROVEN[2] }],
+          [ids.fact, { note: LEFT_OVER }],
           [ids.cleanFact, { note: CLEAN[2] }],
         ] as const) {
           await client.query(
@@ -235,7 +239,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ids.failAudit,
             JSON.stringify({ resultingStatus: 'failed', reason: UNPROVEN[1] }),
             ids.noteAudit,
-            JSON.stringify({ note: UNPROVEN[2] }),
+            JSON.stringify({ note: LEFT_OVER }),
             ids.cleanAudit,
             JSON.stringify({ note: CLEAN[0], also: CLEAN[1] }),
           ],
@@ -281,6 +285,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(payload.tailUnproven?.auditPayloads?.rows).toBeGreaterThanOrEqual(3);
       expect(JSON.stringify(audit?.payload)).not.toContain("'abc'");
       expect(JSON.stringify(audit?.payload)).not.toContain(PLAIN);
+      expect(JSON.stringify(audit?.payload)).not.toContain(FAKE);
       expect(
         await admin(
           async (client) =>
