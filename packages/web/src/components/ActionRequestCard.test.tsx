@@ -88,6 +88,76 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('action-card-definition').textContent).toContain('按旧定义发起');
   });
 
+  it('legacy 216 ②: an older request names its own definition — the version published with it, or that none was', () => {
+    const digest = `sha256:${'0123456789ab'.repeat(5)}abcd`;
+    const { unmount } = renderCard({
+      card: baseCard({
+        blastRadius: 'high',
+        publishedDefinition: {
+          version: 3,
+          requestIsCurrent: false,
+          requestDigest: digest,
+          requestVersion: 2,
+        },
+      }),
+    });
+    const line = screen.getByTestId('action-card-definition').textContent ?? '';
+    expect(line).toContain('按 v2 的定义');
+    expect(line).toContain(digest.slice(0, 19));
+    expect(line).not.toContain(digest);
+    expect(line).toMatch(/门上现在发布的是\s*v3/);
+    unmount();
+
+    renderCard({
+      card: baseCard({
+        blastRadius: 'high',
+        publishedDefinition: {
+          version: 3,
+          requestIsCurrent: false,
+          requestDigest: digest,
+          requestVersion: null,
+        },
+      }),
+    });
+    const draft = screen.getByTestId('action-card-definition').textContent ?? '';
+    expect(draft).toContain('按一份未发布过的定义（比如草稿，');
+    expect(draft).not.toContain('比如按草稿发起');
+    expect(draft).toContain('现在发布的 v3 不同');
+  });
+
+  it('legacy 216 ②: the always-allow hint names the definition too', () => {
+    renderCard({
+      card: baseCard({
+        publishedDefinition: {
+          version: 3,
+          requestIsCurrent: false,
+          requestDigest: `sha256:${'ab'.repeat(32)}`,
+          requestVersion: 2,
+        },
+      }),
+    });
+    const hint = screen.getByTestId('action-card-always-allow-stale').textContent ?? '';
+    expect(hint).toContain('这条请求是按 v2 的定义');
+    expect(hint).toContain('不能选「总是允许」');
+  });
+
+  it('legacy 216 ②: nothing published now, but the request names the version its definition was published as', () => {
+    renderCard({
+      card: baseCard({
+        blastRadius: 'high',
+        publishedDefinition: {
+          version: null,
+          requestIsCurrent: false,
+          requestDigest: `sha256:${'cd'.repeat(32)}`,
+          requestVersion: 4,
+        },
+      }),
+    });
+    const line = screen.getByTestId('action-card-definition').textContent ?? '';
+    expect(line).toContain('按 v4 的定义');
+    expect(line).toContain('门上现在没有已发布的定义');
+  });
+
   it('legacy 216 ①: when the always-allow hint already names the old version, no second line repeats it', () => {
     renderCard({
       card: baseCard({ publishedDefinition: { version: 3, requestIsCurrent: false } }),

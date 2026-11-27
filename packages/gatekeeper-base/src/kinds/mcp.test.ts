@@ -171,6 +171,117 @@ describe('McpTransport', () => {
     expect(message.length).toBeLessThan(hugeText.length);
   });
 
+  // Legacy 961: as http.ts. FAKE values only.
+  describe("the answer leaves without this gate's own credential (legacy 961)", () => {
+    const TOKEN = 'FAKE-gate-token-0123/abc+def=';
+    const credential = { token: TOKEN };
+    const answering = (answer: (id: unknown) => unknown) =>
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const request = JSON.parse((init?.body ?? '{}') as string);
+        return new Response(JSON.stringify(answer(request.id)), { status: 200 });
+      });
+
+    it('masks a result that echoes the request, and logs only the count', async () => {
+      const log = vi.fn();
+      const fetchImpl = answering((id) => ({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          content: [{ type: 'text', text: `authorization: Bearer ${TOKEN}` }],
+          [encodeURIComponent(TOKEN)]: true,
+        },
+      }));
+      const transport = new McpTransport({ endpoint: 'https://example.test/mcp', fetchImpl, log });
+      const result = await transport.invoke(operation, {}, { credential });
+      expect(result.data).toEqual({
+        content: [{ type: 'text', text: 'authorization: [redacted]' }],
+        '[redacted]': true,
+      });
+      expect(log.mock.calls).toEqual([
+        [
+          "mcp transport: tools/call: the target's answer held this gate's own credential 2 times; masked before the answer left the gate (legacy 961)",
+        ],
+      ]);
+    });
+
+    it('masks a JSON-RPC error message before it is cut to 2 KB, so no part of the token is left', async () => {
+      // The token straddles the 2 KB cut: cut first, then masked, its first half would stay.
+      const message = `${'x'.repeat(2048 - 10)}${TOKEN} and more`;
+      const fetchImpl = answering((id) => ({ jsonrpc: '2.0', id, error: { code: -1, message } }));
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl,
+        log: () => {},
+      });
+      const thrown = await transport
+        .invoke(operation, {}, { credential })
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportInvokeError);
+      expect((thrown as Error).message).toContain('[redacted]');
+      expect((thrown as Error).message).not.toContain('FAKE-gate');
+    });
+
+    it('masks an isError result text, and a tools/list answer', async () => {
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: answering((id) => ({
+          jsonrpc: '2.0',
+          id,
+          result: { isError: true, content: [{ type: 'text', text: `bad token ${TOKEN}` }] },
+        })),
+        log: () => {},
+      });
+      const thrown = await transport
+        .invoke(operation, {}, { credential })
+        .catch((err: unknown) => err);
+      expect((thrown as Error).message).toContain('bad token [redacted]');
+      expect((thrown as Error).message).not.toContain('FAKE-gate');
+
+      const listing = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: answering((id) => ({
+          jsonrpc: '2.0',
+          id,
+          result: { tools: [{ name: 'kb_list', description: `uses ${TOKEN}` }] },
+        })),
+        log: () => {},
+      });
+      const tools = await listing.listTools(credential);
+      expect(tools.tools[0]?.description).toBe('uses [redacted]');
+    });
+
+    it('masks it where a redirect pointed', async () => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response('', {
+            status: 307,
+            headers: { location: `https://login.example.test/t/${TOKEN}` },
+          }),
+      );
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl,
+        log: () => {},
+      });
+      const thrown = await transport.listTools(credential).catch((err: unknown) => err);
+      expect((thrown as Error).message).toContain(
+        'a redirect to "https://login.example.test/t/[redacted]"',
+      );
+    });
+
+    it('leaves the answer as it was without a credential', async () => {
+      const log = vi.fn();
+      const transport = new McpTransport({
+        endpoint: 'https://example.test/mcp',
+        fetchImpl: answering((id) => ({ jsonrpc: '2.0', id, result: { echo: TOKEN } })),
+        log,
+      });
+      const result = await transport.invoke(operation, {}, {});
+      expect(result.data).toEqual({ echo: TOKEN });
+      expect(log).not.toHaveBeenCalled();
+    });
+  });
+
   describe('legacy 797 (#501 review of #1374): a tools/list answer is read up to 16 MiB', () => {
     /** An answer that sends `chunk` on every read, for as long as it is read. */
     function endless(chunk: Uint8Array, headers: Record<string, string> = {}) {
