@@ -102,10 +102,14 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 | `stream-name-not-held` | 流不再扣住还没等到值的密钥名 | 实时流 |
 | `stored-named-values-as-written` | 存量改写不再读「遮罩后面还跟着词的其余部分」（遗留 937 的存量形式） | 存量 |
 | `stream-bound-releases-raw` | 流到扣留上限时原样放出扣着的文本，而不是一个 `[redacted]` | 实时流（`long/`） |
-| `stream-quote-blanks-not-held` | 流不再扣住引号后面的空白 | `str≠w`（流只多遮、不多露） |
+| `tail-stream-forgets-name` | 尾部检查在流里不再回看已经放出的文字，名字和分隔符分在两段时认不出这一对 | `str≠w`（流与整段不同的行多于基线，几乎每个生成器都是；值仍由写法规则遮住） |
 | `stream-json-key-not-held` | 流不再扣住行尾可能还是 JSON 键的引号串 | 实时流 |
 | `stream-pem-not-held` | 流不再从没有 `-----END` 的 `-----BEGIN` 起扣住 | 实时流（`long/pem`） |
 | `stored-split-masks-not-repaired` | `repairSplitQuotedMasks` 什么都不做 | 存量（`stored/split-masks`） |
+
+阶段 1b 去掉了 `stream-quote-blanks-not-held`（流不再扣住引号后面的空白）：尾部检查进了实时流以后，这一处扣住不再改变输出。
+打上它，验收照样通过；定向探针把引号、空白、分隔符、值和前面没收尾的值组合成 34,560 行，在每个切点比流与整段，
+打补丁前后都是 0 行不同。代码留着，按设计 §7 阶段 3 过覆盖核对后再删。
 
 一个补丁要算「验收抓到了」，必须：打上后 `test/redaction-fuzz/tsconfig.json` 类型检查通过、每个测试文件都加载了、
 `harness.test.ts` 通过、至少一个 `acceptance-*.test.ts` 的断言失败。编译不过、文件没加载或 harness 失败记为 broken，

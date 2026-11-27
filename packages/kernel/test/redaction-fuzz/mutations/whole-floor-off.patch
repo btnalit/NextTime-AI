@@ -1,11 +1,13 @@
 diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
-index d0f458dd..f61dc703 100644
+index 93679300..5fc7fdfe 100644
 --- a/packages/kernel/src/substrate/redaction/secret-values.ts
 +++ b/packages/kernel/src/substrate/redaction/secret-values.ts
-@@ -1889,5 +1889,5 @@ export function withFloor(
-   const own = readWith(text, ownPasses(patterns, readFrom));
-   const old = readWith(text, releasedPasses(floor, readFrom));
--  if (old.value === text || old.value === own.value) return own;
-+  if (old.value === text || old.value === own.value || own === own) return own;
+@@ -1948,7 +1948,7 @@ function floorReading(
+           segments: segmentsOf(runs ?? runsOf(text, own), own.value),
+         }
+       : own;
+-  if (old.value === text || old.value === own.value) return ownOnly();
++  if (old.value === text || old.value === own.value || own === own) return ownOnly();
    const runs = runsOf(text, own);
    const hidden = shownOnlyBy(keptOf(runs), keptOf(runsOf(text, old)));
+   if (hidden.length === 0 && runs.every(({ at }) => at !== WROTE_OTHER)) return ownOnly(runs);
