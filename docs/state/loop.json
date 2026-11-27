@@ -23,12 +23,6 @@
     "tierRequiredFromId": 821,
     "inStageWipCap": 20,
     "weeklyNewP3Soft": 10,
-    "grandfathered": {
-      "48": "state",
-      "102": "state",
-      "125": "state",
-      "518": "state",
-      "639": "cells"
-    }
+    "grandfathered": {}
   }
 }
