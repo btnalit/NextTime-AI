@@ -19,7 +19,7 @@
 // Each finding is one of: ok / watch / act / no-sample. A check that could not read its sample
 // (a shallow clone without history, no tags) says no-sample; it never reports ok.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
