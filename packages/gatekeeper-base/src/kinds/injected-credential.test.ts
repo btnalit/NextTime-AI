@@ -113,10 +113,92 @@ describe('injectedCredentialMask (legacy 961)', () => {
     expect(mask.apply('a FAKE-key-\ud800-end b').value).toBe('a [redacted] b');
   });
 
-  it('does not mask a base64 or other transform of the value (design doc §4.6)', () => {
+  it('masks the part after any auth scheme word, not only Bearer, Basic and token', () => {
+    const [one, two, three] = [
+      'FAKE-echoed-one-0123',
+      'FAKE-echoed-two-0123',
+      'FAKE-echoed-three-01',
+    ];
+    const mask = injectedCredentialMask({
+      authorization: `ApiKey ${one}`,
+      'x-bot': `Bot ${two}`,
+      'x-okta': `SSWS ${three}`,
+    });
+    const result = mask.apply({ one, two, three });
+    expect(result.value).toEqual({ one: '[redacted]', two: '[redacted]', three: '[redacted]' });
+    expect(result.masked).toBe(3);
+  });
+
+  it('masks the value of each name=value part of a header value, unquoted, and leaves a short one', () => {
+    const [session, rails, nonce] = [
+      'FAKE-session-0123',
+      'FAKE-rails-0123-ab',
+      'FAKE-nonce-0123-ab',
+    ];
+    const mask = injectedCredentialMask({
+      cookie: `session=${session}; theme=dark`,
+      authorization: `Token token="${rails}", nonce="${nonce}"`,
+    });
+    const result = mask.apply({
+      cookies: { session, theme: 'dark' },
+      echoed: rails,
+      parsed: { rails, nonce },
+    });
+    expect(result.value).toEqual({
+      cookies: { session: '[redacted]', theme: 'dark' },
+      echoed: '[redacted]',
+      parsed: { rails: '[redacted]', nonce: '[redacted]' },
+    });
+    expect(result.masked).toBe(4);
+  });
+
+  it('masks a number equal to an all-digit value, one that lost precision too, and no other', () => {
+    const mask = injectedCredentialMask({
+      'x-api-key': '1234567890123',
+      'x-account-key': '12345678901234567891',
+    });
+    const parsed = JSON.parse(
+      '{"key": 1234567890123, "account": 12345678901234567891, "near": 1234567890124, "n": 3}',
+    );
+    const result = mask.apply(parsed as Record<string, unknown>);
+    expect(result.value).toEqual({
+      key: '[redacted]',
+      account: '[redacted]',
+      near: 1234567890124,
+      n: 3,
+    });
+    expect(result.masked).toBe(2);
+  });
+
+  it('masks it with the escapes a single parse leaves in place: \\/, \\uXXXX and character references', () => {
+    const mask = injectedCredentialMask(BEARER);
+    // TOKEN is FAKE-gate-token-0123/abc+def=
+    const written = [
+      'FAKE-gate-token-0123\\/abc+def=', // PHP's json_encode, read as text or inside a JSON string
+      'FAKE-gate-token-0123\\u002fabc\\u002Bdef\\u003d', // a second layer of JSON, either case
+      'FAKE-gate-token-0123&#x2F;abc&#43;def&#x3D;', // HTML numeric references
+      'FAKE&#45;gate&#0045;token&#x002d;0123&#47;abc+def=',
+      'FAKE-gate-token-0123%2Fabc\\u002bdef&#61;', // mixed
+    ];
+    const result = mask.apply(written);
+    expect(result.value).toEqual(written.map(() => '[redacted]'));
+    expect(result.masked).toBe(written.length);
+    const named = injectedCredentialMask({ 'x-api-key': 'FAKE-a&b<c>"d\'e' });
+    expect(named.apply('v=FAKE-a&amp;b&lt;c&gt;&quot;d&apos;e;').value).toBe('v=[redacted];');
+  });
+
+  it('leaves a letter or digit written as an escape, and an escape that names another character', () => {
+    const mask = injectedCredentialMask(BEARER);
+    const others = ['\\u0046AKE-gate-token-0123/abc+def=', 'FAKE-gate-token-0123&#46;abc+def='];
+    expect(mask.apply(others)).toEqual({ value: others, masked: 0 });
+  });
+
+  it('does not mask a base64 or other transform of the value, or a piece cut from it (design doc §4.6)', () => {
     const mask = injectedCredentialMask(BEARER);
     const transformed = Buffer.from(TOKEN).toString('base64');
     expect(mask.apply(transformed)).toEqual({ value: transformed, masked: 0 });
+    const piece = `${TOKEN.slice(0, 16)}…`;
+    expect(mask.apply(piece)).toEqual({ value: piece, masked: 0 });
   });
 
   it('logs how many, never what', () => {
