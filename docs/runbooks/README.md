@@ -45,6 +45,8 @@
 | [`staging-rehearsal.md`](./staging-rehearsal.md) | 云端发版预演：一次性 GitHub runner 上按生产方式装上一发布版（签名镜像 + 运营者一次性状态 + 基线 S1–S4），再用它自己的 `apply-release.sh` 升到目标并跑 S3→S1→S2→S4；可选真实模型回归（仅 main 触发、不设人工审批的 environment）；列出仍只能在生产主机做的事 |
 | [`demo.md`](./demo.md) | `DEMO_MODEL=<provider/model> make demo`：ephemeral 工作区 + 采集器 + 三句预置提问（依赖、溯源、审批重启）+ Markdown 结果页，15 分钟预算；不碰生产采集器密钥；同时是 S5.7 的第六场景 |
 | [`automation.md`](./automation.md) | GitHub 自动化一览：每个 bot/workflow 的用途、触发时机、开出东西之后该做什么 |
+| [`dev-loop.md`](./dev-loop.md) | AI 开发闭环：角色与交接、评审路由与裁定行、遗留分档、记录与归档节奏、定时巡检、哪些规则由机器检查 |
+| [`host-upgrade-session.md`](./host-upgrade-session.md) | 主机升级会话的常设规则、阶段与交回的结果块；每次不同的部分在 `scripts/host-upgrade-brief.mjs` 生成的简报里 |
 
 ## ③ 扩展平台
 

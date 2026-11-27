@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "host": {
+    "version": "v0.63.0",
+    "appliedOn": "2026-11-06"
+  },
+  "cadence": {
+    "hostLagRemindReleases": 3,
+    "hostLagRemindDays": 14,
+    "recordCommitShareMax": 0.25,
+    "stalePrDays": 3
+  },
+  "docBudgets": {
+    "CLAUDE.md": { "ceiling": 8000, "target": 8000 },
+    "docs/STATUS.md": { "ceiling": 330000, "target": 120000 },
+    "docs/development-tasks.md": { "ceiling": 490000, "target": 200000 },
+    "docs/runbooks/release.md": { "ceiling": 440000, "target": 150000 }
+  },
+  "release": {
+    "hostStepTagFromSection": 222
+  },
+  "legacy": {
+    "tierRequiredFromId": 821,
+    "inStageWipCap": 20,
+    "weeklyNewP3Soft": 10,
+    "grandfathered": {
+      "48": "state",
+      "102": "state",
+      "125": "state",
+      "518": "state",
+      "639": "cells"
+    }
+  }
+}
