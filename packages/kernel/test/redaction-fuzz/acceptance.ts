@@ -85,7 +85,7 @@ const cell = (text: string, width: number) =>
 export function table(tag: string, results: readonly Result[]): string {
   return [
     `against ${tag}: w/s/st/rr = rows shown now, hidden then (whole/stream/stored/reread), gated at 0;`,
-    'rec = record rows the rewrite on upgrade changes twice/needlessly/leaves showing uncounted, gated at 0;',
+    'rec = record rows the rewrite on upgrade changes twice/needlessly/leaves showing a secret, gated at 0;',
     'str≠w = rows whose stream is not their whole text now:then, now held to stream-baseline.json.',
     'Reported: rows showing a secret now:then; hiding more now; whole output differs; stream showing',
     'more than its own whole reading now:then; reread changing; stored rewrite changing its own;',
@@ -133,7 +133,7 @@ export async function acceptance(group: string, part = 1, parts = 1): Promise<vo
               comparison.records,
               `${name}, seed ${seed}, records the rewrite on upgrade gets wrong:\n${examplesOf(comparison)}`,
             )
-            .toEqual({ twice: 0, needless: 0, uncounted: 0 });
+            .toEqual({ twice: 0, needless: 0, left: 0 });
         }
       });
     }

@@ -245,7 +245,7 @@ describe('compare: rows now shows a secret character of that before hid', () => 
     const fixed: Reader = { ...release, record: hide, recordRewrite: rewrite(hide) };
     const better = compare([row], fixed, release, { seed: 1 });
     expect(better.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
-    expect(better.records).toEqual({ twice: 0, needless: 0, uncounted: 0 });
+    expect(better.records).toEqual({ twice: 0, needless: 0, left: 0 });
     expect(better.info.rewrites).toEqual({ now: 1, before: 0 });
     expect(better.info.hidesMore).toBe(1);
     const at = (now: Reader, before: Reader, rows = [row]) =>
@@ -272,10 +272,12 @@ describe('compare: rows now shows a secret character of that before hid', () => 
     };
     const toTheEnd = (text: string) => text.replace(/FAKEfour[\s\S]*$/, MASK);
     const eating: Reader = { ...fixed, record: toTheEnd, recordRewrite: rewrite(toTheEnd) };
-    expect(at(eating, release, [cut]).records).toEqual({ twice: 0, needless: 1, uncounted: 0 });
-    // A record still showing a secret once rewritten, which the tail check does not count.
-    expect(at(release, release).records.uncounted).toBe(1);
-    expect(at({ ...release, recordUnproven: () => true }, release).records.uncounted).toBe(0);
+    expect(at(eating, release, [cut]).records).toEqual({ twice: 0, needless: 1, left: 0 });
+    // A record still showing a secret once rewritten: counted as 收尾未证明 or not.
+    expect(at(release, release).records.left).toBe(1);
+    const counted = at({ ...release, recordUnproven: () => true }, release);
+    expect(counted.records.left).toBe(1);
+    expect(counted.info.recordsUnproven).toBe(1);
   });
 });
 

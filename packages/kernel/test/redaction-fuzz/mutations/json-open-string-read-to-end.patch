@@ -1,13 +1,13 @@
 diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
-index 1cae44fa..313e6154 100644
+index 8f3e23cc..c51fa67f 100644
 --- a/packages/kernel/src/substrate/redaction/secret-values.ts
 +++ b/packages/kernel/src/substrate/redaction/secret-values.ts
-@@ -2366,7 +2366,7 @@ export function redactSecretFieldsInJsonText(
-    *  text as it is (review #501 on #1629). */
+@@ -2408,7 +2408,7 @@ export function redactSecretFieldsInJsonText(
+    *  open to the cut, is hidden there (`hiddenToTheCut`): only this read sees the string end. */
    const rewrite = (start: number, quote: number): void => {
      const closed = quote < length;
 -    const stop = closed ? quote : firstControlChar(text, start + 1);
 +    const stop = closed ? quote : length;
      const end = closed ? quote + 1 : stop;
      const inner = text.slice(start + 1, stop);
-     if (scrubValue === undefined || !inner.includes('\\')) return;
+     if (scrubValue === undefined) return;

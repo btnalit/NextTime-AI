@@ -277,12 +277,13 @@ export interface Comparison {
    *    — the rewrite runs on every upgrade;
    *  - `needless`: it changes a record and hides no secret character the record showed, or drops
    *    the cut's note line the record had (design D3: a rewrite that hides past a secret);
-   *  - `uncounted`: the rewritten record still shows a secret, and `scrub-raw-secrets` does not
-   *    count it as 收尾未证明 (`storedToolCallResultTailUnproven`) either. */
+   *  - `left`: the rewritten record still shows a secret — counted as 收尾未证明
+   *    (`storedToolCallResultTailUnproven`) or not: a value an old cut kept is hidden by the
+   *    rewrite, a quoted one the cut left open included (review #501 on #1629). */
   readonly records: {
     readonly twice: number;
     readonly needless: number;
-    readonly uncounted: number;
+    readonly left: number;
   };
   /** Rows where some stream reading's text is not the same one's whole text, for each (the design's
    *  I-R3 (b), §8): `now` gated by `acceptance.ts`. A stream that hides more than its whole reading
@@ -319,7 +320,7 @@ export interface Comparison {
   };
   /** Up to `examples` rows for each gated reading, to read; `streamNotWhole`: rows whose stream
    *  `now` is not its whole text and `before`'s is — `now` the stream's text, `before` the whole's;
-   *  `twice`, `needless`, `uncounted` (`records`): `now` the rewritten record (or what rewriting it
+   *  `twice`, `needless`, `left` (`records`): `now` the rewritten record (or what rewriting it
    *  again wrote), `before` the release's. */
   readonly examples: Record<string, { t: string; now: string; before: string }[]>;
 }
@@ -360,7 +361,7 @@ export function compare(
     streamNotWhole: [],
     twice: [],
     needless: [],
-    uncounted: [],
+    left: [],
   };
   const keep = options.examples ?? 3;
   const note = (kind: keyof typeof gate, t: string, a: string, b: string) => {
@@ -369,7 +370,7 @@ export function compare(
     if (list.length < keep) list.push({ t, now: a, before: b });
   };
 
-  const records = { twice: 0, needless: 0, uncounted: 0 };
+  const records = { twice: 0, needless: 0, left: 0 };
   /** A record row the rewrite gets wrong: `now` the rewritten record, `before` the release's. */
   const wrong = (kind: keyof typeof records, t: string, a: string, b: string) => {
     records[kind] += 1;
@@ -418,9 +419,8 @@ export function compare(
       if (stNow.value !== kept && (!showsMore(sKept, sNow) || noteLost)) {
         wrong('needless', row.t, stNow.value, kept);
       }
-      const unproven = now.recordUnproven(stNow.value);
-      if (unproven) info.recordsUnproven += 1;
-      if (any(sNow) && !unproven) wrong('uncounted', row.t, stNow.value, kept);
+      if (now.recordUnproven(stNow.value)) info.recordsUnproven += 1;
+      if (any(sNow)) wrong('left', row.t, stNow.value, kept);
       if (before.recordRewrite(stBefore.value).value !== stBefore.value) {
         info.storedChangesOwn.before += 1;
       }

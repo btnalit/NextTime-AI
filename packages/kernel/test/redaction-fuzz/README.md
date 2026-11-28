@@ -58,19 +58,21 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 遗留 967 之前，pi 把长的工具结果按字符数截断，在后面隔一个原样换行接一行说明（`truncateToolResult`）；截点常落在 JSON
 字符串中间。上一发布版读到末尾也没找到这个字符串的收尾引号，把说明一起当成字符串，解不开转义，就按原文读：`\nPGPASSWORD=…`
 里转义的字母和名字连成一个词，名字认不出，值留在记录里。阶段 1b 让没收尾的字符串停在第一个原样的控制字符，前面解码后读，
-说明留给原文那一遍。存量改写因此会改写这类旧记录（凭据席位评审 #1629 选的做法），三道门把改写的范围卡住（`rec` 列，
-twice/needless/uncounted，都要 0）：
+说明留给原文那一遍；解码出来的最后一行以密钥名后带引号、到截点都没收尾的值结束时（截点截在带引号的值里），从引号遮到截点，
+截点后面这个字符串里没有东西，遮不到别的（`openValueAtTheCut`）。这两处都不是尾部检查：前一处只找字符串在哪里结束，后一处
+只在已知的截点上收尾，都不往后读。存量改写因此会改写这类旧记录（凭据席位评审 #1629 选的做法），三道门把改写的范围卡住
+（`rec` 列，twice/needless/left，都要 0）：
 
 - twice：改写过的记录再改写一遍又变了，或者这次检出自己存下的记录被改写改了。改写每次升级都跑，必须到一次就停。
 - needless：改写改了一行，却没有多遮住任何一个原来露着的值字符，或者把截断说明那一行吃掉了（设计 D3 不让尾部检查进存量，
   怕的就是从值一直遮到说明文字）。
-- uncounted：改写后记录里仍露着值，而 `scrub-raw-secrets` 也没把它算进「收尾未证明」（`storedToolCallResultTailUnproven`）。
-  改写不了的必须被数到。
+- left：改写后记录里仍露着值，算不算进「收尾未证明」（`storedToolCallResultTailUnproven`）都算。旧截法留下的值，带引号
+  被截开的也在内，都要由改写遮住。
 
 | 组 | 截点 | CI 小样本（种子 7、8 各 2,000 行） |
 |---|---|---|
 | `cut-after-value` | 字符串里、值和它的收尾引号之后 | 上一发布版的记录露值 73、85 行，改写全部遮住，没有别的行被改 |
-| `cut-in-value` | 值里面，至少留下 8 个字符；带引号的值引号没收尾 | 露值 553、536 行；改写遮住 24、23 行（不带引号的值），其余是引号没收尾的值，归尾部检查（D3），不改写，全部算进「收尾未证明」 |
+| `cut-in-value` | 值里面，至少留下 8 个字符；带引号的值引号没收尾 | 露值 553、536 行，改写全部遮住：不带引号的值由写法规则遮，引号被截开的从引号遮到截点。「收尾未证明」从 987、991 行降到 458、478 行，剩下的是上一发布版已经遮了值、只留下开引号的记录（`API_TOKEN="[redacted]` 接截点），里面没有值，是多数的 |
 | `cut-elsewhere` | 没截、截在字符串收尾之后、截在值之前 | 两边都不露，改写 0 行；截在开引号后面、值还没开始的行算进「收尾未证明」（17、9 行，里面没有值，是多数的） |
 
 这次检出自己存下这些结果时都遮住了（实时读法有尾部检查）。
@@ -133,7 +135,8 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 | `stream-json-key-not-held` | 流不再扣住行尾可能还是 JSON 键的引号串 | 实时流 |
 | `stream-pem-not-held` | 流不再从没有 `-----END` 的 `-----BEGIN` 起扣住 | 实时流（`long/pem`） |
 | `stored-split-masks-not-repaired` | `repairSplitQuotedMasks` 什么都不做 | 存量（`stored/split-masks`） |
-| `json-open-string-read-to-end` | 没收尾的 JSON 字符串又读到文本末尾（撤掉阶段 1b 对凭据席位评审 #1629 的修复） | `rec` 的 uncounted（`stored/records-cut-after-value`、`cut-in-value`） |
+| `json-open-string-read-to-end` | 没收尾的 JSON 字符串又读到文本末尾（撤掉阶段 1b 对凭据席位评审 #1629 的修复） | `rec` 的 left（`stored/records-cut-after-value`、`cut-in-value`） |
+| `json-open-value-at-the-cut-kept` | 截点处开引号的值不再遮到截点（`openValueAtTheCut` 什么都不找） | `rec` 的 left（`stored/records-cut-in-value`） |
 
 阶段 1b 去掉了 `stream-quote-blanks-not-held`（流不再扣住引号后面的空白）：尾部检查进了实时流以后，这一处扣住不再改变输出。
 打上它，验收照样通过；定向探针把引号、空白、分隔符、值和前面没收尾的值组合成 34,560 行，在每个切点比流与整段，

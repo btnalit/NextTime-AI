@@ -19,8 +19,8 @@ import { distinctRows } from '../row.js';
  *   inside to the end of the text, the note in it, and cannot decode it (review #501 on #1629).
  *   `cut-after-value`: cut inside the string after the value and its closing quote. `cut-in-value`:
  *   cut inside the value, at least 8 of its characters kept — a quoted value's quote left open,
- *   which is the tail check's (design D3), not a rewrite. `cut-elsewhere`: not cut, cut where the
- *   string has closed, or cut inside it before the value.
+ *   which the rewrite hides from its quote to the cut (`openValueAtTheCut`). `cut-elsewhere`: not
+ *   cut, cut where the string has closed, or cut inside it before the value.
  */
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
