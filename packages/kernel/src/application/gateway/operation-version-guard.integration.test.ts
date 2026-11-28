@@ -15,6 +15,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { setOperationStatusObject } from '../../substrate/ontology/index.js';
 
 /**
  * Legacy 482 (migrations/core/0047_operation_version_guard.sql): a published Operation version is
@@ -27,6 +28,9 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
  * `platform-gates.integration.test.ts` — and run on this schema. This file writes the row the way
  * no governed path does and expects the database to refuse it, both as the kernel's workspace role
  * and as the login role.
+ *
+ * Legacy 484 (migrations/core/0065_operation_insert_draft.sql): an Operation row is inserted only
+ * as a draft. The update an upsert ends in (a publish of the draft that exists) is not an insert.
  */
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -486,6 +490,106 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           ),
         ).rejects.toThrow(/stays one, and no other row becomes one/);
+      });
+    });
+
+    describe('legacy 484 (core 0065): an Operation row is inserted as a draft', () => {
+      const insertOperation = (client: PoolClient, properties: Record<string, unknown>) =>
+        client.query<{ id: string }>(
+          `insert into objects (workspace_id, object_type, identity_key, properties)
+           values ($1, 'Operation', $2::jsonb, $3::jsonb) returning id`,
+          [
+            workspaceId,
+            JSON.stringify({
+              gatekeeperId: randomUUID(),
+              name: `guard.op.${randomUUID()}`,
+              version: 1,
+            }),
+            JSON.stringify(properties),
+          ],
+        );
+      const operationRows = (client: PoolClient, marker: string) =>
+        client.query(
+          `select 1 from objects
+            where workspace_id = $1 and object_type = 'Operation' and properties ->> 'description' = $2`,
+          [workspaceId, marker],
+        );
+
+      it('a row inserted past draft is refused, as either role, and nothing is written', async () => {
+        for (const run of [inTx, asLoginRole]) {
+          for (const status of ['published', 'deprecated', 'discarded', 'proposed']) {
+            const marker = `inserted ${status} ${randomUUID()}`;
+            await expect(
+              run((client) =>
+                insertOperation(client, { ...testOperation({ description: marker }), status }),
+              ),
+            ).rejects.toThrow(new RegExp(`is inserted as a draft, not ${status}`));
+            expect((await asLoginRole((client) => operationRows(client, marker))).rowCount).toBe(0);
+          }
+        }
+      });
+
+      it('a draft, a row with no status and a JSON-null status are drafts, and are inserted', async () => {
+        for (const run of [inTx, asLoginRole]) {
+          for (const status of ['draft', undefined, null]) {
+            const marker = `inserted ${String(status)} ${randomUUID()}`;
+            const properties: Record<string, unknown> = testOperation({ description: marker });
+            if (status !== undefined) properties.status = status;
+            await run((client) => insertOperation(client, properties));
+            expect((await asLoginRole((client) => operationRows(client, marker))).rowCount).toBe(1);
+          }
+        }
+      });
+
+      it('a status write for an identity no row has is refused; for the draft that exists, the upsert publishes it', async () => {
+        const gatekeeperId = randomUUID();
+        const name = `guard.op.${randomUUID()}`;
+        for (const status of ['published', 'deprecated', 'discarded'] as const) {
+          await expect(
+            inTx((client) =>
+              setOperationStatusObject(
+                client,
+                workspaceId,
+                { gatekeeperId, name, version: 1 },
+                status,
+              ),
+            ),
+          ).rejects.toThrow(/is inserted as a draft/);
+        }
+        const none = await asLoginRole((client) =>
+          client.query(
+            `select 1 from objects where workspace_id = $1 and object_type = 'Operation'
+               and identity_key ->> 'name' = $2`,
+            [workspaceId, name],
+          ),
+        );
+        expect(none.rowCount).toBe(0);
+
+        // The graph store's merge of a new identity is an insert too.
+        await expect(
+          inTx((client) =>
+            graphStore.upsertObject(client, workspaceId, {
+              objectType: 'Operation',
+              kernelAuthored: true,
+              identity: { gatekeeperId, name, version: 1 },
+              properties: { ...testOperation({ name }), status: 'published' },
+            }),
+          ),
+        ).rejects.toThrow(/is inserted as a draft, not published/);
+
+        // On the draft that exists, the same statement ends in an update, which 0047 holds.
+        const operation = testOperation();
+        const seeded = await seedOperation(operation, { publish: false });
+        const published = await inTx((client) =>
+          setOperationStatusObject(
+            client,
+            workspaceId,
+            { gatekeeperId: seeded.gatekeeperId, name: operation.name, version: 1 },
+            'published',
+          ),
+        );
+        expect(published.id).toBe(seeded.id);
+        expect((await propertiesOf(seeded.id)).status).toBe('published');
       });
     });
 
