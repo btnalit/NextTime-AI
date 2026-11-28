@@ -35,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const LOOP_STATE = 'docs/state/loop.json';
 export const STATUS = 'docs/STATUS.md';
+export const STATUS_HISTORY = 'docs/status-history.md';
 export const RELEASE_MD = 'docs/runbooks/release.md';
 
 export const LEVELS = ['P1', 'P2', 'P3', '功能缺口', '—'];
@@ -257,7 +258,7 @@ export function lintConfig(cfg) {
     '"host.appliedOn" must be a YYYY-MM-DD date',
   );
   const cadence = cfg?.cadence ?? {};
-  for (const key of ['hostLagRemindReleases', 'hostLagRemindDays', 'stalePrDays']) {
+  for (const key of ['hostLagRemindReleases', 'hostLagRemindDays', 'stalePrDays', 'reviewNoteWindowDays']) {
     need(isCount(cadence[key]) && cadence[key] > 0, `"cadence.${key}" must be a positive integer`);
   }
   need(

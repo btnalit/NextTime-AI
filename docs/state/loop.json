@@ -8,7 +8,8 @@
     "hostLagRemindReleases": 3,
     "hostLagRemindDays": 14,
     "recordCommitShareMax": 0.25,
-    "stalePrDays": 3
+    "stalePrDays": 3,
+    "reviewNoteWindowDays": 30
   },
   "docBudgets": {
     "CLAUDE.md": { "ceiling": 8000, "target": 8000 },
