@@ -45,5 +45,6 @@
 ## 合入后由合并线程写入的状态
 
 <!-- 不改 docs/STATUS.md、docs/development-tasks.md、docs/status-history.md；在这里写合入后要记什么：
-     关闭哪条遗留、STATUS 与实现说明里的一两句、发版说明可写的话。没在本 PR 修的发现逐条写建议的档：
-     「阶段内处理」或「挂起：<一句理由>」（docs/runbooks/dev-loop.md §4）。纯文档 PR 可以删掉这一节。 -->
+     关闭哪条遗留、STATUS 与实现说明里的一两句、发版说明可写的话。没在本 PR 修、又要登记的发现逐条写建议的档：
+     「阶段内处理」或「挂起：<一句理由>」；可选建议只留在评审评论里，不写到这里（docs/runbooks/dev-loop.md §4）。
+     纯文档 PR 可以删掉这一节。 -->

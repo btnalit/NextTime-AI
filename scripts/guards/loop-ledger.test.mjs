@@ -146,7 +146,7 @@ test('compareVersions orders by number, with or without the v', () => {
 const CONFIG = {
   schema: 1,
   host: { version: 'v0.63.0', appliedOn: '2026-11-06' },
-  cadence: { hostLagRemindReleases: 3, hostLagRemindDays: 14, recordCommitShareMax: 0.25, stalePrDays: 3 },
+  cadence: { hostLagRemindReleases: 3, hostLagRemindDays: 14, recordCommitShareMax: 0.25, stalePrDays: 3, reviewNoteWindowDays: 30 },
   docBudgets: { 'a.md': { ceiling: 100, target: 50 } },
   release: { hostStepTagFromSection: 222 },
   legacy: LEGACY,
@@ -158,12 +158,13 @@ test('lintConfig: a well-formed state file passes, each malformed part is named'
   bad.host.version = '0.63';
   bad.host.appliedOn = '11-06';
   bad.cadence.recordCommitShareMax = 25;
+  delete bad.cadence.reviewNoteWindowDays;
   bad.docBudgets['a.md'].target = 200;
   bad.legacy.grandfathered = { 5: 'whatever' };
   bad.release = {};
   const problems = lintConfig(bad);
-  assert.equal(problems.length, 6);
-  for (const key of ['host.version', 'host.appliedOn', 'recordCommitShareMax', 'docBudgets.a.md', 'grandfathered.5', 'hostStepTagFromSection']) {
+  assert.equal(problems.length, 7);
+  for (const key of ['host.version', 'host.appliedOn', 'recordCommitShareMax', 'reviewNoteWindowDays', 'docBudgets.a.md', 'grandfathered.5', 'hostStepTagFromSection']) {
     assert.ok(problems.some((p) => p.includes(key)), key);
   }
   assert.ok(lintConfig({}).length > 0);
