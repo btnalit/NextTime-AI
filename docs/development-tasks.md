@@ -184,6 +184,8 @@
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
+- 实现说明（遗留 968 平台一半，#1633，2026-11-28 合入，b3824b0，release.md §3.227；内核 substrate/ontology、platform-extension）：`workerVocabulary`（`substrate/ontology/vocabulary.ts`）从已发布本体读出 Worker 能用的 LinkType，经 `get_task` 的 `ontologyVocabulary` 给 Task 自己的 Worker；评估运行的 Worker 拿不到工作区的本体（见遗留 987）。`renderVocabulary`（`platform-extension/src/modes/vocabulary.ts`）按 4,000 字符分三档写进 Worker 上下文，名字写成一行并限长，没有可写 LinkType 时给引导语；`ontology-guard` 拒绝 `undeclared_link_type` 时带出 `declaredBetween`。内置包提示词那一半随 969。
+
 ### S2.7 `find_workers` 与 `invoke_worker`
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
