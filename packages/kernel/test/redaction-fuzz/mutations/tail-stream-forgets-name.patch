@@ -1,0 +1,13 @@
+diff --git a/packages/kernel/src/substrate/redaction/tail-check.ts b/packages/kernel/src/substrate/redaction/tail-check.ts
+index c5e4f2a6..3ec52020 100644
+--- a/packages/kernel/src/substrate/redaction/tail-check.ts
++++ b/packages/kernel/src/substrate/redaction/tail-check.ts
+@@ -553,7 +553,7 @@ export function readLine(line: string, from: number, state: TailState, ended: bo
+     names.lastIndex = scanned;
+   }
+   if (ended) return { hide, tailAt: -1, safe: line.length, resume: line.length, state: current };
+-  const resume = Math.max(searchFrom, line.length - NAME_SEPARATOR_REACH, scanned);
++  const resume = Math.max(searchFrom, line.length - NAME_SEPARATOR_REACH * 0, scanned);
+   return {
+     hide,
+     tailAt: -1,

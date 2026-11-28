@@ -12,6 +12,9 @@ import type { Rng } from './rng.js';
  * - `stored`: `t` is a row as an earlier release stored it, masks and all — forms the last release
  *   no longer writes, which the rewrite on upgrade still reads (review #493 on #1619). Read by the
  *   stored reading alone, from `t` itself (`measure.ts`).
+ * - `record`: `t` is a tool result's text as pi sent it, read the way a tool-call record is
+ *   (`application/chat/tool-call-record`): what each one stores, and the record the release stored
+ *   rewritten on upgrade by each (review #501 on #1629) — not the text readings above.
  *
  * What counts as shown is the characters of these places a reader's output still holds.
  */
@@ -20,6 +23,7 @@ export interface Row {
   readonly req?: readonly string[];
   readonly spans?: readonly (readonly [number, number])[];
   readonly stored?: true;
+  readonly record?: true;
 }
 
 /** `n` distinct rows from a seeded source — or `maxRows`, when the generator has it and it is

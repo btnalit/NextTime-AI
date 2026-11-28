@@ -5,11 +5,11 @@ import { DESIGN_GENERATORS } from './design.js';
 import { KERNEL_SEAT_GENERATORS } from './kernel-seat.js';
 import { LONG_GENERATORS } from './long.js';
 import { REAL_FORMAT_GENERATORS } from './real-formats.js';
-import { STORED_GENERATORS } from './stored.js';
+import { RECORD_GENERATORS, STORED_GENERATORS } from './stored.js';
 
 /** Every generator, by name: random concatenation (the kernel author's, the design's, both seats'),
- *  long lines (`long/…`), rows as earlier releases stored them (`stored/…`) and the real-format
- *  corpus (`formats/…`). A name is `<who>/<what>`. */
+ *  long lines (`long/…`), rows as earlier releases stored them (`stored/…`, tool-call records
+ *  among them) and the real-format corpus (`formats/…`). A name is `<who>/<what>`. */
 export const GENERATORS: Record<string, Generator> = {
   ...AUTHOR_GENERATORS,
   ...DESIGN_GENERATORS,
@@ -17,6 +17,7 @@ export const GENERATORS: Record<string, Generator> = {
   ...KERNEL_SEAT_GENERATORS,
   ...LONG_GENERATORS,
   ...STORED_GENERATORS,
+  ...RECORD_GENERATORS,
   ...REAL_FORMAT_GENERATORS,
 };
 

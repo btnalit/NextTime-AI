@@ -1,3 +1,4 @@
+import { type Segment, TailMasker, TailReader } from '../../substrate/redaction/tail-check.js';
 import {
   ESCAPED_JSON_SECRET_PAIR,
   JSON_SECRET_PAIR,
@@ -10,7 +11,7 @@ import {
   floorReadSpans,
   namesASecretField,
   namesASecretValue,
-  scrubSecretValues,
+  placedSecretValues,
   secretMatches,
 } from './secret-values.js';
 
@@ -194,9 +195,15 @@ function wordToComeAt(raw: string, cut: number): number {
 /** Blanks, or nothing: what may stand between a value still open and a pair read as inside it. */
 const BLANKS_ONLY = /^[ \t]*$/;
 
-/** Where the text that is safe to emit ends — everything from here on is held back. `context` is
- *  the end of what was emitted before `raw`, which the patterns look back into (`CONTEXT_CHARS`). */
-function safeCut(raw: string, context: string): number {
+/** Where the text that is safe to emit ends — everything from here on is held back. `raw` is read
+ *  on its own, as `placedBefore` and `flush` read what is cut from it, not after the last
+ *  characters emitted. Those are the text as it came, and right after a value another rule hid, the
+ *  whole text reads what follows as after the mask, not after the value's last characters
+ *  (`<ntk key>api_key=a\\,-----BEGIN x`): read after them, as eight of them were until review #493
+ *  on #1619, the name was no name there, the tail check hid the rest of the line, and stream and
+ *  whole text differed at almost every cut. Elsewhere a cut falls after a blank or a CJK character,
+ *  or where a match, a secret's name, a quote, a run of backslashes or a `-----BEGIN` starts. */
+function safeCut(raw: string): number {
   let cut = raw.length;
   while (cut > 0 && !BREAKS_A_SECRET_RUN.test(raw.charAt(cut - 1))) cut -= 1;
 
@@ -232,14 +239,11 @@ function safeCut(raw: string, context: string): number {
   // What the value rules read does not turn on the cut: read once, not again each time the cut
   // moves back (review #493 on #1593: a line of JSON members, each settled at the next key, moved
   // it back one member at a time, and read the whole text again each time).
-  const read = context + raw;
   const spans: readonly Pick<SecretMatch, 'start' | 'end' | 'open' | 'settledAt'>[] = [
-    ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) =>
-      secretMatches(valuePattern, read, context.length),
-    ),
-    ...bareValueEndsToCome(read, context.length),
+    ...SECRET_VALUE_PATTERNS.flatMap((valuePattern) => secretMatches(valuePattern, raw)),
+    ...bareValueEndsToCome(raw),
     // And v0.70.0's, which every text is read with as well (legacy 939).
-    ...floorReadSpans(read, context.length),
+    ...floorReadSpans(raw),
   ];
   for (let moved = true; moved; ) {
     moved = false;
@@ -256,7 +260,9 @@ function safeCut(raw: string, context: string): number {
     // while what comes right after the cut is that `:` or `=` or nothing yet (no cut falls inside
     // a run of blanks): once something else has come, the quote's reading is settled, and of a
     // run of `" " "` only the last is held, not each in turn back to the start (#493 on
-    // e301108f).
+    // e301108f). Since stage 1b this hold changes no output: the tail check in the stream settles
+    // the quote's reading (taking it out passed the acceptance run, and a probe of 34,560 rows at
+    // every cut). It stays for stage 3's coverage check before it goes (review #493 on #1631).
     const blanks = BLANKS_AFTER_A_QUOTE.exec(raw.slice(Math.max(0, cut - 9), cut));
     const next = raw.charAt(cut);
     if (blanks !== null && (next === ':' || next === '=' || next === '')) {
@@ -277,17 +283,15 @@ function safeCut(raw: string, context: string): number {
     // a key's `:` or `=`: whether the value reads on as the rest of its word turns on it
     // (`wordToComeAt`; legacy 937).
     for (const { start, end, open, settledAt } of spans) {
-      const at = start - context.length;
       if (
-        at < cut &&
-        (end - context.length > cut ||
-          end - context.length === word ||
-          end === read.length ||
-          (open === true && BLANKS_ONLY.test(read.slice(end, context.length + cut))) ||
-          (settledAt !== undefined &&
-            (settledAt - context.length > cut || settledAt === read.length)))
+        start < cut &&
+        (end > cut ||
+          end === word ||
+          end === raw.length ||
+          (open === true && BLANKS_ONLY.test(raw.slice(end, cut))) ||
+          (settledAt !== undefined && (settledAt > cut || settledAt === raw.length)))
       ) {
-        cut = at;
+        cut = start;
         moved = true;
       }
     }
@@ -295,23 +299,34 @@ function safeCut(raw: string, context: string): number {
   return cut;
 }
 
-/** `text` up to `cut`, scrubbed as the whole text scrubs it. Cut right after a `"`, the text
+/** `text` up to `cut`, read by the value rules as the whole text reads it, with where each stretch
+ *  of what they made of it comes from (`placedSecretValues`). Cut right after a `"`, the text
  *  before reads as if it ended at that quote, where any `"` closes a `"…"` value with escaped
  *  quotes in it; in the whole text what follows may keep it from closing one (`password="a\"b"` of
  *  `password="a\"b":c`, of `… "api_key" : …`; #493, #501 on #1579). So it is read with a character
  *  that keeps the quote from closing one, as what follows does, and the character is taken off
  *  again — unless a value took it in (one opened by that quote, or a bare one that ends with an
  *  escaped quote), when the text is read on its own. */
-function scrubbedBefore(text: string, cut: number, context: string): Scrubbed<string> {
-  const options = { readAfter: context };
+function placedBefore(text: string, cut: number): Placed {
   if (text.charAt(cut - 1) !== '"' || endsAQuotedValue(text.slice(cut, cut + 10))) {
-    return scrubSecretValues(text.slice(0, cut), options);
+    return placedSecretValues(text.slice(0, cut));
   }
-  const read = scrubSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`, options);
-  return read.value.endsWith(KEEPS_A_QUOTE_OPEN)
-    ? { value: read.value.slice(0, -1), redactedValues: read.redactedValues }
-    : scrubSecretValues(text.slice(0, cut), options);
+  const read = placedSecretValues(`${text.slice(0, cut)}${KEEPS_A_QUOTE_OPEN}`);
+  const last = read.segments.at(-1);
+  if (
+    read.value.endsWith(KEEPS_A_QUOTE_OPEN) &&
+    last !== undefined &&
+    last.at >= 0 &&
+    last.at + last.text.length === cut + 1
+  ) {
+    const segments = read.segments.slice(0, -1);
+    if (last.text.length > 1) segments.push({ at: last.at, text: last.text.slice(0, -1) });
+    return { value: read.value.slice(0, -1), redactedValues: read.redactedValues, segments };
+  }
+  return placedSecretValues(text.slice(0, cut));
 }
+type Placed = ReturnType<typeof placedSecretValues>;
+
 /** A character no value ends with once hidden, that `endsAQuotedValue` refuses, and that no word
  *  starts with after a value's closing quote (`restOfTheWord` in `secret-values.ts`): a backtick.
  *  An `x` was read as that word, where the quote closes a `"…"` value with escaped quotes in it
@@ -319,7 +334,10 @@ function scrubbedBefore(text: string, cut: number, context: string): Scrubbed<st
  *  quote closed that value, and more was hidden than the whole text hides. */
 const KEEPS_A_QUOTE_OPEN = '`';
 
-/** What `push` emits: scrubbed text, and whether the stream paused with it. */
+/** What `push` emits: scrubbed text, and whether the stream paused with it. Its `redactedTails`
+ *  and `redactedTailChars` count as a whole text's do, but each when it is known: a tail when it
+ *  starts, the characters it hid when its line ends — often in a later piece, and the one may be
+ *  present without the other. */
 export interface StreamPiece extends Scrubbed<string> {
   /** Legacy 162: this piece took the scrubber past its bound — it ends with the one `[redacted]`
    *  that stands for what was held and dropped, and nothing more is emitted until `flush`. Absent
@@ -334,31 +352,110 @@ export interface SecretStreamScrubber {
   flush(): Scrubbed<string>;
 }
 
-/** How much of the text already emitted the patterns look back into before what is held — as far
- *  as one looks behind where a match starts (`\u4e2d` before a key, `.` before a name) — so that
- *  the held text reads as the whole text reads it there. No match starts in it: it was read. */
-const CONTEXT_CHARS = 8;
-
+/**
+ * The stream composes as a whole text does (`docs/redaction-boundary-design-2026-11-27.md` §4.3),
+ * in steps that each hold what they cannot settle yet:
+ *   1. the value rules read the text up to `safeCut` — what they made of it, placed in the text
+ *      (`placedBefore`);
+ *   2. the tail check reads the text as it came (`TailReader`, its line's state carried across
+ *      pieces), and what it hides is hidden in what the rules kept, as far as its marks are final
+ *      (`TailMasker`);
+ *   3. the check reads that composed text once more, as a whole text's second reading does.
+ * What all three hold together is bounded by `STREAM_HOLD_MAX_CHARS` as the rules' hold alone was:
+ * past it, what is final is emitted, then one `[redacted]`, and the stream pauses.
+ */
 export function createSecretStreamScrubber(): SecretStreamScrubber {
-  let context = '';
   let held = '';
+  /** Where `held` starts in the text since the last flush. */
+  let heldAt = 0;
   let dropping = false;
+  let steps = freshSteps();
 
-  function take(slice: string): Scrubbed<string> {
-    held += slice;
-    const cut = safeCut(held, context);
-    if (held.length - cut > STREAM_HOLD_MAX_CHARS) {
-      const before = scrubbedBefore(held, cut, context);
-      context = '';
-      held = '';
-      dropping = true;
-      return { value: before.value + REDACTED, redactedValues: before.redactedValues + 1 };
+  /** What the pieces so far said, and what was read since. */
+  function freshSteps() {
+    return {
+      reader: new TailReader(),
+      masker: new TailMasker(),
+      again: new TailReader(),
+      againMasker: new TailMasker(),
+      /** Characters of the composed text handed to the second reading. */
+      composed: 0,
+      ruleValues: 0,
+      said: { values: 0, tails: 0, tailChars: 0 },
+    };
+  }
+
+  /** The rules' reading of the text before `cut`, handed to the masker. */
+  function place(read: Placed): void {
+    const segments: Segment[] = read.segments.map((segment) =>
+      segment.at < 0 ? segment : { at: heldAt + segment.at, text: segment.text },
+    );
+    steps.masker.add(segments);
+    steps.ruleValues += read.redactedValues;
+  }
+
+  /** What is final of the composition, as far as `limit` (`Infinity` at the end). */
+  function composeTo(ended: boolean): string {
+    const { reader, masker, again, againMasker } = steps;
+    if (ended) reader.end();
+    let first = masker.compose(
+      ended ? Number.POSITIVE_INFINITY : reader.safe,
+      reader.marksFrom(masker.done),
+    );
+    if (ended) first += masker.finish();
+    if (first !== '') {
+      again.push(first);
+      againMasker.add([{ at: steps.composed, text: first }]);
+      steps.composed += first.length;
     }
-    if (cut === 0) return { value: '', redactedValues: 0 };
-    const out = scrubbedBefore(held, cut, context);
-    context = (context + held.slice(0, cut)).slice(-CONTEXT_CHARS);
-    held = held.slice(cut);
+    if (ended) again.end();
+    let out = againMasker.compose(
+      ended ? Number.POSITIVE_INFINITY : again.safe,
+      again.marksFrom(againMasker.done),
+    );
+    if (ended) out += againMasker.finish();
     return out;
+  }
+
+  /** `value`, with the counts read since the last piece. */
+  function said(value: string, extraValues = 0): StreamPiece {
+    const { reader, masker, again, againMasker, said: before } = steps;
+    const values =
+      steps.ruleValues + masker.redactedValues + againMasker.redactedValues + extraValues;
+    const tails = reader.tails + again.tails;
+    const tailChars = reader.tailChars + again.tailChars;
+    const piece: StreamPiece = { value, redactedValues: values - before.values };
+    const newTails = tails - before.tails;
+    const newChars = tailChars - before.tailChars;
+    steps.said = { values, tails, tailChars };
+    return newTails > 0 || newChars > 0
+      ? { ...piece, redactedTails: newTails, redactedTailChars: newChars }
+      : piece;
+  }
+
+  function take(slice: string): StreamPiece {
+    held += slice;
+    steps.reader.push(slice);
+    const cut = safeCut(held);
+    if (cut > 0) {
+      place(placedBefore(held, cut));
+      held = held.slice(cut);
+      heldAt += cut;
+    }
+    const out = composeTo(false);
+    if (held.length + steps.masker.held + steps.againMasker.held > STREAM_HOLD_MAX_CHARS) {
+      const piece = said(out + REDACTED, 1);
+      restart();
+      dropping = true;
+      return piece;
+    }
+    return said(out);
+  }
+
+  function restart(): void {
+    held = '';
+    heldAt = 0;
+    steps = freshSteps();
   }
 
   return {
@@ -366,21 +463,28 @@ export function createSecretStreamScrubber(): SecretStreamScrubber {
       const wasDropping = dropping;
       let value = '';
       let redactedValues = 0;
+      let redactedTails = 0;
+      let redactedTailChars = 0;
       for (let at = 0; at < piece.length && !dropping; at += PIECE_SLICE_CHARS) {
         const out = take(piece.slice(at, at + PIECE_SLICE_CHARS));
         value += out.value;
         redactedValues += out.redactedValues;
+        redactedTails += out.redactedTails ?? 0;
+        redactedTailChars += out.redactedTailChars ?? 0;
       }
+      const tails =
+        redactedTails > 0 || redactedTailChars > 0 ? { redactedTails, redactedTailChars } : {};
       return dropping && !wasDropping
-        ? { value, redactedValues, paused: true }
-        : { value, redactedValues };
+        ? { value, redactedValues, ...tails, paused: true }
+        : { value, redactedValues, ...tails };
     },
     flush() {
-      const out = dropping
-        ? { value: '', redactedValues: 0 }
-        : scrubSecretValues(held, { readAfter: context });
-      context = '';
-      held = '';
+      let out: StreamPiece = { value: '', redactedValues: 0 };
+      if (!dropping) {
+        place(placedSecretValues(held));
+        out = said(composeTo(true));
+      }
+      restart();
       dropping = false;
       return out;
     },

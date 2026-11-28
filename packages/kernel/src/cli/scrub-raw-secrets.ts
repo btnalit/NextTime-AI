@@ -7,6 +7,7 @@ import {
   RAW_SECRET_SCRUB_BATCH_SIZE,
   REWRITTEN_CATEGORIES,
   RawSecretScrubFailedError,
+  TAIL_UNPROVEN_CATEGORIES,
   envAdminLogins,
   scrubRawSecrets,
 } from '../application/platform/index.js';
@@ -15,6 +16,7 @@ import type {
   CountedRawSecretRow,
   LiveApiKeyRow,
   ScrubRawSecretsResult,
+  TailUnprovenCategory,
 } from '../application/platform/index.js';
 
 /**
@@ -33,7 +35,10 @@ import type {
  * audit row carry only the first few. Likewise every row of the database holding a platform API
  * key still issued: one `live-api-key <table> <row> principal <workspace>/<id> <kind>[ user <id>]`
  * line each (`<row>` its primary key, `/`-joined), ids only — the keys to rotate, one Principal
- * each (`liveApiKeys=` in the summary).
+ * each (`liveApiKeys=` in the summary). And every row «收尾未证明» (`tailUnproven` — the text after a
+ * mask does not pass the tail check: a row to look at, not a secret found), one
+ * `tail-unproven <category> <workspace>/<id>` line each, uncapped, and `tailUnproven=` in the
+ * summary; nothing is rewritten for them.
  *
  * `scripts/apply-release.sh` runs `--yes` right after the release's `BACKUP_NOW` — that dump is the
  * recovery point. The last stdout line is a one-line summary the script echoes as its
@@ -126,6 +131,14 @@ export function formatCountedRow(
   return `counted ${category} ${row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id}`;
 }
 
+/** One row «收尾未证明», as the CLI prints it while it scans. */
+export function formatTailUnprovenRow(
+  category: TailUnprovenCategory,
+  row: CountedRawSecretRow,
+): string {
+  return `tail-unproven ${category} ${row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id}`;
+}
+
 /** One row holding a key still issued, as the CLI prints it while it scans: the row, then whose key
  *  it is — never the key, never its hash. */
 export function formatLiveApiKeyRow(row: LiveApiKeyRow): string {
@@ -171,6 +184,15 @@ export function formatScrubReport(
       `${name} (${label.group}): examined=${c.examined} ${label.rows}=${c.affected}${listed}`,
     );
   }
+  for (const name of TAIL_UNPROVEN_CATEGORIES) {
+    const c = result.tailUnproven[name];
+    const ids = c.examples.map((e) => (e.workspaceId ? `${e.workspaceId}/${e.id}` : e.id));
+    const more = c.rows > ids.length ? `,… (all ${c.rows}: the "tail-unproven ${name}" lines)` : '';
+    const listed = ids.length > 0 ? ` ids=${ids.join(',')}${more}` : '';
+    lines.push(
+      `${name} tail unproven (a row to look at, not a secret count; not rewritten): rows=${c.rows}${listed}`,
+    );
+  }
   const live = result.liveApiKeys;
   const principals = [
     ...new Set(live.examples.map((row) => `${row.principalWorkspaceId}/${row.principalId}`)),
@@ -194,8 +216,12 @@ export function formatScrubReport(
   const counted = COUNTED_CATEGORIES.map(
     (name) => `${name}=${result.categories[name].affected}`,
   ).join(' ');
+  const unproven = TAIL_UNPROVEN_CATEGORIES.reduce(
+    (sum, name) => sum + result.tailUnproven[name].rows,
+    0,
+  );
   lines.push(
-    `scrub-raw-secrets: ${result.executed ? 'ok' : 'dry-run'} ${verb}=${rewritten} counted: ${counted} liveApiKeys=${live.keys} batches=${result.batches}`,
+    `scrub-raw-secrets: ${result.executed ? 'ok' : 'dry-run'} ${verb}=${rewritten} counted: ${counted} tailUnproven=${unproven} liveApiKeys=${live.keys} batches=${result.batches}`,
   );
   return lines;
 }
@@ -213,6 +239,7 @@ async function run(): Promise<void> {
         ...(actor !== undefined ? { actorUserId: actor.id } : {}),
         onCounted: (category, row) => console.log(formatCountedRow(category, row)),
         onLiveApiKey: (row) => console.log(formatLiveApiKeyRow(row)),
+        onTailUnproven: (category, row) => console.log(formatTailUnprovenRow(category, row)),
       });
     } catch (err) {
       if (err instanceof RawSecretScrubFailedError) {

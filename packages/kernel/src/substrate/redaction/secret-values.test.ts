@@ -30,6 +30,7 @@ import {
   withFloor,
 } from './index.js';
 import * as released from './secret-values-v0.70.0.js';
+import { tailChecked } from './tail-check.js';
 
 /** A Handle-shaped compact JWT. Synthetic — `.gitleaks.toml` allows this signature segment, and
  *  every other fixture here spells out `abcdefghijklmnopqrstuvwxyz`, which it allows too. */
@@ -49,6 +50,38 @@ const OWN_READING: readonly SecretPattern[] = [...SECRET_VALUE_PATTERNS];
 const readOwn = (text: string): Scrubbed<string> =>
   scrubSecretValues(text, { patterns: OWN_READING });
 const fakesIn = (text: string): number => text.split(FAKE).length - 1;
+
+/** What the value rules read (with their floor) — what the cases from legacy 921 on pin. Since
+ *  stage 1b of the redaction boundary design (`docs/redaction-boundary-design-2026-11-27.md`
+ *  §4.3), `scrubSecretValues` returns that reading composed with the tail check, which the rules'
+ *  cases do not pin; each read here checks the composition on the way: every stretch it shows is
+ *  one the rules show, in order (I-R1), and the check reads it as it is (a fixed point). A call
+ *  with options is `scrubSecretValues`'s own: no composition there. */
+function readByRules(
+  text: string,
+  options?: Parameters<typeof scrubSecretValues>[1],
+): Scrubbed<string> {
+  if (options !== undefined) return scrubSecretValues(text, options);
+  const rules = withFloor(text, SECRET_VALUE_PATTERNS, released.SECRET_VALUE_PATTERNS, 0);
+  expectComposedOver(text, rules.value);
+  return rules;
+}
+
+/** `scrubSecretValues(text)` shows only what `rules` shows, in its order, and the tail check
+ *  leaves it as it is. */
+function expectComposedOver(text: string, rules: string): void {
+  const composed = scrubSecretValues(text).value;
+  let from = 0;
+  for (const part of composed.split(REDACTED)) {
+    const at = rules.indexOf(part, from);
+    expect(
+      at,
+      `${JSON.stringify(part)} of ${JSON.stringify(composed)} in ${JSON.stringify(rules)}`,
+    ).not.toBe(-1);
+    from = at + part.length;
+  }
+  expect(tailChecked(composed).value).toBe(composed);
+}
 /** What is returned shows `FAKE` no more often than the rules' own reading does, nor v0.70.0's. */
 function expectFloored(text: string): void {
   const shown = fakesIn(scrubSecretValues(text).value);
@@ -59,7 +92,9 @@ function expectFloored(text: string): void {
 describe('scrubSecretValues — the common ways a secret is written down', () => {
   it.each([
     ['a quoted .env line', `export API_TOKEN="${FAKE}"`, `export API_TOKEN="${REDACTED}"`],
-    ['an unquoted env line', `PGPASSWORD=${FAKE} psql`, `PGPASSWORD=${REDACTED} psql`],
+    // The rest of its line too: a line's first pair whose value is bare reads to the end of the
+    // line (the tail check, redaction boundary design §4.2).
+    ['an unquoted env line', `PGPASSWORD=${FAKE} psql`, `PGPASSWORD=${REDACTED}`],
     ['a YAML env entry', `POSTGRES_PASSWORD: ${FAKE}`, `POSTGRES_PASSWORD: ${REDACTED}`],
     ['a YAML key', `  password: '${FAKE}'`, `  password: '${REDACTED}'`],
     ['an ini line', `aws_secret_access_key = ${FAKE}`, `aws_secret_access_key = ${REDACTED}`],
@@ -645,9 +680,17 @@ describe('a quoted value written inside a string: \\"…\\" (legacy 918)', () =>
 
   it('stops at its line and at the first quote not escaped (review #493, #501 on #1575)', () => {
     // No closing \" on its line: read as before, the next line kept.
-    expect(scrubSecretValues('API_TOKEN=\\"a b\nrun \\"x\\"').value).toContain('\nrun \\"x\\"');
-    expect(scrubSecretValues('export API_TOKEN=\\"a" b && echo \\"done\\"').value).toContain(
+    expect(readByRules('API_TOKEN=\\"a b\nrun \\"x\\"').value).toContain('\nrun \\"x\\"');
+    expect(readByRules('export API_TOKEN=\\"a" b && echo \\"done\\"').value).toContain(
       ' b && echo \\"done\\"',
+    );
+    // The tail check reads no quote in a `\"…\"` value: the rest of that line hidden, the next
+    // line kept.
+    expect(scrubSecretValues('export API_TOKEN=\\"a" b && echo \\"done\\"').value).toBe(
+      `export API_TOKEN=${REDACTED}`,
+    );
+    expect(scrubSecretValues('API_TOKEN=\\"a b\nrun \\"x\\"').value).toBe(
+      `API_TOKEN=${REDACTED}\nrun \\"x\\"`,
     );
   });
 
@@ -699,8 +742,8 @@ describe('a value written inside a string twice over, and JSON text inside a str
       `{\\"note\\":\\"say \\\\\\"hi\\\\\\"\\",\\"token\\":\\"${REDACTED}\\"}`,
     ],
   ])('hides the value whole, its quotes kept: %s', (_label, text, hidden) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   it('takes a value to the next quote, which the run it opened with closes', () => {
@@ -775,8 +818,8 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
   ])(
     'hides it to the end of its line, with no closing quote written: %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -814,24 +857,22 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
   ])(
     'ends before the next pair, whose value it read on to and kept (after legacy 921): %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
   it('reads on past what no value rule takes for a name, to its first quote, as it did', () => {
-    expect(scrubSecretValues(`token=\\"a _k: "b ${FAKE}`).value).toBe(
-      `token=\\"${REDACTED}"b ${FAKE}`,
-    );
-    expect(scrubSecretValues(`token=\\"a note: c ${FAKE}`).value).toBe(`token=\\"${REDACTED}`);
+    expect(readByRules(`token=\\"a _k: "b ${FAKE}`).value).toBe(`token=\\"${REDACTED}"b ${FAKE}`);
+    expect(readByRules(`token=\\"a note: c ${FAKE}`).value).toBe(`token=\\"${REDACTED}`);
   });
 
   it('still writes the closing quote of a value closed on its line', () => {
-    expect(scrubSecretValues(`password="${FAKE}" b="c`).value).toBe(`password="${REDACTED}" b="c`);
-    expect(scrubSecretValues(`{"session cookie": "${FAKE}", "a": ""}`).value).toBe(
+    expect(readByRules(`password="${FAKE}" b="c`).value).toBe(`password="${REDACTED}" b="c`);
+    expect(readByRules(`{"session cookie": "${FAKE}", "a": ""}`).value).toBe(
       `{"session cookie": "${REDACTED}", "a": ""}`,
     );
-    expect(scrubSecretValues('{"session cookie": "", "password": ""}').value).toBe(
+    expect(readByRules('{"session cookie": "", "password": ""}').value).toBe(
       `{"session cookie": "${REDACTED}", "password": "${REDACTED}"}`,
     );
   });
@@ -846,7 +887,7 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       [`{"cmd":"run --password ${FAKE}\\\\","x":1}`, `{"cmd":"run --password ${REDACTED}","x":1}`],
       [`sh -c \\"run --password ${FAKE}\\" x`, `sh -c \\"run --password ${REDACTED}\\" x`],
     ] as const) {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
     }
   });
 
@@ -858,7 +899,7 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       '{"client secret": "',
       '{\\"client secret\\": \\"\nb',
     ]) {
-      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: text, redactedValues: 0 });
     }
   });
 
@@ -879,7 +920,7 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
       'echo "API_TOKEN=" >> .env',
       "VALUES ('api_key=');",
     ]) {
-      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: text, redactedValues: 0 });
     }
   });
 
@@ -896,8 +937,8 @@ describe('a quoted value whose closing quote is not on its line (legacy 921)', (
         `password: ${'\\'.repeat(9)}"${REDACTED}\\" b`,
       ],
     ] as const) {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     }
   });
 });
@@ -932,12 +973,12 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
       `{"password": "${REDACTED}"}`,
     ],
   ])('hides it to the quote no backslash escapes: %s', (_label, text, hidden) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   it('ends at an escaped backslash before its quote, and leaves what follows', () => {
-    expect(scrubSecretValues(`{"password": "a \\\\", "x": "${FAKE}"}`).value).toBe(
+    expect(readByRules(`{"password": "a \\\\", "x": "${FAKE}"}`).value).toBe(
       `{"password": "${REDACTED}", "x": "${FAKE}"}`,
     );
   });
@@ -945,8 +986,8 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   // And reads on past that quote the rest of the word written right against it, as after any
   // value's closing quote (legacy 948: v0.70.0 and main kept the `b`).
   it('closes at the first quote, as before, when no quote no backslash escapes is on its line', () => {
-    expect(scrubSecretValues('password="C:\\dir\\" x').value).toBe(`password="${REDACTED}" x`);
-    expect(scrubSecretValues('password="a\\"b\nc" d').value).toBe(
+    expect(readByRules('password="C:\\dir\\" x').value).toBe(`password="${REDACTED}" x`);
+    expect(readByRules('password="a\\"b\nc" d').value).toBe(
       `password="${REDACTED}"${REDACTED}\nc" d`,
     );
   });
@@ -954,7 +995,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   it.each([' ', '\t', '\n', ',', ';', '}', ')', ']', '&', '.', "'", '|', '<', '>', ''])(
     'is closed by a quote what ends a value follows: %j',
     (after) => {
-      expect(scrubSecretValues(`password="a\\"b ${FAKE}"${after}`).value).toBe(
+      expect(readByRules(`password="a\\"b ${FAKE}"${after}`).value).toBe(
         `password="${REDACTED}"${after}`,
       );
     },
@@ -964,11 +1005,11 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   // read to the first quote, as it was, it ended at the `\"`, and the rest of it was kept, the word
   // too (legacy 948).
   it('is closed by a quote more of its word is written right against, and hides that word', () => {
-    expect(scrubSecretValues('password="a\\"b"c').value).toBe(`password="${REDACTED}"${REDACTED}`);
+    expect(readByRules('password="a\\"b"c').value).toBe(`password="${REDACTED}"${REDACTED}`);
   });
 
   it('is not closed by the quote of a JSON key, its colon after it (#501 on #1579)', () => {
-    expect(scrubSecretValues(`API_TOKEN="a \\"b \\"password":${FAKE}`).value).not.toContain(FAKE);
+    expect(readByRules(`API_TOKEN="a \\"b \\"password":${FAKE}`).value).not.toContain(FAKE);
   });
 
   it.each([
@@ -990,7 +1031,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   ])(
     'hides the next pair after a value that ends with a backslash before its quote (#493 on #1579): %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
     },
   );
 
@@ -1008,7 +1049,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   ])(
     'hides the next value, as main does, after one read on to its quote (#501 on #1579): %s',
     (text) => {
-      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+      expect(readByRules(text).value).not.toContain(FAKE);
     },
   );
 
@@ -1043,7 +1084,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   ])(
     'never closes at the opening quote of the next pair, its value opening with a space or what ends one (legacy 924): %s',
     (_label, text) => {
-      expect(scrubSecretValues(text).value).not.toContain(FAKE);
+      expect(readByRules(text).value).not.toContain(FAKE);
     },
   );
 
@@ -1065,13 +1106,13 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
   ])(
     'a quote after what no value rule takes for a name still closes the value: %s',
     (_label, text) => {
-      expect(scrubSecretValues(text).value).toBe(`password="${REDACTED}" x`);
+      expect(readByRules(text).value).toBe(`password="${REDACTED}" x`);
     },
   );
 
   // And the rest of its word after it, as after any value's closing quote (legacy 948).
   it("reads a value whose last word is a secret's name and its separator to its first quote, as v0.69.2 does", () => {
-    expect(scrubSecretValues('password="a \\"b token: " x').value).toBe(
+    expect(readByRules('password="a \\"b token: " x').value).toBe(
       `password="${REDACTED}"${REDACTED} token: " x`,
     );
   });
@@ -1082,7 +1123,7 @@ describe('a quoted value with escaped quotes inside it (review #501 on #1577)', 
     ['an env line', 'PASSWORD="a\\\r\nb" c', '\r\nb" c'],
     ['a JSON pair', '{"password": "a\\\nb", "x": "y"}', '\nb", "x": "y"}'],
   ])('reads no escape past the end of its line: %s', (_label, text, nextLine) => {
-    expect(scrubSecretValues(text).value).toContain(nextLine);
+    expect(readByRules(text).value).toContain(nextLine);
   });
 });
 
@@ -1124,8 +1165,8 @@ describe('a value read with escapes, and the next pair (legacy 926)', () => {
     (_label, text, hidden) => {
       // Ended before that pair (#501 on #1581), it ended at the `\"` before it and the rest of
       // the string was kept: `password:"\"a TOKEN='"'<密钥>"`.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1148,8 +1189,8 @@ describe('a value read with escapes, and the next pair (legacy 926)', () => {
   ])(
     "ends before the next pair whose '…' value holds the quote it would have closed at (review #501 on #1581): %s",
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1161,18 +1202,14 @@ describe('a value read with escapes, and the next pair (legacy 926)', () => {
   ])(
     "reads on, as main does, past a next pair whose '…' value it covers: %s",
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
     },
   );
 
   it('leaves the blanks at the end of its line out of a value not closed, as text cut there reads it', () => {
-    expect(scrubSecretValues('API_TOKEN=\\"a  \nnext').value).toBe(
-      `API_TOKEN=\\"${REDACTED}  \nnext`,
-    );
-    expect(scrubSecretValues('API_TOKEN=\\"a \r\nnext').value).toBe(
-      `API_TOKEN=\\"${REDACTED} \r\nnext`,
-    );
-    expect(scrubSecretValues('API_TOKEN=\\"a  ').value).toBe(`API_TOKEN=\\"${REDACTED}  `);
+    expect(readByRules('API_TOKEN=\\"a  \nnext').value).toBe(`API_TOKEN=\\"${REDACTED}  \nnext`);
+    expect(readByRules('API_TOKEN=\\"a \r\nnext').value).toBe(`API_TOKEN=\\"${REDACTED} \r\nnext`);
+    expect(readByRules('API_TOKEN=\\"a  ').value).toBe(`API_TOKEN=\\"${REDACTED}  `);
   });
 
   it.each([
@@ -1181,7 +1218,7 @@ describe('a value read with escapes, and the next pair (legacy 926)', () => {
     // main kept the second value, v0.69.2 the second and the fourth (#501 on #1581).
     `"secret": "${FAKE}=\\" \\"secret" = \\" k: ${FAKE} : 'password': "${FAKE}"|PASSWORD=\\"${FAKE}`,
   ])('hides every value of the lines #501 found: %s', (text) => {
-    expect(scrubSecretValues(text).value).not.toContain(FAKE);
+    expect(readByRules(text).value).not.toContain(FAKE);
   });
 });
 
@@ -1195,14 +1232,14 @@ describe('an escaped JSON key and `=` (review #501 on #1581)', () => {
       `pwsh -c "Invoke-X -Body @{\\"Password\\" = \\"${REDACTED}\\"}"`,
     ],
   ])('hides the value, as with a colon: %s', (_label, text, hidden) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
   });
 
   it.each([
     ['a key that names no secret', '\\"user\\" = \\"bob\\"'],
     ['a comparison', 'if (\\"password\\" == \\"x\\")'],
   ])('keeps what is no secret pair: %s', (_label, text) => {
-    expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(readByRules(text)).toEqual({ value: text, redactedValues: 0 });
   });
 });
 
@@ -1228,7 +1265,7 @@ describe('the name rules read together, each on the text as it is written (legac
     (_label, text, hidden) => {
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: 1 });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1251,8 +1288,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     'hides both values of pairs that cross, the rest of the second after the first, as main does: %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1280,8 +1317,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     "keeps what stands between a value and the value of the pair it crosses, and that value's opening quote: %s",
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1291,7 +1328,7 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     'reads a pair inside the rest of a value that crosses, from where the pair it crossed ended (v0.69.2 and main kept the last value): %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({
+      expect(readByRules(text)).toEqual({
         value: `${hidden}${REDACTED}"${REDACTED}"`,
         redactedValues: 3,
       });
@@ -1354,8 +1391,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     "reads a bare value on past a next pair whose value is a secret's key, as v0.70.0 does, and that key's pair crosses it: the key hidden with the values (review #501 on #1586, #493 on #1591; main kept it): %s",
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1381,8 +1418,8 @@ describe('the name rules read together, each on the text as it is written (legac
     (_label, text, hidden) => {
       // The pair that starts inside the bare value and goes on past it is read from where that
       // value starts, as its rule reads on there (`readTogether`).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1415,8 +1452,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     'reads on from where a match ended before one crossed it, whichever rule comes first at one place (review #493 on #1586; v0.69.2 and main kept the last value): %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1441,8 +1478,8 @@ describe('the name rules read together, each on the text as it is written (legac
   ])(
     'adds no closing quote to the rest of a value it crosses that was never closed, as main does (review #501 on #1586): %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1462,8 +1499,8 @@ describe('the name rules read together, each on the text as it is written (legac
     (_label, text, hidden) => {
       // Three since legacy 948: the text after the escaped quote is the rest of the last value's
       // word, and the pair in it is hidden with it.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1471,38 +1508,23 @@ describe('the name rules read together, each on the text as it is written (legac
     // The env rule takes `API_KEY=x&secret:`, the name rule, whose value stops at the `&`,
     // `API_KEY=x` inside it: read on from where the env match ends, it skipped `secret: '…'`.
     const hidden = `API_KEY=${REDACTED} '${REDACTED}'`;
-    expect(scrubSecretValues(`API_KEY=x&secret: '${FAKE}'`)).toEqual({
+    expect(readByRules(`API_KEY=x&secret: '${FAKE}'`)).toEqual({
       value: hidden,
       redactedValues: 2,
     });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   it('counts a pair inside the value of the one it starts in once, with that value', () => {
-    expect(scrubSecretValues(`token="a PASSWORD=${FAKE} b"`)).toEqual({
+    expect(readByRules(`token="a PASSWORD=${FAKE} b"`)).toEqual({
       value: `token="${REDACTED}"`,
       redactedValues: 1,
     });
     // Two masks that meet are one: the rest of a value read on past the `&` the first stops at.
-    expect(scrubSecretValues(`--TOKEN=${FAKE}&${FAKE}`)).toEqual({
+    expect(readByRules(`--TOKEN=${FAKE}&${FAKE}`)).toEqual({
       value: `--TOKEN=${REDACTED}`,
       redactedValues: 1,
     });
-  });
-
-  it('reads the pairs from where it is told, looking back into what comes before', () => {
-    // After a `.` the name rule takes no name, as in the whole text; and no match starts in what
-    // was read before (`secret-stream.ts`).
-    const text = `password: "a ${FAKE}"`;
-    expect(scrubSecretValues(text, { readAfter: '"hi".' })).toEqual({
-      value: text,
-      redactedValues: 0,
-    });
-    expect(scrubSecretValues(`'${FAKE} b'`, { readAfter: 'token: ' })).toEqual({
-      value: `'${FAKE} b'`,
-      redactedValues: 0,
-    });
-    expect(scrubSecretValues(text).value).toBe(`password: "${REDACTED}"`);
   });
 });
 
@@ -1527,7 +1549,7 @@ describe('a secret key after an escaped quote is no value (legacy 929)', () => {
 
 describe('a value read with escapes and the next pair (review #493, #501 on #1583)', () => {
   it("ends before a next pair's name and quote, not a `'` before it", () => {
-    expect(scrubSecretValues(`password="a\\" x ${FAKE} --token '"}`)).toEqual({
+    expect(readByRules(`password="a\\" x ${FAKE} --token '"}`)).toEqual({
       value: `password="${REDACTED}"}`,
       redactedValues: 1,
     });
@@ -1537,12 +1559,12 @@ describe('a value read with escapes and the next pair (review #493, #501 on #158
     ['YAML', `password: "a\\"${FAKE}token: " x`, `password: "${REDACTED}" x`],
     ['JSON', `{"password": "p\\"w${FAKE}token: "}`, `{"password": "${REDACTED}"}`],
   ])('reads on past a name right after its text, no blank between: %s', (_label, text, hidden) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
   });
 
   it.each([40, 58])('ends before a next pair whose name is %i characters and _token', (length) => {
     const name = `${'x'.repeat(length)}_token`;
-    expect(scrubSecretValues(`password=\\"a ${name}='b" ${FAKE}'`)).toEqual({
+    expect(readByRules(`password=\\"a ${name}='b" ${FAKE}'`)).toEqual({
       value: `password=\\"${REDACTED} ${name}='${REDACTED}'`,
       redactedValues: 2,
     });
@@ -1635,7 +1657,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // Its rule reads on from where the value it starts in starts (`readTogether`).
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1677,7 +1699,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1720,7 +1742,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1749,7 +1771,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1770,7 +1792,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   });
 
   it('reads no pair into a value cut short where other text stands between them, as main and v0.70.0 do', () => {
-    expect(scrubSecretValues(`api_key: \\"a"b TOKEN='\\"' c`)).toEqual({
+    expect(readByRules(`api_key: \\"a"b TOKEN='\\"' c`)).toEqual({
       value: `api_key: \\"${REDACTED}"b TOKEN='${REDACTED}' c`,
       redactedValues: 2,
     });
@@ -1821,8 +1843,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'reads a "…" value that is a secret\'s key and its quote as a value, which that key\'s pair crosses: the key hidden with both values, whose own v0.70.0 kept (review #493 on #1591): %s',
     (_label, text, hidden, values) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1894,7 +1916,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // Read by the JSON rule alone, after the name rules hid the key as a value, it was kept.
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -1969,7 +1991,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2009,7 +2031,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     // A value not closed after a JSON key ends with its line.
     ['a carriage return', `"api_key": "${FAKE}\rnext line`, `"api_key": "${REDACTED}\rnext line`],
   ])('reads on no further than that: %s', (_label, text, hidden) => {
-    expect(scrubSecretValues(text).value).toBe(hidden);
+    expect(readByRules(text).value).toBe(hidden);
   });
 
   it.each([
@@ -2087,8 +2109,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // The key's pair is read with the name rules, and crosses the value it is: both are hidden.
       // Read as no value, the value before it was kept (review #493 on #1591); read after them
       // alone, as the value before it, the key's own value was kept (legacy 930).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2117,8 +2139,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // Read with the name rules as that pair, its rule wrote the key's closing quote escaped, and
       // the escaped pair after it was then read from that quote and kept (a mutant, review #493 on
       // #1591).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2147,8 +2169,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // Read as no value, as if it were a secret's key and its escaped quote, it was kept since
       // the key's quote was guarded (review #493 on #1591).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 1 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 1 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2176,8 +2198,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       // Read with the name rules, that key is a name: a key that may hold anything held a pair
       // whose value it then kept (review #493 on #1591).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2202,8 +2224,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // That value stops before the pair, which is read as its own; covered by that value, it was
       // read on from where it ended, and the pair in its value kept its own (review #493 on #1591).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2278,7 +2300,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // #493 on #1591). Known failures here before.
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2360,8 +2382,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       // That pair is read with the name rules, on the text as it is written. Read after them alone,
       // on the text they rewrote, it found its key hidden as the value before it, and kept its own.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2383,7 +2405,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       // Read as a JSON pair too, from the key's opening quote, it crossed the value before it one
       // character sooner than the name does, and kept what the name rule hid.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
     },
   );
 
@@ -2400,8 +2422,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // No pair can be written in such a key (`KEY_WITH_NO_PAIR_IN_IT`). main read the escaped ones
       // so; v0.70.0 kept their values, and both kept the unescaped one's.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2432,8 +2454,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // A key is read with the name rules as long as the JSON rule reads one. Read so only up to
       // 64 characters, a longer one was left to that rule alone, on the text the value before it
       // rewrote, and kept its value; main too.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2459,7 +2481,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
   ])(
     'hides the value of a pair written in a JSON key, which is read with the name rules only where no pair can be written in it (legacy 930): %s',
     (_label, text, hidden) => {
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 2 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 2 });
     },
   );
 
@@ -2480,8 +2502,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     'reads a `\\\\\\"` in an escaped JSON value as a quote of its own, not its close, as v0.70.0 did (review #501 on #1591): %s',
     (_label, text, hidden, values) => {
       // Read as any `\"` value is, it closed at the `\"` of that `\\\"`, and kept the rest.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2503,8 +2525,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden, values) => {
       // main read that `\"` as the value's close: it wrote it after the mask (the first), or
       // went on to it and no further, and kept what came after it (the second, as v0.70.0 did).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2513,8 +2535,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     // that quote; v0.70.0 kept that pair's value.
     const text = `\\"token\\":\\"'token:${FAKE}\\"token\\":\\"\\"|${FAKE}`;
     const hidden = `\\"token\\":\\"${REDACTED}\\"token\\":\\"${REDACTED}\\"${REDACTED}`;
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 5 });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 5 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   it.each([
@@ -2549,8 +2571,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // Read as any `"` value is, it closed at the `"` of that `\"`, and kept the rest: the first
       // five main and v0.70.0 hid, the last every version kept.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2566,8 +2588,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     (_label, text, hidden) => {
       // It ends with a quote of its own (`\"`, `\\\"`), not its close: read as closed there, it
       // went on no further, and kept what follows that pair's value; so did main and v0.70.0.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2588,8 +2610,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // `\\` is a backslash of the value's own, and the quote after it closes the value. Read as a
       // quote of its own, the value went on past the pair after it and read in that pair's key,
       // which the JSON rule then no longer found (the second kept the key's value).
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 3 });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 3 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2708,7 +2730,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // not read the value together, and kept the key (but the one written in a string, on main).
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues });
       expectFloored(text);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2762,7 +2784,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
       // Nor at a key straight after a `}` or an object straight after the value, or at a key with a
       // backslash in it, which the JSON rule does not read: closed there, short of the pair, the
       // string kept the value after that key.
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues });
     },
   );
 
@@ -2780,8 +2802,8 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
         `{"passwordx": "${REDACTED}\n"_password":"${REDACTED}\n{"a": 1}`,
       ],
     ] as const) {
-      expect(scrubSecretValues(text).value).toBe(hidden);
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text).value).toBe(hidden);
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     }
   });
 
@@ -2791,7 +2813,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     // the quote that closes its string, and kept what follows; so did main and v0.70.0.
     const text = `"passwordx":"\\"password\\":\\""_password":" token:""" ${FAKE}`;
     const hidden = `"passwordx":"${REDACTED}"_password":"${REDACTED}token:"${REDACTED}"${REDACTED}`;
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 4 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 4 });
   });
 
   it('closes a JSON value short of a pair only where it is open at the quote of its JSON string (review #501 on #1593)', () => {
@@ -2800,7 +2822,7 @@ describe('a pair that starts inside a value and goes on past it (legacy 934)', (
     // after it; main and v0.70.0 kept it too.
     const text = `"passwordx":"\\"password\\":\\""_password":" token:", "note": "${FAKE}"`;
     const hidden = `"passwordx":"${REDACTED}"_password":"${REDACTED}token:"${REDACTED}"${REDACTED}`;
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: 4 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: 4 });
   });
 });
 
@@ -2837,8 +2859,8 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
     (_label, text, hidden, values) => {
       expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -2887,9 +2909,9 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
       2,
     ],
   ])('reads on no further than its word: %s', (_label, text, hidden, values) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
     expectFloored(text);
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   // Each of these reads otherwise with one guard taken away (review #501 on #1597): a JSON string's
@@ -2911,9 +2933,9 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
       1,
     ],
   ])('reads the rest of its word only where it is one: %s', (_label, text, hidden, values) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
     expectFloored(text);
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   it('writes the quote that closed it where it stands, for the JSON rule that reads the text after it', () => {
@@ -2926,7 +2948,7 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
       `{"token": ""x"${key}": "${FAKE}"}`,
     ]) {
       const written = text.includes(key) ? key : 'password';
-      expect(scrubSecretValues(text)).toEqual({
+      expect(readByRules(text)).toEqual({
         value: `{"token": "${REDACTED}"${REDACTED}"${written}": "${REDACTED}"}`,
         redactedValues: 2,
       });
@@ -2935,7 +2957,7 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
 
   describe('in rows already stored (review #493 on #1597)', () => {
     const stored = (text: string) =>
-      scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+      readByRules(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
 
     // An earlier release hid the quoted part and kept the rest of the word as written
     // (`TOKEN="[redacted]"<密钥>`). The rewrite of stored rows at each upgrade reads that mask
@@ -2956,8 +2978,8 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
       const written = released.scrubSecretValues(text).value;
       expect(written).toMatch(/\[redacted\]["']/);
       expect(fakesIn(written)).toBe(1);
-      expect(fakesIn(scrubSecretValues(written).value)).toBe(1);
-      const now = scrubSecretValues(text);
+      expect(fakesIn(readByRules(written).value)).toBe(1);
+      const now = readByRules(text);
       expect(stored(written)).toEqual(now);
       expect(stored(now.value)).toEqual({ value: now.value, redactedValues: 0 });
     });
@@ -2977,7 +2999,7 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
       `TOKEN=""${FAKE}""`,
       `token='x'${FAKE} y`,
     ])('leaves a row written from now on as it is: %s', (text) => {
-      const now = scrubSecretValues(text).value;
+      const now = readByRules(text).value;
       expect(stored(now)).toEqual({ value: now, redactedValues: 0 });
     });
 
@@ -2989,7 +3011,7 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
     // wrote for it is rewritten once, as before.
     it('leaves a value closed by an escaped quote as it is written now, and rewrites the row an earlier release wrote once', () => {
       const text = `password="a\\"b"c ok`;
-      const now = scrubSecretValues(text).value;
+      const now = readByRules(text).value;
       expect(now).toBe(`password="${REDACTED}"${REDACTED} ok`);
       expect(stored(now)).toEqual({ value: now, redactedValues: 0 });
       const written = released.scrubSecretValues(text).value;
@@ -3002,8 +3024,7 @@ describe('a quoted value closed right against more of its word (legacy 937)', ()
 });
 
 describe('a value with an escaped quote closed right against more of its word (legacy 948)', () => {
-  const stored = (text: string) =>
-    scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+  const stored = (text: string) => readByRules(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
 
   // A `\"…\"` value, a `"…"` one with `\"` in it, and one closed by a quote a backslash escapes:
   // read to that quote and no further, the text written right against it was kept, in main, in
@@ -3113,8 +3134,8 @@ describe('a value with an escaped quote closed right against more of its word (l
     (_label, text, hidden, values) => {
       expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
       expect(stored(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
@@ -3131,16 +3152,16 @@ describe('a value with an escaped quote closed right against more of its word (l
     ],
     ['a `,`', `token=\\"x\\",x`, `token=\\"${REDACTED}\\",x`, 1],
   ])('reads on no further than its word: %s', (_label, text, hidden, values) => {
-    expect(scrubSecretValues(text)).toEqual({ value: hidden, redactedValues: values });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(text)).toEqual({ value: hidden, redactedValues: values });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   // After a `"…"` or `'…'` value, the backslashes of its word are read two at a time, as main reads
   // them; a run is read whole only after a `\"…\"` one (`moreOfTheEscapedWord`; review #493 on #1600).
   it('reads the backslashes of the word after a "…" value as main reads them', () => {
     const hidden = `TOKEN="${REDACTED}"${REDACTED}\\"& y`;
-    expect(scrubSecretValues(`TOKEN=""C:\\\\\\"& y`)).toEqual({ value: hidden, redactedValues: 1 });
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(readByRules(`TOKEN=""C:\\\\\\"& y`)).toEqual({ value: hidden, redactedValues: 1 });
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   // Read on to a blank, the value ends where a value inside it, not closed, stopped before blanks
@@ -3165,7 +3186,7 @@ describe('a value with an escaped quote closed right against more of its word (l
     (_label, text, hidden, values) => {
       expect(fakesIn(released.scrubSecretValues(text).value)).toBeGreaterThan(0);
       expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
-      expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+      expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
     },
   );
 
@@ -3312,8 +3333,8 @@ describe('a value with an escaped quote closed right against more of its word (l
   ])('hides what main hides where a pair crosses it: %s', (_label, text, hidden, values) => {
     expect(fakesIn(released.scrubSecretValues(text).value)).toBe(1);
     expect(readOwn(text)).toEqual({ value: hidden, redactedValues: values });
-    expect(fakesIn(scrubSecretValues(text).value)).toBe(0);
-    expect(scrubSecretValues(hidden)).toEqual({ value: hidden, redactedValues: 0 });
+    expect(fakesIn(readByRules(text).value)).toBe(0);
+    expect(readByRules(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
 
   // An earlier release wrote `TOKEN=\"[redacted]\"<密钥>` for such a value: the rewrite of stored
@@ -3336,7 +3357,7 @@ describe('a value with an escaped quote closed right against more of its word (l
   ])('hides the rest of the word an earlier release kept: %s', (text, hidden) => {
     const written = released.scrubSecretValues(text).value;
     expect(fakesIn(written)).toBe(1);
-    expect(fakesIn(scrubSecretValues(written).value)).toBe(1);
+    expect(fakesIn(readByRules(written).value)).toBe(1);
     expect(stored(written)).toEqual({ value: hidden, redactedValues: 1 });
     expect(stored(hidden)).toEqual({ value: hidden, redactedValues: 0 });
   });
@@ -3374,18 +3395,20 @@ describe('v0.70.0 read under every text: a floor (legacy 939)', () => {
   ])('%s', (_label, text, own, old, floored) => {
     expect(readOwn(text).value).toBe(own);
     expect(released.scrubSecretValues(text).value).toBe(old);
-    expect(scrubSecretValues(text)).toEqual(floored);
+    expect(readByRules(text)).toEqual(floored);
   });
 
   it('is under both lists v0.70.0 had, wherever they read', () => {
-    const floored = scrubSecretValues(CROSSING);
+    const floored = readByRules(CROSSING);
     expect(floored.value).not.toContain(FAKE);
     expect(scrubSecretValues(CROSSING, { patterns: STORED_REWRITE_SECRET_PATTERNS })).toEqual(
       floored,
     );
+    // The walk reads each string as `scrubSecretValues` does: the floor, then the tail check.
+    const composed = scrubSecretValues(CROSSING);
     expect(redactSecrets({ note: CROSSING })).toEqual({
-      value: { note: floored.value },
-      redactedValues: floored.redactedValues,
+      ...composed,
+      value: { note: composed.value },
       omitted: false,
     });
   });
@@ -3445,7 +3468,7 @@ describe('v0.70.0 read under every text: a floor (legacy 939)', () => {
       const text = draw();
       const own = readOwn(text);
       const old = released.scrubSecretValues(text);
-      const floored = scrubSecretValues(text);
+      const floored = readByRules(text);
       if (old.value === text || old.value === own.value) {
         if (floored.value !== own.value || floored.redactedValues !== own.redactedValues) {
           wrong.push(JSON.stringify(text));
@@ -3585,10 +3608,10 @@ describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split,
     const text = `-e "PW_TOKEN=${FAKE}" img \\"x\\"`;
     const written = `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`;
     const rewritten = `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`;
-    expect(scrubSecretValues(text)).toEqual({ value: written, redactedValues: 1 });
+    expect(readByRules(text)).toEqual({ value: written, redactedValues: 1 });
     expect(repairSplitQuotedMasks(written)).toEqual({ value: rewritten, redactedValues: 1 });
     expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
-    expect(scrubSecretValues(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+    expect(readByRules(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
   });
 
   // Review #501 on #1575: the bare run took the \ of the \" that closes the string, and wrote
@@ -4224,6 +4247,15 @@ describe('a cut never ends in the start of a secret (legacy 819)', () => {
   });
 });
 
+/** Plain prose: what a read of a shape is held against, besides the wall clock. */
+const PROSE = 'The run wrote 3 files to the log; see step 2 for the details of each one.\n';
+/** How long `read` takes, in milliseconds. */
+const timed = (read: () => unknown): number => {
+  const started = performance.now();
+  read();
+  return performance.now() - started;
+};
+
 describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded (legacy 916)', () => {
   const scrub = (text: string) => fieldsIn(text, namesASecretField, scrubSecretValues);
   /** As the callers use it: then the value patterns over the rest of the text as it is. */
@@ -4250,7 +4282,8 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
       `$ psql\n--password ${REDACTED} -h db`,
     ],
     ['a YAML key', `db:\npassword: '${FAKE}'`, `db:\npassword: '${REDACTED}'`],
-    ['a query string', `GET\napi_key=${FAKE}&x=1`, `GET\napi_key=${REDACTED}&x=1`],
+    // Stage 1b: a bare value at the head of a line with more text after it is read to the end.
+    ['a query string', `GET\napi_key=${FAKE}&x=1`, `GET\napi_key=${REDACTED}`],
     ['after a tab', `a\tPGPASSWORD=${FAKE}`, `a\tPGPASSWORD=${REDACTED}`],
   ])('hides %s that follows an escape', (_label, stdout, expected) => {
     expect(scrub(result(stdout))).toEqual({ value: result(expected), redactedValues: 1 });
@@ -4317,8 +4350,9 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
   );
 
   it('skips what it read, rewritten or kept, in a pass over the text: the spans', () => {
-    // `\r` after the separator: no value decoded, the line breaks there.
-    const kept = '"\\u4e2d\\nAPI_TOKEN=\\rx"';
+    // `\r\n` after the separator: no value decoded, the line breaks there. (A lone `\r` no longer
+    // does: the tail check reads it as part of the line, and hides from it on, stage 1b.)
+    const kept = '"\\u4e2d\\nAPI_TOKEN=\\r\\nx"';
     const text = `{"a":${kept},"b":"x\\nPGPASSWORD=${FAKE}","c":"plain","d":${kept}}`;
     const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
     const rewritten = JSON.stringify(`x\nPGPASSWORD=${REDACTED}`);
@@ -4330,7 +4364,7 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
       [at(rewritten), at(rewritten) + rewritten.length],
       [last, last + kept.length],
     ]);
-    // Read over as it is, the kept string's `\r` reads as the start of a value.
+    // Read over as it is, the kept string's `\r\n` reads as the start of a value.
     expect(scrubSecretValues(kept).redactedValues).toBe(1);
     expect(scrubAll(text)).toEqual({ value: fields.value, redactedValues: 1 });
   });
@@ -4353,6 +4387,79 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     // An escaped backslash is a whole escape, not a cut one.
     expect(scrub(`${open}\\\\`).value).toBe(`${hidden}\\\\`);
     expect(scrub(`${open}\\\\u4`).value).toBe(`${hidden}\\\\u4`);
+  });
+
+  it('reads a string the text ends inside to its first raw control character, a note after the cut apart (review #501 on #1629)', () => {
+    const open = `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore`;
+    const hidden = `{"stdout":"a\\nPGPASSWORD=${REDACTED}\\nmore`;
+    // The runtime notes a cut used to append (platform-extension before legacy 967), and others.
+    const notes = [
+      '\n\n[... 500 more characters omitted — the full result is not shown ...]',
+      '\r\n…',
+      '\r…',
+    ];
+    for (const note of notes) {
+      for (const partial of ['', '\\', '\\u4e']) {
+        const fields = redactSecretFieldsInJsonText(
+          open + partial + note,
+          namesASecretField,
+          scrubSecretValues,
+        );
+        expect({ value: fields.value, redactedValues: fields.redactedValues }).toEqual({
+          value: hidden + partial + note,
+          redactedValues: 1,
+        });
+        expect(fields.decodedSpans).toEqual([
+          [hidden.indexOf('"a'), hidden.length + partial.length],
+        ]);
+      }
+    }
+    // Kept as written: the span still ends at the note, which the pass over the text reads.
+    const kept = `{"stdout":"a\\nb\n\npassword=${FAKE}`;
+    expect(
+      redactSecretFieldsInJsonText(kept, namesASecretField, scrubSecretValues).decodedSpans,
+    ).toEqual([[kept.indexOf('"a'), kept.indexOf('\n')]]);
+    expect(scrubAll(kept)).toEqual({
+      value: `{"stdout":"a\\nb\n\npassword=${REDACTED}`,
+      redactedValues: 1,
+    });
+  });
+
+  // Review #501 on #1631: a cut is only at a line break with no key block open before it. At a
+  // tab (a name before it, its value after) or with a key block open across the break, the two
+  // sides read apart would show what the whole text hides: the string is left to the pass over
+  // the text as it is, as before legacy 982.
+  it('takes only a line break with no key block open before it for the cut', () => {
+    const KEY = `${FAKE}${FAKE}`;
+    // The markers spelled from a word, so that the secret scan does not take the test for a key.
+    const mark = (edge: 'BEGIN' | 'END') => `-----${edge} RSA PRIVATE KEY-----`;
+    const apart = [
+      `{"out": "echo \\"x\\"; PASSWORD=\t${FAKE} more`,
+      `{"out": "cfg \\"a\\" password:\t${FAKE}`,
+      `{"out": "key \\"id\\": ${mark('BEGIN')}\n${KEY}\n${mark('END')}`,
+      `{"out": "key \\"id\\": ${mark('BEGIN')}\r\n${KEY}`,
+      `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\t`,
+      `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\u000b…`,
+    ];
+    for (const text of apart) {
+      const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+      expect({ value: fields.value, spans: fields.decodedSpans }).toEqual({
+        value: text,
+        spans: [],
+      });
+      expect(scrubAll(text)).toEqual(scrubSecretValues(text));
+    }
+    // The first four hide every secret, as v0.70.1 did. The last two read as v0.70.1 read them too,
+    // the escaped letter against the name left as written (legacy 916): the cost the review took,
+    // as no cut today has anything but a line break after it.
+    for (const text of apart.slice(0, 4)) {
+      expect(scrubAll(text).value).not.toContain(FAKE);
+    }
+    // A key block closed before the break is no reason: the string read to there is still cut.
+    const closedBlock = `{"out": "k \\"id\\": ${mark('BEGIN')}\\n${KEY}\\n${mark('END')} PGPASSWORD=${FAKE}\n\n[... cut ...]`;
+    const read = redactSecretFieldsInJsonText(closedBlock, namesASecretField, scrubSecretValues);
+    expect(read.decodedSpans).toHaveLength(1);
+    expect(scrubAll(closedBlock).value).not.toContain(FAKE);
   });
 
   it('still replaces a secret-named field whole, and counts each once; a second pass changes nothing', () => {
@@ -4380,16 +4487,21 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     ['quoted values', `{"a":"${'API_TOKEN=\\"x\\" '.repeat(12_000)}"}`],
     ['a string cut open', `{"a":"${'\\nPGPASSWORD=x'.repeat(14_000)}\\u4`],
     ['many kept strings', `[${'"\\n",'.repeat(40_000)}"y"]`],
-  ])('%s × 200 KB within 1 s', (_name, text) => {
+  ])('%s × 200 KB within 1 s, or within 20 times plain prose of its length', (_name, text) => {
+    // Against plain prose read in the same process as well, not a wall clock alone: a loaded
+    // runner slows both (review #493 on #1631). What it holds is that these shapes read in time
+    // linear in their length, as prose does; a read gone quadratic is thousands of times slower.
+    const plain = PROSE.repeat(Math.ceil(text.length / PROSE.length)).slice(0, text.length);
     scrubAll(text.slice(0, 1_000));
-    const started = performance.now();
-    scrubAll(text);
-    expect(performance.now() - started).toBeLessThan(1_000);
+    scrubAll(plain.slice(0, 1_000));
+    const took = timed(() => scrubAll(text));
+    expect(took).toBeLessThan(Math.max(1_000, 20 * timed(() => scrubAll(plain))));
   });
 });
 
 describe('redactSecrets — jsonTextFields: the key rule over strings that are JSON text', () => {
-  // The value patterns alone take only the token after `"credentials": ` (here the `{`).
+  // The value patterns alone take only the token after `"credentials": ` (here the `{`); the tail
+  // check takes the container when it closes on the same line (stage 1b).
   const text = '{"name": "db-1", "credentials": {"user": "bob", "pin": 1234}}';
   const shown = (options: Parameters<typeof redactSecrets>[1]) => {
     const redacted = redactSecrets({ text }, options);
@@ -4404,9 +4516,19 @@ describe('redactSecrets — jsonTextFields: the key rule over strings that are J
     expect(fields.count).toBe(shown({ isSecretKey: namesASecretField }).count + 2);
   });
 
-  it('without it (or without isSecretKey), only the value patterns run over the text', () => {
+  // Stage 1b: the tail check reads a container balanced on its line as the value and hides it
+  // whole; spread over lines, only the value patterns run over the text and take the `{`.
+  it('without it (or without isSecretKey), the text pass alone: the container on its line, the `{` over lines', () => {
+    const pretty = JSON.stringify(JSON.parse(text), null, 2);
     for (const options of [{ isSecretKey: namesASecretField }, { jsonTextFields: true }]) {
-      expect(shown(options).text).toContain('"user": "bob", "pin": 1234');
+      expect(shown(options)).toEqual({
+        text: '{"name": "db-1", "credentials": [redacted]}',
+        count: 1,
+      });
+      const spread = redactSecrets({ text: pretty }, options).value as { text: string };
+      expect(spread.text).toContain(
+        '"credentials": [redacted]\n    "user": "bob",\n    "pin": 1234',
+      );
     }
   });
 

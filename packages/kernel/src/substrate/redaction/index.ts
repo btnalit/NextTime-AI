@@ -6,3 +6,4 @@
  */
 export * from './secret-values.js';
 export * from './shown-text.js';
+export { type TailChecked, tailChecked } from './tail-check.js';

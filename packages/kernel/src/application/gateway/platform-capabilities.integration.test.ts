@@ -2238,7 +2238,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(page.items[0]?.payload).toMatchObject({
           params: { login: 'ops', password: '[redacted]' },
-          note: 'PGPASSWORD=[redacted] was in the script',
+          // The head-of-line rule of the tail check (stage 1b, legacy 962): the rest of the line.
+          note: 'PGPASSWORD=[redacted]',
           credentialReview: { suspectedSecretValues: 1, confirmed: true },
         });
       });

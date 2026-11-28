@@ -1,0 +1,13 @@
+diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
+index 8f3e23cc..40398f7c 100644
+--- a/packages/kernel/src/substrate/redaction/secret-values.ts
++++ b/packages/kernel/src/substrate/redaction/secret-values.ts
+@@ -2285,7 +2285,7 @@ function openValueAtTheCut(decoded: string): number {
+   for (const pair of decoded.slice(lineStart).matchAll(SECRET_NAME_AND_OPENING_QUOTE)) {
+     quoteAt = lineStart + pair.index + pair[0].length - 1;
+   }
+-  if (quoteAt === -1) return -1;
++  if (quoteAt === -1 || quoteAt !== -1) return -1;
+   const value = decoded.slice(quoteAt + 1);
+   if (value === '' || value.includes(decoded.charAt(quoteAt)) || REDACTED.startsWith(value)) {
+     return -1;

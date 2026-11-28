@@ -25,6 +25,7 @@ import {
   quotedName,
   redactSuspectedSecrets,
   redactedForAudit,
+  tailCountsOf,
 } from '../../governance/redaction/index.js';
 import type { ActingContext, ActingContextHandle } from '../../substrate/audit/index.js';
 import { runWithActingContext, writeAudit } from '../../substrate/audit/index.js';
@@ -351,7 +352,9 @@ function lookupCapabilityOrThrow(name: string): Capability {
  * Handle; a person's call can carry a password or a token pasted into a field; a platform call's
  * `create_user` carries one by design. So the audit copy hides exactly what the console would
  * hide, and what an approval counts. Only the audit copy is redacted — the handler gets the params
- * as sent — and the payload's `redactedValues` says how many values were replaced.
+ * as sent — and the payload's `redactedValues` says how many values were replaced; of them,
+ * `redactedTails` the values the tail check hid to the end of their line, and `redactedTailChars`
+ * the characters those tails hid (only when above 0).
  *
  * S2.13 (design doc §11 "凭证不进内核进程"; `Capability.redactedParamKeys`'s own doc comment,
  * packages/shared/src/capabilities.ts): then every field named in `capability.redactedParamKeys`
@@ -364,6 +367,8 @@ function auditParams(
   readonly params: Record<string, unknown>;
   readonly withheldParams?: readonly string[];
   readonly redactedValues?: number;
+  readonly redactedTails?: number;
+  readonly redactedTailChars?: number;
   readonly unstorableEscaped?: number;
 } {
   // Unbounded walks: the params already passed their schema, and the copy keeps their shape. Gate
@@ -396,6 +401,8 @@ function auditParams(
     params: audited,
     ...(withheld.length > 0 ? { withheldParams: withheld } : {}),
     ...(replaced > 0 ? { redactedValues: replaced } : {}),
+    // Of those, the values the tail check hid to the end of their line (design §4.2).
+    ...tailCountsOf(redacted),
     ...(storable.escaped > 0 ? { unstorableEscaped: storable.escaped } : {}),
   };
 }

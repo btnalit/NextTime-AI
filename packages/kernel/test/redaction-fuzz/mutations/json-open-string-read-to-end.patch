@@ -1,0 +1,12 @@
+diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
+--- a/packages/kernel/src/substrate/redaction/secret-values.ts
++++ b/packages/kernel/src/substrate/redaction/secret-values.ts
+@@ -2414,7 +2414,7 @@
+    *  (`hiddenToTheCut`): only this read sees the string end. */
+   const rewrite = (start: number, quote: number): void => {
+     const closed = quote < length;
+-    const stop = closed ? quote : firstControlChar(text, start + 1);
++    const stop = closed ? quote : length;
+     const end = closed ? quote + 1 : stop;
+     const inner = text.slice(start + 1, stop);
+     if (scrubValue === undefined) return;

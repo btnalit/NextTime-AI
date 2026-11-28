@@ -14,6 +14,8 @@
  *   --report <dir>          write the results there as JSON, one file a group
  *   --write-corpus-baseline rewrite corpus-baseline.json from this run (CI's sample only)
  *   --write-stream-baseline rewrite stream-baseline.json from this run (CI's sample, every generator)
+ *   --allow-baseline-growth let either rewrite raise a line; without it a line that grows refuses
+ *                           the rewrite (a baseline may only go down, review #501 on #1619)
  *   --mutations [a,b,…]     apply each patch in mutations/ in turn and run: each must fail the run
  *   --list                  name the generators and the mutations
  *
@@ -81,6 +83,9 @@ function parse(argv) {
         break;
       case '--write-stream-baseline':
         options.writeStreamBaseline = true;
+        break;
+      case '--allow-baseline-growth':
+        options.allowBaselineGrowth = true;
         break;
       case '--mutations': {
         const next = argv[i + 1];
@@ -275,8 +280,37 @@ const ciSample = (settings) =>
   settings.cutSets === Number(CI_SAMPLE.cutSets) &&
   settings.seeds.join(',') === CI_SAMPLE.seeds;
 
+/** The lines of a baseline rewrite that are larger than the committed file's, as `name.field
+ *  old -> new`; a line the file does not have yet is not larger (a new generator or format). */
+function grownLines(fileName, key, next, fields) {
+  const path = join(HERE, fileName);
+  const committed = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8'))[key] ?? {}) : {};
+  const grown = [];
+  for (const [name, line] of Object.entries(next)) {
+    const before = committed[name];
+    if (before === undefined) continue;
+    for (const field of fields) {
+      if (line[field] > before[field])
+        grown.push(`${name}.${field} ${before[field]} -> ${line[field]}`);
+    }
+  }
+  return grown;
+}
+
+/** Refuses a rewrite that raises a line unless `--allow-baseline-growth` (a baseline may only go
+ *  down: a line that grows is a regression, or a change the seats agree to on the diff). */
+function refuseGrowth(flag, grown, allowed) {
+  if (grown.length === 0) return;
+  if (!allowed) {
+    throw new Error(
+      `${flag}: these lines would grow (pass --allow-baseline-growth to write them anyway):\n  ${grown.join('\n  ')}`,
+    );
+  }
+  console.error(`${flag}: growing, as --allow-baseline-growth asks:\n  ${grown.join('\n  ')}`);
+}
+
 /** corpus-baseline.json from a run's formats report: what the whole reading showed, per format. */
-function writeCorpusBaseline(report, tag) {
+function writeCorpusBaseline(report, tag, allowGrowth) {
   const { settings, results } = JSON.parse(readFileSync(join(report, 'formats.json'), 'utf8'));
   if (!ciSample(settings))
     throw new Error(
@@ -289,6 +323,11 @@ function writeCorpusBaseline(report, tag) {
     line.rowsShowing += result.info.showing.now;
     line.shownChars += result.info.shownChars.now;
   }
+  refuseGrowth(
+    '--write-corpus-baseline',
+    grownLines('corpus-baseline.json', 'formats', formats, ['rowsShowing', 'shownChars']),
+    allowGrowth,
+  );
   const file = {
     note: `Per format, on CI's sample (${CI_SAMPLE.rows} rows, seeds ${CI_SAMPLE.seeds}): the rows where this checkout's whole reading shows a value's character, and how many it shows. Written by run.mjs --write-corpus-baseline (compared with ${tag}); a change may only lower it.`,
     formats,
@@ -300,7 +339,7 @@ function writeCorpusBaseline(report, tag) {
 /** stream-baseline.json from a run's reports: per generator, rows whose stream was not its whole
  *  text, this checkout's and the release's on the same rows. Every generator: a partial run would
  *  drop the lines of those it did not read. */
-function writeStreamBaseline(report, tag, generators) {
+function writeStreamBaseline(report, tag, generators, allowGrowth) {
   if (generators !== undefined)
     throw new Error('--write-stream-baseline: every generator (no --generators)');
   const lines = {};
@@ -319,6 +358,12 @@ function writeStreamBaseline(report, tag, generators) {
     }
   }
   const recorded = Object.fromEntries(Object.entries(lines).sort(([a], [b]) => a.localeCompare(b)));
+  // `atRelease` is the release's count, read for the record: only `rows` is held.
+  refuseGrowth(
+    '--write-stream-baseline',
+    grownLines('stream-baseline.json', 'generators', recorded, ['rows']),
+    allowGrowth,
+  );
   const file = {
     note: `Per generator, on CI's sample (${CI_SAMPLE.rows} rows, seeds ${CI_SAMPLE.seeds}): rows where a stream reading's text is not this checkout's whole text (rows), and the same count for ${tag} on the same rows (atRelease). Written by run.mjs --write-stream-baseline; a change may only lower rows.`,
     generators: recorded,
@@ -360,8 +405,10 @@ function main() {
   };
   if (options.mutations !== undefined) return mutate(patches(options.mutations), env);
   const status = vitest(env);
-  if (options.writeCorpusBaseline) writeCorpusBaseline(report, tag);
-  if (options.writeStreamBaseline) writeStreamBaseline(report, tag, options.generators);
+  if (options.writeCorpusBaseline) writeCorpusBaseline(report, tag, options.allowBaselineGrowth);
+  if (options.writeStreamBaseline) {
+    writeStreamBaseline(report, tag, options.generators, options.allowBaselineGrowth);
+  }
   return status;
 }
 

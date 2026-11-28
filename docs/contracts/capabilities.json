@@ -37044,6 +37044,14 @@
                     ],
                     "type": "string"
                   },
+                  "redactedTailChars": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "redactedTails": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
                   "redactedValues": {
                     "minimum": 0,
                     "type": "integer"

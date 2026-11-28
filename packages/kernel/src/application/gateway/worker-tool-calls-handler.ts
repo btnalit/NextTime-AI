@@ -63,6 +63,8 @@ export const reportToolCallsHandler: CapabilityHandler = async (
 
   const { calls } = params as ReportToolCallsParams;
   let redactedValues = 0;
+  let redactedTails = 0;
+  let redactedTailChars = 0;
   let unstorableEscaped = 0;
   const records: ToolCallMessageContent[] = calls.map((call) => {
     const finished = call.outcome !== 'not_finished';
@@ -78,6 +80,8 @@ export const reportToolCallsHandler: CapabilityHandler = async (
       endedAt: call.endedAt === null ? null : new Date(call.endedAt),
     });
     redactedValues += record.redactedValues;
+    redactedTails += record.redactedTails ?? 0;
+    redactedTailChars += record.redactedTailChars ?? 0;
     const storable = storableValue(record);
     unstorableEscaped += storable.escaped;
     return storable.value;
@@ -95,6 +99,9 @@ export const reportToolCallsHandler: CapabilityHandler = async (
       // Named apart from dispatch's own `redactedValues` / `unstorableEscaped` (the audit copy of
       // the params): these count what the records hold.
       ...(redactedValues > 0 ? { recordRedactedValues: redactedValues } : {}),
+      ...(redactedTails > 0
+        ? { recordRedactedTails: redactedTails, recordRedactedTailChars: redactedTailChars }
+        : {}),
       ...(unstorableEscaped > 0 ? { recordUnstorableEscaped: unstorableEscaped } : {}),
     },
   };

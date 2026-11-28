@@ -840,11 +840,15 @@ const neighbors = (r: Rng): Row => {
     const at = int(r, chars.length + 1);
     const x = r();
     const take = x < 0.45 ? 0 : 1;
-    const put = x < 0.45 || x >= 0.7 ? [...pick(r, NB_ALPHA)] : [];
+    const token = x < 0.45 || x >= 0.7 ? pick(r, NB_ALPHA) : '';
+    const put = [...token];
     chars = [...chars.slice(0, at), ...put, ...chars.slice(at + take)];
+    // An inserted G is a secret like the seed's own: tracked through later edits, so the whole of
+    // it, or what of it is left, counts (#501 on #1619: 104 / 120 rows of seeds 7 / 8 showed it
+    // whole and required none of it).
     marks = [
       ...marks.slice(0, at),
-      ...put.map((): [number, number] => [0, 0]),
+      ...put.map((_, i): [number, number] => (token === G ? [2, i] : [0, 0])),
       ...marks.slice(at + take),
     ];
   }

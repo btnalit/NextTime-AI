@@ -49,6 +49,9 @@ export interface SuspectedSecretsOptions {
   /** Also count every secret value under a field whose name names a secret — for call
    *  arguments, which fill fields. Leave off for a document, which declares them. */
   readonly secretFields?: boolean;
+  /** `RedactSecretsOptions.tailCheck`: false only for the scrub report's reading of a stored row
+   *  without the tail check. */
+  readonly tailCheck?: boolean;
 }
 
 /** At most this many paths go on the wire — the count stays exact. */
@@ -76,6 +79,10 @@ function segment(key: string): string {
 export interface SuspectedSecrets {
   readonly count: number;
   readonly paths: readonly string[];
+  /** Of `count`, the values the tail check hid to the end of their line, and the characters those
+   *  tails hid (`Scrubbed.redactedTails`); present only when above 0. */
+  readonly redactedTails?: number;
+  readonly redactedTailChars?: number;
 }
 
 /** One walk of the redactor (`redactSecrets`) with `rule`, keeping where values were replaced.
@@ -84,7 +91,7 @@ export interface SuspectedSecrets {
  *  stored draft), so the walk is unbounded. */
 function detect(
   value: unknown,
-  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'patterns'>,
+  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'patterns' | 'tailCheck'>,
 ): SuspectedSecrets & { readonly value: unknown } {
   const paths: string[] = [];
   const redacted = redactSecrets(value, {
@@ -95,15 +102,31 @@ function detect(
       if (paths.length < MAX_PATHS && !paths.includes(path)) paths.push(path);
     },
   });
-  return { value: redacted.value, count: redacted.redactedValues, paths };
+  return {
+    value: redacted.value,
+    count: redacted.redactedValues,
+    paths,
+    ...tailCountsOf(redacted),
+  };
+}
+
+/** The tail counts of `found`, as an audit payload or a record carries them: only when above 0. */
+export function tailCountsOf(found: {
+  readonly redactedTails?: number;
+  readonly redactedTailChars?: number;
+}): { readonly redactedTails?: number; readonly redactedTailChars?: number } {
+  return (found.redactedTails ?? 0) > 0
+    ? { redactedTails: found.redactedTails, redactedTailChars: found.redactedTailChars ?? 0 }
+    : {};
 }
 
 function suspectedSecretsRule(
   options: SuspectedSecretsOptions,
-): Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals'> {
+): Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'tailCheck'> {
   return {
     ...(options.secretFields === true ? { isSecretKey: namesASecretField } : {}),
     schemaLiterals: true,
+    ...(options.tailCheck !== undefined ? { tailCheck: options.tailCheck } : {}),
   };
 }
 
@@ -115,8 +138,8 @@ export function findSuspectedSecrets(
   value: unknown,
   options: SuspectedSecretsOptions = {},
 ): SuspectedSecrets {
-  const { count, paths } = detect(value, suspectedSecretsRule(options));
-  return { count, paths };
+  const { value: _redacted, ...found } = detect(value, suspectedSecretsRule(options));
+  return found;
 }
 
 /** `value` with every suspected secret `findSuspectedSecrets` counts (same options) replaced by
@@ -152,8 +175,14 @@ export function redactSuspectedSecretsUpTo(
  *  under the same rule as the `params` copy (`redactSuspectedSecrets`, call-argument rule). Pass
  *  only those fields, never a whole payload: a payload's own fields (`credentialReview`,
  *  `suspectedSecretValues`) are named after secrets and would be replaced. */
-export function redactedForAudit(fields: Record<string, unknown>): Record<string, unknown> {
-  return redactSuspectedSecrets(fields, { secretFields: true }).value as Record<string, unknown>;
+export function redactedForAudit(
+  fields: Record<string, unknown>,
+  options: Pick<SuspectedSecretsOptions, 'tailCheck'> = {},
+): Record<string, unknown> {
+  return redactSuspectedSecrets(fields, { ...options, secretFields: true }).value as Record<
+    string,
+    unknown
+  >;
 }
 
 /** Only the values that are almost certainly a credential themselves, whatever field holds them
@@ -229,10 +258,21 @@ export function assertCredentialsReviewed(
 }
 
 /** The audit payload fields of a confirmed review — empty when there was nothing to confirm, so
- *  an ordinary decision's audit row is unchanged. The actor is the audit row's own actor. */
-export function credentialReviewAudit(suspectedSecretValues: number): Record<string, unknown> {
+ *  an ordinary decision's audit row is unchanged. The actor is the audit row's own actor. With the
+ *  review's `found` (an approval's), the values the tail check hid to the end of their line are
+ *  counted in it too (`redactedTails`, `redactedTailChars`; only when above 0). */
+export function credentialReviewAudit(
+  suspectedSecretValues: number,
+  found?: Pick<SuspectedSecrets, 'redactedTails' | 'redactedTailChars'>,
+): Record<string, unknown> {
   return suspectedSecretValues > 0
-    ? { credentialReview: { suspectedSecretValues, confirmed: true } }
+    ? {
+        credentialReview: {
+          suspectedSecretValues,
+          ...(found !== undefined ? tailCountsOf(found) : {}),
+          confirmed: true,
+        },
+      }
     : {};
 }
 

@@ -19,7 +19,22 @@ import {
   scrubSecretValues,
   scrubbedCut,
   secretFieldLiterals,
+  tailChecked,
+  tailCountsOf,
+  withTailCounts,
 } from '../../governance/redaction/index.js';
+
+/** Tails counted as text parts are read (`Scrubbed.redactedTails`), for a record's own count. */
+interface TailTally {
+  tails: number;
+  tailChars: number;
+}
+
+function tallied<T extends Scrubbed<unknown>>(tally: TailTally, scrubbed: T): T {
+  tally.tails += scrubbed.redactedTails ?? 0;
+  tally.tailChars += scrubbed.redactedTailChars ?? 0;
+  return scrubbed;
+}
 
 /**
  * application/chat/tool-call-record: what the chat event sink stores for one of a Turn's tool
@@ -95,10 +110,11 @@ function resultRule(toolName: string | null | undefined, args: unknown): ResultR
 function scrubWithResultRule(text: string, rule: ResultRule): Scrubbed<string> {
   const literals = scrubSecretLiterals(text, rule.literals);
   const values = scrubSecretValues(literals.value);
-  return {
-    value: values.value,
-    redactedValues: literals.redactedValues + values.redactedValues,
-  };
+  return withTailCounts(
+    { value: values.value, redactedValues: literals.redactedValues + values.redactedValues },
+    values.redactedTails ?? 0,
+    values.redactedTailChars ?? 0,
+  );
 }
 
 /** One of a result's text parts — read only up to its bound. When it is JSON: the key rule, and
@@ -106,13 +122,15 @@ function scrubWithResultRule(text: string, rule: ResultRule): Scrubbed<string> {
  *  `scrubValue`); then the rest of the text as it is, with the same scrub (`scrubWithResultRule`),
  *  so a value counts the same wherever it is found. */
 function scrubResultText(text: string, rule: ResultRule): Scrubbed<string> {
-  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey, (value) =>
-    scrubWithResultRule(value, rule),
+  const tally: TailTally = { tails: 0, tailChars: 0 };
+  const scrub = (part: string) => tallied(tally, scrubWithResultRule(part, rule));
+  const fields = redactSecretFieldsInJsonText(text, rule.isSecretKey, scrub);
+  const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, scrub);
+  return withTailCounts(
+    { value: rest.value, redactedValues: fields.redactedValues + rest.redactedValues },
+    tally.tails,
+    tally.tailChars,
   );
-  const rest = scrubOutsideSpans(fields.value, fields.decodedSpans, (part) =>
-    scrubWithResultRule(part, rule),
-  );
-  return { value: rest.value, redactedValues: fields.redactedValues + rest.redactedValues };
 }
 
 /** A tool call's arguments with secret-looking keys and values replaced, read only as far as their
@@ -181,6 +199,20 @@ export function rescrubStoredToolCallResult(
   };
 }
 
+/** Whether the tail check alone (`tailChecked`, `docs/redaction-boundary-design-2026-11-27.md`
+ *  §4.2) would hide more in a stored record's result preview, read the way the record is read: its
+ *  escaped JSON strings decoded, then the rest of the text as it is (`rescrubStoredToolCallResult`).
+ *  For a row that rewrite leaves as it is, this is «收尾未证明» (`cli/scrub-raw-secrets.ts`'s
+ *  `tailUnproven`): the text after a mask does not pass the check — a secret left over, or only a
+ *  value an earlier release hid in part. Never a rewrite (design D3). */
+export function storedToolCallResultTailUnproven(content: Record<string, unknown>): boolean {
+  const result = content.result as { text?: unknown } | null | undefined;
+  if (content.kind !== TOOL_CALL_MESSAGE_KIND || typeof result?.text !== 'string') return false;
+  const name = typeof content.name === 'string' ? content.name : null;
+  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name), tailChecked);
+  return scrubOutsideSpans(fields.value, fields.decodedSpans, tailChecked).value !== result.text;
+}
+
 /** A runtime `message`'s content with secrets scrubbed from its string fields (only the values;
  *  a reply has no secret-named keys to replace) — each past `MESSAGE_TEXT_MAX_CHARS` cut there
  *  (`scrubbedCut`: it reads `CUT_LOOKAHEAD_CHARS` further, so the cut never leaves the start of a
@@ -191,9 +223,10 @@ export function redactMessageContent(
 ): Scrubbed<Record<string, unknown>> & { readonly cut: boolean } {
   let redactedValues = 0;
   let cut = false;
+  const tally: TailTally = { tails: 0, tailChars: 0 };
   const out: Record<string, unknown> = {};
   const scrub = (text: string): string => {
-    const scrubbed = scrubSecretValues(text);
+    const scrubbed = tallied(tally, scrubSecretValues(text));
     redactedValues += scrubbed.redactedValues;
     return scrubbed.value;
   };
@@ -205,7 +238,7 @@ export function redactMessageContent(
       out[key] = `${scrubbedCut(value, MESSAGE_TEXT_MAX_CHARS, scrub)}…`;
     }
   }
-  return { value: out, redactedValues, cut };
+  return { ...withTailCounts({ value: out, redactedValues }, tally.tails, tally.tailChars), cut };
 }
 
 /** `text` (already scrubbed) cut to `limit`, never through a surrogate pair (legacy 834).
@@ -234,12 +267,11 @@ function resultContentText(
   readChars: number,
   rule: ResultRule,
 ):
-  | {
+  | (Scrubbed<string> & {
       readonly text: string;
       readonly totalChars: number;
       readonly readAll: boolean;
-      readonly redactedValues: number;
-    }
+    })
   | undefined {
   const content = (result as { content?: unknown } | null)?.content;
   if (!Array.isArray(content)) return undefined;
@@ -248,6 +280,7 @@ function resultContentText(
   let totalChars = 0;
   let parts = 0;
   let redactedValues = 0;
+  const tally: TailTally = { tails: 0, tailChars: 0 };
   for (const part of content) {
     const record = part as { type?: unknown; text?: unknown } | null;
     let partText: string;
@@ -261,7 +294,7 @@ function resultContentText(
     const room = Math.max(0, readChars - read - separator.length);
     read += separator.length + Math.min(partText.length, room);
     const scrub = (part: string): string => {
-      const scrubbed = scrubResultText(part, rule);
+      const scrubbed = tallied(tally, scrubResultText(part, rule));
       redactedValues += scrubbed.redactedValues;
       return scrubbed.value;
     };
@@ -269,7 +302,13 @@ function resultContentText(
     if (partText.length <= room) text += separator + scrub(partText);
     else text += separator + (room > 0 ? scrubbedCut(partText, room, scrub) : '');
   }
-  return parts > 0 ? { text, totalChars, readAll: read >= totalChars, redactedValues } : undefined;
+  return parts > 0
+    ? withTailCounts(
+        { value: text, text, totalChars, readAll: read >= totalChars, redactedValues },
+        tally.tails,
+        tally.tailChars,
+      )
+    : undefined;
 }
 
 /** A result as redacted text: its content text scrubbed, or — with no content text — the result
@@ -289,6 +328,7 @@ function redactedResultPreview(
         !contentText.readAll,
       ),
       redactedValues: contentText.redactedValues,
+      ...tailCountsOf(contentText),
     };
   }
   const redacted = redactToolResult(result, toolName, args);
@@ -296,6 +336,7 @@ function redactedResultPreview(
   return {
     value: preview(text, TOOL_CALL_RESULT_PREVIEW_CHARS, text.length, redacted.omitted),
     redactedValues: redacted.redactedValues,
+    ...tailCountsOf(redacted),
   };
 }
 
@@ -317,19 +358,19 @@ export interface ToolCallRecordInput {
  *  cut to their preview length (redaction first, so a cut never leaves half a secret behind). */
 export function buildToolCallRecord(input: ToolCallRecordInput): ToolCallMessageContent {
   let redactedValues = 0;
+  const tally: TailTally = { tails: 0, tailChars: 0 };
   let args: ToolCallPayloadPreview | undefined;
   if (input.hasArgs) {
-    const redacted = redactToolArgs(input.args, input.name);
+    const redacted = tallied(tally, redactToolArgs(input.args, input.name));
     redactedValues += redacted.redactedValues;
     const text = safeStringify(redacted.value);
     args = preview(text, TOOL_CALL_ARGS_PREVIEW_CHARS, text.length, redacted.omitted);
   }
   let result: ToolCallPayloadPreview | undefined;
   if (input.hasResult) {
-    const redacted = redactedResultPreview(
-      input.result,
-      input.name,
-      input.hasArgs ? input.args : undefined,
+    const redacted = tallied(
+      tally,
+      redactedResultPreview(input.result, input.name, input.hasArgs ? input.args : undefined),
     );
     redactedValues += redacted.redactedValues;
     result = redacted.value;
@@ -343,6 +384,7 @@ export function buildToolCallRecord(input: ToolCallRecordInput): ToolCallMessage
     ...(args ? { args } : {}),
     ...(result ? { result } : {}),
     redactedValues,
+    ...tailCountsOf({ redactedTails: tally.tails, redactedTailChars: tally.tailChars }),
     startedAt: input.startedAt?.toISOString() ?? null,
     endedAt: input.endedAt?.toISOString() ?? null,
   };

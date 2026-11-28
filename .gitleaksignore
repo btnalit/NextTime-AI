@@ -19,3 +19,7 @@ c09e53aa57a177781658c44d47f10ab2abfd6c05:packages/kernel/src/application/admin-a
 # #1629 (legacy 967): a synthetic private-key block in the tool-result tail test of the PR's
 # eighth commit; the next commit spelled the BEGIN / END markers from a word.
 2ecb078f8ff72971963f091f238826726071ff0b:packages/platform-extension/src/modes/tool-result.test.ts:private-key:168
+#
+# #1631 (redaction stage 1b): a synthetic private-key block in the cut test of the PR's fix for
+# review #501; the next commit spelled the BEGIN / END markers from a word.
+e71fbd7e18872bd8b5b8b82346dbc3eee726a736:packages/kernel/src/substrate/redaction/secret-values.test.ts:private-key:4437

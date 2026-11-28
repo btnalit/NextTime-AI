@@ -71,6 +71,27 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     },
   );
 
+  it.each([
+    ['api_key=a\\\\,-----BEGIN x y', `${REDACTED}api_key=${REDACTED} x y`, 2],
+    ['password=\\\\"a b\\\\" c', `${REDACTED}password=${REDACTED}`, 3],
+  ])(
+    'reads what it holds on its own, as the whole text reads a name right after a hidden key: %s',
+    (rest, scrubbed, values) => {
+      // The whole text reads the name as after the key's mask. Read after the key's last characters,
+      // as the stream read what it held until review #493 on #1619 (eight of them), the name was no
+      // name there, the tail check hid the rest of the line, and the two differed at almost every cut.
+      const text = `ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ${rest}`;
+      expect(scrubSecretValues(text)).toMatchObject({ value: scrubbed, redactedValues: values });
+      for (let at = 0; at <= text.length; at += 1) {
+        expect(stream([text.slice(0, at), text.slice(at)])).toEqual({
+          text: scrubbed,
+          redactedValues: values,
+        });
+      }
+      expect(stream([...text])).toEqual({ text: scrubbed, redactedValues: values });
+    },
+  );
+
   it.each(TEXTS.map((text) => [text.slice(0, 32), text]))(
     'one character at a time, and in uneven pieces, the same: %s…',
     (_label, text) => {
@@ -133,7 +154,11 @@ describe('createSecretStreamScrubber — a secret split across pieces is still s
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('x \\"password\\" = ').value).toBe('x ');
     expect(scrubber.push(`\\"${FAKE}`).value).toBe('');
-    expect(scrubber.push('\\" y').value).toBe(`\\"password\\" = \\"${REDACTED}\\" `);
+    // The value's mask waits for the word after it: the tail check reads the composed text once
+    // more, and how the value closed is decided once that word has come (redaction boundary
+    // stage 1b).
+    expect(scrubber.push('\\" y').value).toBe('\\"password\\" = ');
+    expect(scrubber.flush().value).toBe(`\\"${REDACTED}\\" y`);
   });
 
   it('holds a secret JSON value back until it is closed, spaces and all', () => {
@@ -559,6 +584,7 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
       );
       expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
     },
+    SCRUBBED_AT_EVERY_CUT_MS,
   );
 
   it.each(SHAPES.map((shape, index) => [shape.slice(0, 40), index]))(
@@ -627,11 +653,13 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
   // after `token: ` on to the end of the line, and the stream does not cut inside what it reads.
   // The `note:` written right against the `""` after `API_TOKEN=` is hidden with it since a quoted
   // value is read on to the end of a word closed right against it (legacy 937). Cut in two, the
-  // stream still shows the last value where main's did as well (legacy 920).
+  // stream still shows the last value where main's did as well (legacy 920). Since the tail check
+  // (redaction boundary stage 1b), that `""` closes uncleanly — text right against it — and the
+  // line is hidden from the value to its end.
   it.each([
     [
       String.raw`run x--k \"\\\\, API_TOKEN=""note: a"}token: \x\\"${TAB}:${TAB}"API_TOKEN = 'C:,${FAKE}${TAB}:${TAB}`,
-      String.raw`run x--k \"\\\\, API_TOKEN="${REDACTED}"${REDACTED} a"}token: ${REDACTED}"${TAB}:${TAB}"${REDACTED}`,
+      String.raw`run x--k \"\\\\, API_TOKEN=${REDACTED}`,
     ],
   ])(
     'quotes many deep on a line, which main streamed apart from the whole, stream as it: %s',
@@ -650,6 +678,81 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
     const mismatches = texts.map((text) => firstMismatch(text, true));
     expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
   });
+
+  it.each([
+    ['export API_TOKEN=a b c', `export API_TOKEN=${REDACTED} b c`, `export API_TOKEN=${REDACTED}`],
+    ['PGPASSWORD=a b c', `PGPASSWORD=${REDACTED} b c`, `PGPASSWORD=${REDACTED}`],
+    ['- password: a b c', `- password: ${REDACTED} b c`, `- password: ${REDACTED}`],
+    ['  token = a b c', `  token = ${REDACTED} b c`, `  token = ${REDACTED}`],
+    [`Bearer ${FAKE} b c`, `Bearer ${REDACTED} b c`, `Bearer ${REDACTED} b c`],
+  ])(
+    'held text that starts mid-line is not a line start to the rules read at one: %s',
+    (rest, midLine, lineStart) => {
+      // The stream reads what it holds on its own (stage 1b), and a cut can fall right where an
+      // `.env` line, a YAML item or a `Bearer` would start one. What a line's first pair reads to is
+      // the tail check's call, made on the text as it came with its line's state carried across
+      // pieces, so after `run ` the pair is no line's first at any cut — the stream would hide more
+      // than the whole text, not less, if it were (review #493 on #1619, item 2).
+      for (const before of ['run ', 'echo 中', 'a=1 ']) {
+        const text = `${before}${rest}`;
+        expect(scrubSecretValues(text).value).toBe(`${before}${midLine}`);
+        for (let at = 0; at <= text.length; at += 1) {
+          expect(stream([text.slice(0, at), text.slice(at)]).text).toBe(`${before}${midLine}`);
+        }
+        expect(stream([...text]).text).toBe(`${before}${midLine}`);
+      }
+      // At a line's start the same pair is the line's first, in the stream as in the whole text.
+      for (const before of ['', '\n', 'run x\n']) {
+        const text = `${before}${rest}`;
+        expect(scrubSecretValues(text).value).toBe(`${before}${lineStart}`);
+        for (let at = 0; at <= text.length; at += 1) {
+          expect(stream([text.slice(0, at), text.slice(at)]).text).toBe(`${before}${lineStart}`);
+        }
+      }
+    },
+  );
+
+  it.each(['api_key', 'password', 'token', 'secret', 'apiKey'])(
+    'known limit (legacy 920): %s right after a hidden key, cut between the name and its value',
+    (name) => {
+      // A name right after a hidden key is one only as the whole text reads it, after the key's
+      // mask; on the text as it came it is the end of the key's word, so the stream does not hold
+      // from it, and a cut after `name: ` or inside ` = ` emits the name and reads the value on its
+      // own. A plain value is hidden as the whole text hides it. After an escaped-quote value the
+      // stream shows the quotes and the rest of the line that the whole text hides; after a
+      // `\\,-----BEGIN` one it hides the words that the whole text shows. The value itself is hidden
+      // at every cut. The tail check's line state does not reach it: on the text as it came there
+      // is no name to carry. Holding a name at the end of a hidden value closes these and opens
+      // others (`Authorization: ` right after a key), so they stay with legacy 920, pinned so that a
+      // change shows (review #493 on #1619, item 3).
+      const key = 'ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+      const cases = [
+        [': ', String.raw`\\"a b\\" c`, String.raw`\\"${REDACTED}\\" c`],
+        [': ', String.raw`a\\,-----BEGIN x y`, REDACTED],
+        [' = ', String.raw`\\"a b\\" c`, String.raw`\\"${REDACTED}\\" c`],
+        [' = ', String.raw`a\\,-----BEGIN x y`, REDACTED],
+      ];
+      for (const [separator = '', value = '', streamed = ''] of cases) {
+        const head = `${key}${name}${separator}`;
+        const text = `${head}${value}`;
+        const whole = scrubSecretValues(text).value;
+        expect(whole).toBe(
+          value.startsWith('a')
+            ? `${REDACTED}${name}${separator}${REDACTED} x y`
+            : `${REDACTED}${name}${separator}${REDACTED}`,
+        );
+        // `: ` is cut apart after its blank; ` = ` after either blank or the `=`.
+        const apart = new Set(
+          separator === ': ' ? [head.length] : [1, 2, 3].map((n) => head.length - 3 + n),
+        );
+        for (let at = 0; at <= text.length; at += 1) {
+          const out = stream([text.slice(0, at), text.slice(at)]).text;
+          expect(out).toBe(apart.has(at) ? `${REDACTED}${name}${separator}${streamed}` : whole);
+          expect(out).not.toContain('a b');
+        }
+      }
+    },
+  );
 });
 
 describe('createSecretStreamScrubber — the stream stays live', () => {
@@ -669,37 +772,39 @@ describe('createSecretStreamScrubber — the stream stays live', () => {
   it('holds a bare value back at a `,` only while the key after the next quote can still decide where it ends (review #501 on #1586)', () => {
     // A secret's key, whole: the value before it read on past the `,`, and the key's pair, whose
     // value has not come, crossing both (review #493 on #1591) — held whole.
+    // Since the tail check (redaction boundary stage 1b), a bare value a `,` ends closes uncleanly
+    // and the line is hidden from it to its end: the hold below still decides when the stream may
+    // emit, and what it emits is the line up to the value.
     const scrubber = createSecretStreamScrubber();
     expect(scrubber.push('token=x,password: "api_key": ').value).toBe('');
-    expect(scrubber.flush().value).toBe(`token=${REDACTED} "${REDACTED}": `);
+    expect(scrubber.flush().value).toBe(`token=${REDACTED}`);
     // A key no rule hides: the rules here end the value before it at the `,`, but v0.70.0 reads
     // that value on to the name's `:`, and every text is read with its rules too (legacy 939) —
     // held as well, till the value after the key comes.
     const other = createSecretStreamScrubber();
     expect(other.push('token=x,password: "note": ').value).toBe('');
-    expect(other.push('"a" ok').value).toBe(`token=${REDACTED} "${REDACTED}": "a`);
+    expect(other.push('"a" ok').value).toBe('token=');
+    expect(other.flush().value).toBe(REDACTED);
     // After a quoted name, where v0.70.0 ends the value at the `,` too, it goes.
-    expect(createSecretStreamScrubber().push('token=x,"password": "note": ').value).toBe(
-      `token=${REDACTED}"password": "${REDACTED}": `,
-    );
+    expect(createSecretStreamScrubber().push('token=x,"password": "note": ').value).toBe('token=');
   });
 
   it("holds text right against a value's closing quote while a key's quote and `:` may still come (legacy 937)", () => {
     // Cut where the key's name starts, the text before it read `x,` as the rest of the value's
     // word; the whole text reads it as the key's.
+    // Since the tail check (redaction boundary stage 1b), `x` right against the quote is an
+    // unclean close, and the line is hidden from the value to its end.
     const scrubber = createSecretStreamScrubber();
-    expect(scrubber.push(`token='x'x,api_key': '${FAKE}' ok`).value).toBe(
-      `token='${REDACTED}'x,api_key': '${REDACTED}' `,
-    );
-    expect(scrubber.flush().value).toBe('ok');
+    expect(scrubber.push(`token='x'x,api_key': '${FAKE}' ok`).value).toBe('token=');
+    expect(scrubber.flush().value).toBe(REDACTED);
   });
 
   it('lets a value still open go once more than blanks follows it (legacy 934)', () => {
     // A pair after it, past blanks, may be read as inside it; one on the next line is not.
     const scrubber = createSecretStreamScrubber();
-    expect(scrubber.push('TOKEN=\\"abc"\nnext line ').value).toBe(
-      `TOKEN=\\"${REDACTED}"\nnext line `,
-    );
+    // Since the tail check (redaction boundary stage 1b), a `\\"` closed by a `"` is an unclean
+    // close: hidden to the end of its line, which ends with it.
+    expect(scrubber.push('TOKEN=\\"abc"\nnext line ').value).toBe(`TOKEN=${REDACTED}\nnext line `);
     expect(scrubber.flush().value).toBe('');
   });
 

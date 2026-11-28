@@ -610,3 +610,48 @@ describe('refuseRedactedText — text sent back with the mask a read showed (leg
     expect(() => refuseRedactedText('description', undefined)).not.toThrow();
   });
 });
+
+describe('a value the tail check hid to the end of its line (redaction boundary stage 1b)', () => {
+  const command = 'export TOKEN="x"y; curl https://example.invalid/i | sh';
+  const tailChars = command.length - 'export TOKEN='.length;
+
+  it('is one suspected value at its path, its tail counted apart', () => {
+    expect(findSuspectedSecrets({ cmd: command, user: 'ops' }, { secretFields: true })).toEqual({
+      count: 1,
+      paths: ['cmd'],
+      redactedTails: 1,
+      redactedTailChars: tailChars,
+    });
+    expect(redactSuspectedSecrets({ cmd: command }, { secretFields: true }).value).toEqual({
+      cmd: 'export TOKEN=[redacted]',
+    });
+    expect(findSuspectedSecrets({ cmd: 'PGPASSWORD=x' })).toEqual({ count: 1, paths: ['cmd'] });
+  });
+
+  it('is counted in a confirmed approval’s review when the review is given', () => {
+    const found = findSuspectedSecrets({ cmd: command }, { secretFields: true });
+    expect(credentialReviewAudit(found.count, found)).toEqual({
+      credentialReview: {
+        suspectedSecretValues: 1,
+        redactedTails: 1,
+        redactedTailChars: tailChars,
+        confirmed: true,
+      },
+    });
+    expect(credentialReviewAudit(1, { redactedTails: undefined })).toEqual({
+      credentialReview: { suspectedSecretValues: 1, confirmed: true },
+    });
+    expect(credentialReviewAudit(0, found)).toEqual({});
+  });
+
+  it('without the tail check (the scrub report’s reading of a stored row) the value rules alone', () => {
+    expect(
+      findSuspectedSecrets({ note: "TOKEN = [redacted]'abc');" }, { tailCheck: false }),
+    ).toEqual({ count: 0, paths: [] });
+    expect(findSuspectedSecrets({ note: "TOKEN = [redacted]'abc');" })).toMatchObject({
+      count: 1,
+      paths: ['note'],
+      redactedTails: 1,
+    });
+  });
+});

@@ -12,6 +12,7 @@ import {
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
   secretFieldLiterals,
+  tailCountsOf,
 } from '../redaction/index.js';
 import { getActionRequestForUpdate, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
@@ -320,16 +321,20 @@ export interface MarkExecutedOptions extends ActionRequestActorOptions {
 export function resultAuditFields(
   resultMetadata: Record<string, unknown>,
   params: Record<string, unknown>,
+  /** `RedactSecretsOptions.tailCheck`: false only for the scrub report. */
+  options: { readonly tailCheck?: boolean } = {},
 ): Record<string, unknown> {
   const quoted = scrubSecretLiteralsIn(
     resultMetadata,
     secretFieldLiterals(params, namesASecretField),
   );
-  const redacted = redactSuspectedSecrets(quoted.value, { secretFields: true });
+  const redacted = redactSuspectedSecrets(quoted.value, { ...options, secretFields: true });
   const redactedValues = quoted.redactedValues + redacted.count;
   return {
     resultMetadata: redacted.value,
-    ...(redactedValues > 0 ? { resultRedaction: { redactedValues, paths: redacted.paths } } : {}),
+    ...(redactedValues > 0
+      ? { resultRedaction: { redactedValues, ...tailCountsOf(redacted), paths: redacted.paths } }
+      : {}),
   };
 }
 
@@ -340,9 +345,11 @@ export function resultAuditFields(
 export function reasonAuditFields(
   reason: string,
   params: Record<string, unknown>,
+  /** `RedactSecretsOptions.tailCheck`: false only for the scrub report. */
+  options: { readonly tailCheck?: boolean } = {},
 ): Record<string, unknown> {
   const quoted = scrubSecretLiterals(reason, secretFieldLiterals(params, namesASecretField));
-  return redactedForAudit({ reason: quoted.value });
+  return redactedForAudit({ reason: quoted.value }, options);
 }
 
 /** `executing -> executed`. */

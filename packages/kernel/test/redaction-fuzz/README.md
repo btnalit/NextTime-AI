@@ -34,6 +34,10 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | 存量（stored） | 上一发布版整段读出的结果，再由各自的存量改写（`repairSplitQuotedMasks`，然后 `STORED_REWRITE_SECRET_PATTERNS`）读；`stored/` 组的行本身就是以前版本存下的形式，直接交给存量改写，只读这一遍 |
 | 再读（reread） | 各自整段读出的结果，再由自己整段读一遍 |
 
+`stored/records-…` 三组的行是工具结果（pi 交来的一个文本部分），按工具调用记录读：各自存下的记录（`buildToolCallRecord`
+的结果预览）算整段那一列，上一发布版存下的记录再由各自的存量改写（`rescrubStoredToolCallResult`，`scrub-raw-secrets` 的
+`toolCallRecords`）读算存量那一列，见下文「工具调用记录」。
+
 门槛是「由遮变露」0 行：某个值的字符这次检出露了、上一发布版遮了。字符算不算露，按输出与输入对齐来定
 （`measure.ts` 的 `keptChars`）：输出按 `[redacted]` 切开，各段按顺序放在输入里最早能放的位置，一处遮可以遮住 0 个字符
 （空的带引号的值写成 `"[redacted]"`）；对不上的输出，它的值的字符全部算露。`stored/` 组的行不对齐：存量改写会把
@@ -46,7 +50,38 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 这道门按 `stream-baseline.json` 卡，见下一节。
 
 其余的数只报告、不设门槛：两边各有多少行露、这次多遮的行、整段输出不同的行、流比自己的整段多露的行、再读会变的行、
-存量改写又改了自己写出的行、计数和文本对不上的行、对不上的输出。
+存量改写又改了自己写出的行、存量改写改了的行（`rewr`，这次检出:上一发布版）、记录改写后算「收尾未证明」的行（`tu`）、
+计数和文本对不上的行、对不上的输出。
+
+### 工具调用记录
+
+遗留 967 之前，pi 把长的工具结果按字符数截断，在后面隔一个原样换行接一行说明（`truncateToolResult`）；截点常落在 JSON
+字符串中间。上一发布版读到末尾也没找到这个字符串的收尾引号，把说明一起当成字符串，解不开转义，就按原文读：`\nPGPASSWORD=…`
+里转义的字母和名字连成一个词，名字认不出，值留在记录里。阶段 1b 让没收尾的字符串停在第一个原样的控制字符，前面解码后读，
+说明留给原文那一遍；解码出来的最后一行以密钥名后带引号、到截点都没收尾的值结束时（截点截在带引号的值里），从引号遮到截点，
+截点后面这个字符串里没有东西，遮不到别的（`openValueAtTheCut`）。这两处都不是尾部检查：前一处只找字符串在哪里结束，后一处
+只在已知的截点上收尾，都不往后读。存量改写因此会改写这类旧记录（凭据席位评审 #1629 选的做法），三道门把改写的范围卡住
+（`rec` 列，twice/needless/left，都要 0）。
+
+只在那个控制字符是原样换行、它前面也没有没收尾的私钥块时才这样分开读（凭据席位评审 #1631）。值规则和尾部检查按行读，
+换行处分开，两边的行界和整段读时一样；私钥块是唯一跨行的规则，单独排除。别的控制字符（名字和值之间的制表符）或跨着换行的
+私钥块，分开读会让名字碰不到值、正文离开 BEGIN 行，整个字符串照 v0.70.1 留给原文那一遍。今天的截点（旧截法、遗留 967 的
+`characterCut`）后面都是原样换行，这个限制不影响它们。
+
+- twice：改写过的记录再改写一遍又变了，或者这次检出自己存下的记录被改写改了。改写每次升级都跑，必须到一次就停。
+- needless：改写改了一行，却没有多遮住任何一个原来露着的值字符，或者把截断说明那一行吃掉了（设计 D3 不让尾部检查进存量，
+  怕的就是从值一直遮到说明文字）。
+- left：改写后记录里仍露着值，算不算进「收尾未证明」（`storedToolCallResultTailUnproven`）都算。旧截法留下的值，带引号
+  被截开的也在内，都要由改写遮住。
+
+| 组 | 截点 | CI 小样本（种子 7、8 各 2,000 行） |
+|---|---|---|
+| `cut-after-value` | 字符串里、值和它的收尾引号之后 | 上一发布版的记录露值 73、85 行，改写全部遮住，没有别的行被改 |
+| `cut-in-value` | 值里面，至少留下 8 个字符；带引号的值引号没收尾 | 露值 553、536 行，改写全部遮住：不带引号的值由写法规则遮，引号被截开的从引号遮到截点。「收尾未证明」从 987、991 行降到 458、478 行，剩下的是上一发布版已经遮了值、只留下开引号的记录（`API_TOKEN="[redacted]` 接截点），里面没有值，是多数的 |
+| `cut-elsewhere` | 没截、截在字符串收尾之后、截在值之前 | 两边都不露，改写 0 行；截在开引号后面、值还没开始的行算进「收尾未证明」（17、9 行，里面没有值，是多数的） |
+| `open-control` | 结果文字本身不是合法 JSON（原样转发的命令输出、按字节截断的文件）：最后一个字符串到末尾没收尾，前面有转义，名字和值隔着原样制表符，或私钥块跨着原样换行；另有一行自成一行、后面接原样换行的名值对 | 两边都不露，改写 0 行；值已遮住、后面接 `\" x` 的记录算进「收尾未证明」（128、124 行，引号后面到末尾只有一个词，里面没有值，是多数的）。撤掉 #1631 的修复，这次检出存下的记录露值 1,229、1,248 行 |
+
+这次检出自己存下这些结果时都遮住了（实时读法有尾部检查）。
 
 ## 生成器
 
@@ -57,7 +92,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | `credentials/` | 凭据席位评审 #1593–#1600 时写的生成器 |
 | `kernel/` | 内核席位评审 #1593–#1600 时的 kvgen4、7、8、9、10（从 Python 移植：同样的表与形状，不是同样的行） |
 | `long/` | 内核席位评审 #1619 要的长行：行首前缀长于 8 个字符（带引号与不带），值长到 L（3,584）附近、扣留上限（4,096）附近和更长，带引号与不带；PEM 私钥（换行、CRLF、字符串里的 `\n`）。一行流式读一遍要一两秒，每个种子只读 6 行、8 行 |
-| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 916、918 拆开的 `\"…\"` 值（`API_TOKEN=[redacted]"<值>\"`，`repairSplitQuotedMasks` 修的那种），遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号） |
+| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 916、918 拆开的 `\"…\"` 值（`API_TOKEN=[redacted]"<值>\"`，`repairSplitQuotedMasks` 修的那种），遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631） |
 | `formats/` | 真实格式语料第一批：`.env`、YAML、INI、JSON、JSON 写在字符串里、shell 赋值与 `--flag`、PHP 与 Ruby 的 `=>` |
 
 随机数是 mulberry32，按种子；比较前去重，报告里的行数是去重后的。真实格式里的值是运行时随机生成的，不在文件里。
@@ -71,21 +106,25 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 node packages/kernel/test/redaction-fuzz/run.mjs --write-corpus-baseline
 ```
 
-只许变小；变大说明有回退，评审时看这个文件的 diff。加一种格式：在 `generators/real-formats.ts` 加生成器，重写基线。
+只许变小：重写时有一行变大，`run.mjs` 拒绝写并列出那几行，要写得加 `--allow-baseline-growth`；变大说明有回退，评审时看这个文件的 diff。加一种格式：在 `generators/real-formats.ts` 加生成器，重写基线。
 
 ## 流与整段的基线
 
-设计 I-R3 (b)（§8）要「流与整段不同的行不多于上一版」。main 上做不到：13 个生成器 main 比 v0.70.1 多 1 到 23 行
-（每个生成器 4,000 行）。v0.70.1 之后改过脱敏源码的只有遗留 948（#1600）；看过的例子都是流比整段多遮，
-流比整段多露的行（`str>w`）两边一样多。门先按 main 卡：
+设计 I-R3 (b)（§8）要「流与整段不同的行不多于上一版」。main 在阶段 1a 时做不到：13 个生成器 main 比 v0.70.1 多 1 到 23 行
+（每个生成器 4,000 行），多出来的归遗留 920。门先按 main 卡：
 `stream-baseline.json` 记每个生成器在 CI 小样本上这次检出的行数（`rows`）和上一发布版在同样的行上的行数（`atRelease`），
-验收要求 `rows` 不变多。等一个带着 948 的版本发出来、`atRelease` 追上 `rows`，就可以改成直接和上一版比。
+验收要求 `rows` 不变多。
+
+阶段 1b（尾部检查进流、流读扣住的文本不带上文）之后全部生成器合计从 196 行降到 17 行（v0.70.1 在同样的行上 105 行），
+每个生成器都不多于 `atRelease`；17 行里 14 行是超过扣留上限的长行（两边都与整段不同），其余 3 行是流比整段多遮。
+流比自己的整段多露的行（`str>w`）这次检出 0 行，v0.70.1 13 行。门仍按 `rows` 卡，比和上一版比更严。
 
 ```sh
 node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # 只认 CI 小样本、全部生成器
 ```
 
-只许变小；加生成器时一起重写。这 13 个生成器多出来的行归遗留 920（实时流与整段不一致，阶段 1b 后重测）。
+只许变小（`rows` 变大时同样拒绝写，`atRelease` 只记不卡）；加生成器时一起重写，新生成器的行不算变大。
+验收量不到、在单测里钉成已知用例的流与整段不同，见 `secret-stream.test.ts` 里标着遗留 920 的用例。
 
 ## 变异
 
@@ -98,10 +137,17 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 | `stream-name-not-held` | 流不再扣住还没等到值的密钥名 | 实时流 |
 | `stored-named-values-as-written` | 存量改写不再读「遮罩后面还跟着词的其余部分」（遗留 937 的存量形式） | 存量 |
 | `stream-bound-releases-raw` | 流到扣留上限时原样放出扣着的文本，而不是一个 `[redacted]` | 实时流（`long/`） |
-| `stream-quote-blanks-not-held` | 流不再扣住引号后面的空白 | `str≠w`（流只多遮、不多露） |
+| `tail-stream-forgets-name` | 尾部检查在流里不再回看已经放出的文字，名字和分隔符分在两段时认不出这一对 | `str≠w`（流与整段不同的行多于基线，几乎每个生成器都是；值仍由写法规则遮住） |
 | `stream-json-key-not-held` | 流不再扣住行尾可能还是 JSON 键的引号串 | 实时流 |
 | `stream-pem-not-held` | 流不再从没有 `-----END` 的 `-----BEGIN` 起扣住 | 实时流（`long/pem`） |
 | `stored-split-masks-not-repaired` | `repairSplitQuotedMasks` 什么都不做 | 存量（`stored/split-masks`） |
+| `json-open-string-read-to-end` | 没收尾的 JSON 字符串又读到文本末尾（撤掉阶段 1b 对凭据席位评审 #1629 的修复） | `rec` 的 left（`stored/records-cut-after-value`、`cut-in-value`） |
+| `json-open-value-at-the-cut-kept` | 截点处开引号的值不再遮到截点（`openValueAtTheCut` 什么都不找） | `rec` 的 left（`stored/records-cut-in-value`） |
+| `json-open-string-cut-at-any-control` | 没收尾的字符串在任何原样控制字符处分开读（撤掉凭据席位评审 #1631 的修复） | 整段，即这次检出存下的记录（`stored/records-open-control`） |
+
+阶段 1b 去掉了 `stream-quote-blanks-not-held`（流不再扣住引号后面的空白）：尾部检查进了实时流以后，这一处扣住不再改变输出。
+打上它，验收照样通过；定向探针把引号、空白、分隔符、值和前面没收尾的值组合成 34,560 行，在每个切点比流与整段，
+打补丁前后都是 0 行不同。代码留着，按设计 §7 阶段 3 过覆盖核对后再删。
 
 一个补丁要算「验收抓到了」，必须：打上后 `test/redaction-fuzz/tsconfig.json` 类型检查通过、每个测试文件都加载了、
 `harness.test.ts` 通过、至少一个 `acceptance-*.test.ts` 的断言失败。编译不过、文件没加载或 harness 失败记为 broken，
@@ -110,6 +156,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 ## 已知的局限
 
 - 对齐取最早能放的位置。一段保留的文本如果在输入里出现两次，可能被放在前一处；生成器的值是长随机词，影响很小。
-- 存量读法的输入是上一发布版写出的行，加上 `stored/` 组手写的旧形式；本 PR 写出的行再用存量读法读，记在「存量改写又改了自己写出的行」里，不设门槛。
+- 存量读法的输入是上一发布版写出的行，加上 `stored/` 组手写的旧形式；本 PR 写出的行再用存量读法读，记在「存量改写又改了自己写出的行」里，文本行不设门槛，工具调用记录的行卡在 twice。
+- 工具调用记录的行只用一个不声明密钥键的工具名读（任何工具都适用的键规则）；声明了键的工具走同一条路，只是多认几个键。
 - `long/` 每个种子只读几行：门槛对它们照样是 0，但覆盖靠的是行的种类，不是行数。全量跑（`--rows 20000`）也只多读种子数倍的行。
 - 名字的覆盖不归这里量：语料里的名字都是名字规则认得的（`harness.test.ts` 核对），名字文法是设计的阶段 2。

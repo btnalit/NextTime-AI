@@ -174,8 +174,9 @@ describe('gatePayloadKeptRaw — what the scrub counts (legacy 817)', () => {
     expect(before.truncated).toBe(true);
     expect(before.payload).toContain(PLAIN);
     expect(gatePayloadKeptRaw(before)).toBe(true);
-    // The same text with no field rule over it: the value patterns alone pass it.
-    expect(gatePayloadKeptRaw({ ...before, truncated: false })).toBe(false);
+    // The same text with no field rule over it: the tail check reads the object after the quoted
+    // secret's name as its value, whole on its line, and finds it too (redaction boundary stage 1b).
+    expect(gatePayloadKeptRaw({ ...before, truncated: false })).toBe(true);
 
     // The cut lands inside the secret: what is left of it is still found.
     const head = JSON.stringify({ rows: rows(1), pad: '' }).length;

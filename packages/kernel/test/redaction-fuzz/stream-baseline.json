@@ -2,59 +2,59 @@
   "note": "Per generator, on CI's sample (2000 rows, seeds 7,8): rows where a stream reading's text is not this checkout's whole text (rows), and the same count for v0.70.1 on the same rows (atRelease). Written by run.mjs --write-stream-baseline; a change may only lower rows.",
   "generators": {
     "author/first": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 5
     },
     "author/keys": {
-      "rows": 29,
+      "rows": 1,
       "atRelease": 6
     },
     "author/mix": {
-      "rows": 20,
+      "rows": 2,
       "atRelease": 4
     },
     "author/nest": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 3
     },
     "author/pjson": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 4
     },
     "credentials/escjson": {
-      "rows": 11,
+      "rows": 0,
       "atRelease": 8
     },
     "credentials/g100esc": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 3
     },
     "credentials/g100soup": {
-      "rows": 2,
+      "rows": 0,
       "atRelease": 2
     },
     "credentials/g100soupjson": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 1
     },
     "credentials/g97m0": {
-      "rows": 3,
+      "rows": 0,
       "atRelease": 0
     },
     "credentials/g97m1": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 1
     },
     "credentials/g97m2": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 1
     },
     "credentials/g97m3": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 1
     },
     "credentials/g97m4": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 1
     },
     "credentials/keys": {
@@ -62,23 +62,23 @@
       "atRelease": 0
     },
     "credentials/neighbors": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 0
     },
     "credentials/parts": {
-      "rows": 2,
+      "rows": 0,
       "atRelease": 2
     },
     "credentials/pjh": {
-      "rows": 20,
+      "rows": 0,
       "atRelease": 20
     },
     "credentials/plainjson": {
-      "rows": 16,
+      "rows": 0,
       "atRelease": 5
     },
     "credentials/quotes": {
-      "rows": 6,
+      "rows": 0,
       "atRelease": 6
     },
     "design/json": {
@@ -130,19 +130,19 @@
       "atRelease": 0
     },
     "kernel/kv10": {
-      "rows": 1,
+      "rows": 0,
       "atRelease": 0
     },
     "kernel/kv4": {
-      "rows": 22,
+      "rows": 0,
       "atRelease": 14
     },
     "kernel/kv7": {
-      "rows": 5,
+      "rows": 0,
       "atRelease": 0
     },
     "kernel/kv8": {
-      "rows": 15,
+      "rows": 0,
       "atRelease": 4
     },
     "kernel/kv9": {
@@ -158,6 +158,22 @@
       "atRelease": 7
     },
     "stored/masked-tails": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-cut-after-value": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-cut-elsewhere": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-cut-in-value": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-open-control": {
       "rows": 0,
       "atRelease": 0
     },

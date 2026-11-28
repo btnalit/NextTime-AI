@@ -185,7 +185,7 @@ export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
  * (`audit_records`, name and redacted params, no result), which stays the authoritative one.
  *
  * `args`/`result` are previews, not the payloads: read only up to a bound, secret-looking values
- * replaced (`redactedValues` counts them), then cut at a fixed length (`truncated`, `totalChars`). `result.text` is the tool
+ * replaced (`redactedValues` counts them; `redactedTails` those hidden to the end of their line), then cut at a fixed length (`truncated`, `totalChars`). `result.text` is the tool
  * result's own text when it has any (pi's `content` text parts — a capability tool's is its JSON),
  * otherwise the result as JSON. `startedAt`/`endedAt` are when the kernel received the events.
  */
@@ -224,6 +224,12 @@ export const ToolCallMessageContentSchema = z
     /** Absent for a `not_finished` call, or when the runtime reported no result. */
     result: ToolCallPayloadPreviewSchema.optional(),
     redactedValues: z.number().int().nonnegative(),
+    /** Of `redactedValues`, the values the redaction's tail check hid to the end of their line —
+     *  a value read after a secret's name that did not close cleanly — and the characters (UTF-16
+     *  code units) those tails hid, each from where it starts to the end of its line, in the text
+     *  read. Present only when above 0 (`docs/redaction-boundary-design-2026-11-27.md` §4.2). */
+    redactedTails: z.number().int().positive().optional(),
+    redactedTailChars: z.number().int().nonnegative().optional(),
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
   })
