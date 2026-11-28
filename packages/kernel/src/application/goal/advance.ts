@@ -1499,7 +1499,6 @@ class Advance {
       input: input.input,
       outputSchema: entry.outputSchema ?? null,
       reworkOf,
-      nested: entry.nested ?? false,
       previous,
       tokenCap,
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),

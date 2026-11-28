@@ -1230,7 +1230,7 @@ async function plannerWorkers(
   for (const row of result.rows) {
     const ref = { definitionId: row.id, version: row.version };
     // One client, one query at a time: each Worker's admission is read in turn.
-    const authority = await resolveStepAuthority(client, workspaceId, goal.onBehalfOf, ref, false);
+    const authority = await resolveStepAuthority(client, workspaceId, goal.onBehalfOf, ref);
     const content = row.definition;
     workers.push({
       definitionId: row.id,

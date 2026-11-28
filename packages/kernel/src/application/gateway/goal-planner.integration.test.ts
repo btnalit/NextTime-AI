@@ -34,6 +34,7 @@ import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
+import { nestedProblem } from '../goal/plan.js';
 import { PLANNER_WORKERS_MAX_BYTES } from '../goal/planner.js';
 import { adoptRevision, checkRevisionCandidate } from '../goal/revise.js';
 import { lockGoalRun } from '../goal/service.js';
@@ -1578,9 +1579,16 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('a major revision pauses the run for the requester, who decides it on the same card', async () => {
       const requester = await newPrincipal('member');
+      const held = await newGate([requester]);
       const { goalRunId } = await failedRunning(requester);
       const round = await onlyRound(goalRunId);
       const goal = await getGoal(goalRunId, requester);
+      // A new step whose Worker would request actions through a gate: what makes it major
+      // (execution_step, K7; gate_added).
+      const reasons = [
+        { code: 'execution_step', stepKey: 'renew-team', capabilities: ['request_action'] },
+        { code: 'gate_added', stepKey: 'renew-team', gates: [held] },
+      ];
       await report((await plannerTask(round.id)).id, {
         decision: 'revise',
         plan: {
@@ -1590,19 +1598,19 @@ describe.runIf(DATABASE_URL !== undefined)(
               key: 'renew-team',
               worker: otherWorker,
               input: { step: 'renew' },
-              nested: true,
               maxAttempts: 1,
+              spec: { gates: [held], capabilities: ['request_action'] },
             },
           ],
         },
-        reason: 'A team of Workers renews it.',
+        reason: 'A Worker that requests the renewal renews it.',
       });
       await advanceOnce(goalRunId, requester);
       expect(await onlyRound(goalRunId)).toMatchObject({
         status: 'proposed',
         revision: 2,
         revision_class: 'major',
-        class_reasons: [{ code: 'execution_step', stepKey: 'renew-team' }],
+        class_reasons: reasons,
       });
       expect(await goalRow(goalRunId)).toMatchObject({
         status: 'paused',
@@ -1615,7 +1623,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'autonomous',
           status: 'proposed',
           revisionClass: 'major',
-          classReasons: [{ code: 'execution_step', stepKey: 'renew-team' }],
+          classReasons: reasons,
         },
       ]);
       expect(paused.revisions.at(-1)).toMatchObject({ status: 'proposed', acceptedBy: null });
@@ -1634,6 +1642,29 @@ describe.runIf(DATABASE_URL !== undefined)(
         revision: 2,
         acceptedBy: 'person',
       });
+    });
+
+    it('legacy 981: a revision with a nested step is refused at the report, saying why; the round runs on', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedRunning(requester);
+      const round = await onlyRound(goalRunId);
+      const goal = await getGoal(goalRunId, requester);
+      const task = await plannerTask(round.id);
+      const refused = await refusal(
+        report(task.id, {
+          decision: 'revise',
+          plan: changeStep(goal, 'renew', (entry) => ({ ...entry, nested: true })),
+          reason: 'A team of Workers renews it.',
+        }),
+      );
+      expect(refused).toMatchObject({ status: 400, code: 'invalid_params' });
+      expect(JSON.stringify(refused.details)).toContain('output.plan');
+      expect(JSON.stringify(refused.details)).toContain(
+        JSON.stringify(nestedProblem('renew')).slice(1, -1),
+      );
+      expect((await plannerTask(round.id)).status).toBe('running');
+      expect(await onlyRound(goalRunId)).toMatchObject({ status: 'running' });
+      expect((await goalRow(goalRunId)).current_revision).toBe(1);
     });
 
     it('legacy 515: under apply_minor an attempt the evaluation seal kept from starting pauses the run for the requester; no autonomous round routes around it', async () => {

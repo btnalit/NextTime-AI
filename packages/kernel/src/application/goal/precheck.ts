@@ -156,10 +156,10 @@ function stepHint(step: PlanStep, refusal: StepAttemptRefusal): PlanHint | null 
   return null;
 }
 
-/** What one step is checked as: as a first or a later attempt, its Worker version, whether it is
- *  nested, its WorkerSpec. */
+/** What one step is checked as: as a first or a later attempt, its Worker version, its
+ *  WorkerSpec. */
 function checkKey(step: PlanStep, retried: boolean): string {
-  return `${retried ? 'later' : 'first'}:${step.worker.definitionId}@${step.worker.version}:${step.nested === true}:${canonicalJson(step.spec ?? null)}`;
+  return `${retried ? 'later' : 'first'}:${step.worker.definitionId}@${step.worker.version}:${canonicalJson(step.spec ?? null)}`;
 }
 
 /** What a step's check found: the gates an attempt would start on, or why it would not (with the
@@ -313,14 +313,7 @@ async function checkStep(
   offered: ReadonlySet<string> | null,
 ): Promise<StepCheck> {
   const spec = step.spec ?? null;
-  const authority = await resolveStepAuthority(
-    client,
-    workspaceId,
-    requesterId,
-    step.worker,
-    step.nested === true,
-    spec,
-  );
+  const authority = await resolveStepAuthority(client, workspaceId, requesterId, step.worker, spec);
   if (authority.kind === 'refused') {
     return { kind: 'refused', refusals: [authority.refusal], gatekeeperIds: [] };
   }
