@@ -108,6 +108,29 @@ describe('renderVocabulary (legacy 968)', () => {
     expect(lines).toContain('- mentions: Container  -> *');
   });
 
+  it('cuts a long name between characters, never inside a surrogate pair, and writes no lone surrogate (review #481 on #1633)', () => {
+    // The 119th code unit the first half of an emoji: the cut leaves it out.
+    const emoji = `${'A'.repeat(NAME_MAX_CHARS - 2)}😀tail`;
+    const whole = `${'B'.repeat(NAME_MAX_CHARS - 3)}😀tail`;
+    const text =
+      renderVocabulary(
+        vocabulary(
+          [
+            [emoji, null, true],
+            [whole, null, true],
+            ['Lone\uD800half', null, true],
+          ],
+          [['runs_on', 'Lone\uD800half', '*', true]],
+        ),
+      ) ?? '';
+    expect(text).not.toMatch(/\p{Cs}/u);
+    const lines = text.split('\n');
+    expect(lines).toContain(`- ${'A'.repeat(NAME_MAX_CHARS - 2)}…`);
+    expect(lines).toContain(`- ${'B'.repeat(NAME_MAX_CHARS - 3)}😀…`);
+    expect(lines).toContain('- Lone half');
+    expect(lines).toContain('- runs_on: Lone half -> *');
+  });
+
   it('is no section when get_task gave none (a kernel before 968, or no published ontology)', () => {
     expect(renderVocabulary(undefined)).toBeUndefined();
     expect(renderVocabulary(null)).toBeUndefined();

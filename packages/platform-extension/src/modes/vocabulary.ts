@@ -57,14 +57,19 @@ interface Entry {
   readonly line: string;
 }
 
-/** Every character that would end a line where the model reads it, or that it would not see. */
-const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+/** Every character that would end a line where the model reads it, or that it would not see —
+ *  a lone surrogate too, which would leave the request body not well-formed. */
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]/gu;
 
-/** A name as it goes into the context: on one line, at most `NAME_MAX_CHARS` characters (module
- *  doc comment). */
+/** A name as it goes into the context: on one line, at most `NAME_MAX_CHARS` code units, never
+ *  cut between the two halves of a surrogate pair (review #481 on #1633; as tool-result.ts
+ *  `headOf` cuts). */
 function shownName(name: string): string {
   const flat = name.replace(LINE_BREAKING, ' ');
-  return flat.length <= NAME_MAX_CHARS ? flat : `${flat.slice(0, NAME_MAX_CHARS - 1)}…`;
+  if (flat.length <= NAME_MAX_CHARS) return flat;
+  const last = flat.charCodeAt(NAME_MAX_CHARS - 2);
+  const end = last >= 0xd800 && last <= 0xdbff ? NAME_MAX_CHARS - 2 : NAME_MAX_CHARS - 1;
+  return `${flat.slice(0, end)}…`;
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
