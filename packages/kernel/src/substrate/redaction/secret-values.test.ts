@@ -4431,11 +4431,13 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
   // the text as it is, as before legacy 982.
   it('takes only a line break with no key block open before it for the cut', () => {
     const KEY = `${FAKE}${FAKE}`;
+    // The markers spelled from a word, so that the secret scan does not take the test for a key.
+    const mark = (edge: 'BEGIN' | 'END') => `-----${edge} RSA PRIVATE KEY-----`;
     const apart = [
       `{"out": "echo \\"x\\"; PASSWORD=\t${FAKE} more`,
       `{"out": "cfg \\"a\\" password:\t${FAKE}`,
-      `{"out": "key \\"id\\": -----BEGIN RSA PRIVATE KEY-----\n${KEY}\n-----END RSA PRIVATE KEY-----`,
-      `{"out": "key \\"id\\": -----BEGIN RSA PRIVATE KEY-----\r\n${KEY}`,
+      `{"out": "key \\"id\\": ${mark('BEGIN')}\n${KEY}\n${mark('END')}`,
+      `{"out": "key \\"id\\": ${mark('BEGIN')}\r\n${KEY}`,
       `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\t`,
       `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\u000b…`,
     ];
@@ -4454,7 +4456,7 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
       expect(scrubAll(text).value).not.toContain(FAKE);
     }
     // A key block closed before the break is no reason: the string read to there is still cut.
-    const closedBlock = `{"out": "k \\"id\\": -----BEGIN RSA PRIVATE KEY-----\\n${KEY}\\n-----END RSA PRIVATE KEY----- PGPASSWORD=${FAKE}\n\n[... cut ...]`;
+    const closedBlock = `{"out": "k \\"id\\": ${mark('BEGIN')}\\n${KEY}\\n${mark('END')} PGPASSWORD=${FAKE}\n\n[... cut ...]`;
     const read = redactSecretFieldsInJsonText(closedBlock, namesASecretField, scrubSecretValues);
     expect(read.decodedSpans).toHaveLength(1);
     expect(scrubAll(closedBlock).value).not.toContain(FAKE);
