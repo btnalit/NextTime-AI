@@ -294,9 +294,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('approve: a platform API key pasted on its own into the reason is cut before the audit row is written (legacy 168)', async () => {
-      // 43 base64url characters, the shape `generateApiKey()` minted before legacy 906 — no prefix,
-      // no `key=` before it.
-      const platformKey = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+      // The shape `generateApiKey()` mints (legacy 906), with no `key=` before it. The bare 43
+      // base64url characters it minted before are no key any more (legacy 906 step 2).
+      const platformKey = 'ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
       const id = await seedPending({ host: 'db.example.invalid' });
       await call('approve', { actionRequestId: id, reason: `used ${platformKey} to check` });
 

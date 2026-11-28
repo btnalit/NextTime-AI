@@ -17,8 +17,10 @@ import {
 /**
  * application/platform/scrub-raw-secrets.live-keys.integration.test: DB-gated (real Postgres;
  * auto-skip without DATABASE_URL). Platform API keys written into stored rows before legacy 168's
- * review masked them: the audit rows that hold one are counted (`auditPayloads`), and every row of
- * the database is compared, by hash, against the keys issued (`liveApiKeys`). Seeds a workspace
+ * review masked them: every row of the database is compared, by hash, against the keys issued
+ * (`liveApiKeys`) — a key minted before its prefix is found this way only, its bare shape no
+ * longer one the value rules hide (legacy 906 step 2: no audit row is counted for it,
+ * `auditPayloads`). Seeds a workspace
  * whose service Principal and whose person's membership each hold a key, the key wherever one could
  * have been pasted or echoed — a person's chat message, an agent's reply, a tool-call result, an
  * agent Turn's summary (after `Bearer`, which the rewrite hides), a Task's input and, in an array,
@@ -361,10 +363,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.liveApiKeys.found).toBe(live.length);
       expect(result.liveApiKeys.tables).toBeGreaterThan(50);
       expect(result.liveApiKeys.rows).toBeGreaterThan(LIVE_API_KEY_COMPARE_WINDOW);
-      // The audit rows holding a key's shape are counted, issued or not; the clean one is not.
-      expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
-      expect(counted).toContainEqual({ category: 'auditPayloads', id: ids.auditRetired });
-      expect(counted).not.toContainEqual({ category: 'auditPayloads', id: ids.auditClean });
+      // A bare key's shape is no value the rules hide (legacy 906 step 2): no audit row holding
+      // one is counted — the one whose key is issued is listed above, the retired one by nothing.
+      for (const id of [ids.auditLive, ids.auditRetired, ids.auditClean]) {
+        expect(counted).not.toContainEqual({ category: 'auditPayloads', id });
+      }
       expect(counted).toContainEqual({ category: 'toolCallRecordKeyShapes', id: ids.toolMessage });
       for (const leak of leaks) {
         expect(JSON.stringify({ result, live, counted })).not.toContain(leak);
@@ -416,8 +419,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       const rotated = await run(false);
       expect(rotated.listed).toEqual([]);
-      // The audit rows stay as written (I11) and stay counted.
-      expect(rotated.counted).toContainEqual({ category: 'auditPayloads', id: ids.auditLive });
+      // The audit rows stay as written (I11).
+      const kept = await admin(
+        async (client) =>
+          (
+            await client.query<{ payload: unknown }>(
+              'select payload from audit_records where workspace_id = $1 and id = $2',
+              [workspaceId, ids.auditLive],
+            )
+          ).rows[0]?.payload,
+      );
+      expect(kept).toEqual({ params: { note: `for the collector, key ${serviceKey}` } });
     }, 300_000);
   },
 );

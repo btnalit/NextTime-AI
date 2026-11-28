@@ -495,14 +495,6 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
       ['next'],
     ],
     ['a pageToken inside a query string', { next: `/items?pageToken=${FAKE}` }, ['next']],
-    // A pre-prefix platform API key's shape is any 32 bytes in base64url (legacy 168 review): hidden in the
-    // audit copy, never refused — a call that names an event by its digest goes through.
-    ['a SHA-256 digest in base64url', { eventId: BASE64URL_32 }, ['eventId']],
-    [
-      'an Ed25519 public key in a JWK',
-      { jwk: { kty: 'OKP', crv: 'Ed25519', x: BASE64URL_32 } },
-      ['jwk.x'],
-    ],
     // Secret-named fields: as often an ordinary cursor or resource id.
     ['pageToken', { pageToken: 'cursor-page-2', pageSize: 50 }, ['pageToken']],
     ['nextPageToken', { nextPageToken: 'opaque-cursor-42' }, ['nextPageToken']],
@@ -536,6 +528,10 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
     // `token` is an ordinary word outside an `Authorization:` header (`invalid token <id>`).
     { q: `invalid token ${FAKE}` },
     { q: "select id from builds where sha = '0123456789abcdef0123456789abcdef01234567'" },
+    // 32 bytes in base64url alone: a SHA-256 digest or a public key, not suspected since the bare
+    // shape of a key minted before the prefix left the scrub (legacy 906 step 2).
+    { eventId: BASE64URL_32 },
+    { jwk: { kty: 'OKP', crv: 'Ed25519', x: BASE64URL_32 } },
     {},
   ])('records nothing for ordinary params: %j', (params) => {
     expect(reviewObserveParams('inventory', 'list_items', params)).toEqual({});

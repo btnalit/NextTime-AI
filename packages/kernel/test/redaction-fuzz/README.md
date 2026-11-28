@@ -38,7 +38,10 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 的结果预览）算整段那一列，上一发布版存下的记录再由各自的存量改写（`rescrubStoredToolCallResult`，`scrub-raw-secrets` 的
 `toolCallRecords`）读算存量那一列，见下文「工具调用记录」。
 
-门槛是「由遮变露」0 行：某个值的字符这次检出露了、上一发布版遮了。字符算不算露，按输出与输入对齐来定
+门槛是「由遮变露」0 行：某个值的字符这次检出露了、上一发布版遮了。上一发布版读的时候去掉下限的例外名单（`FLOOR_EXCEPTIONS`）里的规则：
+它自己的规则表和它的下限（冻结的 v0.70.0）里，表达式与标志相同的规则就地拿掉（`readers.ts` 的 `withoutFloorExceptions`），
+拿掉了几条打印在表头，`harness.test.ts` 钉住。名单里的规则是这次检出明确不再守的（遗留 906 第 2 步：旧格式平台 API key 的裸形状），
+上一版只靠它遮住的，这次可以露。字符算不算露，按输出与输入对齐来定
 （`measure.ts` 的 `keptChars`）：输出按 `[redacted]` 切开，各段按顺序放在输入里最早能放的位置，一处遮可以遮住 0 个字符
 （空的带引号的值写成 `"[redacted]"`）；对不上的输出，它的值的字符全部算露。`stored/` 组的行不对齐：存量改写会把
 `[redacted]"…\"` 写成 `\"[redacted]\"`，不是「输入的一些段换成遮罩」。这些行按片段量（`shownInRuns`）：值里任意连续 8 个字符

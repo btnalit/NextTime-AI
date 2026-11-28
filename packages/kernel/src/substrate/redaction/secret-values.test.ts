@@ -3,6 +3,7 @@ import { namesASecretField } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CUT_LOOKAHEAD_CHARS,
+  FLOOR_EXCEPTIONS,
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   MAX_SECRET_LITERALS,
   OMITTED,
@@ -14,6 +15,7 @@ import {
   type Scrubbed,
   type SecretPattern,
   endsAQuotedValue,
+  floorOf,
   floorReadSpans,
   placeIn,
   platformApiKeys,
@@ -236,7 +238,7 @@ function drawWithoutVendorPrefix(draw: () => string): string {
   }
 }
 
-describe('a platform API key standing alone (legacy 168)', () => {
+describe('a platform API key standing alone, minted before the prefix (legacy 168, 906 step 2)', () => {
   const certain = (text: string) =>
     redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
 
@@ -257,20 +259,23 @@ describe('a platform API key standing alone (legacy 168)', () => {
     ],
     ['after a \\uXXXX escape', `"\\uff1a${PLATFORM_KEY}"`, `"\\uff1a${REDACTED}"`],
   ])(
-    'is replaced %s — hidden, never refused by the high-confidence set',
+    'is kept %s — no set hides it since legacy 906 step 2, and v0.70.0 did',
     (_label, text, expected) => {
-      expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
       expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+      // The floor would hide it; the floor leaves the shape out by name (`FLOOR_EXCEPTIONS`).
+      expect(released.scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+      expect(platformKeyShapes(text)).toEqual([expect.any(String)]);
     },
   );
 
   it('a minted key always has the shape, bar about one in 7,500 that lacks a digit, - and _', () => {
-    // generateApiKey's own recipe: 32 random bytes, base64url.
+    // generateApiKey's own recipe before the prefix: 32 random bytes, base64url.
     let missed = 0;
     for (let i = 0; i < 2_000; i += 1) {
       const key = randomBytes(32).toString('base64url');
       expect(key).toHaveLength(43);
-      if (scrubSecretValues(`key ${key}`).value !== `key ${REDACTED}`) missed += 1;
+      if (platformKeyShapes(`key ${key}`).length !== 1) missed += 1;
     }
     // Expected about 0.27 misses in 2,000; more than 5 has odds of about 4 in 10 million.
     expect(missed).toBeLessThanOrEqual(5);
@@ -296,6 +301,7 @@ describe('a platform API key standing alone (legacy 168)', () => {
   ])('is not matched %s', (_label, text) => {
     expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
     expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+    expect(platformKeyShapes(text)).toEqual([]);
   });
 
   it('a 32-byte value in standard base64 (a WireGuard key, a SHA-256= digest) is never one', () => {
@@ -314,13 +320,11 @@ describe('a platform API key standing alone (legacy 168)', () => {
     }
   });
 
-  it('any 32 bytes in base64url (a SHA-256 digest, a JWK public key) is hidden but never refused', () => {
-    // The same shape as a key, so the full set hides it (the accepted over-redaction) …
-    expect(scrubSecretValues(`{"kty":"OKP","crv":"Ed25519","x":"${PLATFORM_KEY}"}`)).toEqual({
-      value: `{"kty":"OKP","crv":"Ed25519","x":"${REDACTED}"}`,
-      redactedValues: 1,
-    });
-    // … and the high-confidence set, which refuses a call outright, never matches it.
+  it('any 32 bytes in base64url (a SHA-256 digest, a JWK public key) is neither hidden nor refused', () => {
+    // The same shape as a key minted before the prefix: hidden until legacy 906 step 2 (the
+    // over-redaction it was kept for while such keys were issued), and never refused.
+    const jwk = `{"kty":"OKP","crv":"Ed25519","x":"${PLATFORM_KEY}"}`;
+    expect(scrubSecretValues(jwk)).toEqual({ value: jwk, redactedValues: 0 });
     for (let i = 0; i < 2_000; i += 1) {
       const digest = drawWithoutVendorPrefix(() =>
         createHash('sha256').update(randomBytes(16)).digest('base64url'),
@@ -333,26 +337,36 @@ describe('a platform API key standing alone (legacy 168)', () => {
         `{"kty":"OKP","crv":"Ed25519","x":"${x}"}`,
       ]) {
         expect(certain(text).redactedValues).toBe(0);
+        expect(scrubSecretValues(text).redactedValues).toBe(0);
       }
     }
   });
 
-  it('a rewrite of stored rows leaves the shape and counts it instead (legacy 168 review)', () => {
+  it('a rewrite of stored rows leaves the shape, as the full set does, and counts it (legacy 168 review)', () => {
     const stored = `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${HANDLE}`;
-    expect(scrubSecretValues(stored, { patterns: STORED_REWRITE_SECRET_PATTERNS })).toEqual({
-      value: `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${REDACTED}`,
-      redactedValues: 1,
-    });
+    for (const patterns of [SECRET_VALUE_PATTERNS, STORED_REWRITE_SECRET_PATTERNS]) {
+      expect(scrubSecretValues(stored, { patterns })).toEqual({
+        value: `digest ${PLATFORM_KEY}, then CAPABILITY_HANDLE=${REDACTED}`,
+        redactedValues: 1,
+      });
+    }
     expect(
       scrubSecretValues(stored, { patterns: PLATFORM_KEY_SHAPE_PATTERNS }).redactedValues,
     ).toBe(1);
+    // No set that hides holds the shape (legacy 906 step 2).
+    for (const set of [
+      SECRET_VALUE_PATTERNS,
+      STORED_REWRITE_SECRET_PATTERNS,
+      HIGH_CONFIDENCE_SECRET_PATTERNS,
+    ]) {
+      expect(PLATFORM_KEY_SHAPE_PATTERNS.filter((shape) => set.includes(shape))).toEqual([]);
+    }
     // Every other pattern is kept, in order; the name rules read as they do, and one thing more
     // (legacy 937: a mask an earlier release left with more of its word).
-    expect(STORED_REWRITE_SECRET_PATTERNS).toHaveLength(SECRET_VALUE_PATTERNS.length - 1);
-    const [shape, named, ...others] = SECRET_VALUE_PATTERNS.filter(
+    expect(STORED_REWRITE_SECRET_PATTERNS).toHaveLength(SECRET_VALUE_PATTERNS.length);
+    const [named, ...others] = SECRET_VALUE_PATTERNS.filter(
       (p) => !STORED_REWRITE_SECRET_PATTERNS.includes(p),
     );
-    expect([shape]).toEqual(PLATFORM_KEY_SHAPE_PATTERNS);
     expect(others).toEqual([]);
     expect(named !== undefined && 'together' in named).toBe(true);
     expect(
@@ -487,9 +501,10 @@ describe('a platform API key with its prefix (legacy 906)', () => {
         redactedValues: 1,
       });
     }
-    // The shape minted before the prefix, likewise — hidden whole by the full set.
+    // The shape minted before the prefix: no rule reads it since legacy 906 step 2, and the
+    // vendor rule takes the `sk-…` it spells.
     expect(scrubSecretValues(`key ${body}.`)).toEqual({
-      value: `key ${REDACTED}.`,
+      value: `key FAKE-${REDACTED}.`,
       redactedValues: 1,
     });
   });
@@ -3550,6 +3565,52 @@ describe('v0.70.0 read under every text: a floor (legacy 939)', () => {
       value: `xa${REDACTED}y`,
       redactedValues: 2,
     });
+  });
+});
+
+describe('the floor leaves out only what it names (legacy 906 step 2, coordinator 2026-11-28)', () => {
+  // Each exception is a decision of its own: one added here, or a rule left out of a floor another
+  // way, turns this red, and the change to it is in the diff a review reads.
+  it("names one exception: v0.70.0's bare shape of a platform API key minted before the prefix", () => {
+    expect(FLOOR_EXCEPTIONS).toHaveLength(1);
+    expect(released.PLATFORM_KEY_SHAPE_PATTERNS).toHaveLength(1);
+    expect(FLOOR_EXCEPTIONS[0]).toBe(released.PLATFORM_KEY_SHAPE_PATTERNS[0]);
+  });
+
+  it.each([
+    ['SECRET_VALUE_PATTERNS', SECRET_VALUE_PATTERNS, released.SECRET_VALUE_PATTERNS, 1],
+    [
+      'STORED_REWRITE_SECRET_PATTERNS',
+      STORED_REWRITE_SECRET_PATTERNS,
+      released.STORED_REWRITE_SECRET_PATTERNS,
+      0,
+    ],
+  ] as const)("reads %s with v0.70.0's list in order, less only that", (_n, own, then, left) => {
+    const floor = floorOf(own);
+    expect(floor).toBeDefined();
+    const kept = then.filter((p) => floor?.includes(p));
+    expect(floor).toHaveLength(kept.length);
+    floor?.forEach((p, at) => expect(p).toBe(kept[at]));
+    const out = then.filter((p) => !floor?.includes(p));
+    expect(out).toHaveLength(left);
+    for (const p of out) expect(p).toBe(FLOOR_EXCEPTIONS[0]);
+  });
+
+  it("has no floor for a list of a caller's own", () => {
+    expect(floorOf(HIGH_CONFIDENCE_SECRET_PATTERNS)).toBeUndefined();
+    expect(floorOf([...SECRET_VALUE_PATTERNS])).toBeUndefined();
+  });
+
+  it("so a key's bare shape v0.70.0 hid is kept, and the rest of what it hid is hidden", () => {
+    const text = `digest ${PLATFORM_KEY}; PGPASSWORD=${FAKE}`;
+    expect(released.scrubSecretValues(text).value).toBe(
+      `digest ${REDACTED}; PGPASSWORD=${REDACTED}`,
+    );
+    expect(scrubSecretValues(text)).toEqual({
+      value: `digest ${PLATFORM_KEY}; PGPASSWORD=${REDACTED}`,
+      redactedValues: 1,
+    });
+    expect(floorReadSpans(`digest ${PLATFORM_KEY}`)).toEqual([]);
   });
 });
 
