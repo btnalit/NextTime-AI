@@ -2228,6 +2228,14 @@ function decodedJsonKey(literal: string): string {
   }
 }
 
+/** The index of the first character below U+0020 in `text` from `from`, or `text.length`. */
+function firstControlChar(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    if (text.charCodeAt(index) < 0x20) return index;
+  }
+  return text.length;
+}
+
 /** A JSON string literal's value, or `undefined` when it does not decode. */
 function decodedJsonString(literal: string): string | undefined {
   try {
@@ -2351,11 +2359,16 @@ export function redactSecretFieldsInJsonText(
     redactedValues += 1;
   };
   /** The string literal from `start` to its closing quote at `quote` (`length`: the text ends
-   *  inside it), decoded and scrubbed; written back when `scrubValue` changed it. */
+   *  inside it), decoded and scrubbed; written back when `scrubValue` changed it. One the text
+   *  ends inside ends at its first raw control character, if any: JSON writes none inside a
+   *  string, so it is where the cut was — a runtime's note after it (`\n\n[... more characters
+   *  omitted ...]`) — and the string read to there decodes, the note is left to the pass over the
+   *  text as it is (review #501 on #1629). */
   const rewrite = (start: number, quote: number): void => {
     const closed = quote < length;
-    const end = closed ? quote + 1 : length;
-    const inner = text.slice(start + 1, closed ? quote : length);
+    const stop = closed ? quote : firstControlChar(text, start + 1);
+    const end = closed ? quote + 1 : stop;
+    const inner = text.slice(start + 1, stop);
     if (scrubValue === undefined || !inner.includes('\\')) return;
     const partial = closed ? 0 : partialEscapeLength(inner);
     const decoded = decodedJsonString(`"${inner.slice(0, inner.length - partial)}"`);

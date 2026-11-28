@@ -4380,6 +4380,42 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     expect(scrub(`${open}\\\\u4`).value).toBe(`${hidden}\\\\u4`);
   });
 
+  it('reads a string the text ends inside to its first raw control character, a note after the cut apart (review #501 on #1629)', () => {
+    const open = `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore`;
+    const hidden = `{"stdout":"a\\nPGPASSWORD=${REDACTED}\\nmore`;
+    // The runtime notes a cut used to append (platform-extension before legacy 967), and others.
+    const notes = [
+      '\n\n[... 500 more characters omitted — the full result is not shown ...]',
+      '\r\n…',
+      '\t',
+    ];
+    for (const note of notes) {
+      for (const partial of ['', '\\', '\\u4e']) {
+        const fields = redactSecretFieldsInJsonText(
+          open + partial + note,
+          namesASecretField,
+          scrubSecretValues,
+        );
+        expect({ value: fields.value, redactedValues: fields.redactedValues }).toEqual({
+          value: hidden + partial + note,
+          redactedValues: 1,
+        });
+        expect(fields.decodedSpans).toEqual([
+          [hidden.indexOf('"a'), hidden.length + partial.length],
+        ]);
+      }
+    }
+    // Kept as written: the span still ends at the note, which the pass over the text reads.
+    const kept = `{"stdout":"a\\nb\n\npassword=${FAKE}`;
+    expect(
+      redactSecretFieldsInJsonText(kept, namesASecretField, scrubSecretValues).decodedSpans,
+    ).toEqual([[kept.indexOf('"a'), kept.indexOf('\n')]]);
+    expect(scrubAll(kept)).toEqual({
+      value: `{"stdout":"a\\nb\n\npassword=${REDACTED}`,
+      redactedValues: 1,
+    });
+  });
+
   it('still replaces a secret-named field whole, and counts each once; a second pass changes nothing', () => {
     const text = `{"password":"a\\nb","items":["x\\nPGPASSWORD=${FAKE}"]}`;
     const once = scrub(text);

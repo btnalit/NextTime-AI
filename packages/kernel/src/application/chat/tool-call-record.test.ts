@@ -399,6 +399,20 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
     expect(rescrubStoredToolCallResult(stored)).toEqual({ value: stored, redactedValues: 0 });
   });
 
+  it('a stored result cut inside a string, with the old note after it, is rewritten too (review #501 on #1629)', () => {
+    // Before legacy 967 a long result was cut at a character count and a note appended after a
+    // raw newline: the string the text ends inside did not decode, so its lines read as `\n…`.
+    const cut = `${dump.slice(0, dump.indexOf('\\nAWS'))}\n\n[... 40 more characters omitted — the full result is not shown ...]`;
+    const live = redactToolResult(textResult(cut), 'some_tool');
+    expect(JSON.stringify(live.value)).not.toContain(SECRET);
+    expect(live.redactedValues).toBe(1);
+    const stored = { ...record({ name: 'some_tool' }), result: { text: cut }, redactedValues: 0 };
+    const once = rescrubStoredToolCallResult(stored);
+    expect(JSON.stringify(once.value)).not.toContain(SECRET);
+    expect(once.redactedValues).toBe(1);
+    expect(rescrubStoredToolCallResult(once.value).redactedValues).toBe(0);
+  });
+
   it('an arg’s secret value the result quotes is hidden though JSON escaped a character of it', () => {
     // A quote and a backslash: the JSON text carries `\"` and `\\`, so the literal is not in it.
     const args = { password: 'pa"ss\\word-9' };
