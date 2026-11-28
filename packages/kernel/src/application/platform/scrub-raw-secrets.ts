@@ -411,7 +411,7 @@ const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 /** Agent text as stored, scrubbed the way it is written now (`STORED_REWRITE`). A quoted value
  *  written with `\"` that releases before v0.70.0 split (`[redacted]"…\"`) is no longer written
  *  whole first: the stored rewrite of v0.70.x did that over every row, and nothing writes one
- *  since (legacy 919 step 2, release.md §3.NNN). */
+ *  since (legacy 919 step 2, release.md §3.230). */
 function rescrubStoredText(text: string): Scrubbed<string> {
   return scrubSecretValues(text, STORED_REWRITE);
 }

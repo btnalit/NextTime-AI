@@ -92,7 +92,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | `credentials/` | 凭据席位评审 #1593–#1600 时写的生成器 |
 | `kernel/` | 内核席位评审 #1593–#1600 时的 kvgen4、7、8、9、10（从 Python 移植：同样的表与形状，不是同样的行） |
 | `long/` | 内核席位评审 #1619 要的长行：行首前缀长于 8 个字符（带引号与不带），值长到 L（3,584）附近、扣留上限（4,096）附近和更长，带引号与不带；PEM 私钥（换行、CRLF、字符串里的 `\n`）。一行流式读一遍要一两秒，每个种子只读 6 行、8 行 |
-| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631）。遗留 916、918 拆开的 `\"…\"` 值那组（`stored/split-masks`）随存量修复 `repairSplitQuotedMasks` 一起在遗留 919 第 2 步去掉：v0.70.x 的存量改写已把存下的这种行写好，之后没有版本再写出它，这组再和上一版比只会显示有意的多露（release.md §3.NNN） |
+| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631）。遗留 916、918 拆开的 `\"…\"` 值那组（`stored/split-masks`）随存量修复 `repairSplitQuotedMasks` 一起在遗留 919 第 2 步去掉：v0.70.x 的存量改写已把存下的这种行写好，之后没有版本再写出它，这组再和上一版比只会显示有意的多露（release.md §3.230） |
 | `formats/` | 真实格式语料第一批：`.env`、YAML、INI、JSON、JSON 写在字符串里、shell 赋值与 `--flag`、PHP 与 Ruby 的 `=>` |
 
 随机数是 mulberry32，按种子；比较前去重，报告里的行数是去重后的。真实格式里的值是运行时随机生成的，不在文件里。
