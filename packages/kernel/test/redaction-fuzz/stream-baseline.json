@@ -176,10 +176,6 @@
     "stored/records-open-control": {
       "rows": 0,
       "atRelease": 0
-    },
-    "stored/split-masks": {
-      "rows": 0,
-      "atRelease": 0
     }
   }
 }

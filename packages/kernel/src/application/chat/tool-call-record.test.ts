@@ -534,37 +534,25 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
     });
   });
 
-  describe('a quoted value the text pass split before legacy 916, stored (coordinator, #1573)', () => {
-    /** As the value patterns over the text as written left it before legacy 916: `\` taken for
-     *  the value. */
-    const split = (stdout: string) =>
-      JSON.stringify({ stdout }).replace(`\\"${SECRET}\\"`, `${REDACTED}"${SECRET}\\"`);
+  describe('a mask with a quote after it, stored (legacy 919 step 2)', () => {
     const stored = (text: string) => ({
       ...record({ name: 'some_tool' }),
       result: { text },
       redactedValues: 1,
     });
 
-    it.each([
-      ['an env line', 'API_TOKEN='],
-      ['an export', 'export X_TOKEN='],
-      ['a YAML key', 'password: '],
-      ['a header, no space', 'X-Api-Key:'],
-      ['a --password flag', '--password '],
-      ['a query string', 'api_key='],
-    ])('is rewritten as the value patterns write it now, once, the JSON whole: %s', (_l, name) => {
-      const stdout = `a ${name}"${SECRET}" b\nok`;
-      const text = split(stdout);
-      expect(text).toBe(`{"stdout":"a ${name}${REDACTED}"${SECRET}\\" b\\nok"}`);
-      const once = rescrubStoredToolCallResult(stored(text));
-      const fixed = JSON.stringify({ stdout: `a ${name}"${REDACTED}" b\nok` });
-      // What the value patterns over the text as written make of it now (legacy 918).
-      expect(scrubSecretValues(JSON.stringify({ stdout })).value).toBe(fixed);
-      expect(once).toMatchObject({ value: { result: { text: fixed }, redactedValues: 2 } });
-      expect(once.redactedValues).toBe(1);
-      expect(JSON.parse(fixed)).toEqual({ stdout: `a ${name}"${REDACTED}" b\nok` });
-      expect(rescrubStoredToolCallResult(once.value)).toEqual({
-        value: once.value,
+    // Releases before v0.70.0 split a `\"…\"` value (`API_TOKEN=[redacted]"…\"`); the stored
+    // rewrite of v0.70.x wrote any stored whole and nothing writes one since, so the rewrite no
+    // longer takes the text up to the next `\"` for a value (`repairSplitQuotedMasks` is gone).
+    it('leaves a bare value cut by a quote, a \\" later on its line, as written', () => {
+      const live = record({
+        result: textResult(`-e "PW_TOKEN=${SECRET}" img \\"x\\"`),
+        hasResult: true,
+      });
+      const text = `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`;
+      expect(live.result?.text).toBe(text);
+      expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+        value: stored(text),
         redactedValues: 0,
       });
     });
@@ -584,36 +572,6 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
           redactedValues: 0,
         });
       }
-    });
-
-    it('repairs plain text too, as it is written now (legacy 918)', () => {
-      const plain = `sh -c "export API_TOKEN=\\"${SECRET} x\\" && run"`;
-      const now = `sh -c "export API_TOKEN=\\"${REDACTED}\\" && run"`;
-      const live = record({ result: textResult(plain), hasResult: true });
-      expect(live.result?.text).toBe(now);
-      const text = `sh -c "export API_TOKEN=${REDACTED}"${SECRET} x\\" && run"`;
-      const once = rescrubStoredToolCallResult(stored(text));
-      expect(once).toEqual({
-        value: { ...stored(text), result: { text: now }, redactedValues: 2 },
-        redactedValues: 1,
-      });
-      expect(rescrubStoredToolCallResult(once.value)).toEqual({
-        value: once.value,
-        redactedValues: 0,
-      });
-    });
-
-    it('reads JSON text after leading white space (review #493)', () => {
-      const text = ` \n${split(`a API_TOKEN="${SECRET}" b`)}`;
-      expect(text).toContain(`${REDACTED}"${SECRET}`);
-      expect(rescrubStoredToolCallResult(stored(text))).toEqual({
-        value: {
-          ...stored(text),
-          result: { text: ` \n{"stdout":"a API_TOKEN=\\"${REDACTED}\\" b"}` },
-          redactedValues: 2,
-        },
-        redactedValues: 1,
-      });
     });
 
     it('leaves JSON that is valid alone, where a closing quote follows a mask', () => {

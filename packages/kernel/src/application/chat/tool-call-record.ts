@@ -12,7 +12,6 @@ import {
   type Scrubbed,
   redactSecretFieldsInJsonText,
   redactSecrets,
-  repairSplitQuotedMasks,
   safeStringify,
   scrubOutsideSpans,
   scrubSecretLiterals,
@@ -166,9 +165,9 @@ export function redactToolResult(
  * (its tool's declared keys, or a secret-naming key), with its escaped strings decoded (legacy
  * 916), then every secret-looking value but a platform API key standing alone
  * (`STORED_REWRITE_SECRET_PATTERNS`: the rewrite is one-way and that shape is any 32 bytes in
- * base64url, so `cli/scrub-raw-secrets.ts` counts it instead — legacy 168 review). First, a quoted
- * value the text pass split before legacy 916 is written as it is written now
- * (`repairSplitQuotedMasks`).
+ * base64url, so `cli/scrub-raw-secrets.ts` counts it instead — legacy 168 review). A quoted value
+ * the text pass split before legacy 916 is no longer written whole first: the stored rewrite of
+ * v0.70.x did that over every row (legacy 919 step 2).
  * What the record cannot give back is the values its arguments hid (its `args` copy is masked), so a
  * result that quoted one in prose keeps it. `redactedValues` is added to the record's own count.
  * `cli/scrub-raw-secrets.ts` rewrites stored records with it.
@@ -183,10 +182,9 @@ export function rescrubStoredToolCallResult(
   const name = typeof content.name === 'string' ? content.name : null;
   const stored = (text: string) =>
     scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
-  const repaired = repairSplitQuotedMasks(result.text);
-  const fields = redactSecretFieldsInJsonText(repaired.value, secretKeyRule(name), stored);
+  const fields = redactSecretFieldsInJsonText(result.text, secretKeyRule(name), stored);
   const values = scrubOutsideSpans(fields.value, fields.decodedSpans, stored);
-  const redactedValues = repaired.redactedValues + fields.redactedValues + values.redactedValues;
+  const redactedValues = fields.redactedValues + values.redactedValues;
   if (values.value === result.text) return { value: content, redactedValues: 0 };
   const previous = typeof content.redactedValues === 'number' ? content.redactedValues : 0;
   return {

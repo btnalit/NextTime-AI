@@ -31,7 +31,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 |---|---|
 | 整段（whole） | `scrubSecretValues` |
 | 实时流（stream） | `createSecretStreamScrubber`，按行自己的种子切：两组各 1–6 刀，再加一组每 1–4 个字符一刀（像真实的 `textDelta`）；两边切点相同 |
-| 存量（stored） | 上一发布版整段读出的结果，再由各自的存量改写（`repairSplitQuotedMasks`，然后 `STORED_REWRITE_SECRET_PATTERNS`）读；`stored/` 组的行本身就是以前版本存下的形式，直接交给存量改写，只读这一遍 |
+| 存量（stored） | 上一发布版整段读出的结果，再由各自的存量改写（`STORED_REWRITE_SECRET_PATTERNS`；v0.70.1 先跑 `repairSplitQuotedMasks`，遗留 919 第 2 步起没有了）读；`stored/` 组的行本身就是以前版本存下的形式，直接交给存量改写，只读这一遍 |
 | 再读（reread） | 各自整段读出的结果，再由自己整段读一遍 |
 
 `stored/records-…` 三组的行是工具结果（pi 交来的一个文本部分），按工具调用记录读：各自存下的记录（`buildToolCallRecord`
@@ -92,7 +92,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | `credentials/` | 凭据席位评审 #1593–#1600 时写的生成器 |
 | `kernel/` | 内核席位评审 #1593–#1600 时的 kvgen4、7、8、9、10（从 Python 移植：同样的表与形状，不是同样的行） |
 | `long/` | 内核席位评审 #1619 要的长行：行首前缀长于 8 个字符（带引号与不带），值长到 L（3,584）附近、扣留上限（4,096）附近和更长，带引号与不带；PEM 私钥（换行、CRLF、字符串里的 `\n`）。一行流式读一遍要一两秒，每个种子只读 6 行、8 行 |
-| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 916、918 拆开的 `\"…\"` 值（`API_TOKEN=[redacted]"<值>\"`，`repairSplitQuotedMasks` 修的那种），遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631） |
+| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631）。遗留 916、918 拆开的 `\"…\"` 值那组（`stored/split-masks`）随存量修复 `repairSplitQuotedMasks` 一起在遗留 919 第 2 步去掉：v0.70.x 的存量改写已把存下的这种行写好，之后没有版本再写出它，这组再和上一版比只会显示有意的多露（release.md §3.NNN） |
 | `formats/` | 真实格式语料第一批：`.env`、YAML、INI、JSON、JSON 写在字符串里、shell 赋值与 `--flag`、PHP 与 Ruby 的 `=>` |
 
 随机数是 mulberry32，按种子；比较前去重，报告里的行数是去重后的。真实格式里的值是运行时随机生成的，不在文件里。
@@ -140,7 +140,6 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 | `tail-stream-forgets-name` | 尾部检查在流里不再回看已经放出的文字，名字和分隔符分在两段时认不出这一对 | `str≠w`（流与整段不同的行多于基线，几乎每个生成器都是；值仍由写法规则遮住） |
 | `stream-json-key-not-held` | 流不再扣住行尾可能还是 JSON 键的引号串 | 实时流 |
 | `stream-pem-not-held` | 流不再从没有 `-----END` 的 `-----BEGIN` 起扣住 | 实时流（`long/pem`） |
-| `stored-split-masks-not-repaired` | `repairSplitQuotedMasks` 什么都不做 | 存量（`stored/split-masks`） |
 | `json-open-string-read-to-end` | 没收尾的 JSON 字符串又读到文本末尾（撤掉阶段 1b 对凭据席位评审 #1629 的修复） | `rec` 的 left（`stored/records-cut-after-value`、`cut-in-value`） |
 | `json-open-value-at-the-cut-kept` | 截点处开引号的值不再遮到截点（`openValueAtTheCut` 什么都不找） | `rec` 的 left（`stored/records-cut-in-value`） |
 | `json-open-string-cut-at-any-control` | 没收尾的字符串在任何原样控制字符处分开读（撤掉凭据席位评审 #1631 的修复） | 整段，即这次检出存下的记录（`stored/records-open-control`） |
