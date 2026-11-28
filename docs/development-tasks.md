@@ -1068,6 +1068,8 @@
   - **Task 与 ActionRequest 归属**：`task/0007` 加 `goal_run_id` / `step_run_id` / `plan_revision`（三者同有同无，外键带 GoalRun）、`step_attempt`（推进器的尝试号，与 `worker_runs.attempt` 的 Task 内崩溃重试分开）、`run_config_snapshot`（尝试 Task 必填，内容由 GO2 写，从不放凭据），五列建后不可改（`tasks_goal_step_immutable`）；I-G1 唯一索引。`application/task/invoke.ts` 嵌套子 Task 继承步骤、不带尝试号。`governance/0022` 加 `action_requests.step_run_id`，`request_action` 从发起 Worker 的 Task 读出、建行后不变（`action_requests_step_run_immutable`）。执行侧不读 `step_runs`：`governance/approval/step-actions.ts` `listStepActionOutcomes` 按列读，类型里没有 reason 字段。
   - **定时检查**：`substrate/audit/goal-invariant-checks.ts` 的 I-G1 / I-G2（`accepted-off-chain`、`chain-not-accepted`、`guards`）/ I-G6 / I-G9 随 `runInvariantChecks` 跑；数据库已禁止的改为检查机制本身还在，触发器要求 `tgenabled in ('O','A')`（I4 / I12 同改）。step-mismatch 拆成两条走索引的查询（新索引 `worker_runs_task_idx`、`action_requests_parent_worker_run_idx`，前者也让 reaper 的活 run 查找走索引）。I-G9 暂不检查已 supersede 步骤的请求（等 GO3 的放行入口）；全量扫描见 STATUS 遗留 342。
 
+- 实现说明（遗留 981 第 1 步，#1635，2026-11-28 合入，cd9e181，release.md §3.228；内核 application/goal、task）：`nestedProblem(key)` 是拒绝的文字，`parsePlan` 对每个 `nested: true` 的步骤加一条；`resolveStepAuthority` 不再收 `nested`，步骤的 Handle 从不带 `invoke_worker` / `find_workers`。第 2 步（worker 模式接通 `invoke_worker`）挂起，见遗留 981、983。
+
 **GO2 — 确定性推进器**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明（#619，2026-10-16 合入，bf933cf；goal 0002；遗留 325 关闭）：
