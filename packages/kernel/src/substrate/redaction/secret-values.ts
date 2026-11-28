@@ -2408,14 +2408,26 @@ export function redactSecretFieldsInJsonText(
    *  ends inside ends at its first raw control character, if any: JSON writes none inside a
    *  string, so it is where the cut was — a runtime's note after it (`\n\n[... more characters
    *  omitted ...]`) — and the string read to there decodes, the note is left to the pass over the
-   *  text as it is (review #501 on #1629). What is left of a value it was cut inside, quoted and
-   *  open to the cut, is hidden there (`hiddenToTheCut`): only this read sees the string end. */
+   *  text as it is (review #501 on #1629). Only a line break with no key block open before it is
+   *  taken for the cut (review #501 on #1631); at any other the string is not read here. What is
+   *  left of a value it was cut inside, quoted and open to the cut, is hidden there
+   *  (`hiddenToTheCut`): only this read sees the string end. */
   const rewrite = (start: number, quote: number): void => {
     const closed = quote < length;
     const stop = closed ? quote : firstControlChar(text, start + 1);
     const end = closed ? quote + 1 : stop;
     const inner = text.slice(start + 1, stop);
     if (scrubValue === undefined) return;
+    // A cut is only at a line break with no key block open before it (review #501 on #1631): the
+    // value rules and the tail check read a line on its own, so the two sides of a line break
+    // read as they do in the whole text, and a key block is the one rule that reads on across
+    // lines. At any other raw control character (a tab between a name and its value) the string
+    // is left whole to the pass over the text as it is, as before legacy 982.
+    if (!closed && stop < length) {
+      const atBreak = text.charAt(stop) === '\n' || text.charAt(stop) === '\r';
+      const begin = inner.lastIndexOf('-----BEGIN');
+      if (!atBreak || (begin !== -1 && !inner.includes('-----END', begin))) return;
+    }
     // Without an escape a string reads the same decoded, and the pass over the text as it is
     // reads it — unless it was cut inside a value.
     const escaped = inner.includes('\\');

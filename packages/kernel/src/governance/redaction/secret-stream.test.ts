@@ -584,6 +584,7 @@ describe('createSecretStreamScrubber — split anywhere, the output is the whole
       );
       expect(mismatches.filter((found) => found !== undefined)).toEqual([]);
     },
+    SCRUBBED_AT_EVERY_CUT_MS,
   );
 
   it.each(SHAPES.map((shape, index) => [shape.slice(0, 40), index]))(

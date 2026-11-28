@@ -61,7 +61,12 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 说明留给原文那一遍；解码出来的最后一行以密钥名后带引号、到截点都没收尾的值结束时（截点截在带引号的值里），从引号遮到截点，
 截点后面这个字符串里没有东西，遮不到别的（`openValueAtTheCut`）。这两处都不是尾部检查：前一处只找字符串在哪里结束，后一处
 只在已知的截点上收尾，都不往后读。存量改写因此会改写这类旧记录（凭据席位评审 #1629 选的做法），三道门把改写的范围卡住
-（`rec` 列，twice/needless/left，都要 0）：
+（`rec` 列，twice/needless/left，都要 0）。
+
+只在那个控制字符是原样换行、它前面也没有没收尾的私钥块时才这样分开读（凭据席位评审 #1631）。值规则和尾部检查按行读，
+换行处分开，两边的行界和整段读时一样；私钥块是唯一跨行的规则，单独排除。别的控制字符（名字和值之间的制表符）或跨着换行的
+私钥块，分开读会让名字碰不到值、正文离开 BEGIN 行，整个字符串照 v0.70.1 留给原文那一遍。今天的截点（旧截法、遗留 967 的
+`characterCut`）后面都是原样换行，这个限制不影响它们。
 
 - twice：改写过的记录再改写一遍又变了，或者这次检出自己存下的记录被改写改了。改写每次升级都跑，必须到一次就停。
 - needless：改写改了一行，却没有多遮住任何一个原来露着的值字符，或者把截断说明那一行吃掉了（设计 D3 不让尾部检查进存量，
@@ -74,6 +79,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | `cut-after-value` | 字符串里、值和它的收尾引号之后 | 上一发布版的记录露值 73、85 行，改写全部遮住，没有别的行被改 |
 | `cut-in-value` | 值里面，至少留下 8 个字符；带引号的值引号没收尾 | 露值 553、536 行，改写全部遮住：不带引号的值由写法规则遮，引号被截开的从引号遮到截点。「收尾未证明」从 987、991 行降到 458、478 行，剩下的是上一发布版已经遮了值、只留下开引号的记录（`API_TOKEN="[redacted]` 接截点），里面没有值，是多数的 |
 | `cut-elsewhere` | 没截、截在字符串收尾之后、截在值之前 | 两边都不露，改写 0 行；截在开引号后面、值还没开始的行算进「收尾未证明」（17、9 行，里面没有值，是多数的） |
+| `open-control` | 结果文字本身不是合法 JSON（原样转发的命令输出、按字节截断的文件）：最后一个字符串到末尾没收尾，前面有转义，名字和值隔着原样制表符，或私钥块跨着原样换行；另有一行自成一行、后面接原样换行的名值对 | 两边都不露，改写 0 行；值已遮住、后面接 `\" x` 的记录算进「收尾未证明」（128、124 行，引号后面到末尾只有一个词，里面没有值，是多数的）。撤掉 #1631 的修复，这次检出存下的记录露值 1,229、1,248 行 |
 
 这次检出自己存下这些结果时都遮住了（实时读法有尾部检查）。
 
@@ -86,7 +92,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline   # 重
 | `credentials/` | 凭据席位评审 #1593–#1600 时写的生成器 |
 | `kernel/` | 内核席位评审 #1593–#1600 时的 kvgen4、7、8、9、10（从 Python 移植：同样的表与形状，不是同样的行） |
 | `long/` | 内核席位评审 #1619 要的长行：行首前缀长于 8 个字符（带引号与不带），值长到 L（3,584）附近、扣留上限（4,096）附近和更长，带引号与不带；PEM 私钥（换行、CRLF、字符串里的 `\n`）。一行流式读一遍要一两秒，每个种子只读 6 行、8 行 |
-| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 916、918 拆开的 `\"…\"` 值（`API_TOKEN=[redacted]"<值>\"`，`repairSplitQuotedMasks` 修的那种），遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」） |
+| `stored/` | 同一评审要的「以前版本会写下的形式」：遗留 916、918 拆开的 `\"…\"` 值（`API_TOKEN=[redacted]"<值>\"`，`repairSplitQuotedMasks` 修的那种），遗留 950 的遮罩后面紧跟文本（`password="[redacted]"<值>` 及各种引号）；`stored/records-…` 是遗留 967 之前截断的工具结果，按工具调用记录读（凭据席位评审 #1629，上文「工具调用记录」）；`stored/records-open-control` 是本身不是合法 JSON、字符串里有原样控制字符的工具结果（凭据席位评审 #1631） |
 | `formats/` | 真实格式语料第一批：`.env`、YAML、INI、JSON、JSON 写在字符串里、shell 赋值与 `--flag`、PHP 与 Ruby 的 `=>` |
 
 随机数是 mulberry32，按种子；比较前去重，报告里的行数是去重后的。真实格式里的值是运行时随机生成的，不在文件里。
@@ -137,6 +143,7 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 | `stored-split-masks-not-repaired` | `repairSplitQuotedMasks` 什么都不做 | 存量（`stored/split-masks`） |
 | `json-open-string-read-to-end` | 没收尾的 JSON 字符串又读到文本末尾（撤掉阶段 1b 对凭据席位评审 #1629 的修复） | `rec` 的 left（`stored/records-cut-after-value`、`cut-in-value`） |
 | `json-open-value-at-the-cut-kept` | 截点处开引号的值不再遮到截点（`openValueAtTheCut` 什么都不找） | `rec` 的 left（`stored/records-cut-in-value`） |
+| `json-open-string-cut-at-any-control` | 没收尾的字符串在任何原样控制字符处分开读（撤掉凭据席位评审 #1631 的修复） | 整段，即这次检出存下的记录（`stored/records-open-control`） |
 
 阶段 1b 去掉了 `stream-quote-blanks-not-held`（流不再扣住引号后面的空白）：尾部检查进了实时流以后，这一处扣住不再改变输出。
 打上它，验收照样通过；定向探针把引号、空白、分隔符、值和前面没收尾的值组合成 34,560 行，在每个切点比流与整段，

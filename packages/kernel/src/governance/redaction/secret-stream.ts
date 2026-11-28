@@ -260,7 +260,9 @@ function safeCut(raw: string): number {
     // while what comes right after the cut is that `:` or `=` or nothing yet (no cut falls inside
     // a run of blanks): once something else has come, the quote's reading is settled, and of a
     // run of `" " "` only the last is held, not each in turn back to the start (#493 on
-    // e301108f).
+    // e301108f). Since stage 1b this hold changes no output: the tail check in the stream settles
+    // the quote's reading (taking it out passed the acceptance run, and a probe of 34,560 rows at
+    // every cut). It stays for stage 3's coverage check before it goes (review #493 on #1631).
     const blanks = BLANKS_AFTER_A_QUOTE.exec(raw.slice(Math.max(0, cut - 9), cut));
     const next = raw.charAt(cut);
     if (blanks !== null && (next === ':' || next === '=' || next === '')) {

@@ -382,6 +382,21 @@ describe('the record rows (review #501 on #1629)', () => {
     }
     expect([...kinds].sort()).toEqual(['before', 'closed', 'whole']);
   });
+
+  it('open-control: not JSON as written, its last string open, a raw tab or line break in it', () => {
+    const kinds = new Set<string>();
+    for (const row of rows('stored/records-open-control')) {
+      expect(row.record).toBe(true);
+      const { head, open } = cutOf(row.t);
+      expect(row.t.startsWith('{"')).toBe(true);
+      expect(() => JSON.parse(row.t)).toThrow();
+      expect(open).toBe(true);
+      expect(head).toMatch(/[\t\n\r]/);
+      for (const secret of row.req ?? []) expect(head).toContain(secret);
+      kinds.add(head.includes('-----BEGIN') ? 'block' : /[\n\r]more/.test(head) ? 'line' : 'pair');
+    }
+    expect([...kinds].sort()).toEqual(['block', 'line', 'pair']);
+  });
 });
 
 describe('the long rows and the neighbors (reviews on #1619)', () => {

@@ -4247,6 +4247,15 @@ describe('a cut never ends in the start of a secret (legacy 819)', () => {
   });
 });
 
+/** Plain prose: what a read of a shape is held against, besides the wall clock. */
+const PROSE = 'The run wrote 3 files to the log; see step 2 for the details of each one.\n';
+/** How long `read` takes, in milliseconds. */
+const timed = (read: () => unknown): number => {
+  const started = performance.now();
+  read();
+  return performance.now() - started;
+};
+
 describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded (legacy 916)', () => {
   const scrub = (text: string) => fieldsIn(text, namesASecretField, scrubSecretValues);
   /** As the callers use it: then the value patterns over the rest of the text as it is. */
@@ -4387,7 +4396,7 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     const notes = [
       '\n\n[... 500 more characters omitted — the full result is not shown ...]',
       '\r\n…',
-      '\t',
+      '\r…',
     ];
     for (const note of notes) {
       for (const partial of ['', '\\', '\\u4e']) {
@@ -4416,6 +4425,41 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     });
   });
 
+  // Review #501 on #1631: a cut is only at a line break with no key block open before it. At a
+  // tab (a name before it, its value after) or with a key block open across the break, the two
+  // sides read apart would show what the whole text hides: the string is left to the pass over
+  // the text as it is, as before legacy 982.
+  it('takes only a line break with no key block open before it for the cut', () => {
+    const KEY = `${FAKE}${FAKE}`;
+    const apart = [
+      `{"out": "echo \\"x\\"; PASSWORD=\t${FAKE} more`,
+      `{"out": "cfg \\"a\\" password:\t${FAKE}`,
+      `{"out": "key \\"id\\": -----BEGIN RSA PRIVATE KEY-----\n${KEY}\n-----END RSA PRIVATE KEY-----`,
+      `{"out": "key \\"id\\": -----BEGIN RSA PRIVATE KEY-----\r\n${KEY}`,
+      `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\t`,
+      `{"stdout":"a\\nPGPASSWORD=${FAKE}\\nmore\u000b…`,
+    ];
+    for (const text of apart) {
+      const fields = redactSecretFieldsInJsonText(text, namesASecretField, scrubSecretValues);
+      expect({ value: fields.value, spans: fields.decodedSpans }).toEqual({
+        value: text,
+        spans: [],
+      });
+      expect(scrubAll(text)).toEqual(scrubSecretValues(text));
+    }
+    // The first four hide every secret, as v0.70.1 did. The last two read as v0.70.1 read them too,
+    // the escaped letter against the name left as written (legacy 916): the cost the review took,
+    // as no cut today has anything but a line break after it.
+    for (const text of apart.slice(0, 4)) {
+      expect(scrubAll(text).value).not.toContain(FAKE);
+    }
+    // A key block closed before the break is no reason: the string read to there is still cut.
+    const closedBlock = `{"out": "k \\"id\\": -----BEGIN RSA PRIVATE KEY-----\\n${KEY}\\n-----END RSA PRIVATE KEY----- PGPASSWORD=${FAKE}\n\n[... cut ...]`;
+    const read = redactSecretFieldsInJsonText(closedBlock, namesASecretField, scrubSecretValues);
+    expect(read.decodedSpans).toHaveLength(1);
+    expect(scrubAll(closedBlock).value).not.toContain(FAKE);
+  });
+
   it('still replaces a secret-named field whole, and counts each once; a second pass changes nothing', () => {
     const text = `{"password":"a\\nb","items":["x\\nPGPASSWORD=${FAKE}"]}`;
     const once = scrub(text);
@@ -4441,11 +4485,15 @@ describe('redactSecretFieldsInJsonText — its escaped strings scrubbed decoded 
     ['quoted values', `{"a":"${'API_TOKEN=\\"x\\" '.repeat(12_000)}"}`],
     ['a string cut open', `{"a":"${'\\nPGPASSWORD=x'.repeat(14_000)}\\u4`],
     ['many kept strings', `[${'"\\n",'.repeat(40_000)}"y"]`],
-  ])('%s × 200 KB within 1 s', (_name, text) => {
+  ])('%s × 200 KB within 1 s, or within 20 times plain prose of its length', (_name, text) => {
+    // Against plain prose read in the same process as well, not a wall clock alone: a loaded
+    // runner slows both (review #493 on #1631). What it holds is that these shapes read in time
+    // linear in their length, as prose does; a read gone quadratic is thousands of times slower.
+    const plain = PROSE.repeat(Math.ceil(text.length / PROSE.length)).slice(0, text.length);
     scrubAll(text.slice(0, 1_000));
-    const started = performance.now();
-    scrubAll(text);
-    expect(performance.now() - started).toBeLessThan(1_000);
+    scrubAll(plain.slice(0, 1_000));
+    const took = timed(() => scrubAll(text));
+    expect(took).toBeLessThan(Math.max(1_000, 20 * timed(() => scrubAll(plain))));
   });
 });
 

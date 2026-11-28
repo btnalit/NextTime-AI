@@ -20,7 +20,9 @@ import { distinctRows } from '../row.js';
  *   `cut-after-value`: cut inside the string after the value and its closing quote. `cut-in-value`:
  *   cut inside the value, at least 8 of its characters kept — a quoted value's quote left open,
  *   which the rewrite hides from its quote to the cut (`openValueAtTheCut`). `cut-elsewhere`: not
- *   cut, cut where the string has closed, or cut inside it before the value.
+ *   cut, cut where the string has closed, or cut inside it before the value. `open-control`: text
+ *   that is not JSON as written, a raw control character in its open string (review #501 on
+ *   #1631).
  */
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -206,9 +208,59 @@ function cutElsewhere(r: Rng): Row | undefined {
   return { t: cutAt(json, between(r, open, at)), req: [], record: true };
 }
 
+/**
+ * A tool result's text that is not JSON as written (command output passed on raw, a file cut at a
+ * byte count; review #501 on #1631), opening with `{` and ending inside a string with an escape in
+ * it, and a raw control character inside what must be read as one: a name and its value either
+ * side of a tab (`pair`), a key block across a line break (`block`); or a line break with no key
+ * block open before it, the cut legacy 982 reads apart (`line`). Read apart at the tab or across
+ * the block, the name no longer meets its value and the block loses its BEGIN; the string is left
+ * whole to the reading of the text as it is, as v0.70.1 read it. The names and separators are ones
+ * v0.70.1's record reads across these characters (a vertical tab or a form feed between a name and
+ * its value, `--token` and an escaped key before a tab: neither version reads them, so no row
+ * requires them).
+ */
+const OPEN_KEYS = ['out', 'stdout', 'cmd', 'result'];
+const ESCAPED = [
+  'echo \\"x\\"; ',
+  'cfg \\"a\\" ',
+  'C:\\\\tmp\\\\a ',
+  'ok\\nnext ',
+  'say \\u0041 ',
+  '',
+];
+const TABS = ['\t', '\t\t'];
+const BREAKS = ['\n', '\r\n', '\r'];
+const OPEN_PAIRS = ['PASSWORD=', 'password:', 'password: ', 'api_key=', 'TOKEN=', 'client_secret:'];
+const OPEN_QUOTES = ['', '\\"', "'"];
+const KEY_KINDS = ['RSA PRIVATE KEY', 'PRIVATE KEY', 'OPENSSH PRIVATE KEY', 'EC PRIVATE KEY'];
+const OPEN_TAILS = ['', ' more', ' && run', '\\" x', NOTE(120)];
+
+function openControl(r: Rng): Row | undefined {
+  const lead = `{"${pick(r, OPEN_KEYS)}": "${pick(r, ESCAPED)}`;
+  const tail = pick(r, OPEN_TAILS);
+  const shape = int(r, 3);
+  if (shape === 2) {
+    const kind = pick(r, KEY_KINDS);
+    const lineBreak = pick(r, BREAKS);
+    const body = Array.from({ length: 1 + int(r, 3) }, () => secret(r));
+    const end = int(r, 2) === 0 ? `${lineBreak}-----END ${kind}-----` : '';
+    const block = `-----BEGIN ${kind}-----${lineBreak}${body.join(lineBreak)}${end}`;
+    return { t: `${lead}key \\"id\\": ${block}${tail}`, req: body, record: true };
+  }
+  const value = secret(r);
+  const quote = pick(r, OPEN_QUOTES);
+  const split = shape === 0 ? pick(r, TABS) : '';
+  const pair = `${pick(r, OPEN_PAIRS)}${split}${quote}${value}${quote}`;
+  // `line`: the pair on a line of its own, a raw line break after it and nothing open before.
+  const after = shape === 1 ? `${pick(r, BREAKS)}more${pick(r, TABS)}` : '';
+  return { t: `${lead}${pair}${after}${tail}`, req: [value], record: true };
+}
+
 /** Tool results read as tool-call records (`Row.record`). */
 export const RECORD_GENERATORS: Record<string, Generator> = {
   'stored/records-cut-after-value': (r, n) => distinctRows(r, n, cutAfterValue),
   'stored/records-cut-in-value': (r, n) => distinctRows(r, n, cutInValue),
   'stored/records-cut-elsewhere': (r, n) => distinctRows(r, n, cutElsewhere),
+  'stored/records-open-control': (r, n) => distinctRows(r, n, openControl),
 };

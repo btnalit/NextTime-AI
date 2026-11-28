@@ -1,0 +1,12 @@
+diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
+--- a/packages/kernel/src/substrate/redaction/secret-values.ts
++++ b/packages/kernel/src/substrate/redaction/secret-values.ts
+@@ -2425,7 +2425,7 @@
+     if (!closed && stop < length) {
+       const atBreak = text.charAt(stop) === '\n' || text.charAt(stop) === '\r';
+       const begin = inner.lastIndexOf('-----BEGIN');
+-      if (!atBreak || (begin !== -1 && !inner.includes('-----END', begin))) return;
++      if (stop < 0 && (!atBreak || (begin !== -1 && !inner.includes('-----END', begin)))) return;
+     }
+     // Without an escape a string reads the same decoded, and the pass over the text as it is
+     // reads it — unless it was cut inside a value.
