@@ -809,7 +809,8 @@ Alpine 源——这是验收仍剩的出网点（遗留 139）。拉取或验签
   - LinkType 未声明的拒绝带上这两种类型之间（两个方向）声明了的签名（`declaredBetween`，最多 20 条）：守卫的消息与 details、存下的拒绝、`report_result` 的回答里都有，Worker 模式在拒绝那一行显示。
   - `list_allowed_operations` 的规则抽成 `readAllowedOperations`，`get_task` 也读它。
 - **代价**：`get_task` 多读一次已发布的本体（每个 Worker 一次）；上下文多至多 4,000 字符。
-- **升级影响**：没有需要手工执行的步骤，内核与智能体镜像随正常升级更换。契约快照里 `get_task` 的回答多了 `ontologyVocabulary`，旧的智能体镜像不读它。核对：在试验工作区派一个会写事实的 Worker，Task 的工具调用里 `get_task` 的回答带 `ontologyVocabulary`；Worker 写出的 LinkType 都是声明过的，`reject` 工作区里不再因为猜名字被拒。
+- **升级影响**：没有需要手工执行的步骤，内核与智能体镜像随正常升级更换。契约快照里 `get_task` 的回答多了 `ontologyVocabulary`，旧的智能体镜像不读它。
+- **可选的观察（不是验收项）**：以后有人在试验工作区派会写事实的 Worker，Task 的工具调用里 `get_task` 的回答带 `ontologyVocabulary`，Worker 写出的 LinkType 是声明过的。不要为了核对专门派一次：要登录控制台、用主机的模型。`get_task` 给谁词汇、拒绝带 `declaredBetween` 由 `worker-result.integration.test.ts` 覆盖，词汇的内容与上限由内核的 `vocabulary.test.ts` 覆盖，上下文里的三档与相关事实的上限由 platform-extension 的 `vocabulary.test.ts`、`worker.test.ts` 覆盖。
 - **回滚**（见 §5，没有迁移）：只回退代码，Worker 又不知道本体。
 - 下一次主机升级的提示要带上本节。
 
