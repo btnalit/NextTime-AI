@@ -196,6 +196,8 @@
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
+- 实现说明（遗留 967 阶段 1，#1629，2026-11-28 合入，9e67893，release.md §3.225；platform-extension）：`renderToolResult` 替掉 `truncateToolResult`，入口、交互、worker 三种模式共用：门工具结果给模型时是紧凑 JSON，数组按整项截并写明看到几项、共几项，不是完整 JSON 时才按字符截。截尾起点用行首并按内核原文的私钥正则，有与内核一致的测试（类遗留 962 的「Worker 截尾与内核遮蔽对齐」子项）。`BudgetTracker` 在 worker 模式本地累计用量，余量不足上一次调用的三倍时提醒 Worker 先上报；只读一次 `tokenBudget` 见遗留 983。
+
 ### S2.10 审批卡片与任务视图（web）
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
