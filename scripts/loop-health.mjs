@@ -64,6 +64,8 @@ const ROW_TOPIC = new RegExp(`topic=(${TOPIC_WORD})`, 'gu');
 // (the same rule pr-gate applies to verdict lines).
 const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 const topicKey = (word) => word.normalize('NFC').toLowerCase();
+// Pages of 100 read from each comment listing before the patrol stops and says so.
+const NOTE_PAGE_CAP = 50;
 
 /**
  * Topic words of the review notes in `comments` (`[{ pull, association, body }]`), each with the
@@ -285,6 +287,21 @@ export function assess(input) {
       '问作者线程卡在哪一步；等评审的直接找对应席位',
     );
   }
+  if (input.pullsUnread) {
+    add('pulls', 'no-sample', '协调线程', '读不到开着的 PR（GitHub 调用失败），沉寂的 PR 这次没查');
+  }
+  if (input.noteTopicsUnread) {
+    add('review-notes', 'no-sample', '协调线程', '读不到 PR 评论（GitHub 调用失败），可选建议的主题词这次没查');
+  }
+  if (input.noteTopicsTruncated) {
+    add(
+      'review-notes-truncated',
+      'watch',
+      '协调线程',
+      `近 ${cfg.cadence.reviewNoteWindowDays} 天的 PR 评论超过 ${NOTE_PAGE_CAP * 100} 条，主题词只查了最近的 ${NOTE_PAGE_CAP * 100} 条`,
+      '把 loop.json 的 cadence.reviewNoteWindowDays 调小',
+    );
+  }
   if (input.noteTopics !== undefined) {
     const registered = input.registeredTopics ?? new Set();
     const repeated = repeatedTopics(input.noteTopics, registered);
@@ -341,26 +358,32 @@ const ghJson = (endpoint) => JSON.parse(execFileSync('gh', ['api', endpoint], { 
 /**
  * Comments written on pull requests since `since`: conversation comments and inline review
  * comments (the two kinds GitHub lists for a whole repository; a review's summary body is not).
+ * Newest first, so that when a listing is longer than the page cap it is the oldest comments
+ * that are left unread; `truncated` says that happened.
  */
 function pullComments(slug, since) {
-  const out = [];
+  const comments = [];
+  let truncated = false;
   const read = (endpoint, pullOf) => {
-    for (let page = 1; page <= 50; page += 1) {
-      const batch = ghJson(`repos/${slug}/${endpoint}?since=${since}&per_page=100&page=${page}`);
-      for (const c of batch) out.push({ pull: pullOf(c), association: c.author_association, body: c.body });
+    for (let page = 1; page <= NOTE_PAGE_CAP; page += 1) {
+      const batch = ghJson(`repos/${slug}/${endpoint}?since=${since}&sort=created&direction=desc&per_page=100&page=${page}`);
+      for (const c of batch) comments.push({ pull: pullOf(c), association: c.author_association, body: c.body });
       if (batch.length < 100) return;
     }
+    truncated = true;
   };
   const tail = (url) => Number(/\/(\d+)$/.exec(url ?? '')?.[1]);
   read('issues/comments', (c) => (/\/pull\/\d+#/.test(c.html_url ?? '') ? tail(c.issue_url) : NaN));
   read('pulls/comments', (c) => tail(c.pull_request_url));
-  return out;
+  return { comments, truncated };
 }
 
 function collectTopics(cfg, now) {
   const since = new Date(now - cfg.cadence.reviewNoteWindowDays * DAY).toISOString();
+  const { comments, truncated } = pullComments(repoSlug(), since);
   return {
-    noteTopics: reviewNoteTopics(pullComments(repoSlug(), since)),
+    noteTopics: reviewNoteTopics(comments),
+    noteTopicsTruncated: truncated,
     registeredTopics: registeredTopics(...[STATUS, STATUS_HISTORY].map((f) => (fileSize(f) === undefined ? '' : readRepoFile(f)))),
   };
 }
@@ -409,11 +432,19 @@ function collect(args) {
   if (memoryIndex) input.memoryIndexSize = statSync(memoryIndex).size;
 
   if (args.includes('--github')) {
-    const pulls = ghJson(`repos/${repoSlug()}/pulls?state=open&per_page=100`);
-    input.quietPulls = pulls
-      .map((p) => ({ number: p.number, title: p.title, draft: p.draft, days: daysBetween(Date.parse(p.updated_at), now) }))
-      .filter((p) => p.days >= cfg.cadence.stalePrDays && !/^chore\(main\): release /.test(p.title));
-    Object.assign(input, collectTopics(cfg, now));
+    // About twenty requests in all; one that fails must not take the rest of the report with it.
+    try {
+      input.quietPulls = ghJson(`repos/${repoSlug()}/pulls?state=open&per_page=100`)
+        .map((p) => ({ number: p.number, title: p.title, draft: p.draft, days: daysBetween(Date.parse(p.updated_at), now) }))
+        .filter((p) => p.days >= cfg.cadence.stalePrDays && !/^chore\(main\): release /.test(p.title));
+    } catch {
+      input.pullsUnread = true;
+    }
+    try {
+      Object.assign(input, collectTopics(cfg, now));
+    } catch {
+      input.noteTopicsUnread = true;
+    }
   }
 
   const projectFiles = flag(args, '--project-files');

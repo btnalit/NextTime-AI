@@ -205,6 +205,14 @@ test('assess: a topic on a second pull request needs action; without the GitHub 
   assert.equal(find(settled, 'topic:error-context'), undefined);
   assert.equal(find(settled, 'review-notes').level, 'ok');
   assert.match(find(settled, 'review-notes').message, /近 30 天.*2 个主题词/);
+  // A failed GitHub read is no-sample, never ok; a listing cut at the page cap is worth a look.
+  const unread = find(assess(quiet({ noteTopicsUnread: true })), 'review-notes');
+  assert.equal(unread.level, 'no-sample');
+  assert.match(unread.message, /读不到 PR 评论/);
+  assert.equal(find(assess(quiet({ pullsUnread: true })), 'pulls').level, 'no-sample');
+  const cut = assess(quiet({ noteTopics, registeredTopics: new Set(['error-context']), noteTopicsTruncated: true }));
+  assert.equal(find(cut, 'review-notes-truncated').level, 'watch');
+  assert.match(find(cut, 'review-notes-truncated').message, /只查了最近的 5000 条/);
 });
 
 test('renderTopics: words in use with their pull requests, then words only a ledger row carries', () => {
