@@ -130,6 +130,9 @@ node packages/kernel/test/redaction-fuzz/run.mjs --write-stream-baseline    # �
 
 `mutations/*.patch` 每个对 `src` 做一处小改动（相对仓库根，`git apply` 能打上）。`--mutations` 逐个打上、跑验收、再撤回：
 每个都必须让验收失败，否则说明某种读法没被量到。补丁打不上（源码变了）报 stale，同样算失败，按新源码重做补丁。
+不带 `--mutations` 的每次运行（包括 CI 的 `redaction`）先查每个补丁都还打得上，有打不上的就直接以 1 退出、什么都不跑：
+要么是补丁 stale，要么是变异留在了源码里（手工打上没撤，或者在 `--mutations` 跑着时提交了工作区，把正打着的变异提交了进去，
+遗留 919 第 2 步出过一次）。后一种用 `git apply -R` 撤回。`--mutations` 跑着时不要在同一个检出里提交。
 
 | 补丁 | 改了什么 | 应在哪一列失败 |
 |---|---|---|
