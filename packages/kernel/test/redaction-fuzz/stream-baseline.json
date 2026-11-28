@@ -161,6 +161,18 @@
       "rows": 0,
       "atRelease": 0
     },
+    "stored/records-cut-after-value": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-cut-elsewhere": {
+      "rows": 0,
+      "atRelease": 0
+    },
+    "stored/records-cut-in-value": {
+      "rows": 0,
+      "atRelease": 0
+    },
     "stored/split-masks": {
       "rows": 0,
       "atRelease": 0

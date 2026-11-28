@@ -12,6 +12,15 @@ import { distinctRows } from '../row.js';
  *   `API_TOKEN=[redacted]"<value>\"` — what `repairSplitQuotedMasks` writes again.
  * - `stored/masked-tails`: a mask with text against it, `password="[redacted]"<value>` and its
  *   kin (legacy 950), quoted every way the value rules read.
+ * - `stored/records-…`: a tool result as pi sent it, read as a tool-call record (`Row.record`):
+ *   JSON, indented or not, with a secret in it — as a value in a line of output or as a
+ *   secret-naming key's — that pi cut before legacy 967 at a character count, the note appended
+ *   after a raw newline (`truncateToolResult`). The release's record reads the string the text ends
+ *   inside to the end of the text, the note in it, and cannot decode it (review #501 on #1629).
+ *   `cut-after-value`: cut inside the string after the value and its closing quote. `cut-in-value`:
+ *   cut inside the value, at least 8 of its characters kept — a quoted value's quote left open,
+ *   which is the tail check's (design D3), not a rewrite. `cut-elsewhere`: not cut, cut where the
+ *   string has closed, or cut inside it before the value.
  */
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -79,4 +88,127 @@ function maskedTail(r: Rng): Row {
 export const STORED_GENERATORS: Record<string, Generator> = {
   'stored/split-masks': (r, n) => distinctRows(r, n, splitMask),
   'stored/masked-tails': (r, n) => distinctRows(r, n, maskedTail),
+};
+
+/** A tool result's lines around the one with the secret: plain, quoted, escaped, not ASCII. */
+const RESULT_LINES = [
+  'HOME=/workspace',
+  'PATH=/usr/local/bin:/usr/bin',
+  '[INFO] step 1 ok',
+  'say "hi"',
+  'C:\\tmp\\out.log',
+  '完成 3 项',
+  'naïve\tcafé',
+  '',
+];
+const SECRET_NAMES = [
+  'PGPASSWORD',
+  'AWS_SECRET_ACCESS_KEY',
+  'API_TOKEN',
+  'DB_PASSWORD',
+  'GITHUB_TOKEN',
+  'client_secret',
+];
+/** What stood before the name: the start of the line, `export`, a space — or nothing between the
+ *  name and the escape before it (`\nPGPASSWORD=…` in the JSON), which an undecoded string reads
+ *  as one word. */
+const LEADS = ['', 'export ', '  '];
+const VALUE_QUOTES = ['', '"', "'"];
+const INDENTS = [undefined, 2];
+const NOTE = (omitted: number) =>
+  `\n\n[... ${omitted} more characters omitted — the full result is not shown ...]`;
+
+const someLines = (r: Rng, most: number) =>
+  Array.from({ length: int(r, most + 1) }, () => pick(r, RESULT_LINES));
+
+/**
+ * A tool result's JSON text with `value` in one string of it: `at`, where the value starts;
+ * `end`, where the value and its closing quote end (`\"` in the JSON is two characters); `close`,
+ * the string's closing quote. `line`: the value is in a line of output (`NAME=<value>`), not the
+ * whole value of a secret-naming key.
+ */
+interface ResultJson {
+  readonly json: string;
+  readonly at: number;
+  readonly end: number;
+  readonly close: number;
+  readonly line: boolean;
+}
+
+function resultJson(r: Rng, value: string, line = int(r, 4) !== 0): ResultJson {
+  if (!line) {
+    // The secret is the value of a secret-naming key: the key rule reads it.
+    const object = { config: { user: 'app', password: value, retries: 3 }, note: 'loaded' };
+    const json = JSON.stringify(object, null, pick(r, INDENTS));
+    const at = json.indexOf(value);
+    return { json, at, end: at + value.length, close: at + value.length, line };
+  }
+  const quote = pick(r, VALUE_QUOTES);
+  const secretLine = `${pick(r, LEADS)}${pick(r, SECRET_NAMES)}=${quote}${value}${quote}`;
+  const stdout = [...someLines(r, 3), secretLine, ...someLines(r, 4)].join('\n');
+  const shapes = [
+    { stdout, stderr: '', code: 0 },
+    { result: { stdout, code: 0 }, ok: true, note: 'see the log' },
+    { output: stdout, status: 'done' },
+  ];
+  const json = JSON.stringify(pick(r, shapes), null, pick(r, INDENTS));
+  const at = json.indexOf(value);
+  const end = at + value.length + JSON.stringify(quote).length - 2;
+  let close = end;
+  while (json.charAt(close) !== '"') close += json.charAt(close) === '\\' ? 2 : 1;
+  return { json, at, end, close, line };
+}
+
+/** The string's opening quote, before `at`. */
+function openOf(json: string, at: number): number {
+  let open = at;
+  while (json.charAt(open - 1) !== '"' || json.charAt(open - 2) === '\\') open -= 1;
+  return open;
+}
+
+/** `json` as pi cut it at `cut` characters, the note after it; all of it when `cut` is past it. */
+const cutAt = (json: string, cut: number): string =>
+  cut >= json.length ? json : `${json.slice(0, cut)}${NOTE(json.length - cut)}`;
+
+/** Cut inside the string, the value and its closing quote kept: the release's record reads the
+ *  value out of an undecoded string, as `\nPGPASSWORD=…` with the escape against the name. */
+function cutAfterValue(r: Rng): Row | undefined {
+  const value = secret(r);
+  const { json, end, close } = resultJson(r, value, true);
+  return { t: cutAt(json, between(r, end, close)), req: [value], record: true };
+}
+
+/** Cut inside the value, at least 8 of its characters kept; a quoted value's quote left open. */
+function cutInValue(r: Rng): Row | undefined {
+  const value = secret(r);
+  const { json, at, end } = resultJson(r, value);
+  const cut = between(r, at + 8, end - 1);
+  return {
+    t: cutAt(json, cut),
+    req: [json.slice(at, Math.min(cut, at + value.length))],
+    record: true,
+  };
+}
+
+/** Not cut; cut once the string with the value closed (between fields, inside a later string);
+ *  or cut inside it before the value. */
+function cutElsewhere(r: Rng): Row | undefined {
+  const value = secret(r);
+  const { json, at, close } = resultJson(r, value);
+  const where = int(r, 3);
+  if (where === 0) return { t: json, req: [value], record: true };
+  if (where === 1) {
+    if (close + 1 >= json.length - 1) return undefined;
+    return { t: cutAt(json, between(r, close + 1, json.length - 1)), req: [value], record: true };
+  }
+  const open = openOf(json, at);
+  if (open >= at) return undefined;
+  return { t: cutAt(json, between(r, open, at)), req: [], record: true };
+}
+
+/** Tool results read as tool-call records (`Row.record`). */
+export const RECORD_GENERATORS: Record<string, Generator> = {
+  'stored/records-cut-after-value': (r, n) => distinctRows(r, n, cutAfterValue),
+  'stored/records-cut-in-value': (r, n) => distinctRows(r, n, cutInValue),
+  'stored/records-cut-elsewhere': (r, n) => distinctRows(r, n, cutElsewhere),
 };

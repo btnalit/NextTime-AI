@@ -122,7 +122,14 @@ describe('compare: rows now shows a secret character of that before hid', () => 
       const value = hide(text);
       return { value, redactedValues: value === text ? 0 : 1 };
     };
-    return { whole: read, stream: (text) => hide(text), stored: read };
+    return {
+      whole: read,
+      stream: (text) => hide(text),
+      stored: read,
+      record: hide,
+      recordRewrite: read,
+      recordUnproven: () => false,
+    };
   };
   const rows: Row[] = [
     { t: 'token=FAKEone note', req: ['FAKEone'] },
@@ -193,6 +200,15 @@ describe('compare: rows now shows a secret character of that before hid', () => 
         throw new Error('a stored row is not streamed');
       },
       stored: (text) => ({ value: text.replace('"FAKEthree\\"', ''), redactedValues: 1 }),
+      record: () => {
+        throw new Error('a stored row is not a record');
+      },
+      recordRewrite: () => {
+        throw new Error('a stored row is not a record');
+      },
+      recordUnproven: () => {
+        throw new Error('a stored row is not a record');
+      },
     };
     const asWritten: Reader = {
       ...repairing,
@@ -203,6 +219,63 @@ describe('compare: rows now shows a secret character of that before hid', () => 
     expect(worse.info.showing).toEqual({ now: 1, before: 0 });
     const same = compare([stored], repairing, repairing, { seed: 1 });
     expect(same.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+  });
+
+  it('reads a record row as records, holding the rewrite on upgrade to its rules (review #501 on #1629)', () => {
+    const row: Row = { t: '{"stdout": "token=FAKEfour more', req: ['FAKEfour'], record: true };
+    const unread = () => {
+      throw new Error('a record row is read as a record');
+    };
+    const hide = (text: string) => text.replace('FAKEfour', MASK);
+    const keep = (text: string) => ({ value: text, redactedValues: 0 });
+    const rewrite = (to: (text: string) => string) => (text: string) => {
+      const value = to(text);
+      return { value, redactedValues: value === text ? 0 : 1 };
+    };
+    // The release: its record keeps the secret, and so does its rewrite.
+    const release: Reader = {
+      whole: unread,
+      stream: unread,
+      stored: unread,
+      record: (text) => text,
+      recordRewrite: keep,
+      recordUnproven: () => false,
+    };
+    // Stores it hidden, and rewrites the release's record to hide it.
+    const fixed: Reader = { ...release, record: hide, recordRewrite: rewrite(hide) };
+    const better = compare([row], fixed, release, { seed: 1 });
+    expect(better.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+    expect(better.records).toEqual({ twice: 0, needless: 0, uncounted: 0 });
+    expect(better.info.rewrites).toEqual({ now: 1, before: 0 });
+    expect(better.info.hidesMore).toBe(1);
+    const at = (now: Reader, before: Reader, rows = [row]) =>
+      compare(rows, now, before, { seed: 1 });
+    // Its rewrite showing what the release's rewrite hid: the stored gate.
+    const hiding: Reader = { ...release, recordRewrite: rewrite(hide) };
+    expect(at({ ...fixed, recordRewrite: keep }, hiding).showsMore.stored).toBe(1);
+    // The record it stores showing what the release's record hid: the whole gate.
+    expect(
+      at({ ...fixed, record: (text) => text }, { ...release, record: hide }).showsMore.whole,
+    ).toBe(1);
+    // A rewrite that changes what it wrote, on every upgrade again.
+    const growing: Reader = { ...fixed, recordRewrite: rewrite((text) => `${text}.`) };
+    expect(at(growing, release).records.twice).toBe(1);
+    // A rewrite that changes a record and hides nothing of the secret.
+    const other = rewrite((text) => text.replace(' more', ' [x]'));
+    const elsewhere: Reader = { ...fixed, record: (text) => hide(text).replace(' more', ' [x]') };
+    expect(at({ ...elsewhere, recordRewrite: other }, release).records.needless).toBe(1);
+    // One that hides it and the cut's note with it.
+    const cut: Row = {
+      t: `${row.t}\n\n[... 3 more characters omitted — the full result is not shown ...]`,
+      req: ['FAKEfour'],
+      record: true,
+    };
+    const toTheEnd = (text: string) => text.replace(/FAKEfour[\s\S]*$/, MASK);
+    const eating: Reader = { ...fixed, record: toTheEnd, recordRewrite: rewrite(toTheEnd) };
+    expect(at(eating, release, [cut]).records).toEqual({ twice: 0, needless: 1, uncounted: 0 });
+    // A record still showing a secret once rewritten, which the tail check does not count.
+    expect(at(release, release).records.uncounted).toBe(1);
+    expect(at({ ...release, recordUnproven: () => true }, release).records.uncounted).toBe(0);
   });
 });
 
@@ -221,7 +294,10 @@ describe('the generators', () => {
 });
 
 describe('the stored rows', () => {
-  for (const name of Object.keys(GENERATORS).filter((key) => key.startsWith('stored/'))) {
+  const storedNames = Object.keys(GENERATORS).filter(
+    (key) => key.startsWith('stored/') && !key.startsWith('stored/records-'),
+  );
+  for (const name of storedNames) {
     it(`${name}: every row stored, a mask in it, its secret after the mask`, () => {
       for (const row of (GENERATORS[name] as (typeof GENERATORS)[string])(mulberry32(7), 300)) {
         expect(row.stored).toBe(true);
@@ -237,10 +313,72 @@ describe('the stored rows', () => {
     for (const [name, generator] of Object.entries(GENERATORS)) {
       if (name.startsWith('stored/')) continue;
       expect(
-        generator(mulberry32(7), 50).some((row) => row.stored === true),
+        generator(mulberry32(7), 50).some((row) => row.stored === true || row.record === true),
         name,
       ).toBe(false);
     }
+  });
+});
+
+describe('the record rows (review #501 on #1629)', () => {
+  const NOTE =
+    /\n\n\[\.\.\. (\d+) more characters omitted — the full result is not shown \.\.\.\]$/;
+  const rows = (name: string) => (GENERATORS[name] as Generator)(mulberry32(7), 300);
+  /** The text before the note, the note's count, and whether the cut left a string open. */
+  const cutOf = (t: string) => {
+    const note = NOTE.exec(t);
+    const head = note === null ? t : t.slice(0, note.index);
+    let open = false;
+    for (let i = 0; i < head.length; i += 1) {
+      if (head[i] === '\\' && open) i += 1;
+      else if (head[i] === '"') open = !open;
+    }
+    return { head, omitted: note === null ? 0 : Number(note[1]), open };
+  };
+
+  it('cut-after-value: cut inside the string, the secret whole and closed before the cut', () => {
+    for (const row of rows('stored/records-cut-after-value')) {
+      expect(row.record).toBe(true);
+      const { head, omitted, open } = cutOf(row.t);
+      const secret = row.req?.[0] as string;
+      expect(omitted).toBeGreaterThan(0);
+      expect(open).toBe(true);
+      expect(head).toContain(secret);
+      expect(head).not.toContain(MASK);
+    }
+  });
+
+  it('cut-in-value: cut inside the value, 8 or more of its characters kept', () => {
+    for (const row of rows('stored/records-cut-in-value')) {
+      const { head, omitted, open } = cutOf(row.t);
+      const kept = row.req?.[0] as string;
+      expect(omitted).toBeGreaterThan(0);
+      expect(open).toBe(true);
+      expect(kept.length).toBeGreaterThanOrEqual(8);
+      expect(head.endsWith(kept) || head.endsWith(`${kept}\\`)).toBe(true);
+    }
+  });
+
+  it('cut-elsewhere: not cut, cut with the string closed, or cut before the value', () => {
+    const kinds = new Set<string>();
+    for (const row of rows('stored/records-cut-elsewhere')) {
+      const { head, omitted } = cutOf(row.t);
+      if (omitted === 0) {
+        kinds.add('whole');
+        expect(() => JSON.parse(row.t)).not.toThrow();
+      } else if ((row.req ?? []).length === 0) {
+        kinds.add('before');
+        expect(head).not.toContain('FAKE');
+      } else {
+        kinds.add('closed');
+        // The string the secret is in closes before the cut.
+        const secret = row.req?.[0] as string;
+        let at = head.indexOf(secret) + secret.length;
+        while (at < head.length && head[at] !== '"') at += head[at] === '\\' ? 2 : 1;
+        expect(at).toBeLessThan(head.length);
+      }
+    }
+    expect([...kinds].sort()).toEqual(['before', 'closed', 'whole']);
   });
 });
 

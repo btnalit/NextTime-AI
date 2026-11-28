@@ -410,7 +410,14 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
     const once = rescrubStoredToolCallResult(stored);
     expect(JSON.stringify(once.value)).not.toContain(SECRET);
     expect(once.redactedValues).toBe(1);
-    expect(rescrubStoredToolCallResult(once.value).redactedValues).toBe(0);
+    // The string still ends inside, the raw newline and the note after it as they were: a second
+    // rewrite (every upgrade runs one) leaves the record as it is.
+    const text = (once.value.result as { text: string }).text;
+    expect(text).toBe(
+      `${dump.slice(0, dump.indexOf('PGPASSWORD=') + 'PGPASSWORD='.length)}${REDACTED}\n\n[... 40 more characters omitted — the full result is not shown ...]`,
+    );
+    const twice = rescrubStoredToolCallResult(once.value);
+    expect(twice).toEqual({ value: once.value, redactedValues: 0 });
   });
 
   it('an arg’s secret value the result quotes is hidden though JSON escaped a character of it', () => {

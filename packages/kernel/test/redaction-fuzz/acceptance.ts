@@ -14,7 +14,11 @@ import { CORPUS, readsCiSample, settings } from './settings.js';
  *
  * 1. Not more shown than the last release (I-R1): on every generator's rows, no secret character
  *    this checkout shows that the release hid — whole text, live stream at the same cuts, rows the
- *    release stored rewritten on upgrade, and the whole reading read again. Threshold 0.
+ *    release stored rewritten on upgrade, and the whole reading read again. Threshold 0. For tool
+ *    results read as records (`Row.record`): the record each stores, the release's record rewritten
+ *    by each — and the rewrite changes a record only to hide a secret it showed, never a second
+ *    time, and leaves none showing that `scrub-raw-secrets` does not count (`Comparison.records`,
+ *    review #501 on #1629). Threshold 0.
  * 2. The real-format corpus (I-R5): what this checkout shows of the values the formats wrote, held
  *    to `corpus-baseline.json` — no more rows and no more characters than when it was taken. The
  *    design's threshold, 0 characters, is where stage 1b and stage 2 take it; each lowers the file.
@@ -68,6 +72,9 @@ const COLUMNS: [string, number, (r: Result) => string][] = [
   ],
   ['reread', 8, (r) => `${r.info.rereadChanges.now}:${r.info.rereadChanges.before}`],
   ['st-own', 8, (r) => `${r.info.storedChangesOwn.now}:${r.info.storedChangesOwn.before}`],
+  ['rec', 7, (r) => Object.values(r.records).join('/')],
+  ['rewr n:b', 11, (r) => `${r.info.rewrites.now}:${r.info.rewrites.before}`],
+  ['tu', 5, (r) => String(r.info.recordsUnproven)],
   ['count', 6, (r) => String(r.info.countDisagrees)],
   ['unal', 5, (r) => String(r.info.unaligned)],
 ];
@@ -78,9 +85,11 @@ const cell = (text: string, width: number) =>
 export function table(tag: string, results: readonly Result[]): string {
   return [
     `against ${tag}: w/s/st/rr = rows shown now, hidden then (whole/stream/stored/reread), gated at 0;`,
+    'rec = record rows the rewrite on upgrade changes twice/needlessly/leaves showing uncounted, gated at 0;',
     'str≠w = rows whose stream is not their whole text now:then, now held to stream-baseline.json.',
     'Reported: rows showing a secret now:then; hiding more now; whole output differs; stream showing',
     'more than its own whole reading now:then; reread changing; stored rewrite changing its own;',
+    'rows the release stored that the rewrite changes now:then; record rows counted 收尾未证明 now;',
     'count and text disagreeing; outputs not lined up with their input (counted as showing all).',
     COLUMNS.map(([name, width]) => cell(name, width)).join(' '),
     ...results.map((r) => COLUMNS.map(([, width, value]) => cell(value(r), width)).join(' ')),
@@ -119,6 +128,12 @@ export async function acceptance(group: string, part = 1, parts = 1): Promise<vo
               `${name}, seed ${seed}, shown now and hidden in ${run.tag}:\n${examplesOf(comparison)}`,
             )
             .toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+          expect
+            .soft(
+              comparison.records,
+              `${name}, seed ${seed}, records the rewrite on upgrade gets wrong:\n${examplesOf(comparison)}`,
+            )
+            .toEqual({ twice: 0, needless: 0, uncounted: 0 });
         }
       });
     }
@@ -157,26 +172,27 @@ export async function acceptance(group: string, part = 1, parts = 1): Promise<vo
   ).generators;
   // A run of some generators (`--generators`) leaves other groups with none: no suite for them,
   // as for the corpus above (Vitest fails a suite with no test).
-  if (names.length > 0) describe(`${label}: rows whose stream is not their whole text (I-R3 b), held to stream-baseline.json`, () => {
-    for (const name of names) {
-      it.skipIf(before === undefined || !readsCiSample(run))(name, () => {
-        const mine = results.filter((result) => result.generator === name);
-        const rows = mine.reduce((n, result) => n + result.streamDiffers.now, 0);
-        const line = streamRecorded[name];
-        expect(line, `${name} has no line in stream-baseline.json`).toBeDefined();
-        expect
-          .soft(
-            rows,
-            `${name}: rows whose stream is not their whole text; some that ${run.tag} streams as its whole:\n${JSON.stringify(
-              mine.flatMap((result) => result.examples.streamNotWhole ?? []),
-              null,
-              2,
-            )}`,
-          )
-          .toBeLessThanOrEqual(line?.rows ?? 0);
-      });
-    }
-  });
+  if (names.length > 0)
+    describe(`${label}: rows whose stream is not their whole text (I-R3 b), held to stream-baseline.json`, () => {
+      for (const name of names) {
+        it.skipIf(before === undefined || !readsCiSample(run))(name, () => {
+          const mine = results.filter((result) => result.generator === name);
+          const rows = mine.reduce((n, result) => n + result.streamDiffers.now, 0);
+          const line = streamRecorded[name];
+          expect(line, `${name} has no line in stream-baseline.json`).toBeDefined();
+          expect
+            .soft(
+              rows,
+              `${name}: rows whose stream is not their whole text; some that ${run.tag} streams as its whole:\n${JSON.stringify(
+                mine.flatMap((result) => result.examples.streamNotWhole ?? []),
+                null,
+                2,
+              )}`,
+            )
+            .toBeLessThanOrEqual(line?.rows ?? 0);
+        });
+      }
+    });
 
   afterAll(() => {
     if (results.length === 0) return;

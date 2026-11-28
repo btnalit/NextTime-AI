@@ -81,6 +81,11 @@ export function shownThrough(
   return out;
 }
 
+/** The note pi put after a tool result it cut before legacy 967 (`truncateToolResult`), at the end
+ *  of the text. */
+const CUT_NOTE =
+  /\n\n\[\.\.\. \d+ more characters omitted — the full result is not shown \.\.\.\]$/;
+
 /** The shortest piece of a secret `shownInRuns` looks for. */
 const RUN_CHARS = 8;
 
@@ -125,6 +130,15 @@ export interface Reader {
   /** A row an earlier release stored, rewritten on upgrade (the text rows of
    *  `application/platform/scrub-raw-secrets`: `turnReports`, `decisions`). */
   stored(text: string): { value: string; redactedValues: number };
+  /** A tool result's text (pi's one text part) as a tool-call record stores it: the record's
+   *  result preview (`buildToolCallRecord`). */
+  record(text: string): string;
+  /** A stored record's result preview rewritten on upgrade (`rescrubStoredToolCallResult`, the
+   *  `toolCallRecords` of `scrub-raw-secrets`). */
+  recordRewrite(text: string): { value: string; redactedValues: number };
+  /** Whether `scrub-raw-secrets` counts a stored record's result preview as 收尾未证明
+   *  (`storedToolCallResultTailUnproven`); `false` for a version without it. */
+  recordUnproven(text: string): boolean;
 }
 
 /** The module shapes a `Reader` is built from — today's and a released tag's alike. */
@@ -134,6 +148,23 @@ export interface ValuesModule {
   /** Gone once legacy 919 step 2 lands; a reader without it stores as the rest. */
   readonly repairSplitQuotedMasks?: (text: string) => { value: string; redactedValues: number };
 }
+export interface RecordModule {
+  buildToolCallRecord(input: {
+    toolCallId: string;
+    name: string | null;
+    outcome: 'done';
+    hasArgs: false;
+    result: unknown;
+    hasResult: true;
+    startedAt: null;
+    endedAt: null;
+  }): { result?: { text: string } };
+  rescrubStoredToolCallResult(content: Record<string, unknown>): {
+    value: Record<string, unknown>;
+    redactedValues: number;
+  };
+  readonly storedToolCallResultTailUnproven?: (content: Record<string, unknown>) => boolean;
+}
 export interface StreamModule {
   createSecretStreamScrubber(): {
     push(piece: string): { value: string };
@@ -141,7 +172,23 @@ export interface StreamModule {
   };
 }
 
-export function readerOf(values: ValuesModule, stream: StreamModule): Reader {
+/** The tool a record row's result came from: not one that declares its secret keys, so the
+ *  record reads it with the key rule for any tool (a secret-naming key). */
+const RECORD_TOOL = 'some_tool';
+
+/** A stored record's result preview as `scrub-raw-secrets` reads it. */
+const storedRecord = (text: string): Record<string, unknown> => ({
+  kind: 'tool_call',
+  name: RECORD_TOOL,
+  result: { text, totalChars: text.length, truncated: false },
+  redactedValues: 0,
+});
+
+export function readerOf(
+  values: ValuesModule,
+  stream: StreamModule,
+  records: RecordModule,
+): Reader {
   return {
     whole: (text) => values.scrubSecretValues(text),
     stream(text, cuts) {
@@ -165,6 +212,26 @@ export function readerOf(values: ValuesModule, stream: StreamModule): Reader {
         redactedValues: repaired.redactedValues + scrubbed.redactedValues,
       };
     },
+    record(text) {
+      const record = records.buildToolCallRecord({
+        toolCallId: 'call_1',
+        name: RECORD_TOOL,
+        outcome: 'done',
+        hasArgs: false,
+        result: { content: [{ type: 'text', text }] },
+        hasResult: true,
+        startedAt: null,
+        endedAt: null,
+      });
+      return record.result?.text ?? '';
+    },
+    recordRewrite(text) {
+      const { value, redactedValues } = records.rescrubStoredToolCallResult(storedRecord(text));
+      const result = value.result as { text: string };
+      return { value: result.text, redactedValues };
+    },
+    recordUnproven: (text) =>
+      records.storedToolCallResultTailUnproven?.(storedRecord(text)) ?? false,
   };
 }
 
@@ -204,6 +271,19 @@ export interface Comparison {
     /** Each one's whole reading read again by itself. */
     readonly reread: number;
   };
+  /** Record rows (`Row.record`) this checkout's rewrite on upgrade gets wrong (review #501 on
+   *  #1629: what it changes is known, not only counted), gated at 0 by `acceptance.ts`:
+   *  - `twice`: it changes the release's record a second time, or the record this checkout stores
+   *    — the rewrite runs on every upgrade;
+   *  - `needless`: it changes a record and hides no secret character the record showed, or drops
+   *    the cut's note line the record had (design D3: a rewrite that hides past a secret);
+   *  - `uncounted`: the rewritten record still shows a secret, and `scrub-raw-secrets` does not
+   *    count it as 收尾未证明 (`storedToolCallResultTailUnproven`) either. */
+  readonly records: {
+    readonly twice: number;
+    readonly needless: number;
+    readonly uncounted: number;
+  };
   /** Rows where some stream reading's text is not the same one's whole text, for each (the design's
    *  I-R3 (b), §8): `now` gated by `acceptance.ts`. A stream that hides more than its whole reading
    *  counts here, and in no column above: those count only what shows (review #493 on #1619, the
@@ -226,13 +306,21 @@ export interface Comparison {
     readonly rereadChanges: { readonly now: number; readonly before: number };
     /** Rows of its own the same one's stored rewrite changes again. */
     readonly storedChangesOwn: { readonly now: number; readonly before: number };
+    /** Rows the release stored that each one's rewrite on upgrade changes: the release's whole
+     *  reading, a stored row itself, the release's record of a record row. */
+    readonly rewrites: { readonly now: number; readonly before: number };
+    /** Record rows whose record, once this checkout rewrote it, `scrub-raw-secrets` counts as
+     *  收尾未证明. */
+    readonly recordsUnproven: number;
     /** Rows where `now`'s count and text disagree: changed with 0 counted, or counted unchanged. */
     readonly countDisagrees: number;
     /** Rows an output of `now` could not be lined up with its input (counted as showing all). */
     readonly unaligned: number;
   };
   /** Up to `examples` rows for each gated reading, to read; `streamNotWhole`: rows whose stream
-   *  `now` is not its whole text and `before`'s is — `now` the stream's text, `before` the whole's. */
+   *  `now` is not its whole text and `before`'s is — `now` the stream's text, `before` the whole's;
+   *  `twice`, `needless`, `uncounted` (`records`): `now` the rewritten record (or what rewriting it
+   *  again wrote), `before` the release's. */
   readonly examples: Record<string, { t: string; now: string; before: string }[]>;
 }
 
@@ -258,6 +346,8 @@ export function compare(
     streamShowsMoreThanWhole: { now: 0, before: 0 },
     rereadChanges: { now: 0, before: 0 },
     storedChangesOwn: { now: 0, before: 0 },
+    rewrites: { now: 0, before: 0 },
+    recordsUnproven: 0,
     countDisagrees: 0,
     unaligned: 0,
   };
@@ -268,6 +358,9 @@ export function compare(
     stored: [],
     reread: [],
     streamNotWhole: [],
+    twice: [],
+    needless: [],
+    uncounted: [],
   };
   const keep = options.examples ?? 3;
   const note = (kind: keyof typeof gate, t: string, a: string, b: string) => {
@@ -276,8 +369,63 @@ export function compare(
     if (list.length < keep) list.push({ t, now: a, before: b });
   };
 
+  const records = { twice: 0, needless: 0, uncounted: 0 };
+  /** A record row the rewrite gets wrong: `now` the rewritten record, `before` the release's. */
+  const wrong = (kind: keyof typeof records, t: string, a: string, b: string) => {
+    records[kind] += 1;
+    const list = examples[kind] as { t: string; now: string; before: string }[];
+    if (list.length < keep) list.push({ t, now: a, before: b });
+  };
   for (const row of rows) {
     const places = secretPlaces(row);
+    if (row.record === true) {
+      // A tool result: stored as a record by each (the whole gate), and the record the release
+      // stored rewritten on upgrade by each (the stored gate). A record is not its result with
+      // stretches masked (a value it hides inside a JSON string is written escaped), so both are
+      // read by `shownInRuns`.
+      const kept = before.record(row.t);
+      const live = now.record(row.t);
+      if (showsMore(shownInRuns(row, places, live), shownInRuns(row, places, kept))) {
+        note('whole', row.t, live, kept);
+      }
+      const stNow = now.recordRewrite(kept);
+      const stBefore = before.recordRewrite(kept);
+      const sNow = shownInRuns(row, places, stNow.value);
+      const sBefore = shownInRuns(row, places, stBefore.value);
+      if (any(sNow)) info.showing.now += 1;
+      if (any(sBefore)) info.showing.before += 1;
+      info.shownChars.now += count(sNow);
+      info.shownChars.before += count(sBefore);
+      if (stNow.value !== stBefore.value) info.differs += 1;
+      if (showsMore(sNow, sBefore)) note('stored', row.t, stNow.value, stBefore.value);
+      if (showsMore(sBefore, sNow)) info.hidesMore += 1;
+      if ((stNow.value !== kept) !== stNow.redactedValues > 0) info.countDisagrees += 1;
+      if (stNow.value !== kept) info.rewrites.now += 1;
+      if (stBefore.value !== kept) info.rewrites.before += 1;
+      const again = now.recordRewrite(stNow.value);
+      const own = now.recordRewrite(live);
+      if (
+        again.value !== stNow.value ||
+        again.redactedValues > 0 ||
+        own.value !== live ||
+        own.redactedValues > 0
+      ) {
+        wrong('twice', row.t, again.value === stNow.value ? own.value : again.value, stNow.value);
+        info.storedChangesOwn.now += 1;
+      }
+      const sKept = shownInRuns(row, places, kept);
+      const noteLost = CUT_NOTE.test(kept) && !CUT_NOTE.test(stNow.value);
+      if (stNow.value !== kept && (!showsMore(sKept, sNow) || noteLost)) {
+        wrong('needless', row.t, stNow.value, kept);
+      }
+      const unproven = now.recordUnproven(stNow.value);
+      if (unproven) info.recordsUnproven += 1;
+      if (any(sNow) && !unproven) wrong('uncounted', row.t, stNow.value, kept);
+      if (before.recordRewrite(stBefore.value).value !== stBefore.value) {
+        info.storedChangesOwn.before += 1;
+      }
+      continue;
+    }
     if (row.stored === true) {
       // A row an earlier release stored: rewritten on upgrade by each, and nothing else.
       const stNow = now.stored(row.t).value;
@@ -291,6 +439,8 @@ export function compare(
       if (stNow !== stBefore) info.differs += 1;
       if (showsMore(sNow, sBefore)) note('stored', row.t, stNow, stBefore);
       if (showsMore(sBefore, sNow)) info.hidesMore += 1;
+      if (stNow !== row.t) info.rewrites.now += 1;
+      if (stBefore !== row.t) info.rewrites.before += 1;
       if (now.stored(stNow).value !== stNow) info.storedChangesOwn.now += 1;
       if (before.stored(stBefore).value !== stBefore) info.storedChangesOwn.before += 1;
       continue;
@@ -350,6 +500,8 @@ export function compare(
     ) {
       note('stored', row.t, stNow, stBefore);
     }
+    if (stNow !== wBefore.value) info.rewrites.now += 1;
+    if (stBefore !== wBefore.value) info.rewrites.before += 1;
     if (now.stored(wNow.value).value !== wNow.value) info.storedChangesOwn.now += 1;
     if (stBefore !== wBefore.value) info.storedChangesOwn.before += 1;
 
@@ -366,5 +518,5 @@ export function compare(
       note('reread', row.t, rNow, rBefore);
     }
   }
-  return { rows: rows.length, showsMore: gate, streamDiffers, info, examples };
+  return { rows: rows.length, showsMore: gate, records, streamDiffers, info, examples };
 }
