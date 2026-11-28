@@ -296,6 +296,8 @@
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
 
+- 实现说明（遗留 965，#1627，2026-11-27 合入，c4e3299，release.md §3.224）：`changeOwnPassword`（`application/identity/credentials.ts`）在吊销 API key、其他登录会话与已签凭证的同一事务里写平台审计 `user.password_changed`，记在本人名下；载荷是登录名、是否被要求改、吊销的控制台会话个数、吊销了访问的成员身份个数（`membershipAccessRevoked`），不记密码，被拒的修改不写。字段名不能带 `Credentials` 一类词，否则 `maskSecretFields` 会把值遮成 `[redacted]`，`auth-routes.integration.test.ts` 断言载荷经 `maskSecretFields` 不变。控制台平台审计页的动作筛选（`audit-pickers.ts`）加上它，说明在 `capability-labels.ts`。身份路由的审计行「经由」为空见遗留 977。
+
 ### P-A2 使用面收口
 
 已完成，原文在 `archive/e-r-s1-s9/development-tasks.md` 同名一节。
