@@ -2086,6 +2086,10 @@ function composeWithTailCheck(
   let first: Scrubbed<string>;
   if (checked.marks.length === 0) {
     first = withFloor(text, SECRET_VALUE_PATTERNS, floor, 0);
+    // The rules kept `text` as it is: the read once more is of `text`, which the check has just
+    // read and marked nothing in (no marks, no tails). Most short parts end here — a JSON text's
+    // strings are read one by one (legacy 916) — so the second read is not made.
+    if (first.value === text) return first;
   } else {
     const read = floorReading(text, SECRET_VALUE_PATTERNS, floor, 0, true);
     const masker = new TailMasker();

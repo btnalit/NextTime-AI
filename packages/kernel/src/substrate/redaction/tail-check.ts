@@ -582,8 +582,15 @@ export interface TailMarks {
 
 const LINE_BREAK = /\r?\n/g;
 
+/** Any ASCII letter (no `g`: `test` keeps no state). */
+const ANY_LETTER = /[A-Za-z]/;
+
 /** The check over a whole text, line by line. */
 export function tailMarks(text: string): TailMarks {
+  // Every name `NAME` matches holds an ASCII letter, and a line is part of the text: a text
+  // without one has no name on any line, so nothing to mark. A JSON text's strings and the runs
+  // between them are read one by one (legacy 916), most of them `\n` or `,`.
+  if (!ANY_LETTER.test(text)) return { marks: [], tails: 0, tailChars: 0 };
   const marks: TailMark[] = [];
   let tails = 0;
   let tailChars = 0;
