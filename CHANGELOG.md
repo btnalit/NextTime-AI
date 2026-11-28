@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.71.0](https://github.com/btnalit/NextTime-AI/compare/v0.70.1...v0.71.0) (2026-11-28)
+
+
+### Features
+
+* **kernel:** insert an Operation row only as a draft (legacy 484 step 2, core 0065) ([#1637](https://github.com/btnalit/NextTime-AI/issues/1637)) ([2e83e05](https://github.com/btnalit/NextTime-AI/commit/2e83e05807eee5db609e7c7bde88487efbf36584))
+* **loop:** 可选的评审建议只记在 PR 评论里，主题词第二次出现由巡检报出 ([#1642](https://github.com/btnalit/NextTime-AI/issues/1642)) ([e598caf](https://github.com/btnalit/NextTime-AI/commit/e598cafc963050b6eed1e2845beaae490c937766))
+* **web:** name the definition an older pending request was made under (legacy 216) ([#1608](https://github.com/btnalit/NextTime-AI/issues/1608)) ([e1d995e](https://github.com/btnalit/NextTime-AI/commit/e1d995eb903e844a526982c71f5f7844cfdfbf86))
+* **web:** show what a published Skill version was published on (legacy 539) ([#1569](https://github.com/btnalit/NextTime-AI/issues/1569)) ([7f39bfa](https://github.com/btnalit/NextTime-AI/commit/7f39bfa1a13d0eaf968cedd819f24f5f0a6a4719))
+
+
+### Bug Fixes
+
+* **gatekeeper-base:** mask the gate's own injected credential in answers (legacy 961) ([#1618](https://github.com/btnalit/NextTime-AI/issues/1618)) ([8e0532c](https://github.com/btnalit/NextTime-AI/commit/8e0532c3bb15e7d7a2f1e887fe49253d4ad13385))
+* **gates:** docker gate lists return a summary per container, labels only in container.inspect (legacy 966) ([#1625](https://github.com/btnalit/NextTime-AI/issues/1625)) ([1e389fd](https://github.com/btnalit/NextTime-AI/commit/1e389fd5d8d82cb108f3744de5ee9620b18fb60a))
+* **kernel:** a self-service password change writes a platform audit row (legacy 965) ([#1627](https://github.com/btnalit/NextTime-AI/issues/1627)) ([c4e3299](https://github.com/btnalit/NextTime-AI/commit/c4e3299d7f7d6ab3e580c8d84b40196060d9e353))
+* **kernel:** a value that does not close cleanly is hidden to the line end, in the whole text and the stream (redaction boundary stage 1b) ([#1631](https://github.com/btnalit/NextTime-AI/issues/1631)) ([2e3455b](https://github.com/btnalit/NextTime-AI/commit/2e3455b6a69337d80db48427a5f9f6c6bfb80d87))
+* **kernel:** read an escaped-quote value on to the end of the word closed right against it (legacy 948) ([#1600](https://github.com/btnalit/NextTime-AI/issues/1600)) ([673d3cc](https://github.com/btnalit/NextTime-AI/commit/673d3ccef20f814002c0571e114cc2670756f444))
+* **kernel:** refuse a nested goal step instead of starting it silently (legacy 981 step 1) ([#1635](https://github.com/btnalit/NextTime-AI/issues/1635)) ([cd9e181](https://github.com/btnalit/NextTime-AI/commit/cd9e181f90e391f210f9c20e099422bcf83e86ef))
+* **kernel:** tell a Task's own Worker which LinkTypes its Facts may use (legacy 968) ([#1633](https://github.com/btnalit/NextTime-AI/issues/1633)) ([b3824b0](https://github.com/btnalit/NextTime-AI/commit/b3824b034d7441c18be83b25be75672344e89791))
+* **platform-extension:** gate tool results as compact JSON cut by whole items; Worker told to report before its budget runs out (legacy 967 stage 1) ([#1629](https://github.com/btnalit/NextTime-AI/issues/1629)) ([9e67893](https://github.com/btnalit/NextTime-AI/commit/9e678936a64c400c295b08668cab7d0028ab8239))
+
 ## [0.70.1](https://github.com/btnalit/NextTime-AI/compare/v0.70.0...v0.70.1) (2026-11-27)
 
 
