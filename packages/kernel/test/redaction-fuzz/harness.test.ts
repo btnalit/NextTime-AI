@@ -221,6 +221,38 @@ describe('compare: rows now shows a secret character of that before hid', () => 
     expect(same.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
   });
 
+  it('reads the upgrade rewrite of what the release wrote by runs where it does not line up (review #501 on #1639)', () => {
+    // The release kept the value after a mask, then its rewrite on upgrade wrote it whole
+    // (`[redacted]"…\"` to `\"[redacted]\"`), which is not what it read with stretches masked.
+    const row: Row = { t: 'run --password x"FAKEfourVALUE\\" done', req: ['FAKEfourVALUE'] };
+    const reader = (whole: (text: string) => string, stored: (text: string) => string): Reader => {
+      const read = (f: (text: string) => string) => (text: string) => {
+        const value = f(text);
+        return { value, redactedValues: value === text ? 0 : 1 };
+      };
+      return {
+        whole: read(whole),
+        stream: whole,
+        stored: read(stored),
+        record: whole,
+        recordRewrite: read(whole),
+        recordUnproven: () => false,
+      };
+    };
+    const release = reader(
+      (text) => text.replace('x"', `${MASK}"`),
+      (text) => text.replace(`${MASK}"FAKEfourVALUE\\"`, `\\"${MASK}\\"`),
+    );
+    const leaving = reader(
+      (text) => text.replace('x"FAKEfourVALUE\\" done', MASK),
+      (text) => text,
+    );
+    const worse = compare([row], leaving, release, { seed: 1 });
+    expect(worse.showsMore).toEqual({ whole: 0, stream: 0, stored: 1, reread: 0 });
+    const same = compare([row], release, release, { seed: 1 });
+    expect(same.showsMore).toEqual({ whole: 0, stream: 0, stored: 0, reread: 0 });
+  });
+
   it('reads a record row as records, holding the rewrite on upgrade to its rules (review #501 on #1629)', () => {
     const row: Row = { t: '{"stdout": "token=FAKEfour more', req: ['FAKEfour'], record: true };
     const unread = () => {

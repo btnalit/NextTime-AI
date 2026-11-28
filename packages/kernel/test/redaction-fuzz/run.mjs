@@ -24,7 +24,9 @@
  * Vitest with vitest.config.ts beside this file. Exit status: Vitest's; with --mutations, 0 only
  * when every mutation failed the run — type-checked, every test file loaded, the harness passed,
  * and an acceptance test failed on an assertion; a patch that does not apply is stale, one that
- * breaks the build or the harness is broken, and both count as not failing it.
+ * breaks the build or the harness is broken, and both count as not failing it. Without
+ * --mutations, a patch that does not apply fails the run before anything is read (exit 1): a
+ * mutation left in the sources, or a stale one.
  */
 import { spawnSync } from 'node:child_process';
 import {
@@ -239,6 +241,16 @@ function patches(selected) {
   return wanted;
 }
 
+/** The mutations that do not apply to the sources as they are (`git apply --check`): stale, or one
+ *  left in them — applied by hand, or committed while a `--mutations` run had it applied, so its
+ *  change is already in and its patch cannot apply again (it happened once, legacy 919 step 2).
+ *  Every run checks them first, so CI fails on a mutation committed as code. */
+function unappliable() {
+  return patches().filter(
+    (name) => !git(['apply', '--check', join(MUTATIONS, `${name}.patch`)]).ok,
+  );
+}
+
 /** Each mutation applied in turn: the run must fail under it. The sources are put back after each. */
 function mutate(names, env) {
   if (names.length === 0) throw new Error('no mutations to run');
@@ -387,6 +399,15 @@ function main() {
     console.log(`generators:\n${names.join('\n')}`);
     console.log(`mutations:\n${patches().join('\n')}`);
     return 0;
+  }
+  if (options.mutations === undefined) {
+    const left = unappliable();
+    if (left.length > 0) {
+      console.error(
+        `mutations/ that do not apply to src: ${left.join(', ')} — one left in the sources (taken back with git apply -R), or stale (rebuilt on the sources as they are); README.md §变异`,
+      );
+      return 1;
+    }
   }
   const tag = options.tag ?? lastRelease();
   baseline(tag);
