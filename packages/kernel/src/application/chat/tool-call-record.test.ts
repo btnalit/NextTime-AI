@@ -338,14 +338,14 @@ describe('legacy 819 — reading stops, a secret never shows', () => {
 });
 
 describe('review #493 on #1571 — a key on its own line of a tool’s JSON output', () => {
-  /** A platform API key as minted before legacy 906, and with its prefix. Synthetic —
-   *  `.gitleaks.toml` allows `abcdefghijklmnopqrstuvwxyz`. */
+  /** A platform API key with its prefix (legacy 906), and the bare shape keys were minted in
+   *  before it. Synthetic — `.gitleaks.toml` allows `abcdefghijklmnopqrstuvwxyz`. */
   const OLD_KEY = 'FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
   const KEY = `ntk_${OLD_KEY}`;
 
   it('is hidden in the live result and in the record — `\\n` before it is a line break', () => {
     // A Handle the same way (review #501 on #1571).
-    for (const key of [KEY, OLD_KEY, HANDLE]) {
+    for (const key of [KEY, HANDLE]) {
       // `cat` of a file holding only the key: the result's text part is JSON, so the line break
       // before the key reaches the scrub as `\n`.
       const result = textResult(JSON.stringify({ stdout: `line1\n${key}\n`, code: 0 }));
@@ -355,6 +355,15 @@ describe('review #493 on #1571 — a key on its own line of a tool’s JSON outp
       const stored = record({ result, hasResult: true });
       expect(stored.result?.text).toBe(JSON.stringify({ stdout: `line1\n${REDACTED}\n`, code: 0 }));
     }
+  });
+
+  it('the bare shape on its own is no key any more (legacy 906 step 2): kept live and in the record', () => {
+    // Every key minted in it is rotated; what is left of the shape is any 32 bytes in base64url.
+    const text = JSON.stringify({ stdout: `line1\n${OLD_KEY}\n`, code: 0 });
+    const live = redactToolResult(textResult(text), 'bash');
+    expect(live.value).toEqual(textResult(text));
+    expect(live.redactedValues).toBe(0);
+    expect(record({ result: textResult(text), hasResult: true }).result?.text).toBe(text);
   });
 });
 

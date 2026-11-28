@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GENERATORS } from './generators/index.js';
 import { type Comparison, compare } from './measure.js';
-import { baselineAt, current, released } from './readers.js';
+import { baselineAt, current, releaseLessExceptions, released } from './readers.js';
 import { mulberry32 } from './rng.js';
 import { CORPUS, readsCiSample, settings } from './settings.js';
 
@@ -13,7 +13,8 @@ import { CORPUS, readsCiSample, settings } from './settings.js';
  * so that Vitest reads the groups side by side:
  *
  * 1. Not more shown than the last release (I-R1): on every generator's rows, no secret character
- *    this checkout shows that the release hid — whole text, live stream at the same cuts, rows the
+ *    this checkout shows that the release hid — the release read without the rules the floor
+ *    names as its exceptions (`FLOOR_EXCEPTIONS`; readers.ts `withoutFloorExceptions`) — whole text, live stream at the same cuts, rows the
  *    release stored rewritten on upgrade, and the whole reading read again. Threshold 0. For tool
  *    results read as records (`Row.record`): the record each stores, the release's record rewritten
  *    by each — and the rewrite changes a record only to hide a secret it showed, never a second
@@ -85,6 +86,9 @@ const cell = (text: string, width: number) =>
 export function table(tag: string, results: readonly Result[]): string {
   return [
     `against ${tag}: w/s/st/rr = rows shown now, hidden then (whole/stream/stored/reread), gated at 0;`,
+    `${tag} read without the floor's exceptions (FLOOR_EXCEPTIONS; rules taken out: ${
+      [...releaseLessExceptions].map(([list, n]) => `${list} ${n}`).join(', ') || 'none'
+    });`,
     'rec = record rows the rewrite on upgrade changes twice/needlessly/leaves showing a secret, gated at 0;',
     'str≠w = rows whose stream is not their whole text now:then, now held to stream-baseline.json.',
     'Reported: rows showing a secret now:then; hiding more now; whole output differs; stream showing',

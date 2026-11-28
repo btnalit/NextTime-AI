@@ -1,11 +1,12 @@
 diff --git a/packages/kernel/src/substrate/redaction/secret-values.ts b/packages/kernel/src/substrate/redaction/secret-values.ts
-index d0f458dd..10fa1906 100644
 --- a/packages/kernel/src/substrate/redaction/secret-values.ts
 +++ b/packages/kernel/src/substrate/redaction/secret-values.ts
-@@ -854,5 +854,5 @@ export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
- export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
-   SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY).map(
--    (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
-+    (valuePattern) => (valuePattern === NAMED_VALUES ? NAMED_VALUES : valuePattern),
-   );
+@@ -850,7 +850,7 @@
+  * such a value in that history is counted by row id (`PLATFORM_KEY_SHAPE_PATTERNS`), never masked.
+  */
+ export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] = SECRET_VALUE_PATTERNS.map(
+-  (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
++  (valuePattern) => (valuePattern === NAMED_VALUES ? NAMED_VALUES : valuePattern),
+ );
  
+ /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and

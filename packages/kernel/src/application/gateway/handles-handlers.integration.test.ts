@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HandleWire, Role, SessionKind } from '@nexttime/shared';
@@ -50,16 +50,6 @@ const DATABASE_URL = process.env.DATABASE_URL;
 /** A FAKE Handle-shaped JWT (the shape the high-confidence detector names; signs nothing). */
 const FAKE_HANDLE_TOKEN =
   'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
-/** A key minted as `generateApiKey` minted a platform API key before legacy 906 (32 random bytes,
- *  base64url, no prefix) — made
- *  at run time and never used, so no real key is written down. Re-drawn in the rare case it has
- *  none of a digit, `-` and `_`, which the detector does not claim to catch. */
-function generateApiKeyLike(): string {
-  for (;;) {
-    const key = randomBytes(32).toString('base64url');
-    if (/[0-9_-]/.test(key)) return key;
-  }
-}
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
@@ -704,14 +694,12 @@ describe.runIf(DATABASE_URL !== undefined)('list_handles / revoke_handle (integr
 
     it('a note that looks like a credential is refused (credentials_in_text), one over 200 (invalid params), before anything is written — the refusal never echoes it', async () => {
       // Pasted into the note, each would be handed to every owner reading the list: a Handle; the
-      // platform API key a person or service account signs in with, minted before its prefix
-      // (review #501 on #1549 — none to know it by) and since (legacy 906); and a `password: …`
-      // the audit copy of the call would redact.
-      const apiKey = generateApiKeyLike();
+      // platform API key a person or service account signs in with (legacy 906 — the bare shape
+      // keys were minted in before their prefix is no key any more, legacy 906 step 2); and a
+      // `password: …` the audit copy of the call would redact.
       const prefixedKey = generateApiKey();
       const pasted: readonly (readonly [note: string, secret: string])[] = [
         [`采集器 ${FAKE_HANDLE_TOKEN}`, FAKE_HANDLE_TOKEN.slice(0, 12)],
-        [`采集器的 key ${apiKey}`, apiKey.slice(0, 12)],
         [`采集器的新 key ${prefixedKey}`, prefixedKey.slice(4, 16)],
         ['采集器 password: FAKEabcdefghijklmnopqrstuvwxyz', 'FAKEabcdefgh'],
       ];

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { STREAM_HOLD_MAX_CHARS } from '../../src/governance/redaction/secret-stream.js';
-import { namesASecretValue } from '../../src/substrate/redaction/secret-values.js';
+import {
+  FLOOR_EXCEPTIONS,
+  namesASecretValue,
+} from '../../src/substrate/redaction/secret-values.js';
 import { CORPUS, GENERATORS } from './generators/index.js';
 import { SECRET_NAMES } from './generators/real-formats.js';
 import {
@@ -14,8 +17,10 @@ import {
   shownInRuns,
   shownThrough,
 } from './measure.js';
+import { baselineAt, releaseLessExceptions, released, withoutFloorExceptions } from './readers.js';
 import { mulberry32 } from './rng.js';
 import { type Generator, type Row, secretPlaces } from './row.js';
+import { settings } from './settings.js';
 
 /** The acceptance run's own machinery: what it counts as shown, and what the generators write. */
 
@@ -538,4 +543,48 @@ describe('the real-format corpus', () => {
       }
     }
   });
+});
+
+describe("the release, read without the floor's exceptions (legacy 906 step 2)", () => {
+  const exception = FLOOR_EXCEPTIONS[0];
+  if (exception === undefined) throw new Error('FLOOR_EXCEPTIONS names one rule');
+  const same = { pattern: new RegExp(exception.pattern.source, exception.pattern.flags) };
+  const other = { pattern: /other/g };
+
+  it('takes out each rule with an exception’s expression, from the lists it reads, in place', () => {
+    const unflagged = { pattern: new RegExp(exception.pattern.source) };
+    const values = [other, same, unflagged];
+    const stored = [other, unflagged];
+    const module = { SECRET_VALUE_PATTERNS: values, STORED_REWRITE_SECRET_PATTERNS: stored };
+    expect(withoutFloorExceptions(module, 'f.ts')).toEqual({ 'f.ts SECRET_VALUE_PATTERNS': 1 });
+    // The same arrays, which the release's own functions read: the rest kept, in order. A rule
+    // with the expression but not its flags is another rule, and stays.
+    expect(module.SECRET_VALUE_PATTERNS).toBe(values);
+    expect(values).toEqual([other, unflagged]);
+    expect(stored).toEqual([other, unflagged]);
+    expect(withoutFloorExceptions({}, 'none.ts')).toEqual({});
+  });
+
+  // The release's sources are there under `run.mjs` (CI's `redaction`), not in a Vitest run by
+  // hand without them.
+  const { tag } = settings();
+  it.skipIf(!baselineAt(tag).present)(
+    `${tag} is read without the bare key shape, in its own list and its floor's, and nothing else`,
+    async () => {
+      const reader = await released(tag);
+      expect(Object.fromEntries(releaseLessExceptions)).toEqual({
+        [`${tag} secret-values.ts SECRET_VALUE_PATTERNS`]: 1,
+        [`${tag} secret-values-v0.70.0.ts SECRET_VALUE_PATTERNS`]: 1,
+      });
+      // What only that rule hid, the release now shows in every reading; what another rule hides,
+      // it still hides.
+      const bare = 'key FAKEbareShapeOnly0123456789abcdefghijklmnop';
+      expect(bare.length - 'key '.length).toBe(43);
+      expect(reader.whole(bare)).toEqual({ value: bare, redactedValues: 0 });
+      expect(reader.stream(bare, [5, 20])).toBe(bare);
+      expect(reader.stored(bare).value).toBe(bare);
+      const prefixed = 'key ntk_FAKE0123456789abcdefghijklmnopqrstuvwxyzXYZ';
+      expect(reader.whole(prefixed).value).toBe('key [redacted]');
+    },
+  );
 });

@@ -96,10 +96,11 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *   - `auditPayloads`: any audit row whose payload holds a value the value patterns would now hide
  *     (`findSuspectedSecrets`, without the field-name rule: a payload's own fields —
  *     `credentialReview`, `suspectedSecretValues` — are named after secrets) — a params copy
- *     written before legacy 180, a platform API key's shape written before legacy 168's review, or
- *     a value only shaped like one (a base64url digest). Append-only like `auditResults`, so the
- *     count never clears; an `action_request.complete` / `.fail` row can be in both. What to act on
- *     is `liveApiKeys` below;
+ *     written before legacy 180, say. A pre-prefix platform API key's bare shape is no longer one
+ *     of those values (legacy 906 step 2): a row holding one is found only if the key is still
+ *     issued (`liveApiKeys` below). Append-only like `auditResults`, so the count never clears; an
+ *     `action_request.complete` / `.fail` row can be in both. What to act on is `liveApiKeys`
+ *     below;
  *   - `gateCallObservations`: an Observation of a Worker's gate call (Activity kind
  *     `worker_gate_call`) written before legacy 237, which kept the gate's result as it came — one
  *     the rule it is now kept by would hide something in; a row written since is marked as that

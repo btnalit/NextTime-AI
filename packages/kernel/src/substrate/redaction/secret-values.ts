@@ -35,7 +35,8 @@ import { type Segment, TailMasker, tailChecked, tailMarks } from './tail-check.j
  *   - a PEM private key; an `Authorization` / `Cookie` header's value (the rest of the line);
  *   - a compact JWT (a Handle is one); a `Bearer`/`Basic` credential;
  *   - a vendor key with a well-known prefix; a platform API key (`ntk_` and 43 base64url
- *     characters, or the 43 characters alone for one minted before the prefix);
+ *     characters; the 43 characters alone, as keys were minted before the prefix, no longer since
+ *     legacy 906 step 2);
  *   - the value of an upper-case env assignment whose name names a secret anywhere (`PGPASSWORD=`,
  *     `CAPABILITY_HANDLE=`, quoted or not);
  *   - the value of a `name: value` / `name=value` whose name's last word names a secret (YAML,
@@ -620,14 +621,13 @@ const PREFIXED_PLATFORM_KEY: ValuePattern = {
  * a line break, not part of the run) — not after a URL-encoded byte, which may stand for the `/`
  * or `+` this shape is not taken after. Each start reads at most 43 characters, so it is linear.
  *
- * Hidden, never refused: any other 32 bytes in base64url (a SHA-256 digest, an Ed25519 public
- * key's JWK `x`, a random id) has the same shape, so this is in `SECRET_VALUE_PATTERNS` only — such
- * a value is masked wherever values are scrubbed (the accepted over-redaction), and not in
- * `HIGH_CONFIDENCE_SECRET_PATTERNS`, where it would refuse a call outright.
- *
- * Kept while keys minted before the prefix are still issued: they authenticate as before, and
- * without this they would be written down as they are again. Dropped once the host's old keys are
- * rotated (legacy 906, second step); only then does a digest of this shape stop being hidden.
+ * In no scrub set since legacy 906 step 2: any other 32 bytes in base64url (a SHA-256 digest, an
+ * Ed25519 public key's JWK `x`, a random id) has the same shape, and with the keys minted before
+ * the prefix rotated out, hiding it hid only those. v0.70.0's floor had it in its list, and the
+ * floor leaves it out by name (`FLOOR_EXCEPTIONS`). What it still does is find such a key in rows
+ * already stored, by its hash against the keys issued (`platformApiKeys`, scrub-raw-secrets'
+ * `liveApiKeys`), and count the rows of its shape there (`PLATFORM_KEY_SHAPE_PATTERNS`): a
+ * comparison, never a mask.
  */
 const MINTED_PLATFORM_KEY: ValuePattern = {
   pattern: new RegExp(
@@ -831,7 +831,6 @@ export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
   // Before the vendor rule (review #501 on #1571): a key's random body can spell `-sk-` and 16
   // more, and the vendor rule, run first, hid only that tail and left the rest of the key.
   PREFIXED_PLATFORM_KEY,
-  MINTED_PLATFORM_KEY,
   VENDOR_KEY,
   // `PGPASSWORD=…`, `password: …`, `--password …`: the three name rules, read together.
   NAMED_VALUES,
@@ -842,23 +841,20 @@ export const SECRET_VALUE_PATTERNS: readonly SecretPattern[] = [
 ];
 
 /**
- * `SECRET_VALUE_PATTERNS` but a pre-prefix platform API key standing alone (`MINTED_PLATFORM_KEY`;
- * a prefixed key, `PREFIXED_PLATFORM_KEY`, is rewritten like any other credential): what a
- * one-way rewrite of rows already stored hides (application/platform/scrub-raw-secrets — historical
- * Turn reports, agent Decisions, tool-call records; legacy 168 review). The key's shape is any 32
- * bytes in base64url, so masking it there would lose every digest and public key in that history for
- * good: such a value is counted by row id instead (`PLATFORM_KEY_SHAPE_PATTERNS`), for the keys
- * still valid among them to be found and rotated. What is written from now on is masked by the full
- * set. Its name rules read one thing more, which only rows an earlier release wrote hold: a quoted
- * value's mask with the rest of its word kept after it (`STORED_NAMED_VALUES`; legacy 937).
+ * `SECRET_VALUE_PATTERNS` for a one-way rewrite of rows already stored
+ * (application/platform/scrub-raw-secrets — historical Turn reports, agent Decisions, tool-call
+ * records; legacy 168 review). Its name rules read one thing more, which only rows an earlier
+ * release wrote hold: a quoted value's mask with the rest of its word kept after it
+ * (`STORED_NAMED_VALUES`; legacy 937). Until legacy 906 step 2 it also left out what the full set
+ * then had and this never did, a pre-prefix platform API key's bare shape (`MINTED_PLATFORM_KEY`):
+ * such a value in that history is counted by row id (`PLATFORM_KEY_SHAPE_PATTERNS`), never masked.
  */
-export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
-  SECRET_VALUE_PATTERNS.filter((valuePattern) => valuePattern !== MINTED_PLATFORM_KEY).map(
-    (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
-  );
+export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] = SECRET_VALUE_PATTERNS.map(
+  (valuePattern) => (valuePattern === NAMED_VALUES ? STORED_NAMED_VALUES : valuePattern),
+);
 
 /** Only a pre-prefix platform API key standing alone — what a rewrite of stored rows leaves and
- *  counts. */
+ *  counts; no scrub set hides it (legacy 906 step 2). */
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
 
 /** `[redacted]"…\"`: a quoted value written with `\"` that the value patterns split before they
@@ -953,9 +949,9 @@ export function platformApiKeys(text: string): string[] {
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
  * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
  * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
- * `Bearer` value; nor a platform API key minted before the prefix, standing alone
- * (`MINTED_PLATFORM_KEY`): its shape is any 32 random bytes in base64url — a SHA-256 digest, an
- * Ed25519 public key's JWK `x` — so a call that names one by its digest would be refused (legacy
+ * `Bearer` value; nor, as in no other set, a platform API key minted before the prefix, standing
+ * alone (`MINTED_PLATFORM_KEY`): its shape is any 32 random bytes in base64url — a SHA-256 digest,
+ * an Ed25519 public key's JWK `x` — so a call that names one by its digest would be refused (legacy
  * 168 review). For refusing content outright (an
  * observe-class Operation's params, legacy 175), where every other pattern is only recorded.
  */
@@ -1886,11 +1882,36 @@ function releasedPasses(patterns: readonly released.ValuePattern[], readFrom: nu
   );
 }
 
-/** v0.70.0's list for each list it had (`withFloor`). */
-const FLOORS = new Map<readonly SecretPattern[], readonly released.ValuePattern[]>([
-  [SECRET_VALUE_PATTERNS, released.SECRET_VALUE_PATTERNS],
-  [STORED_REWRITE_SECRET_PATTERNS, released.STORED_REWRITE_SECRET_PATTERNS],
-]);
+/**
+ * The rules of v0.70.0's lists the floor does not hold these to, by name — the floor's only
+ * exceptions, each a decision of its own (secret-values.test.ts pins the list):
+ *   - its bare shape of a platform API key minted before the prefix (`PLATFORM_KEY_SHAPE_PATTERNS`,
+ *     the one rule that list holds; legacy 906 step 2, coordinator 2026-11-28): any 32 bytes in
+ *     base64url — a digest, a public key — have it, and the keys it was for were rotated out.
+ */
+export const FLOOR_EXCEPTIONS: readonly released.ValuePattern[] = [
+  ...released.PLATFORM_KEY_SHAPE_PATTERNS,
+];
+
+/** v0.70.0's list for each list it had, but its `FLOOR_EXCEPTIONS` (`withFloor`). */
+const FLOORS = new Map<readonly SecretPattern[], readonly released.ValuePattern[]>(
+  (
+    [
+      [SECRET_VALUE_PATTERNS, released.SECRET_VALUE_PATTERNS],
+      [STORED_REWRITE_SECRET_PATTERNS, released.STORED_REWRITE_SECRET_PATTERNS],
+    ] as const
+  ).map(([patterns, floor]) => [
+    patterns,
+    floor.filter((valuePattern) => !FLOOR_EXCEPTIONS.includes(valuePattern)),
+  ]),
+);
+
+/** The floor `withFloor` reads `patterns` with (`FLOORS`), if it has one — for its tests. */
+export function floorOf(
+  patterns: readonly SecretPattern[],
+): readonly released.ValuePattern[] | undefined {
+  return FLOORS.get(patterns);
+}
 
 /** `text` read by `patterns` and by `floor`, v0.70.0's: a character either hides is hidden
  *  (legacy 939). Most text one leaves as it is, or both read alike: that reading. Else each
@@ -2008,7 +2029,7 @@ export function floorReadSpans(text: string, from = 0): { start: number; end: nu
   const spans: { start: number; end: number }[] = [];
   let runs: Run[] = text === '' ? [] : [{ at: 0, length: text.length, first: 0, end: text.length }];
   let out = text;
-  for (const pass of releasedPasses(released.SECRET_VALUE_PATTERNS, from)) {
+  for (const pass of releasedPasses(FLOORS.get(SECRET_VALUE_PATTERNS) ?? [], from)) {
     const matches = pass(out);
     if (matches.length === 0) continue;
     let run = 0;
