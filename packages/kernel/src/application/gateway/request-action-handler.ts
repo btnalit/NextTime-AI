@@ -477,7 +477,8 @@ async function runObserve(
 
 /** What a phase-2 continuation resolves to; the result returned to the caller is `{id, ...this}`,
  *  key order kept (`id`, `status`, `failureKind`, then the rest): the Worker's tool shows it as
- *  pretty JSON cut to a length, and the console reads a cut preview by those leading fields
+ *  compact JSON, cut inside `data` when it is long (legacy 967, platform-extension
+ *  `modes/tool-result.ts`), and the console reads a preview cut short by those leading fields
  *  (web `lib/action-outcome`). */
 interface ExecutionOutcome {
   readonly status: ActionRequestStatus;

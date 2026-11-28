@@ -7,12 +7,10 @@ import { WorkerResultContractSchema, namesASecretField } from '@nexttime/shared'
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError, refusalText } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import {
-  type AllowedOperationWire,
-  gateToolDescription,
-  gateToolName,
-  truncateToolResult,
-} from './gate-tools.js';
+import { BUDGET_HINT_TEXT, BudgetTracker } from './budget.js';
+import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
+import { paramNames, renderToolResult } from './tool-result.js';
 import { ToolCallReporter } from './worker-tool-calls.js';
 
 /**
@@ -33,8 +31,11 @@ import { ToolCallReporter } from './worker-tool-calls.js';
  * to wait for.
  *
  * S8 W3-K1 (leftover 75 first half, docs/STATUS.md §4 row 75): every gate tool result this mode
- * returns to the model goes through `gate-tools.ts`'s `truncateToolResult` — a real inventory-scan
- * Worker's own raw output alone burned ~120k token (59% of one Task's budget) with no cap.
+ * returns to the model is capped — a real inventory-scan Worker's own raw output alone burned ~120k
+ * token (59% of one Task's budget) with no cap. Legacy 967 stage 1: it goes through
+ * `tool-result.ts`'s `renderToolResult` — compact JSON, cut by whole items with a note line — and
+ * the model is told to report what it has once the Task's token budget is nearly used up
+ * (`budget.ts`), a notice appended last with the cache breakpoint kept on the history before it.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -58,6 +59,7 @@ function buildGateTool(
   usedNames: Set<string>,
 ): ToolDefinition {
   const { name, label } = gateToolName(op, usedNames);
+  const narrowingParams = paramNames(op.operation.params_schema);
 
   return {
     name,
@@ -93,11 +95,10 @@ function buildGateTool(
         // executed while the approval landed seconds later. A Worker Handle has no tool to read an
         // ActionRequest's later status (`get_action` is human-only, operator role), so the only
         // truthful summary cites the id and defers to the ActionRequest.
-        const simulateText = truncateToolResult(
+        const simulateText =
           result.simulate !== undefined
-            ? JSON.stringify(result.simulate, null, 2)
-            : '(no simulated effect reported)',
-        );
+            ? renderToolResult(result.simulate)
+            : '(no simulated effect reported)';
         const actionRequestId = typeof result.id === 'string' ? result.id : 'unknown';
         return {
           content: [
@@ -111,7 +112,7 @@ function buildGateTool(
       }
 
       return {
-        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
+        content: [{ type: 'text', text: renderToolResult(result, { narrowingParams }) }],
         details: result,
       };
     },
@@ -448,6 +449,12 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   let fixableRejectionsSurfaced = 0;
   /** Legacy 155: the run's tool calls, reported as they finish (worker-tool-calls.ts). */
   const toolCalls = new ToolCallReporter(options.kernelClient, logKernelError);
+  /** Legacy 967: what the kernel will charge this Task, and when to tell the model to wrap up
+   *  (budget.ts). */
+  const budget = new BudgetTracker();
+  /** The budget notice goes last; the cache breakpoint stays on the history before it. */
+  const noteAppendedNotice = keepCacheBreakpointOnHistory(pi);
+  let noticeLogged = false;
 
   async function postResultContract(
     contract: WorkerResultContract,
@@ -604,6 +611,7 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   });
 
   pi.on('context', async (event) => {
+    noteAppendedNotice(undefined);
     if (!taskContext) {
       try {
         const task = await options.kernelClient.call<{
@@ -611,6 +619,8 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
           outputSchema?: unknown;
           reworkOf?: unknown;
           callerCapabilities?: unknown;
+          tokenBudget?: unknown;
+          tokensUsed?: unknown;
         }>('get_task', {
           taskId: options.taskId,
         });
@@ -633,6 +643,8 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         }
         // Legacy 155: and whether its Handle may report the run's tool calls.
         toolCalls.setCallerCapabilities(task.callerCapabilities);
+        // Legacy 967: the budget and what the kernel has charged so far, read once.
+        budget.start(task);
         taskContext = {
           taskInput: task.input,
           facts,
@@ -655,7 +667,40 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
       display: false,
       timestamp: Date.now(),
     };
-    return { messages: withWorkerContextFirst(event.messages, contextMessage) };
+    const messages = withWorkerContextFirst(event.messages, contextMessage);
+    if (!budget.shouldHint()) return { messages };
+    if (!noticeLogged) {
+      noticeLogged = true;
+      console.log(
+        `nexttime-worker check=budget_notice result=shown charged=${budget.charged} budget=${budget.limit}`,
+      );
+    }
+    noteAppendedNotice(BUDGET_HINT_TEXT);
+    const notice: (typeof event.messages)[number] = {
+      role: 'custom',
+      customType: 'nexttime-worker-budget-notice',
+      content: BUDGET_HINT_TEXT,
+      display: false,
+      timestamp: Date.now(),
+    };
+    return { messages: [...messages, notice] };
+  });
+
+  // Legacy 967: every call the kernel charges this Task, as it finishes (budget.ts).
+  pi.on('message_end', (event) => {
+    if (event.message.role === 'assistant') budget.recordCall(event.message.usage);
+  });
+  pi.on('session_before_compact', (event) => {
+    budget.compactionStarting(event.preparation);
+  });
+  pi.on('session_compact', (event) => {
+    budget.compactionEnded(event.compactionEntry.usage);
+  });
+  pi.on('session_compact_failed', () => {
+    budget.compactionFailed();
+  });
+  pi.on('cache_warming_decision', (event) => {
+    if (event.action === 'warm') budget.warmingRefresh();
   });
 
   // Legacy 155: each tool call's start and end, for the run's records (worker-tool-calls.ts).

@@ -8,17 +8,14 @@ import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import type { EntryContextResult } from './entry-context.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
-import {
-  type AllowedOperationWire,
-  gateToolDescription,
-  truncateToolResult,
-} from './gate-tools.js';
+import { type AllowedOperationWire, gateToolDescription } from './gate-tools.js';
 import { resolveInvokeWorkerCallPlan } from './invoke-worker-call.js';
 import { installLiveContext } from './live-context.js';
+import { paramNames, renderToolResult } from './tool-result.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
- *  which an entry Handle does not hold) and returns the observed data verbatim (truncated — S8
- *  W3-K1, leftover 75 first half, `gate-tools.ts`'s own `truncateToolResult` doc comment). The
+ *  which an entry Handle does not hold) and returns the observed data verbatim (capped — S8
+ *  W3-K1, leftover 75 first half; rendered by `tool-result.ts`'s `renderToolResult`, legacy 967). The
  *  `name`/`label` come from the projector (`gate-tool-projection.ts`), which keeps them stable for
  *  the session (same `gateToolName` naming as worker mode). */
 function buildGateObserveTool(
@@ -40,7 +37,14 @@ function buildGateObserveTool(
         params,
       });
       return {
-        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
+        content: [
+          {
+            type: 'text',
+            text: renderToolResult(result, {
+              narrowingParams: paramNames(op.operation.params_schema),
+            }),
+          },
+        ],
         details: result,
       };
     },

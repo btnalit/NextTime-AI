@@ -135,6 +135,40 @@ describe('moveCacheBreakpointOffContext', () => {
     expect(JSON.stringify(followed)).toBe(followedBefore);
   });
 
+  it('looks past the empty system effort messages pi-ai appends for Claude 5.x models (review #481 on #1629)', () => {
+    const effort = (level: string) => ({
+      role: 'system',
+      content: [],
+      output_config: { effort: level },
+    });
+    // pi-ai `insertThinkingLevelMessages`: one before an assistant message that ran at its own
+    // effort, one after the last message. Neither holds a block, so the breakpoint lands on the
+    // tool result before the context.
+    const payload = anthropicPayload(structuredClone(TOOL_RESULT));
+    payload.messages.splice(1, 0, effort('medium'));
+    payload.messages.push(effort('high'));
+    moveCacheBreakpointOffContext(payload, CONTEXT);
+    expect(payload.messages[4]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: CONTEXT }],
+    });
+    expect(JSON.stringify(payload.messages[3])).toContain('cache_control');
+    expect(payload.messages[5]).toEqual(effort('high'));
+    expect(JSON.stringify(payload.messages).match(/cache_control/g)).toHaveLength(1);
+
+    // Two trailing ones are skipped too; a system message with content after the context is not
+    // pi-ai's marker, so the context is not last and the payload is left alone.
+    const twice = anthropicPayload(structuredClone(TOOL_RESULT));
+    twice.messages.push(effort('high'), effort('high'));
+    moveCacheBreakpointOffContext(twice, CONTEXT);
+    expect(JSON.stringify(twice.messages[2])).toContain('cache_control');
+    const update = anthropicPayload(structuredClone(TOOL_RESULT));
+    update.messages.push({ role: 'system', content: [{ type: 'text', text: 'tools changed' }] });
+    const updateBefore = JSON.stringify(update);
+    moveCacheBreakpointOffContext(update, CONTEXT);
+    expect(JSON.stringify(update)).toBe(updateBefore);
+  });
+
   it('keeps the breakpoint on the context when nothing before it can take one', () => {
     const payload = {
       messages: [

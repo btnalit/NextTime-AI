@@ -31,6 +31,11 @@ import { type FakeKernel, startFakeKernel } from './test-support/fake-kernel.js'
  * breakpoint are repeated byte for byte at the start of the later one — across tool calls within a
  * turn and across turns. The live context (legacy 229) is part of that repeated prefix: placed
  * once, then repeated unchanged, with only what changed since appended last.
+ *
+ * Every case runs twice: once for a model without and once with `compat.supportsMidConvoEffort`,
+ * for which pi-ai appends an empty `system` effort message after the conversation (the Claude 5.x
+ * models in its catalog; review #481 on #1629). "Last message" below means the last one before
+ * those.
  */
 
 const EXTENSION_PATH = join(import.meta.dirname, 'index.ts');
@@ -51,6 +56,29 @@ type ApiMessage = { role: string; content: string | Block[] };
 
 function messagesOf(request: Json): ApiMessage[] {
   return request.messages as ApiMessage[];
+}
+
+function isEffortMessage(message: ApiMessage | undefined): boolean {
+  return (
+    message?.role === 'system' && Array.isArray(message.content) && message.content.length === 0
+  );
+}
+
+/** How many empty `system` effort messages close the request. */
+function trailingEffortMessages(request: Json): number {
+  const messages = messagesOf(request);
+  let count = 0;
+  while (isEffortMessage(messages[messages.length - 1 - count])) count += 1;
+  return count;
+}
+
+/** Index of the last message before the trailing effort messages. */
+function lastAt(request: Json): number {
+  return messagesOf(request).length - 1 - trailingEffortMessages(request);
+}
+
+function lastOf(request: Json): ApiMessage | undefined {
+  return messagesOf(request)[lastAt(request)];
 }
 
 /** `[messageIndex, blockIndex]` of every message-level breakpoint. */
@@ -114,7 +142,8 @@ function expectEachRequestReadsThePreviousWrite(requests: readonly Json[]): void
 async function sessionAgainst(
   anthropic: FakeAnthropic,
   tmpDir: string,
-  bind = false,
+  bind: boolean,
+  midConvoEffort: boolean,
 ): Promise<{ session: AgentSession }> {
   const modelRuntime = await ModelRuntime.create({
     credentials: new InMemoryCredentialStore(),
@@ -137,6 +166,7 @@ async function sessionAgainst(
         contextWindow: 200_000,
         maxTokens: 1024,
         baseUrl: anthropic.url,
+        ...(midConvoEffort ? { compat: { supportsMidConvoEffort: true } } : {}),
       },
     ],
   });
@@ -175,7 +205,13 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
   }
 }
 
-describe('prompt cache: what the real pi-ai request repeats between calls', () => {
+/** pi-ai's model `compat.supportsMidConvoEffort`, off and on. */
+const MODELS = [
+  { models: 'no mid-conversation effort', midConvoEffort: false },
+  { models: 'mid-conversation effort', midConvoEffort: true },
+];
+
+describe.each(MODELS)('prompt cache: what each request repeats ($models)', ({ midConvoEffort }) => {
   let kernel: FakeKernel;
   let anthropic: FakeAnthropic | undefined;
   let session: AgentSession | undefined;
@@ -275,13 +311,14 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
       { text: 'Still a host.' },
     ]);
-    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true, midConvoEffort));
 
     const marker = (turnId: string) =>
       mode.turnMarker ? `<!--nexttime:turn_id=${turnId}-->\n` : '';
     await session.prompt(`${marker('turn-1')}What is obj-1?`);
     await session.prompt(`${marker('turn-2')}And now?`);
     expect(anthropic.requests).toHaveLength(4);
+    expectEffortTail(anthropic.requests);
     if (mode.mode === 'entry') expect(operationReads).toBeGreaterThanOrEqual(2);
     for (const request of anthropic.requests) {
       expect((request.tools as Json[]).map((tool) => tool.name)).toEqual(
@@ -289,6 +326,13 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       );
     }
     return anthropic.requests;
+  }
+
+  /** pi-ai closes every request with one effort message exactly when the model takes them. */
+  function expectEffortTail(requests: readonly Json[]): void {
+    for (const request of requests) {
+      expect(trailingEffortMessages(request)).toBe(midConvoEffort ? 1 : 0);
+    }
   }
 
   function contextMessageIndexes(request: Json, heading: string): number[] {
@@ -319,7 +363,7 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
         // One message-level breakpoint, on the last message (pi-ai's own placement).
         const points = breakpoints(request);
         expect(points).toHaveLength(1);
-        expect(points[0]?.[0]).toBe(messagesOf(request).length - 1);
+        expect(points[0]?.[0]).toBe(lastAt(request));
         // From the second call on, the context lies inside what the previous call wrote.
         if (index > 0) expect(cachedPrefix(requests[index - 1] as Json)).toContain('Approval 1');
       }
@@ -352,30 +396,24 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
 
       // Turn 1, call 2: the snapshot stays put and inside the cached prefix; the update is last,
       // uncached, and carries the changed section only.
-      expect(contextMessageIndexes(second, mode.heading)).toEqual([
-        1,
-        messagesOf(second).length - 1,
-      ]);
-      const update = textOf(messagesOf(second)[messagesOf(second).length - 1]);
+      expect(contextMessageIndexes(second, mode.heading)).toEqual([1, lastAt(second)]);
+      const update = textOf(lastOf(second));
       expect(update).toContain(`${mode.heading} — update`);
       expect(update).toContain('Approval 2');
       expect(update).not.toContain('Approval 1');
       expect(update).not.toContain('recorded facts');
-      expect(JSON.stringify(messagesOf(second)[messagesOf(second).length - 1])).not.toContain(
-        'cache_control',
-      );
-      expect(breakpoints(second)[0]?.[0]).toBe(messagesOf(second).length - 2);
+      expect(JSON.stringify(lastOf(second))).not.toContain('cache_control');
+      expect(breakpoints(second)[0]?.[0]).toBe(lastAt(second) - 1);
       expectEachRequestReadsThePreviousWrite([first, second]);
 
       // Turn 2: the changed context is placed after the new prompt and the old one is gone — the
       // one cache write this costs is turn 1's messages after its prompt.
-      const thirdMessages = messagesOf(third);
-      expect(contextMessageIndexes(third, mode.heading)).toEqual([thirdMessages.length - 1]);
-      expect(textOf(thirdMessages[thirdMessages.length - 1])).toContain('t-1');
-      expect(textOf(thirdMessages[thirdMessages.length - 1])).not.toContain('Approval');
+      expect(contextMessageIndexes(third, mode.heading)).toEqual([lastAt(third)]);
+      expect(textOf(lastOf(third))).toContain('t-1');
+      expect(textOf(lastOf(third))).not.toContain('Approval');
       expect(prefixThrough(third, 0, 0)).toBe(prefixThrough(second, 0, 0));
       // Turn 2, call 2: unchanged since the turn started — no update, read from cache.
-      expect(contextMessageIndexes(fourth, mode.heading)).toEqual([thirdMessages.length - 1]);
+      expect(contextMessageIndexes(fourth, mode.heading)).toEqual([lastAt(third)]);
       expectEachRequestReadsThePreviousWrite([third, fourth]);
     },
   );
@@ -403,7 +441,7 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
 
       expect(stripMarkers(messagesOf(second)[1])).toBe(stripMarkers(messagesOf(first)[1]));
       expectEachRequestReadsThePreviousWrite([first, second]);
-      const last = messagesOf(second)[messagesOf(second).length - 1];
+      const last = lastOf(second);
       const update = textOf(last);
       expect(update).toContain(`${mode.heading} — update`);
       expect(update.match(/"id":"fact-\d+"/g)).toEqual(['"id":"fact-21"']);
@@ -412,7 +450,7 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       expect(update).toContain('- "runs_on": 41');
       expect(update).not.toContain('enumerate the link type');
       expect(JSON.stringify(last)).not.toContain('cache_control');
-      expect(breakpoints(second)[0]?.[0]).toBe(messagesOf(second).length - 2);
+      expect(breakpoints(second)[0]?.[0]).toBe(lastAt(second) - 1);
     },
   );
 
@@ -433,19 +471,16 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
       { text: 'obj-1 is a host.' },
     ]);
-    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true, midConvoEffort));
     await session.prompt('<!--nexttime:turn_id=turn-1-->\nWhat is obj-1?');
     errorSpy.mockRestore();
 
     const [first, second] = anthropic.requests as [Json, Json];
-    const messages = messagesOf(second);
-    expect(contextMessageIndexes(second, 'NextTime entry context')).toEqual([
-      1,
-      messages.length - 1,
-    ]);
-    expect(textOf(messages[messages.length - 1])).toContain('not refreshed');
-    expect(JSON.stringify(messages[messages.length - 1])).not.toContain('cache_control');
-    expect(breakpoints(second)[0]?.[0]).toBe(messages.length - 2);
+    expectEffortTail([first, second]);
+    expect(contextMessageIndexes(second, 'NextTime entry context')).toEqual([1, lastAt(second)]);
+    expect(textOf(lastOf(second))).toContain('not refreshed');
+    expect(JSON.stringify(lastOf(second))).not.toContain('cache_control');
+    expect(breakpoints(second)[0]?.[0]).toBe(lastAt(second) - 1);
     expectEachRequestReadsThePreviousWrite([first, second]);
   });
 
@@ -481,9 +516,11 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
 
     anthropic = await startFakeAnthropic([
       { toolUse: { name: 'inventory_get', input: {} } },
-      { toolUse: { name: 'report_result', input: { summary: 'obj-1 is a host.', findings: [] } } },
+      {
+        toolUse: { name: 'report_result', input: { summary: 'obj-1 is a host.', findings: [] } },
+      },
     ]);
-    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true, midConvoEffort));
     // The run is over once worker mode has (mock-)exited — waiting for that also keeps its
     // scheduled `process.exit` from landing after the spy is restored.
     await waitFor(() => exitSpy.mock.calls.length > 0);
@@ -493,6 +530,7 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
 
     const requests = anthropic.requests;
     expect(requests).toHaveLength(2);
+    expectEffortTail(requests);
     for (const request of requests) {
       const messages = messagesOf(request);
       expect(textOf(messages[0])).toContain('## NextTime worker context');
@@ -501,11 +539,83 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       // pi-ai's own breakpoint on the last message is a persistent block now.
       const points = breakpoints(request);
       expect(points).toHaveLength(1);
-      expect(points[0]?.[0]).toBe(messages.length - 1);
+      expect(points[0]?.[0]).toBe(lastAt(request));
     }
     expect(stripMarkers(messagesOf(requests[1] as Json)[0])).toBe(
       stripMarkers(messagesOf(requests[0] as Json)[0]),
     );
     expectEachRequestReadsThePreviousWrite(requests);
+  });
+  it('worker mode: the budget notice goes last and uncached, the breakpoint stays on the history, and each call still reads the previous write (legacy 967)', async () => {
+    process.env.NEXTTIME_MODE = 'worker';
+    process.env.TASK_ID = 'task-cache-test';
+    // The fake endpoint reports 10 input and 5 output tokens per call: 15 charged each. With 60
+    // left, the third call is the first with less than three calls' worth left.
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: { input: 'Check obj-1 and report what it is.', tokenBudget: 60, tokensUsed: 0 },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'get',
+            operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+          },
+        ],
+      },
+    }));
+    kernel.setHandler('observe_operation', () => ({
+      ok: true,
+      result: { status: 'ok', data: { obj1: 'host' } },
+    }));
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { status: 'completed' },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    anthropic = await startFakeAnthropic([
+      { toolUse: { name: 'inventory_get', input: {} } },
+      { toolUse: { name: 'inventory_get', input: {} } },
+      { toolUse: { name: 'inventory_get', input: {} } },
+      {
+        toolUse: { name: 'report_result', input: { summary: 'obj-1 is a host.', findings: [] } },
+      },
+    ]);
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true, midConvoEffort));
+    await waitFor(() => exitSpy.mock.calls.length > 0);
+    logSpy.mockRestore();
+
+    const requests = anthropic.requests;
+    expect(requests).toHaveLength(4);
+    expectEffortTail(requests);
+    const notice = 'NextTime budget notice';
+    for (const [index, request] of requests.entries()) {
+      const messages = messagesOf(request);
+      const last = lastOf(request);
+      const points = breakpoints(request);
+      expect(points).toHaveLength(1);
+      if (index < 2) {
+        expect(JSON.stringify(request)).not.toContain(notice);
+        expect(points[0]?.[0]).toBe(lastAt(request));
+        continue;
+      }
+      // The notice is the last message, byte-identical on both calls, and carries no marker; the
+      // breakpoint sits on the tool result before it.
+      expect(textOf(last)).toContain(notice);
+      expect(stripMarkers(last)).toBe(stripMarkers(lastOf(requests[2] as Json)));
+      expect(JSON.stringify(last)).not.toContain('cache_control');
+      expect(points[0]?.[0]).toBe(lastAt(request) - 1);
+      expect(JSON.stringify(messages[lastAt(request) - 1])).toContain('tool_result');
+    }
+    // The call that first carries the notice still reads what the call before it wrote, and the
+    // call after it reads what it wrote: the notice never sits inside a cached prefix.
+    expectEachRequestReadsThePreviousWrite(requests);
+    expect(cachedPrefix(requests[3] as Json)).not.toContain(notice);
   });
 });

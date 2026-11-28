@@ -21,6 +21,11 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
  *
  * A payload whose last message is not the context this mode just injected, or that carries no
  * breakpoint there (a provider without explicit cache control), is passed through untouched.
+ *
+ * For a model with `compat.supportsMidConvoEffort` (the Claude 5.x models in pi-ai's catalog),
+ * pi-ai appends an empty `system` message that only carries the effort after the conversation
+ * (`insertThinkingLevelMessages`, after the breakpoint is placed), so the context is the last
+ * message before those (review #481 on #1629).
  */
 
 /** Block types a breakpoint may sit on (Anthropic Messages; Chat Completions only has `text`). */
@@ -66,6 +71,17 @@ function isContextMessage(message: Message, contextText: string): boolean {
   );
 }
 
+/** An empty `system` message: pi-ai's effort marker (`{ role: 'system', content: [],
+ *  output_config }`), which holds no block a breakpoint could sit on. */
+function isEmptySystemMessage(message: unknown): boolean {
+  return (
+    isRecord(message) &&
+    message.role === 'system' &&
+    Array.isArray(message.content) &&
+    message.content.length === 0
+  );
+}
+
 /** Puts `cacheControl` on the message's last block that may carry one; `false` when none can. */
 function placeBreakpoint(message: Message, cacheControl: unknown): boolean {
   if (typeof message.content === 'string') {
@@ -89,13 +105,17 @@ function placeBreakpoint(message: Message, cacheControl: unknown): boolean {
 
 /**
  * Moves the conversation breakpoint off a trailing context message onto the last block before it
- * (mutates and returns `payload`). Untouched when the last message is not that context or carries
- * no breakpoint, and when no earlier block can take one (the breakpoint then stays where it was).
+ * (mutates and returns `payload`). The trailing context is the last message once pi-ai's trailing
+ * empty `system` effort messages are skipped. Untouched when that message is not the context or
+ * carries no breakpoint, and when no earlier block can take one (the breakpoint then stays where it
+ * was).
  */
 export function moveCacheBreakpointOffContext(payload: unknown, contextText: string): unknown {
   if (!isRecord(payload) || !Array.isArray(payload.messages)) return payload;
   const messages = payload.messages as Message[];
-  const last = messages[messages.length - 1];
+  let lastAt = messages.length - 1;
+  while (lastAt >= 0 && isEmptySystemMessage(messages[lastAt])) lastAt -= 1;
+  const last = messages[lastAt];
   if (!isRecord(last) || !isContextMessage(last, contextText)) return payload;
   if (!Array.isArray(last.content)) return payload;
   const marked = (last.content as unknown[]).filter(
@@ -103,7 +123,7 @@ export function moveCacheBreakpointOffContext(payload: unknown, contextText: str
   );
   const cacheControl = marked[marked.length - 1]?.cache_control;
   if (cacheControl === undefined) return payload;
-  for (let index = messages.length - 2; index >= 0; index -= 1) {
+  for (let index = lastAt - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!isRecord(message)) continue;
     if (placeBreakpoint(message, cacheControl)) {

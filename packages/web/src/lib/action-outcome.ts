@@ -3,6 +3,7 @@ import {
   type ActionRequestFailureKind,
   clipCodePoints,
   failureKindOfReason,
+  toolResultJsonValue,
   visibleText,
 } from '@nexttime/shared';
 import { withPlaintextTlsHint } from './errors.js';
@@ -74,14 +75,93 @@ const FAILURE_KIND_OUTCOME: Readonly<Record<ActionRequestFailureKind, ActionOutc
   refused: 'failed',
   outcome_unknown: 'outcome_unknown',
 };
-/** A cut-short preview of the outcome object as the Worker's tool writes it
- *  (`JSON.stringify(result, null, 2)`, `id` then `status`): only its own top-level `status`, never
- *  one inside a simulated effect or the gate's data. */
-const PREVIEW_STATUS = /^\{\s*"id":\s*"([^"]*)",\s*"status":\s*"([a-z_]+)"/;
-/** The start of the reason a cut-short preview still shows, as JSON string content. */
-const PREVIEW_REASON = /\n {2}"reason":\s*"((?:[^"\\]|\\.)*)/;
-const PREVIEW_IN_DOUBT = /\n {2}"outcomeInDoubt":\s*\{/;
-const PREVIEW_FAILURE_KIND = /\n {2}"failureKind":\s*"([a-z_]+)"/;
+const STATUS_NAME = /^[a-z_]+$/;
+
+/** Where the blanks after `from` end. */
+function skipBlanks(text: string, from: number): number {
+  let at = from;
+  while (at < text.length && ' \t\n\r'.includes(text[at] as string)) at += 1;
+  return at;
+}
+
+/** The JSON string starting at `from` (its opening quote): its content as written, where it ends,
+ *  and whether it is closed before the text ends. */
+function stringAt(text: string, from: number): { raw: string; end: number; closed: boolean } {
+  let at = from + 1;
+  while (at < text.length && text[at] !== '"') at += text[at] === '\\' ? 2 : 1;
+  return at < text.length
+    ? { raw: text.slice(from + 1, at), end: at + 1, closed: true }
+    : { raw: text.slice(from + 1), end: text.length, closed: false };
+}
+
+/** Where the object or array starting at `from` ends, or `undefined` when the text ends first. */
+function nestedEnd(text: string, from: number): number | undefined {
+  let depth = 0;
+  for (let at = from; at < text.length; ) {
+    const c = text[at];
+    if (c === '"') {
+      const string = stringAt(text, at);
+      if (!string.closed) return undefined;
+      at = string.end;
+      continue;
+    }
+    if (c === '{' || c === '[') depth += 1;
+    else if (c === '}' || c === ']') {
+      depth -= 1;
+      if (depth === 0) return at + 1;
+    }
+    at += 1;
+  }
+  return undefined;
+}
+
+/** The top-level fields of the JSON object `text` starts with, in order, as far as the text shows
+ *  them: a string's content as written (to where the text ends, when it ends inside it), `{` or
+ *  `[` for an object or an array, any other value as it stands. It reads a preview cut short, or a
+ *  result cut by characters, without parsing it; indented text (a row from before legacy 967) and
+ *  compact text (the Worker's tool since then) read alike. */
+export function topLevelFieldsOf(text: string): ReadonlyMap<string, string> {
+  const fields = new Map<string, string>();
+  let at = skipBlanks(text, 0);
+  if (text[at] !== '{') return fields;
+  at += 1;
+  for (;;) {
+    at = skipBlanks(text, at);
+    if (text[at] !== '"') return fields;
+    const key = stringAt(text, at);
+    if (!key.closed) return fields;
+    at = skipBlanks(text, key.end);
+    if (text[at] !== ':') return fields;
+    at = skipBlanks(text, at + 1);
+    const c = text[at];
+    if (c === undefined) return fields;
+    let name: string;
+    try {
+      name = JSON.parse(`"${key.raw}"`) as string;
+    } catch {
+      return fields;
+    }
+    if (c === '"') {
+      const value = stringAt(text, at);
+      fields.set(name, value.raw);
+      if (!value.closed) return fields;
+      at = value.end;
+    } else if (c === '{' || c === '[') {
+      fields.set(name, c);
+      const end = nestedEnd(text, at);
+      if (end === undefined) return fields;
+      at = end;
+    } else {
+      let end = at;
+      while (end < text.length && !',}] \t\n\r'.includes(text[end] as string)) end += 1;
+      fields.set(name, text.slice(at, end));
+      at = end;
+    }
+    at = skipBlanks(text, at);
+    if (text[at] !== ',') return fields;
+    at += 1;
+  }
+}
 
 /** `value` as a failure kind, or `undefined` for anything else (an older result has none). */
 export function failureKindOf(value: unknown): ActionRequestFailureKind | undefined {
@@ -93,8 +173,7 @@ export function failureKindOf(value: unknown): ActionRequestFailureKind | undefi
 
 /** A preview's reason as text — `null` when there is none; what a cut-short preview still shows
  *  (enough for its code: a reason cut before it ends reads as outcome unknown). */
-function previewReason(text: string): string | null {
-  const raw = PREVIEW_REASON.exec(text)?.[1];
+function previewReason(raw: string | undefined): string | null {
   if (raw === undefined) return null;
   try {
     return JSON.parse(`"${raw}"`) as string;
@@ -146,11 +225,8 @@ function outcomeObjectOf(value: unknown, depth = 0): Record<string, unknown> | n
   if (Array.isArray(content)) {
     const first = content[0] as { text?: unknown } | undefined;
     if (typeof first?.text === 'string') {
-      try {
-        return outcomeObjectOf(JSON.parse(first.text), depth + 1);
-      } catch {
-        return null;
-      }
+      const json = toolResultJsonValue(first.text);
+      return json ? outcomeObjectOf(json.value, depth + 1) : null;
     }
   }
   return null;
@@ -158,15 +234,13 @@ function outcomeObjectOf(value: unknown, depth = 0): Record<string, unknown> | n
 
 /** Where a `request_action` tool result says the action stands — `null` for any other result
  *  (an observe call's data, a pending approval's simulated effect, which is not the outcome
- *  object). Reads the JSON when it parses; a preview cut short falls back to the top-level
- *  `status`, reason code and `outcomeInDoubt` it still shows. */
+ *  object). Reads the JSON when it parses, the text whole or before its note line (a result the
+ *  Worker's tool shortened, legacy 967); a preview cut short, or a result cut by characters, falls
+ *  back to the top-level `id` and `status` it starts with, and the reason code, `failureKind` and
+ *  `outcomeInDoubt` it still shows — only its own, never ones inside a simulated effect or the
+ *  gate's data. */
 export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
+  const parsed = toolResultJsonValue(text)?.value;
   const object = outcomeObjectOf(parsed);
   if (object) {
     const status = object.status as string;
@@ -189,15 +263,19 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
         }
       : null;
   }
-  const preview = PREVIEW_STATUS.exec(text);
-  const id = preview?.[1];
-  const status = preview?.[2];
-  if (id === undefined || status === undefined) return null;
+  const fields = topLevelFieldsOf(text);
+  const [first, second] = fields.keys();
+  const id = fields.get('id');
+  const status = fields.get('status');
+  if (first !== 'id' || second !== 'status' || id === undefined || status === undefined) {
+    return null;
+  }
+  if (!STATUS_NAME.test(status)) return null;
   const kind = kindOf(
     status,
-    failureKindOf(PREVIEW_FAILURE_KIND.exec(text)?.[1]),
-    previewReason(text),
-    PREVIEW_IN_DOUBT.test(text),
+    failureKindOf(fields.get('failureKind')),
+    previewReason(fields.get('reason')),
+    fields.get('outcomeInDoubt') === '{',
   );
   return kind ? { kind, status, id } : null;
 }
