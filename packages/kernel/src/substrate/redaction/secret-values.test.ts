@@ -20,6 +20,7 @@ import {
   platformKeyShapes,
   redactSecretFieldsInJsonText,
   redactSecrets,
+  repairSplitQuotedMasks,
   scrubOutsideSpans,
   scrubSecretLiterals,
   scrubSecretLiteralsIn,
@@ -3552,24 +3553,90 @@ describe('v0.70.0 read under every text: a floor (legacy 939)', () => {
   });
 });
 
-describe('the stored rewrite — a mask with a quote after it is left as written (legacy 919 step 2)', () => {
-  const stored = (text: string) =>
-    scrubSecretValues(text, { patterns: STORED_REWRITE_SECRET_PATTERNS });
+describe('repairSplitQuotedMasks — a \\"…\\" value an earlier release split, stored', () => {
+  /** What the value patterns wrote before they read `\\"…\\"` as one value: the `\\` alone hidden. */
+  const split = (text: string) => text.replace(/\\"([^"]*)\\"/, `${REDACTED}"$1\\"`);
 
-  // Releases before v0.70.0 split a `\"…\"` value (`API_TOKEN=[redacted]"…\"`); the stored
-  // rewrite of v0.70.x wrote any stored whole, and nothing writes one since. The text up to the
-  // next `\"` is no longer taken for a value at each upgrade: these keep their text.
   it.each([
-    ['a bare value cut by a quote, a \\" later on its line', `-e "PW_TOKEN=${FAKE}" img \\"x\\"`],
-    [
-      'a name and its bare value inside \\"…\\"',
-      `docker run -e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\" img`,
-    ],
-  ])('%s', (_label, text) => {
-    const written = scrubSecretValues(text);
-    expect(written.redactedValues).toBe(1);
-    expect(written.value).not.toContain(FAKE);
-    expect(stored(written.value)).toEqual({ value: written.value, redactedValues: 0 });
+    ['an env line', `export API_TOKEN=\\"${FAKE} x\\" && run`],
+    ['a YAML key', `command: "password: \\"${FAKE}\\""`],
+    ['a header, no space', `-H X-Api-Key:\\"${FAKE}\\"`],
+    ['a --password flag', `run --password \\"${FAKE}\\" now`],
+    ['a tab', `password:\t\\"${FAKE}\\"`],
+    ['in JSON text', JSON.stringify({ stdout: `a\nAPI_TOKEN="${FAKE}" b` })],
+  ])('writes it as the value patterns write it now, once: %s', (_label, text) => {
+    const stored = split(text);
+    expect(stored).toContain(`${REDACTED}"${FAKE}`);
+    const now = scrubSecretValues(text).value;
+    expect(repairSplitQuotedMasks(stored)).toEqual({ value: now, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(now)).toEqual({ value: now, redactedValues: 0 });
+  });
+
+  it('writes a value written inside a string twice over with its own run (review #501 on #1575)', () => {
+    // As written before: the bare run took the whole opening `\\\\\\"`.
+    const text = `"cmd": "export API_TOKEN=\\\\\\"${FAKE} x\\\\\\" && run"`;
+    const now = `"cmd": "export API_TOKEN=\\\\\\"${REDACTED}\\\\\\" && run"`;
+    expect(scrubSecretValues(text).value).toBe(now);
+    expect(
+      repairSplitQuotedMasks(`"cmd": "export API_TOKEN=${REDACTED}"${FAKE} x\\\\\\" && run"`),
+    ).toEqual({ value: now, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(now)).toEqual({ value: now, redactedValues: 0 });
+  });
+
+  it('leaves the mask written whole alone, a quote before it (review #493, #501 on #1573)', () => {
+    for (const text of [
+      `TOKEN="${REDACTED}" and later \\"x\\"`,
+      `[INFO] password="${REDACTED}" msg=\\"x\\"`,
+      `{"a":"${REDACTED}","note":"say \\"hi\\""}`,
+      `["${REDACTED}",1,"a\\"b"]`,
+      // A line break between: the value was quoted to the next \" on its line.
+      `export TOKEN=${REDACTED}"\nrun \\"done\\"`,
+      // A separator before the mask, and then (review #501 on #1573): a quote that is not
+      // escaped; the end of the text; a line break before the \".
+      `{"a":"password: ${REDACTED}","note":"say \\"hi\\""}`,
+      `{"a":"password: ${REDACTED}"}`,
+      `{"a":"password: ${REDACTED}"}\nlog \\"x\\"`,
+      `password: ${REDACTED}" and "later" \\"x\\"`,
+    ]) {
+      expect(repairSplitQuotedMasks(text)).toEqual({ value: text, redactedValues: 0 });
+    }
+  });
+
+  // The text up to the next \" is taken for the value. The value patterns still write this one,
+  // and the stored rewrite runs at each upgrade: a row written from now on is rewritten once too.
+  it('cannot tell a bare value cut by a quote, a \\" later on its line, from a split one: rewritten once', () => {
+    const text = `-e "PW_TOKEN=${FAKE}" img \\"x\\"`;
+    const written = `-e "PW_TOKEN=${REDACTED}" img \\"x\\"`;
+    const rewritten = `-e "PW_TOKEN=\\"${REDACTED}\\"x\\"`;
+    expect(readByRules(text)).toEqual({ value: written, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(written)).toEqual({ value: rewritten, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+    expect(readByRules(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+  });
+
+  // Review #501 on #1575: the bare run took the \ of the \" that closes the string, and wrote
+  // `[redacted]"`. It no longer does, so only rows stored before are read wrong, once.
+  it('writes a name and its bare value inside \\"…\\" with its \\" kept, which it leaves', () => {
+    const text = `docker run -e \\"API_TOKEN=${FAKE}\\" -e \\"DEBUG=1\\" img`;
+    const written = `docker run -e \\"API_TOKEN=${REDACTED}\\" -e \\"DEBUG=1\\" img`;
+    expect(scrubSecretValues(text)).toEqual({ value: written, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(written)).toEqual({ value: written, redactedValues: 0 });
+    const stored = `docker run -e \\"API_TOKEN=${REDACTED}" -e \\"DEBUG=1\\" img`;
+    const rewritten = `docker run -e \\"API_TOKEN=\\"${REDACTED}\\"DEBUG=1\\" img`;
+    expect(repairSplitQuotedMasks(stored)).toEqual({ value: rewritten, redactedValues: 1 });
+    expect(repairSplitQuotedMasks(rewritten)).toEqual({ value: rewritten, redactedValues: 0 });
+  });
+
+  it.each([
+    ['masks and quotes', `${`=${REDACTED}"x`.repeat(15_000)}`],
+    ['a mask, then text', `=${REDACTED}"${'x'.repeat(200_000)}`],
+    ['split masks', `${`=${REDACTED}"x\\" `.repeat(12_000)}`],
+    ['a long run of backslashes', `=${REDACTED}"${'\\'.repeat(199_999)}"`],
+  ])('%s × 200 KB within 1 s', (_name, text) => {
+    repairSplitQuotedMasks(text.slice(0, 1_000));
+    const started = performance.now();
+    repairSplitQuotedMasks(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
 

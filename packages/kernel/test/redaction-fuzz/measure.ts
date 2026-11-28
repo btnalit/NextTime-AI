@@ -92,8 +92,8 @@ const RUN_CHARS = 8;
 /** Which secret characters of `row` an output shows, read without lining it up: a character is
  *  shown where some `RUN_CHARS` of its secret's characters around it (all of a shorter secret) are
  *  in the output as written. For the stored rows (`Row.stored`), whose rewrite is not its input
- *  with stretches masked — the release's `repairSplitQuotedMasks` writes `\"[redacted]\"` where
- *  it read `[redacted]"…\"` — and which `shown` would count as showing every one. */
+ *  with stretches masked — `repairSplitQuotedMasks` writes `\"[redacted]\"` where it read
+ *  `[redacted]"…\"` — and which `shown` would count as showing every one. */
 export function shownInRuns(row: Row, places: Uint8Array, output: string): Uint8Array {
   const out = new Uint8Array(row.t.length);
   for (let start = 0; start < places.length; ) {
@@ -145,7 +145,7 @@ export interface Reader {
 export interface ValuesModule {
   scrubSecretValues(text: string, options?: unknown): { value: string; redactedValues: number };
   readonly STORED_REWRITE_SECRET_PATTERNS: unknown;
-  /** v0.70.1's; gone since legacy 919 step 2. A reader without it stores as the rest. */
+  /** Gone once legacy 919 step 2 lands; a reader without it stores as the rest. */
   readonly repairSplitQuotedMasks?: (text: string) => { value: string; redactedValues: number };
 }
 export interface RecordModule {

@@ -15,6 +15,7 @@ import {
   platformApiKeys,
   platformKeyShapes,
   redactSuspectedSecrets,
+  repairSplitQuotedMasks,
   scrubSecretValues,
   tailChecked,
 } from '../../governance/redaction/index.js';
@@ -37,12 +38,13 @@ import { GATE_OBSERVATION_ACTIVITY_KIND, gatePayloadKeptRaw } from '../task/gate
  *
  * **Rewritten** — copies people read, scrubbed the way the write path now scrubs them:
  *   - `turnReports`: an agent Turn's `activities.metadata.summary` / `.decisions` (`report_turn`,
- *     legacy 183) — every secret-looking value but a platform API key's shape
- *     (`STORED_REWRITE_SECRET_PATTERNS`; see `*KeyShapes` below);
+ *     legacy 183) — a quoted value written with `\"` that an earlier release split rewritten as it
+ *     is written now (`repairSplitQuotedMasks`), then every secret-looking value but a platform API
+ *     key's shape (`STORED_REWRITE_SECRET_PATTERNS`; see `*KeyShapes` below);
  *   - `decisions`: the `summary` of a Decision whose Activity is an agent Turn (`record_decision`,
  *     legacy 183) — likewise;
- *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — the key rule
- *     over JSON text, its escaped strings scrubbed decoded
+ *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — a split quoted
+ *     value rewritten likewise, the key rule over JSON text, its escaped strings scrubbed decoded
  *     (legacy 916), then the value patterns but the key's shape over the rest (application/chat's
  *     `rescrubStoredToolCallResult`);
  *   - `selfConnectionAddresses`: the copy of a self-connected gate's `target` / `endpoint` the
@@ -408,12 +410,15 @@ function connectedSystemRewrite(
 /** What a rewrite of these rows hides: every value pattern but a platform API key's shape. */
 const STORED_REWRITE = { patterns: STORED_REWRITE_SECRET_PATTERNS } as const;
 
-/** Agent text as stored, scrubbed the way it is written now (`STORED_REWRITE`). A quoted value
- *  written with `\"` that releases before v0.70.0 split (`[redacted]"…\"`) is no longer written
- *  whole first: the stored rewrite of v0.70.x did that over every row, and nothing writes one
- *  since (legacy 919 step 2, release.md §3.230). */
+/** Agent text as stored, scrubbed the way it is written now: a quoted value an earlier release
+ *  split (`[redacted]"…\"`) written whole first (`repairSplitQuotedMasks`), then `STORED_REWRITE`. */
 function rescrubStoredText(text: string): Scrubbed<string> {
-  return scrubSecretValues(text, STORED_REWRITE);
+  const repaired = repairSplitQuotedMasks(text);
+  const scrubbed = scrubSecretValues(repaired.value, STORED_REWRITE);
+  return {
+    value: scrubbed.value,
+    redactedValues: repaired.redactedValues + scrubbed.redactedValues,
+  };
 }
 
 /** How many values of a platform API key's shape `text` holds (0 for a non-string). */

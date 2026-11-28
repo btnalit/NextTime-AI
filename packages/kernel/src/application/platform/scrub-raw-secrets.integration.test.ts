@@ -89,17 +89,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       otherObservation: randomUUID(),
     };
     const turnMetadata = {
-      // `--password`: a quoted value written with \" (legacy 918).
-      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}; --password \\"${PLAIN}\\"`,
+      // `--password`: a quoted value written with \" as releases before legacy 918 split it.
+      summary: `ran env: CAPABILITY_HANDLE=${HANDLE}; digest ${KEY_SHAPE}; --password [redacted]"${PLAIN}\\"`,
       decisions: [
         `use PGPASSWORD=${FAKE}`,
         'keep the plain one',
         `pin ${KEY_SHAPE}`,
-        // A quoted value written with \" (legacy 918).
-        `ran sh -c "export API_TOKEN=\\"${PLAIN}\\""`,
+        // A quoted value written with \" as releases before legacy 918 split it.
+        `ran sh -c "export API_TOKEN=[redacted]"${PLAIN}\\""`,
         // Review #501 on #1575: a JSON body inside a string, and a value inside one twice over.
         `posted payload={\\"password\\":\\"${PLAIN}\\"}`,
-        `logged "cmd": "export API_TOKEN=\\\\\\"${PLAIN}\\\\\\""`,
+        `logged "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\\\\\""`,
         // Legacy 921: tool output cut short inside a quoted value, which no rule read as one.
         `read {"user":"bob","password": "${PLAIN} and the rest`,
         // Legacy 937: a quoted value hidden to its closing quote, the rest of its word kept.
@@ -116,8 +116,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       outcome: 'done',
       args: { text: '{"password":"[redacted]"}', totalChars: 30, truncated: false },
       result: {
-        // `cmd`: a quoted value inside a JSON string (legacy 916).
-        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "cmd": "export API_TOKEN=\\"${PLAIN}\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
+        // `cmd`: a quoted value as releases before legacy 916 split it (`\` taken for the value).
+        text: `{\n  "user": "bob",\n  "password": "${PLAIN}",\n  "note": "token=${FAKE}",\n  "cmd": "export API_TOKEN=[redacted]"${PLAIN}\\" && run",\n  "x": "${KEY_SHAPE}"\n}`,
         totalChars: 70,
         truncated: false,
       },
@@ -330,7 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             ids.agentDecision,
             ids.turn,
-            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE} and before that --password \\"${PLAIN}\\"`,
+            `rotate it, key ${KEY_SHAPE}; the old one was PGPASSWORD=${FAKE} and before that --password [redacted]"${PLAIN}\\"`,
             ids.approvalDecision,
             ids.approvalActivity,
             `approved; PGPASSWORD=${FAKE}`,

@@ -861,6 +861,55 @@ export const STORED_REWRITE_SECRET_PATTERNS: readonly SecretPattern[] =
  *  counts. */
 export const PLATFORM_KEY_SHAPE_PATTERNS: readonly ValuePattern[] = [MINTED_PLATFORM_KEY];
 
+/** `[redacted]"…\"`: a quoted value written with `\"` that the value patterns split before they
+ *  read `\"…\"` as one (legacy 916 for JSON text; legacy 918 for plain text) —
+ *  `API_TOKEN=\"…\"` became `API_TOKEN=[redacted]"…\"`, the `\` taken for the value and the value
+ *  itself kept. The mask stands right after a name pattern's separator (`=`, `:`, a space or a
+ *  tab); the mask written whole, `"[redacted]"`, stands after its own quote (review #501 on #1573:
+ *  `[INFO] password="[redacted]" msg=\"x\"`). Between `[redacted]"` and the next `\"` there is no
+ *  quote that is not escaped, and no line break or other control character: the value was
+ *  quoted to the next `\"` on its line. In JSON that is valid, a string's closing quote is
+ *  followed, before any `\"`, by the opening quote of the next string, or by nothing. What it
+ *  cannot tell from a split value, and takes the text up to that `\"` for the value of: a bare
+ *  value cut by a closing quote with a `\"` later on its line (`-e "PW_TOKEN=[redacted]" img
+ *  \"x\"`), and a name with its bare value written inside `\"…\"`, the `\` of the closing `\"`
+ *  taken with the value (`-e \"API_TOKEN=[redacted]" -e \"DEBUG=1\"`, review #501 on #1575). The
+ *  value patterns still write the first (the second no longer: a bare run leaves that `\`), and
+ *  the stored rewrite runs over every row at each upgrade: a row written from now on is rewritten
+ *  too, once, at the next upgrade — text lost, no value shown — until this repair is dropped. */
+const SPLIT_QUOTED_MASK = /(?<=[=: \t])\[redacted\]"(?:[^"\\]|\\[^"])*\\"/g;
+
+/** Whether `text` holds a C0 control character — a char-code loop, not a regex class (biome's
+ *  `noControlCharactersInRegex`). */
+function holdsControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) <= 0x1f) return true;
+  }
+  return false;
+}
+
+/** Stored text with each `SPLIT_QUOTED_MASK` written as the value patterns write that value now —
+ *  `\"[redacted]\"`, or `\\\"[redacted]\\\"` when the run that closes it is `\\\"` (a value written
+ *  inside a string twice over, whose opening run the mask took) — counted: for a one-way rewrite of
+ *  rows already stored, before the stored set (`STORED_REWRITE_SECRET_PATTERNS`) runs over it
+ *  (application/platform/scrub-raw-secrets; application/chat's `rescrubStoredToolCallResult`).
+ *  Linear: the run inside stops at a quote. */
+export function repairSplitQuotedMasks(text: string): Scrubbed<string> {
+  // `SPLIT_QUOTED_MASK` spells the mask out: it reads what earlier releases wrote.
+  if (!text.includes(`${REDACTED}"`)) return { value: text, redactedValues: 0 };
+  let redactedValues = 0;
+  const value = text.replace(SPLIT_QUOTED_MASK, (match) => {
+    if (holdsControlCharacter(match)) return match;
+    redactedValues += 1;
+    // The run before its closing quote: odd, as the run inside reads backslashes two at a time.
+    let closing = 1;
+    while (match.charAt(match.length - 2 - closing) === '\\') closing += 1;
+    const escapes = '\\'.repeat(closing);
+    return `${escapes}"${REDACTED}${escapes}"`;
+  });
+  return { value, redactedValues };
+}
+
 /**
  * Each value of a platform API key's shape `text` holds, as written: exactly what
  * `scrubSecretValues(text, { patterns: PLATFORM_KEY_SHAPE_PATTERNS })` replaces, in order. Only
