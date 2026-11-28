@@ -9,8 +9,13 @@
 //
 //   node scripts/loop-health.mjs [--json] [--strict] [--now <ISO time>]
 //                                [--github] [--memory-index <file>] [--project-files <dir>]
+//   node scripts/loop-health.mjs --topics [--now <ISO time>]
 //
-//   --github          also list open pull requests that went quiet (needs `gh`)
+//   --github          also list open pull requests that went quiet, and topic words of optional
+//                     review suggestions that came up on a second pull request without being
+//                     registered (needs `gh`)
+//   --topics          only list the topic words in use: those in recent PR comments and those a
+//                     ledger row already carries, so a reviewer reuses a word instead of coining one
 //   --memory-index    also check the project memory index against its 12 KB limit
 //   --project-files   also list acceptance notes of released pull requests still waiting to be
 //                     archived, and host-upgrade prompts written for an older tag
@@ -24,6 +29,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   STATUS,
+  STATUS_HISTORY,
   compareVersions,
   fileSize,
   git,
@@ -45,6 +51,52 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 // A finding registered before anyone could tell its tier (docs/runbooks/dev-loop.md §4): it is
 // written as a parked row so the ledger guard accepts it, and reported here until it has a tier.
 const UNTRIAGED = /^开放（挂起：待分档/;
+
+// An optional review suggestion stays in the PR comment that made it, with a line that names its
+// topic (docs/runbooks/dev-loop.md §4):
+//   <!-- review-note topic=<主题词> -->
+// It is registered only when the same topic comes up on a second pull request. A ledger row that
+// took a topic in says so with `topic=<主题词>` in its text.
+const TOPIC_WORD = '[\\p{L}\\p{N}][\\p{L}\\p{N}_-]{0,39}';
+const REVIEW_NOTE = new RegExp(`<!--\\s*review-note\\s+topic=(${TOPIC_WORD})\\s*-->`, 'gu');
+const ROW_TOPIC = new RegExp(`topic=(${TOPIC_WORD})`, 'gu');
+// The repository is public: only its owner, members and collaborators write notes that count
+// (the same rule pr-gate applies to verdict lines).
+const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+const topicKey = (word) => word.normalize('NFC').toLowerCase();
+// Pages of 100 read from each comment listing before the patrol stops and says so.
+const NOTE_PAGE_CAP = 50;
+
+/**
+ * Topic words of the review notes in `comments` (`[{ pull, association, body }]`), each with the
+ * pull requests it was written on: `[{ topic, pulls }]`, most pull requests first.
+ */
+export function reviewNoteTopics(comments) {
+  const byTopic = new Map();
+  for (const c of comments) {
+    if (!TRUSTED_ASSOCIATIONS.includes(c.association) || !Number.isInteger(c.pull)) continue;
+    for (const m of (c.body ?? '').matchAll(REVIEW_NOTE)) {
+      const topic = topicKey(m[1]);
+      if (!byTopic.has(topic)) byTopic.set(topic, new Set());
+      byTopic.get(topic).add(c.pull);
+    }
+  }
+  return [...byTopic]
+    .map(([topic, pulls]) => ({ topic, pulls: [...pulls].sort((a, b) => a - b) }))
+    .sort((a, b) => b.pulls.length - a.pulls.length || a.topic.localeCompare(b.topic));
+}
+
+/** Topic words that a ledger row already carries, read from the text of the ledger documents. */
+export function registeredTopics(...texts) {
+  const out = new Set();
+  for (const text of texts) for (const m of (text ?? '').matchAll(ROW_TOPIC)) out.add(topicKey(m[1]));
+  return out;
+}
+
+/** Topics written on two or more pull requests that no ledger row carries yet. */
+export function repeatedTopics(topics, registered) {
+  return topics.filter((t) => t.pulls.length >= 2 && !registered.has(t.topic));
+}
 
 /** Counts of the rows that are still open work, by level and by P3 tier. */
 export function legacyCounts(rows) {
@@ -235,6 +287,37 @@ export function assess(input) {
       '问作者线程卡在哪一步；等评审的直接找对应席位',
     );
   }
+  if (input.pullsUnread) {
+    add('pulls', 'no-sample', '协调线程', '读不到开着的 PR（GitHub 调用失败），沉寂的 PR 这次没查');
+  }
+  if (input.noteTopicsUnread) {
+    add('review-notes', 'no-sample', '协调线程', '读不到 PR 评论（GitHub 调用失败），可选建议的主题词这次没查');
+  }
+  if (input.noteTopicsTruncated) {
+    add(
+      'review-notes-truncated',
+      'watch',
+      '协调线程',
+      `近 ${cfg.cadence.reviewNoteWindowDays} 天的 PR 评论超过 ${NOTE_PAGE_CAP * 100} 条，主题词只查了最近的 ${NOTE_PAGE_CAP * 100} 条`,
+      '把 loop.json 的 cadence.reviewNoteWindowDays 调小',
+    );
+  }
+  if (input.noteTopics !== undefined) {
+    const registered = input.registeredTopics ?? new Set();
+    const repeated = repeatedTopics(input.noteTopics, registered);
+    for (const t of repeated) {
+      add(
+        `topic:${t.topic}`,
+        'act',
+        '协调线程',
+        `可选建议的主题词「${t.topic}」已在 ${t.pulls.length} 个 PR 出现（${t.pulls.map((n) => `#${n}`).join('、')}），还没登记`,
+        `让合并线程登记成一条遗留并定档，行里写 topic=${t.topic}；已登记过的同一件事就把这个词补进那一行`,
+      );
+    }
+    if (repeated.length === 0) {
+      add('review-notes', 'ok', '协调线程', `近 ${cfg.cadence.reviewNoteWindowDays} 天评论里的可选建议：${input.noteTopics.length} 个主题词，没有第二次出现而未登记的`);
+    }
+  }
   if ((input.archivable ?? []).length > 0) {
     add('archive', 'watch', '协调线程', `共享文件夹里 ${input.archivable.length} 份已发版的稿子没归档：${input.archivable.join('、')}`, '按共享文件夹 README 的归档规则移走');
   }
@@ -264,12 +347,49 @@ export function archivableNotes(names, isReleased, latestTag) {
   return out;
 }
 
-function collect(args) {
-  const flag = (name) => {
-    const at = args.indexOf(name);
-    return at >= 0 ? args[at + 1] : undefined;
+const flag = (args, name) => {
+  const at = args.indexOf(name);
+  return at >= 0 ? args[at + 1] : undefined;
+};
+const repoSlug = () =>
+  process.env.GITHUB_REPOSITORY ?? /github\.com[:/]([^/]+\/[^/.\s]+)/.exec(git(['remote', 'get-url', 'origin']) ?? '')?.[1];
+const ghJson = (endpoint) => JSON.parse(execFileSync('gh', ['api', endpoint], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+
+/**
+ * Comments written on pull requests since `since`: conversation comments and inline review
+ * comments (the two kinds GitHub lists for a whole repository; a review's summary body is not).
+ * Newest first, so that when a listing is longer than the page cap it is the oldest comments
+ * that are left unread; `truncated` says that happened.
+ */
+function pullComments(slug, since) {
+  const comments = [];
+  let truncated = false;
+  const read = (endpoint, pullOf) => {
+    for (let page = 1; page <= NOTE_PAGE_CAP; page += 1) {
+      const batch = ghJson(`repos/${slug}/${endpoint}?since=${since}&sort=created&direction=desc&per_page=100&page=${page}`);
+      for (const c of batch) comments.push({ pull: pullOf(c), association: c.author_association, body: c.body });
+      if (batch.length < 100) return;
+    }
+    truncated = true;
   };
-  const now = flag('--now') ? Date.parse(flag('--now')) : Date.now();
+  const tail = (url) => Number(/\/(\d+)$/.exec(url ?? '')?.[1]);
+  read('issues/comments', (c) => (/\/pull\/\d+#/.test(c.html_url ?? '') ? tail(c.issue_url) : NaN));
+  read('pulls/comments', (c) => tail(c.pull_request_url));
+  return { comments, truncated };
+}
+
+function collectTopics(cfg, now) {
+  const since = new Date(now - cfg.cadence.reviewNoteWindowDays * DAY).toISOString();
+  const { comments, truncated } = pullComments(repoSlug(), since);
+  return {
+    noteTopics: reviewNoteTopics(comments),
+    noteTopicsTruncated: truncated,
+    registeredTopics: registeredTopics(...[STATUS, STATUS_HISTORY].map((f) => (fileSize(f) === undefined ? '' : readRepoFile(f)))),
+  };
+}
+
+function collect(args) {
+  const now = flag(args, '--now') ? Date.parse(flag(args, '--now')) : Date.now();
   const weekAgo = new Date(now - 7 * DAY).toISOString();
   const cfg = readLoopState();
 
@@ -308,20 +428,26 @@ function collect(args) {
     subjects,
   };
 
-  const memoryIndex = flag('--memory-index');
+  const memoryIndex = flag(args, '--memory-index');
   if (memoryIndex) input.memoryIndexSize = statSync(memoryIndex).size;
 
   if (args.includes('--github')) {
-    const slug = process.env.GITHUB_REPOSITORY ?? /github\.com[:/]([^/]+\/[^/.\s]+)/.exec(git(['remote', 'get-url', 'origin']) ?? '')?.[1];
-    const pulls = JSON.parse(
-      execFileSync('gh', ['api', `repos/${slug}/pulls?state=open&per_page=100`], { encoding: 'utf8' }),
-    );
-    input.quietPulls = pulls
-      .map((p) => ({ number: p.number, title: p.title, draft: p.draft, days: daysBetween(Date.parse(p.updated_at), now) }))
-      .filter((p) => p.days >= cfg.cadence.stalePrDays && !/^chore\(main\): release /.test(p.title));
+    // About twenty requests in all; one that fails must not take the rest of the report with it.
+    try {
+      input.quietPulls = ghJson(`repos/${repoSlug()}/pulls?state=open&per_page=100`)
+        .map((p) => ({ number: p.number, title: p.title, draft: p.draft, days: daysBetween(Date.parse(p.updated_at), now) }))
+        .filter((p) => p.days >= cfg.cadence.stalePrDays && !/^chore\(main\): release /.test(p.title));
+    } catch {
+      input.pullsUnread = true;
+    }
+    try {
+      Object.assign(input, collectTopics(cfg, now));
+    } catch {
+      input.noteTopicsUnread = true;
+    }
   }
 
-  const projectFiles = flag('--project-files');
+  const projectFiles = flag(args, '--project-files');
   if (projectFiles) {
     const latest = tags && tags.length > 0 ? [...tags].sort((a, b) => compareVersions(a.name, b.name)).at(-1).name : undefined;
     const notes = path.join(projectFiles, 'console-ux');
@@ -336,8 +462,22 @@ function collect(args) {
   return input;
 }
 
+/** The `--topics` listing: every topic word in use, the pull requests it was written on, and whether a row carries it. */
+export function renderTopics(topics, registered) {
+  const seen = new Set(topics.map((t) => t.topic));
+  const lines = topics.map((t) => `${t.topic}  ${t.pulls.map((n) => `#${n}`).join(' ')}${registered.has(t.topic) ? '  已登记' : ''}`);
+  for (const topic of [...registered].filter((t) => !seen.has(t)).sort()) lines.push(`${topic}  已登记`);
+  return lines.length > 0 ? lines.join('\n') : '还没有主题词';
+}
+
 function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--topics')) {
+    const now = flag(args, '--now') ? Date.parse(flag(args, '--now')) : Date.now();
+    const { noteTopics, registeredTopics: registered } = collectTopics(readLoopState(), now);
+    console.log(renderTopics(noteTopics, registered));
+    return;
+  }
   const findings = assess(collect(args));
   console.log(args.includes('--json') ? JSON.stringify(findings, null, 2) : render(findings));
   if (args.includes('--strict') && findings.some((f) => f.level === 'act')) process.exit(1);

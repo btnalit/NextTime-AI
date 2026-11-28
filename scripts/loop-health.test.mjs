@@ -3,7 +3,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseLegacyTable } from './guards/loop-ledger.mjs';
-import { archivableNotes, assess, commitMix, legacyCounts, legacyFlow, releasesAhead, render } from './loop-health.mjs';
+import {
+  archivableNotes,
+  assess,
+  commitMix,
+  legacyCounts,
+  legacyFlow,
+  registeredTopics,
+  releasesAhead,
+  render,
+  renderTopics,
+  repeatedTopics,
+  reviewNoteTopics,
+} from './loop-health.mjs';
 
 const rows = (...lines) => parseLegacyTable(['## 4. 遗留清单', ...lines, '## 5. 更新规则'].join('\n'));
 const row = (id, status, level = 'P3') => `| ${id} | item | ${level} | lane | ${status} |`;
@@ -11,7 +23,7 @@ const row = (id, status, level = 'P3') => `| ${id} | item | ${level} | lane | ${
 const cfg = {
   schema: 1,
   host: { version: 'v0.63.0', appliedOn: '2026-11-06' },
-  cadence: { hostLagRemindReleases: 3, hostLagRemindDays: 14, recordCommitShareMax: 0.25, stalePrDays: 3 },
+  cadence: { hostLagRemindReleases: 3, hostLagRemindDays: 14, recordCommitShareMax: 0.25, stalePrDays: 3, reviewNoteWindowDays: 30 },
   docBudgets: { 'docs/STATUS.md': { ceiling: 1000, target: 500 } },
   legacy: { tierRequiredFromId: 821, inStageWipCap: 2, weeklyNewP3Soft: 2, grandfathered: {} },
 };
@@ -146,6 +158,67 @@ test('assess: optional readings appear only when given', () => {
   const quietPulls = [{ number: 7, title: 'feat: x', draft: true, days: 6 }];
   assert.match(find(assess(quiet({ quietPulls })), 'pr:7').message, /#7（draft） 6 天没有动静/);
   assert.equal(find(assess(quiet({ archivable: ['console-ux/acceptance-7.md'] })), 'archive').level, 'watch');
+});
+
+const note = (pull, body, association = 'OWNER') => ({ pull, association, body });
+
+test('reviewNoteTopics: one topic per note line, counted by pull request, trusted authors only', () => {
+  const topics = reviewNoteTopics([
+    note(10, '建议把错误信息写全。\n<!-- review-note topic=error-context -->\n<!-- review-verdict seat=kernel head=abc1234 verdict=pass -->'),
+    note(10, '同一个 PR 再说一次 <!--review-note topic=Error-Context-->'),
+    note(12, '<!-- review-note topic=error-context -->\n<!-- review-note topic=重复的校验 -->'),
+    note(13, '<!-- review-note topic=error-context -->', 'NONE'),
+    note(14, '<!-- review-note topic=<主题词> -->，<!-- review-note topic=two words -->，<!-- review-note -->'),
+    note(Number.NaN, '<!-- review-note topic=error-context -->'),
+    note(15, null),
+  ]);
+  assert.deepEqual(topics, [
+    { topic: 'error-context', pulls: [10, 12] },
+    { topic: '重复的校验', pulls: [12] },
+  ]);
+});
+
+test('registeredTopics / repeatedTopics: a second pull request counts until a ledger row carries the word', () => {
+  const topics = [
+    { topic: 'error-context', pulls: [10, 12] },
+    { topic: 'dup-check', pulls: [11, 12, 13] },
+    { topic: 'naming', pulls: [12] },
+  ];
+  const registered = registeredTopics('| 991 | 校验写了两遍（`topic=Dup-Check`） | P3 | 内核 | 开放（挂起：内部重复） |', undefined, '');
+  assert.deepEqual([...registered], ['dup-check']);
+  assert.deepEqual(repeatedTopics(topics, registered), [{ topic: 'error-context', pulls: [10, 12] }]);
+  assert.deepEqual(repeatedTopics(topics, registeredTopics('topic=error-context，topic=dup-check。')), []);
+});
+
+test('assess: a topic on a second pull request needs action; without the GitHub reading there is no line', () => {
+  assert.equal(find(assess(quiet()), 'review-notes'), undefined);
+  const noteTopics = [
+    { topic: 'error-context', pulls: [10, 12] },
+    { topic: 'naming', pulls: [12] },
+  ];
+  const f = find(assess(quiet({ noteTopics, registeredTopics: new Set() })), 'topic:error-context');
+  assert.equal(f.level, 'act');
+  assert.equal(f.owner, '协调线程');
+  assert.match(f.message, /「error-context」已在 2 个 PR 出现（#10、#12）/);
+  assert.match(f.action, /topic=error-context/);
+  const settled = assess(quiet({ noteTopics, registeredTopics: new Set(['error-context']) }));
+  assert.equal(find(settled, 'topic:error-context'), undefined);
+  assert.equal(find(settled, 'review-notes').level, 'ok');
+  assert.match(find(settled, 'review-notes').message, /近 30 天.*2 个主题词/);
+  // A failed GitHub read is no-sample, never ok; a listing cut at the page cap is worth a look.
+  const unread = find(assess(quiet({ noteTopicsUnread: true })), 'review-notes');
+  assert.equal(unread.level, 'no-sample');
+  assert.match(unread.message, /读不到 PR 评论/);
+  assert.equal(find(assess(quiet({ pullsUnread: true })), 'pulls').level, 'no-sample');
+  const cut = assess(quiet({ noteTopics, registeredTopics: new Set(['error-context']), noteTopicsTruncated: true }));
+  assert.equal(find(cut, 'review-notes-truncated').level, 'watch');
+  assert.match(find(cut, 'review-notes-truncated').message, /只查了最近的 5000 条/);
+});
+
+test('renderTopics: words in use with their pull requests, then words only a ledger row carries', () => {
+  const out = renderTopics([{ topic: 'error-context', pulls: [10, 12] }, { topic: 'naming', pulls: [12] }], new Set(['naming', 'dup-check']));
+  assert.equal(out, 'error-context  #10 #12\nnaming  #12  已登记\ndup-check  已登记');
+  assert.equal(renderTopics([], new Set()), '还没有主题词');
 });
 
 test('archivableNotes: released acceptance notes and prompts for an older tag', () => {
