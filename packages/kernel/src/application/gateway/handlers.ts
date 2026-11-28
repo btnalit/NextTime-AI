@@ -2813,8 +2813,10 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
       // `authorizeCapabilityCall` checks every call against — so it does not call one that is
       // refused as `not_in_scope` (worker mode's `search` for context).
       ...(ownWorker && ctx?.claims ? { callerCapabilities: ctx.claims.scope.capabilities } : {}),
-      // Legacy 968: and the LinkTypes and ObjectTypes its `factsToAssert` may use.
-      ...(ownWorker
+      // Legacy 968: and the LinkTypes and ObjectTypes its `factsToAssert` may use — not an
+      // evaluation trial's Worker (review #501 on #1633): its world is the suite's fixtures, closed
+      // to the workspace (application/eval-session), and its report writes no Fact.
+      ...(ownWorker && task.purpose !== 'evaluation'
         ? { ontologyVocabulary: await readWorkerVocabulary(client, workspaceId, ctx) }
         : {}),
     }),

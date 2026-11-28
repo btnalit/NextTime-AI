@@ -37,6 +37,7 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import {
   EVALUATION_WITHHELD_ACTION,
   EvaluationContentWithheldError,
@@ -80,6 +81,7 @@ import type { ResolvedCaller } from './resolve-caller.js';
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+const ONTOLOGY_DIR = path.join(path.resolve(KERNEL_ROOT, '..', '..'), 'ontology');
 
 const HOLDOUT_INPUT =
   'Find the pelican-orchard batch host that stopped answering after midnight and restart it once.';
@@ -580,10 +582,21 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('its Worker reads its own Task — a held-out case input included — and the suite’s fixture tools, and is refused anything else', async () => {
       const trial = await startTrial(holdoutCaseId);
       const other = await startTrial(devCaseId);
+      // The workspace has an ontology a real Task's Worker would be told about (legacy 968).
+      await asApp((client) =>
+        publishOntologyDomainPack(client, workspaceId, {
+          packName: 'ops-assets',
+          fileName: 'ops-assets-v1.yaml',
+          dir: ONTOLOGY_DIR,
+          principalId: people.owner,
+        }),
+      );
 
-      // Its own Task, with the case's input, though the case is held out.
+      // Its own Task, with the case's input, though the case is held out — and none of the
+      // workspace's ontology: its world is the suite's fixtures (review #501 on #1633).
       const own = await call<TaskWire>(trial.worker, 'get_task', { taskId: trial.taskId });
       expect(own).toMatchObject({ id: trial.taskId, input: HOLDOUT_INPUT, purpose: 'evaluation' });
+      expect(own).not.toHaveProperty('ontologyVocabulary');
       // Another trial's Task acts for the same Principal, and is not there for it.
       expect(
         await rejection(call(trial.worker, 'get_task', { taskId: other.taskId })),

@@ -11,12 +11,21 @@
  * ObjectType with its identity key and one per LinkType signature while they fit; once one does
  * not, the rest are listed by name only, and what still does not fit is counted. Nothing in it
  * changes from one call to the next, so the prompt up to it stays cached.
+ *
+ * A name is the owner's free text (an ontology only requires it non-empty), and it lands in the
+ * context as text the model reads: a line break in one could start a section of its own. Each name
+ * is written on one line — every control character and line or paragraph separator a space — and
+ * at most {@link NAME_MAX_CHARS} characters (reviews #481 and #493 on #1633). A Worker could not
+ * write such a name back as given either; the grammar a name is held to at publish is legacy
+ * 938 / 943's.
  */
 
 /** At most this many characters of vocabulary go into a Worker's context. */
 export const VOCABULARY_MAX_CHARS = 4000;
 /** At most this many characters of related Objects go into a Worker's context. */
 export const RELEVANT_FACTS_MAX_CHARS = 4000;
+/** At most this many characters of one name (an ObjectType, a LinkType, an identity key part). */
+export const NAME_MAX_CHARS = 120;
 
 const VOCABULARY_HEADING = '### Ontology vocabulary';
 
@@ -41,8 +50,21 @@ const TAIL_RESERVE = 120;
 
 interface Entry {
   readonly kind: 'object' | 'link';
+  /** What tells two entries apart: the kind and the name as the kernel sent it. */
+  readonly key: string;
+  /** The name as written into the context (`shownName`). */
   readonly name: string;
   readonly line: string;
+}
+
+/** Every character that would end a line where the model reads it, or that it would not see. */
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+
+/** A name as it goes into the context: on one line, at most `NAME_MAX_CHARS` characters (module
+ *  doc comment). */
+function shownName(name: string): string {
+  const flat = name.replace(LINE_BREAKING, ' ');
+  return flat.length <= NAME_MAX_CHARS ? flat : `${flat.slice(0, NAME_MAX_CHARS - 1)}…`;
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
@@ -69,11 +91,17 @@ function entriesOf(vocabulary: Record<string, unknown>): Entry[] {
     const entry = recordOf(raw);
     const name = text(entry?.name);
     if (!entry || !name) continue;
-    const key = Array.isArray(entry.identityKey)
-      ? entry.identityKey.filter((part): part is string => typeof part === 'string')
+    const identityKey = Array.isArray(entry.identityKey)
+      ? entry.identityKey.filter((part): part is string => typeof part === 'string').map(shownName)
       : [];
-    const line = key.length > 0 ? `- ${name} (${key.join(', ')})` : `- ${name}`;
-    relevantFirst[entry.relevant === true ? 0 : 2]?.push({ kind: 'object', name, line });
+    const shown = shownName(name);
+    const line = identityKey.length > 0 ? `- ${shown} (${identityKey.join(', ')})` : `- ${shown}`;
+    relevantFirst[entry.relevant === true ? 0 : 2]?.push({
+      kind: 'object',
+      key: `object:${name}`,
+      name: shown,
+      line,
+    });
   }
   for (const raw of linkTypes) {
     const entry = recordOf(raw);
@@ -81,15 +109,22 @@ function entriesOf(vocabulary: Record<string, unknown>): Entry[] {
     const domain = text(entry?.domain);
     const range = text(entry?.range);
     if (!entry || !name || !domain || !range) continue;
-    const line = `- ${name}: ${domain} -> ${range}`;
-    relevantFirst[entry.relevant === true ? 1 : 3]?.push({ kind: 'link', name, line });
+    const shown = shownName(name);
+    const line = `- ${shown}: ${shownName(domain)} -> ${shownName(range)}`;
+    relevantFirst[entry.relevant === true ? 1 : 3]?.push({
+      kind: 'link',
+      key: `link:${name}`,
+      name: shown,
+      line,
+    });
   }
   return relevantFirst.flat();
 }
 
 /** The vocabulary section of a Worker's context (module doc comment), at most `maxChars`
- *  characters; `undefined` when `get_task` gave none — a kernel before 968, or a workspace with no
- *  published ontology, where no Link is checked. */
+ *  characters; `undefined` when `get_task` gave none — a kernel before 968, an evaluation trial's
+ *  Worker, or a workspace with no published ontology, where no Link is checked. With no LinkType to
+ *  write — ObjectTypes or not — it says to leave `factsToAssert` empty (review #481 on #1633). */
 export function renderVocabulary(
   ontologyVocabulary: unknown,
   maxChars: number = VOCABULARY_MAX_CHARS,
@@ -97,8 +132,9 @@ export function renderVocabulary(
   const vocabulary = recordOf(ontologyVocabulary);
   if (!vocabulary) return undefined;
   const entries = entriesOf(vocabulary);
-  const omittedByKernel = count(vocabulary.omittedObjectTypes) + count(vocabulary.omittedLinkTypes);
-  if (entries.length === 0 && omittedByKernel === 0) {
+  const omittedLinkTypes = count(vocabulary.omittedLinkTypes);
+  const omittedByKernel = count(vocabulary.omittedObjectTypes) + omittedLinkTypes;
+  if (!entries.some((entry) => entry.kind === 'link') && omittedLinkTypes === 0) {
     return `${VOCABULARY_HEADING}\n${NO_VOCABULARY}`;
   }
 
@@ -120,13 +156,13 @@ export function renderVocabulary(
   // What did not get a line of its own: its name, once, while the names still fit. A name stands
   // for every signature of it that got no line; a signature of a LinkType that has a line, and
   // anything once the names no longer fit, is counted.
-  const fullNames = new Set([...full].map((entry) => `${entry.kind}:${entry.name}`));
+  const fullNames = new Set([...full].map((entry) => entry.key));
   const names: string[] = [];
   const named = new Set<string>();
   let notListed = omittedByKernel;
   for (const entry of entries) {
     if (full.has(entry)) continue;
-    const key = `${entry.kind}:${entry.name}`;
+    const key = entry.key;
     if (named.has(key)) continue;
     const added = (names.length === 0 ? NAMES_PREFIX.length + 1 : 2) + entry.name.length;
     if (fullNames.has(key) || used + added + TAIL_RESERVE / 2 > maxChars) {

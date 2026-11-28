@@ -196,7 +196,8 @@ export const TaskWireSchema = z
      *  platform meta-ontology a Handle may not write; `relevant` ones first, those an Operation the
      *  Handle may call reads or writes (`*`, any type, counts as one); at most 100 ObjectTypes and
      *  200 signatures, the rest counted in `omitted*`. `null` when the workspace has published no
-     *  ontology, so no Link it writes is checked. */
+     *  ontology, so no Link it writes is checked. Absent for an evaluation trial's Worker, whose
+     *  world is the suite's fixtures (review #501 on #1633). */
     ontologyVocabulary: WorkerVocabularyWireSchema.nullable().optional(),
   })
   .strict();
