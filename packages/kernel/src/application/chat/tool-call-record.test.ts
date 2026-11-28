@@ -420,6 +420,78 @@ describe('legacy 916 — a secret on its own line of a tool’s JSON output, by 
     expect(twice).toEqual({ value: once.value, redactedValues: 0 });
   });
 
+  describe('a stored result cut inside a quoted value, the quote left open (review #501 on #1629)', () => {
+    const NOTE = '\n\n[... 40 more characters omitted — the full result is not shown ...]';
+    /** `stdout` as JSON text, cut 8 characters into `SECRET`, the old note after it. */
+    const cutIn = (stdout: string) => {
+      const text = JSON.stringify({ stdout, code: 0 });
+      return `${text.slice(0, text.indexOf(SECRET) + 8)}${NOTE}`;
+    };
+    const stored = (text: string) => ({
+      ...record({ name: 'some_tool' }),
+      result: { text },
+      redactedValues: 0,
+    });
+
+    it.each([
+      ['an env line, single quotes', `start\nPGPASSWORD='${SECRET}' psql`, 'start\\nPGPASSWORD='],
+      ['an export, double quotes', `export API_TOKEN="${SECRET}"\nok`, 'export API_TOKEN='],
+      ['the first line, no escape before it', `password: '${SECRET}'`, 'password: '],
+      // The rule for a JSON key's value not closed on its line hid it already, its quote kept.
+      ['a JSON key in the output', `{"password": "${SECRET}"}`, '{\\"password\\": \\"'],
+    ])('%s: hidden from its quote to the cut, the note kept, once', (_, stdout, before) => {
+      const cut = cutIn(stdout);
+      const once = rescrubStoredToolCallResult(stored(cut));
+      const text = (once.value.result as { text: string }).text;
+      expect(text).toBe(`{"stdout":"${before}${REDACTED}${NOTE}`);
+      expect(once.redactedValues).toBe(1);
+      expect(rescrubStoredToolCallResult(once.value)).toEqual({
+        value: once.value,
+        redactedValues: 0,
+      });
+      // The live reading hides it too (the tail check, at the line's end).
+      expect(JSON.stringify(redactToolResult(textResult(cut), 'some_tool').value)).not.toContain(
+        SECRET.slice(0, 8),
+      );
+    });
+
+    it.each([
+      ['a quote left open on a line that goes on (legacy 923)', `PGPASSWORD='${SECRET}\nnext line`],
+      ['an open quote after a name that names no secret', `greeting='${SECRET}`],
+      ['what is left of the value is the mask', `PGPASSWORD='${REDACTED}`],
+      ['what is left of the value is the start of the mask', `PGPASSWORD='${REDACTED.slice(0, 4)}`],
+    ])('%s: left as it is', (_, stdout) => {
+      const text = JSON.stringify({ stdout }).slice(0, -2) + NOTE;
+      expect(rescrubStoredToolCallResult(stored(text))).toEqual({
+        value: stored(text),
+        redactedValues: 0,
+      });
+    });
+
+    it('a record the kernel cut itself, at its preview’s end inside a string, is never rewritten', () => {
+      // The preview is scrubbed before it is cut (16,000 characters): wherever the cut lands in a
+      // masked value, what is left of it is the mask or the start of it.
+      for (const [name, quote] of [
+        ['PGPASSWORD=', "'"],
+        ['export API_TOKEN=', '\\"'],
+        ['password: ', "'"],
+      ] as const) {
+        const line = `${name}${quote}${SECRET}${quote}`;
+        for (let shift = 0; shift < line.length + 24; shift += 1) {
+          const stdout = `${'x'.repeat(16_000 - 12 - shift)}\n${line.replaceAll('\\"', '"')} ok\n${'y'.repeat(2_000)}`;
+          const built = record({
+            name: 'some_tool',
+            result: textResult(JSON.stringify({ stdout })),
+            hasResult: true,
+          });
+          expect(built.result?.truncated).toBe(true);
+          expect(JSON.stringify(built)).not.toContain(SECRET.slice(0, 4));
+          expect(rescrubStoredToolCallResult(built)).toEqual({ value: built, redactedValues: 0 });
+        }
+      }
+    });
+  });
+
   it('an arg’s secret value the result quotes is hidden though JSON escaped a character of it', () => {
     // A quote and a backslash: the JSON text carries `\"` and `\\`, so the literal is not in it.
     const args = { password: 'pa"ss\\word-9' };

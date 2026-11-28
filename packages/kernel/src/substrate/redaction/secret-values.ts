@@ -2265,6 +2265,47 @@ function partialEscapeLength(inner: string): number {
   return inner.endsWith('\\') && startsEscape(inner, inner.length - 1) ? 1 : 0;
 }
 
+/** A secret's name and separator (`SECRET_NAME_AND_SEPARATOR`), and the quote its value opens
+ *  with. */
+const SECRET_NAME_AND_OPENING_QUOTE = new RegExp(String.raw`${SECRET_NAME_AND_SEPARATOR}["']`, 'g');
+
+/**
+ * Where the value starts — at its opening quote — that `decoded` ends with: a string the text ends
+ * inside, read to where it was cut (legacy 982, review #501 on #1629). Its last line ends in a value
+ * quoted after a secret's name (the last such on the line) that nothing after its quote closes. The
+ * cut took the rest of the value, so what is left of it is the start of a secret, and nothing of the
+ * string comes after it: hiding it to the cut hides nothing else. A quote left open on a line that
+ * goes on is not this (legacy 923: no rule reads it as a value). `-1` when the line does not end
+ * so, or what is left of the value is empty, the mask or the start of it (a copy cut inside a mask
+ * it wrote). Not the tail check: it reads one end the text is known to have, and never past it.
+ */
+function openValueAtTheCut(decoded: string): number {
+  const lineStart = Math.max(decoded.lastIndexOf('\n'), decoded.lastIndexOf('\r')) + 1;
+  let quoteAt = -1;
+  for (const pair of decoded.slice(lineStart).matchAll(SECRET_NAME_AND_OPENING_QUOTE)) {
+    quoteAt = lineStart + pair.index + pair[0].length - 1;
+  }
+  if (quoteAt === -1) return -1;
+  const value = decoded.slice(quoteAt + 1);
+  if (value === '' || value.includes(decoded.charAt(quoteAt)) || REDACTED.startsWith(value)) {
+    return -1;
+  }
+  return quoteAt;
+}
+
+/** `read` — a string the text ends inside, decoded and scrubbed — with the value it ends with
+ *  hidden from its quote to the cut (`openValueAtTheCut`), as the tail check hides one open at
+ *  its line's end; counted. */
+function hiddenToTheCut(read: Scrubbed<string>): Scrubbed<string> {
+  const at = openValueAtTheCut(read.value);
+  if (at === -1) return read;
+  return {
+    ...read,
+    value: `${read.value.slice(0, at)}${REDACTED}`,
+    redactedValues: read.redactedValues + 1,
+  };
+}
+
 /** Where a string `redactSecretFieldsInJsonText`'s `scrubValue` read is, in its output: from its
  *  opening quote to just past its closing one (or the text's end). */
 export type JsonTextSpan = readonly [start: number, end: number];
@@ -2363,17 +2404,23 @@ export function redactSecretFieldsInJsonText(
    *  ends inside ends at its first raw control character, if any: JSON writes none inside a
    *  string, so it is where the cut was — a runtime's note after it (`\n\n[... more characters
    *  omitted ...]`) — and the string read to there decodes, the note is left to the pass over the
-   *  text as it is (review #501 on #1629). */
+   *  text as it is (review #501 on #1629). What is left of a value it was cut inside, quoted and
+   *  open to the cut, is hidden there (`hiddenToTheCut`): only this read sees the string end. */
   const rewrite = (start: number, quote: number): void => {
     const closed = quote < length;
     const stop = closed ? quote : firstControlChar(text, start + 1);
     const end = closed ? quote + 1 : stop;
     const inner = text.slice(start + 1, stop);
-    if (scrubValue === undefined || !inner.includes('\\')) return;
+    if (scrubValue === undefined) return;
+    // Without an escape a string reads the same decoded, and the pass over the text as it is
+    // reads it — unless it was cut inside a value.
+    const escaped = inner.includes('\\');
+    if (!escaped && (closed || openValueAtTheCut(inner) === -1)) return;
     const partial = closed ? 0 : partialEscapeLength(inner);
     const decoded = decodedJsonString(`"${inner.slice(0, inner.length - partial)}"`);
     if (decoded === undefined) return;
-    const scrubbed = scrubValue(decoded);
+    const read = scrubValue(decoded);
+    const scrubbed = closed ? read : hiddenToTheCut(read);
     if (scrubbed.value === decoded) {
       // Kept as written — still read: the pass over the text skips it.
       decodedSpans.push([written + start - copiedTo, written + end - copiedTo]);
