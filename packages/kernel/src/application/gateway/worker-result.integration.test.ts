@@ -17,7 +17,12 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
-import { proposeOperation, registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  importManifest,
+  proposeOperation,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { explain, startActivity } from '../../substrate/epistemic/index.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { invokeWorker, postWorkerResult, readWorkerRunRow } from '../task/index.js';
@@ -1119,6 +1124,61 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(stored.evidenceRows).toHaveLength(1);
       });
 
+      it('legacy 968: an undeclared LinkType’s refusal names what is declared between the two types, either way round', async () => {
+        const { taskId, claims } = await spawnWorkerRun();
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const marker = randomUUID().slice(0, 8);
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'two guessed LinkTypes',
+          factsToAssert: [
+            // The trial workspace's shape: the model's own name, the wrong way round.
+            {
+              linkType: 'hosts',
+              source: { objectType: 'Host', identity: { hostname: `h-${marker}` } },
+              target: { objectType: 'Container', identity: { containerId: randomUUID() } },
+            },
+            refusedFact(marker),
+          ],
+        })) as { status: string; factsRejected: Record<string, unknown>[] };
+        expect(result.status).toBe('completed');
+        expect(result.factsRejected).toEqual([
+          {
+            index: 0,
+            linkType: 'hosts',
+            reason: 'undeclared_link_type',
+            sourceType: 'Host',
+            targetType: 'Container',
+            expected: [],
+            declaredBetween: ['runs_on: Container -> Host'],
+          },
+          {
+            index: 1,
+            linkType: 'observed_state_of',
+            reason: 'undeclared_link_type',
+            sourceType: 'DocContainer',
+            targetType: 'Host',
+            expected: [],
+            declaredBetween: [],
+          },
+        ]);
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{ result: { factsRejected: unknown[] } }>(
+            'select result from tasks where workspace_id = $1 and id = $2',
+            [workspaceId, taskId],
+          );
+          const audit = await client.query<{ payload: Record<string, unknown> }>(
+            "select payload from audit_records where workspace_id = $1 and action = 'task.result_fact_rejected' and resource_id = $2 order by (payload->>'factIndex')::int",
+            [workspaceId, taskId],
+          );
+          return { factsRejected: task.rows[0]?.result.factsRejected, audit: audit.rows };
+        });
+        expect(stored.factsRejected).toEqual(result.factsRejected);
+        expect(stored.audit.map((row) => row.payload.declaredBetween)).toEqual([
+          ['runs_on: Container -> Host'],
+          [],
+        ]);
+      });
+
       it('warn: both entries are written and the guard’s own ontology_violation row records the second', async () => {
         // Login role: only a platform transaction may change a workspace row (migration core 0035).
         await withWorkspace(
@@ -1876,6 +1936,112 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect.objectContaining({ proposalIndex: 0, reason: 'invalid_operation_name' }),
           ]);
         });
+      });
+
+      it('legacy 968: get_task gives the Task’s own Worker the vocabulary its Facts may use, its Operations’ types first, and no one else', async () => {
+        // An observe Operation the Worker may call (no Grant needed) that reads Containers and Hosts
+        // and writes nothing. Last in the block: the gate it registers is a Gatekeeper Object, which
+        // the pre-write refusals test above counts none of.
+        const gateMarker = randomUUID().slice(0, 8);
+        await inTx(ownerId, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.register_gatekeeper',
+            principalId: ownerId,
+          });
+          const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+            name: `vocab-gate-${gateMarker}`,
+            transportKind: 'http',
+            target: `vocab-system-${gateMarker}`,
+            endpoint: `https://gate.vocab-${gateMarker}.invalid/`,
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId,
+            operations: [
+              {
+                name: 'list_containers',
+                description: 'List the containers on a host.',
+                binding: { kind: 'http', method: 'GET', path: '/containers' },
+                params_schema: {},
+                mode: 'observe',
+                blast_radius: 'low',
+                reversibility: false,
+                auto_approvable: true,
+                await_decision: false,
+                reads: ['Container', 'Host'],
+                writes: [],
+              },
+            ],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId, name: 'list_containers' });
+        });
+
+        const { taskId, claims } = await spawnWorkerRun();
+        type Vocabulary = {
+          objectTypes: { name: string; identityKey: string[] | null; relevant: boolean }[];
+          linkTypes: { name: string; domain: string; range: string; relevant: boolean }[];
+          omittedObjectTypes: number;
+          omittedLinkTypes: number;
+        };
+        const own = (await dispatchCapability({ pool }, { channel: 'handle', claims }, 'get_task', {
+          taskId,
+        })) as { ontologyVocabulary?: Vocabulary | null };
+        const vocabulary = own.ontologyVocabulary;
+        if (!vocabulary) throw new Error('the Worker was given no vocabulary');
+        // ops-assets v1's types: the two the Operation reads first, then the rest by name; none of
+        // the platform meta-ontology.
+        expect(vocabulary.objectTypes.slice(0, 2)).toEqual([
+          { name: 'Container', identityKey: expect.any(Array), relevant: true },
+          { name: 'Host', identityKey: ['hostname'], relevant: true },
+        ]);
+        const names = vocabulary.objectTypes.map((objectType) => objectType.name);
+        expect(names).not.toContain('Gatekeeper');
+        expect(names).not.toContain('Operation');
+        expect(vocabulary.objectTypes.slice(2).every((objectType) => !objectType.relevant)).toBe(
+          true,
+        );
+        // Both ends among the two: `depends_on: Container -> Container` and `runs_on`, by name.
+        expect(vocabulary.linkTypes.filter((linkType) => linkType.relevant)).toEqual([
+          { name: 'depends_on', domain: 'Container', range: 'Container', relevant: true },
+          { name: 'runs_on', domain: 'Container', range: 'Host', relevant: true },
+        ]);
+        expect(vocabulary.linkTypes.slice(0, 2).every((linkType) => linkType.relevant)).toBe(true);
+        expect(vocabulary.linkTypes.some((linkType) => linkType.domain === 'Gatekeeper')).toBe(
+          false,
+        );
+        expect(vocabulary).toMatchObject({ omittedObjectTypes: 0, omittedLinkTypes: 0 });
+
+        // The owner reading the same Task in the console gets none.
+        const asOwner = (await dispatchCapability(
+          { pool },
+          {
+            channel: 'human',
+            principal: {
+              workspaceId,
+              id: ownerId,
+              kind: 'human',
+              role: 'owner',
+              displayName: null,
+            },
+            session: {
+              workspaceId,
+              id: randomUUID(),
+              principalId: ownerId,
+              kind: 'web',
+              onBehalfOf: ownerId,
+              status: 'active',
+              createdAt: new Date(),
+              expiresAt: null,
+            },
+          },
+          'get_task',
+          { taskId },
+        )) as Record<string, unknown>;
+        expect(asOwner.id).toBe(taskId);
+        expect(asOwner).not.toHaveProperty('ontologyVocabulary');
       });
     });
   },

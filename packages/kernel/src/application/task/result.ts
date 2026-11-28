@@ -157,6 +157,8 @@ export interface RejectedResultFact {
   readonly sourceType?: string;
   readonly targetType?: string;
   readonly expected?: readonly string[];
+  /** Legacy 968, `undeclared_link_type` only: the signatures declared between the two types. */
+  readonly declaredBetween?: readonly string[];
   readonly detail?: string;
 }
 
@@ -170,6 +172,9 @@ function boundedFactRejection(rejection: RejectedResultFact): RejectedResultFact
     ...(rejection.targetType !== undefined && { targetType: boundedEcho(rejection.targetType) }),
     ...(rejection.expected !== undefined && {
       expected: rejection.expected.map((name) => boundedEcho(name)),
+    }),
+    ...(rejection.declaredBetween !== undefined && {
+      declaredBetween: rejection.declaredBetween.map((signature) => boundedEcho(signature)),
     }),
     ...(rejection.detail !== undefined && { detail: boundedEcho(rejection.detail, 400) }),
   };

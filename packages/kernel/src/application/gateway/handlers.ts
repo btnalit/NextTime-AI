@@ -167,6 +167,12 @@ import {
   SqlGraphStore,
   objectDisplayName,
 } from '../../substrate/graph/index.js';
+import {
+  type WorkerVocabulary,
+  loadPublishedOntology,
+  typesTouchedBy,
+  workerVocabulary,
+} from '../../substrate/ontology/index.js';
 import { goalVisibleTo, readRecentGoalPrecedents } from '../goal/index.js';
 import {
   listRuntimeImagesHandler,
@@ -494,7 +500,11 @@ import {
   publishSkillHandler,
 } from './skill-procedure-handlers.js';
 import { NoActiveTurnError, TurnNotFoundError } from './turn-errors.js';
-import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-result-handler.js';
+import {
+  listAllowedOperationsHandler,
+  readAllowedOperations,
+  reportTaskResultHandler,
+} from './worker-result-handler.js';
 import { reportToolCallsHandler } from './worker-tool-calls-handler.js';
 
 // The two Turn errors moved to `turn-errors.ts` (S10 E1) so the attribution handlers can throw them
@@ -2648,6 +2658,8 @@ function toWireTask(
     readonly inputAsStored?: boolean;
     /** Legacy 761: the calling Handle's scope, given only for one of the Task's own WorkerRuns. */
     readonly callerCapabilities?: readonly string[];
+    /** Legacy 968: the vocabulary its Facts are written with, likewise only for its own Worker. */
+    readonly ontologyVocabulary?: WorkerVocabulary | null;
   } = {},
 ) {
   const turn = task.createdByActivityId
@@ -2701,7 +2713,45 @@ function toWireTask(
     ...(options.callerCapabilities !== undefined
       ? { callerCapabilities: [...options.callerCapabilities] }
       : {}),
+    ...(options.ontologyVocabulary !== undefined
+      ? { ontologyVocabulary: toWireVocabulary(options.ontologyVocabulary) }
+      : {}),
   };
+}
+
+/** Legacy 968 (`TaskWireSchema.ontologyVocabulary`), field by field. */
+function toWireVocabulary(vocabulary: WorkerVocabulary | null) {
+  if (vocabulary === null) return null;
+  return {
+    objectTypes: vocabulary.objectTypes.map((objectType) => ({
+      name: objectType.name,
+      identityKey: objectType.identityKey === null ? null : [...objectType.identityKey],
+      relevant: objectType.relevant,
+    })),
+    linkTypes: vocabulary.linkTypes.map((linkType) => ({
+      name: linkType.name,
+      domain: linkType.domain,
+      range: linkType.range,
+      relevant: linkType.relevant,
+    })),
+    omittedObjectTypes: vocabulary.omittedObjectTypes,
+    omittedLinkTypes: vocabulary.omittedLinkTypes,
+  };
+}
+
+/** Legacy 968: the vocabulary a Worker writes its Facts with — the workspace's published ontology
+ *  less what a Handle may not write, the types its own Operations read and write first
+ *  (`substrate/ontology/vocabulary.ts`). `null` when the workspace has published no ontology at
+ *  all: then no Link write is checked (`ontology-guard.ts`) and there is no vocabulary to keep to. */
+async function readWorkerVocabulary(
+  client: PoolClient,
+  workspaceId: string,
+  ctx: Parameters<CapabilityHandler>[3],
+): Promise<WorkerVocabulary | null> {
+  const ontology = await loadPublishedOntology(client, workspaceId);
+  if (ontology.linkTypes.size === 0) return null;
+  const allowed = await readAllowedOperations(client, workspaceId, ctx);
+  return workerVocabulary(ontology, typesTouchedBy(allowed.map(({ record }) => record.operation)));
 }
 
 function toWireRejectedOutput(rejected: RejectedOutput): RejectedOutputWire {
@@ -2763,6 +2813,12 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
       // `authorizeCapabilityCall` checks every call against — so it does not call one that is
       // refused as `not_in_scope` (worker mode's `search` for context).
       ...(ownWorker && ctx?.claims ? { callerCapabilities: ctx.claims.scope.capabilities } : {}),
+      // Legacy 968: and the LinkTypes and ObjectTypes its `factsToAssert` may use — not an
+      // evaluation trial's Worker (review #501 on #1633): its world is the suite's fixtures, closed
+      // to the workspace (application/eval-session), and its report writes no Fact.
+      ...(ownWorker && task.purpose !== 'evaluation'
+        ? { ontologyVocabulary: await readWorkerVocabulary(client, workspaceId, ctx) }
+        : {}),
     }),
     resourceType: 'task',
     resourceId: task.id,

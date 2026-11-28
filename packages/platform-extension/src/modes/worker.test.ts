@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
 import { BUDGET_HINT_TEXT } from './budget.js';
+import { RELEVANT_FACTS_MAX_CHARS } from './vocabulary.js';
 import { holdsCapability, registerWorkerMode, toSearchQuery } from './worker.js';
 
 /**
@@ -730,7 +731,16 @@ describe('registerWorkerMode', () => {
         status: 'completed',
         activityId: 'act-1',
         factIds: [],
-        factsRejected: [null, 'x', { index: 0, linkType: 'hosts', reason: 'undeclared_link_type' }],
+        factsRejected: [
+          null,
+          'x',
+          {
+            index: 0,
+            linkType: 'hosts',
+            reason: 'undeclared_link_type',
+            declaredBetween: ['runs_on: Container -> Host'],
+          },
+        ],
         proposedOperationsRejected: { index: 0, reason: 'gatekeeper_not_found' },
         evidenceDropped: [1, '2', null],
       },
@@ -755,7 +765,8 @@ describe('registerWorkerMode', () => {
     const text = firstPart?.type === 'text' ? firstPart.text : '';
     const refusedLines = text.split('\n').filter((line) => line.startsWith('- '));
     expect(refusedLines).toEqual([
-      '- factsToAssert[0] (hosts): undeclared_link_type',
+      // Legacy 968: an undeclared LinkType's refusal names what is declared between the types.
+      '- factsToAssert[0] (hosts): undeclared_link_type — declared between these types: ["runs_on: Container -> Host"]',
       '- evidence[1]: dropped (its factIndex points outside factsToAssert)',
     ]);
     logSpy.mockRestore();
@@ -814,6 +825,68 @@ describe('registerWorkerMode', () => {
 
     const getTaskCall = kernel.requests.find((r) => r.capability === 'get_task');
     expect(getTaskCall?.params).toEqual({ taskId: 'task-1' });
+  });
+
+  it('legacy 968: the context carries get_task’s ontology vocabulary ahead of the related facts, and no section without one', async () => {
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        input: 'list the containers',
+        ontologyVocabulary: {
+          objectTypes: [
+            { name: 'Container', identityKey: ['composeProjectId', 'serviceName'], relevant: true },
+            { name: 'Host', identityKey: ['hostname'], relevant: true },
+          ],
+          linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', relevant: true }],
+          omittedObjectTypes: 0,
+          omittedLinkTypes: 0,
+        },
+      },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [{ id: 'obj-1' }] } }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    const content = String(
+      (await contextHandler({ messages: [] }, fakeCtx())).messages[0]?.content,
+    );
+    expect(content).toContain('### Ontology vocabulary');
+    expect(content).toContain('- Container (composeProjectId, serviceName)');
+    expect(content).toContain('- runs_on: Container -> Host');
+    expect(content.indexOf('### Ontology vocabulary')).toBeLessThan(
+      content.indexOf('### Relevant facts'),
+    );
+
+    const fake2 = createFakePi();
+    registerWorkerMode(fake2.api, { kernelClient, workspaceId: 'ws-1', taskId: 'task-1' });
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'list the containers' } }));
+    const plainHandler = fake2.handlers.get('context');
+    if (!plainHandler) throw new Error('context handler not registered');
+    const plain = String((await plainHandler({ messages: [] }, fakeCtx())).messages[0]?.content);
+    expect(plain).not.toContain('Ontology vocabulary');
+  });
+
+  it('legacy 968: the related facts in the context stay within their budget however many search returns', async () => {
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'x' } }));
+    kernel.setHandler('search', () => ({
+      ok: true,
+      result: {
+        items: Array.from({ length: 50 }, (_, i) => ({
+          id: `obj-${i}`,
+          properties: { notes: 'z'.repeat(400) },
+        })),
+      },
+    }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    const content = String(
+      (await contextHandler({ messages: [] }, fakeCtx())).messages[0]?.content,
+    );
+    const facts = content.slice(content.indexOf('### Relevant facts'));
+    const section = facts.split('\n### ')[0] ?? '';
+    expect(section.length).toBeLessThanOrEqual(RELEVANT_FACTS_MAX_CHARS);
+    expect(section).toMatch(/- … and \d+ more not shown$/);
   });
 
   it('S11 GO5d-1: a goal step with an output schema gets an "Output contract" section; a rework gets "Previous attempt" with what was refused', async () => {

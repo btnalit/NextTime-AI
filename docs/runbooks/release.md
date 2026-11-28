@@ -796,6 +796,24 @@ Alpine 源——这是验收仍剩的出网点（遗留 139）。拉取或验签
 - **回滚**（见 §5，没有迁移）：只回退代码，新写下的行里的 `redactedTails`、`redactedTailChars` 留着。旧版本读到这两个字段不会出错：结果的形状只在测试里校验（`KERNEL_VALIDATE_RESULTS`），控制台读工具调用记录时也不按严格形状解析。回滚后，规则没想到的写法又露出值的后半段。存量改写这一版只多改了旧截法的工具调用记录，被改写的行要找回原样只能从这次 apply 的 `BACKUP_NOW` 备份里取（§5）。
 - 下一次主机升级的提示要带上本节。
 
+### 3.227 Worker 知道它的事实能用哪些 LinkType（遗留 968，0.70.1 之后的下一版）
+
+> 主机步骤：无；维护者本人：否
+
+没有迁移。设计见 `docs/tool-result-and-budget-design-2026-11-27.md` §5。
+
+- **以前**：Worker 写 `factsToAssert` 时从没被告知工作区的本体，只能猜 LinkType 的名字。`reject` 的工作区里每个猜错的都被拒，`warn` 的工作区里每个都计进 I-S5-1。被拒时只说「未声明的 LinkType」，不说这两种类型之间声明了哪些。
+- **现在**：
+  - `get_task` 给这个 Task 自己的 Worker 一份 `ontologyVocabulary`：已发布的 ObjectType 与它们的标识键、LinkType 的签名，去掉平台元本体（I16 先拒）。它自己的 Operation 读写的排在前面，其余按名字；最多 100 个类型、200 个 LinkType，其余计数。工作区没发布本体时是 `null`。评估运行的 Worker 不给：它的世界是套件的固定数据，与工作区隔开。
+  - Worker 模式把它放进上下文、在相关事实前面，最多 4,000 字符：放得下就整行，放不下只写名字，再放不下只写个数。每个名字写成一行（控制字符和换行都换成空格），最多 120 字符；没有可写的 LinkType 时只说 `factsToAssert` 留空。相关事实也限 4,000 字符（整行，放不下的计数，后面的照样试）。
+  - LinkType 未声明的拒绝带上这两种类型之间（两个方向）声明了的签名（`declaredBetween`，最多 20 条）：守卫的消息与 details、存下的拒绝、`report_result` 的回答里都有，Worker 模式在拒绝那一行显示。
+  - `list_allowed_operations` 的规则抽成 `readAllowedOperations`，`get_task` 也读它。
+- **代价**：`get_task` 多读一次已发布的本体（每个 Worker 一次）；上下文多至多 4,000 字符。
+- **升级影响**：没有需要手工执行的步骤，内核与智能体镜像随正常升级更换。契约快照里 `get_task` 的回答多了 `ontologyVocabulary`，旧的智能体镜像不读它。
+- **可选的观察（不是验收项）**：以后有人在试验工作区派会写事实的 Worker，Task 的工具调用里 `get_task` 的回答带 `ontologyVocabulary`，Worker 写出的 LinkType 是声明过的。不要为了核对专门派一次：要登录控制台、用主机的模型。`get_task` 给谁词汇、拒绝带 `declaredBetween` 由 `worker-result.integration.test.ts` 覆盖（评估运行不给由 `eval-runs.integration.test.ts` 覆盖），词汇的内容与上限由内核的 `vocabulary.test.ts` 覆盖，上下文里的三档与相关事实的上限由 platform-extension 的 `vocabulary.test.ts`、`worker.test.ts` 覆盖。
+- **回滚**（见 §5，没有迁移）：只回退代码，Worker 又不知道本体。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

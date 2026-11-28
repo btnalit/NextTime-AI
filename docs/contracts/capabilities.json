@@ -36377,6 +36377,93 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "ontologyVocabulary": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "linkTypes": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "domain": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "range": {
+                        "type": "string"
+                      },
+                      "relevant": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "domain",
+                      "range",
+                      "relevant"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "objectTypes": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "identityKey": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "relevant": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "identityKey",
+                      "relevant"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "omittedLinkTypes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "omittedObjectTypes": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "objectTypes",
+                "linkTypes",
+                "omittedObjectTypes",
+                "omittedLinkTypes"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "outputSchema": {
           "anyOf": [
             {
@@ -51196,6 +51283,93 @@
               },
               "onBehalfOf": {
                 "type": "string"
+              },
+              "ontologyVocabulary": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "linkTypes": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "domain": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "range": {
+                              "type": "string"
+                            },
+                            "relevant": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "domain",
+                            "range",
+                            "relevant"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "objectTypes": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "identityKey": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "relevant": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "identityKey",
+                            "relevant"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "omittedLinkTypes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "omittedObjectTypes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "objectTypes",
+                      "linkTypes",
+                      "omittedObjectTypes",
+                      "omittedLinkTypes"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "outputSchema": {
                 "anyOf": [
@@ -73312,6 +73486,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "declaredBetween": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "detail": {
                 "type": "string"
               },

@@ -31,7 +31,7 @@ import {
   operationProposalRefusal,
   unstorableActedText,
 } from '../../governance/gatekeepers/index.js';
-import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
+import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { boundedEcho, quotedName, redactSecrets } from '../../governance/redaction/index.js';
 import { SqlGraphStore, shownObjectProperties } from '../../substrate/graph/index.js';
 import {
@@ -474,6 +474,9 @@ function toWireFactRejection(rejection: RejectedResultFact) {
     ...(rejection.sourceType !== undefined ? { sourceType: rejection.sourceType } : {}),
     ...(rejection.targetType !== undefined ? { targetType: rejection.targetType } : {}),
     ...(rejection.expected !== undefined ? { expected: [...rejection.expected] } : {}),
+    ...(rejection.declaredBetween !== undefined
+      ? { declaredBetween: [...rejection.declaredBetween] }
+      : {}),
     ...(rejection.detail !== undefined ? { detail: rejection.detail } : {}),
   };
 }
@@ -571,8 +574,23 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
   _params,
   ctx,
 ) => {
+  const allowed = await readAllowedOperations(client, workspaceId, ctx);
+  return {
+    result: { items: allowed.map(({ record, gateName }) => toWireOperation(record, gateName)) },
+  };
+};
+
+/** The published Operations the calling Handle may call, in tool-naming order, each with its gate's
+ *  display name — `list_allowed_operations`'s rule (its doc comment above). Legacy 968: `get_task`
+ *  reads it too, to put the ObjectTypes these Operations read and write first in the Worker's
+ *  vocabulary. `[]` for a caller with no Handle. */
+export async function readAllowedOperations(
+  client: PoolClient,
+  workspaceId: string,
+  ctx: Parameters<CapabilityHandler>[3],
+): Promise<{ readonly record: OperationRecord; readonly gateName: string }[]> {
   const principalId = ctx?.principalId;
-  if (!ctx?.scope || !principalId) return { result: { items: [] } };
+  if (!ctx?.scope || !principalId) return [];
 
   // Same rule as the MCP projection (interfaces/mcp/tool-projection.ts `wantsExecuteGates`).
   const executeGatekeepers = new Set(
@@ -602,7 +620,7 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
   // One `getGatekeeper` per gate (not per Operation): its display name, and — the same lookup
   // `observe_operation` 404s on — whether the gate counts as enabled for `observeRefusal`.
   const gateRecords = new Map<string, GatekeeperRecord | null>();
-  const operations = [];
+  const operations: { readonly record: OperationRecord; readonly gateName: string }[] = [];
   for (const record of records) {
     let gatekeeper = gateRecords.get(record.gatekeeperId);
     if (gatekeeper === undefined) {
@@ -623,8 +641,7 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
             platformPolicy,
           }) === undefined;
     if (!listed) continue;
-    operations.push(toWireOperation(record, gatekeeper?.name ?? record.gatekeeperId));
+    operations.push({ record, gateName: gatekeeper?.name ?? record.gatekeeperId });
   }
-
-  return { result: { items: operations } };
-};
+  return operations;
+}

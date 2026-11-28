@@ -448,6 +448,19 @@ export async function loadPublishedLinkTypes(
   client: PoolClient,
   workspaceId: string,
 ): Promise<ReadonlyMap<string, readonly LinkTypeSignature[]>> {
+  return (await loadPublishedOntology(client, workspaceId)).linkTypes;
+}
+
+/** Legacy 968: the ObjectTypes and LinkTypes of the workspace's published ontology, read with the
+ *  rule `loadPublishedLinkTypes` reads by (every family's latest published version) — what a Link
+ *  write is checked against, and so what a Worker is told it may write Facts with. */
+export async function loadPublishedOntology(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<{
+  readonly objectTypes: ReadonlyMap<string, ObjectTypeDefinition>;
+  readonly linkTypes: ReadonlyMap<string, readonly LinkTypeSignature[]>;
+}> {
   const result = await client.query<{
     id: string;
     version: number;
@@ -468,7 +481,8 @@ export async function loadPublishedLinkTypes(
      order by t.id`,
     [workspaceId],
   );
-  return mergeVisibleOntology(result.rows).linkTypes;
+  const { objectTypes, linkTypes } = mergeVisibleOntology(result.rows);
+  return { objectTypes, linkTypes };
 }
 
 /** S11 P1-B: per LinkType name, the families whose latest published version declares it — the same
@@ -514,7 +528,12 @@ export interface ValidateLinkInput {
  *  purpose so the guard's error body can tell an agent *which* of the two things to fix. */
 export type LinkEvaluation =
   | { readonly kind: 'declared_and_valid' }
-  | { readonly kind: 'undeclared_link_type' }
+  | {
+      readonly kind: 'undeclared_link_type';
+      /** Legacy 968: the signatures declared between the two types, either way round
+       *  (`declaredBetween`) — what the writer could have named instead. */
+      readonly declaredBetween: readonly string[];
+    }
   | {
       readonly kind: 'domain_range_violation';
       /** Every `domain -> range` signature the LinkType does declare. */
@@ -524,6 +543,32 @@ export type LinkEvaluation =
 const matchesTypeName = (value: string, expected: string): boolean =>
   expected === '*' || expected === value;
 
+/** At most this many signatures `declaredBetween` names. */
+export const MAX_DECLARED_BETWEEN = 20;
+
+/** Legacy 968: every published signature that joins `a` and `b`, in either direction, as
+ *  `name: domain -> range` (sorted, at most {@link MAX_DECLARED_BETWEEN}) — what a refusal of an
+ *  undeclared LinkType tells its writer it could have named. A signature the other way round is
+ *  listed too: a model that invented `hosts` for Host -> Container learns `runs_on` is
+ *  Container -> Host. */
+export function declaredBetween(
+  linkTypes: ReadonlyMap<string, readonly LinkTypeSignature[]>,
+  a: string,
+  b: string,
+): string[] {
+  const joins = (signature: LinkTypeSignature, source: string, target: string) =>
+    matchesTypeName(source, signature.domain) && matchesTypeName(target, signature.range);
+  const found = new Set<string>();
+  for (const [name, signatures] of linkTypes) {
+    for (const signature of signatures) {
+      if (joins(signature, a, b) || joins(signature, b, a)) {
+        found.add(`${name}: ${signature.domain} -> ${signature.range}`);
+      }
+    }
+  }
+  return [...found].sort().slice(0, MAX_DECLARED_BETWEEN);
+}
+
 /** Pure half of `validateLink`, shared with the S5.1 write guard: does some signature of
  *  `input.linkType` in `linkTypes` accept `input.sourceType -> input.targetType` (`"*"` matches
  *  any type on either side)? */
@@ -532,7 +577,12 @@ export function evaluateLink(
   input: ValidateLinkInput,
 ): LinkEvaluation {
   const signatures = linkTypes.get(input.linkType);
-  if (!signatures || signatures.length === 0) return { kind: 'undeclared_link_type' };
+  if (!signatures || signatures.length === 0) {
+    return {
+      kind: 'undeclared_link_type',
+      declaredBetween: declaredBetween(linkTypes, input.sourceType, input.targetType),
+    };
+  }
   const accepted = signatures.some(
     (signature) =>
       matchesTypeName(input.sourceType, signature.domain) &&
