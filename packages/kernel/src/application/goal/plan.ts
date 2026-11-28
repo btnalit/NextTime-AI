@@ -85,9 +85,11 @@ import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../wor
  *   - `input` — passed to the Worker as the Task's input, as is, with the values its `bindings` take
  *     put in;
  *   - `dependsOn` — keys of steps that must have succeeded first; the graph is acyclic;
- *   - `nested` — the step may start Workers of its own (`invoke_worker` / `find_workers` in its
- *     Handle). Off by default: teams are the advancer's, so budgets and dependencies have one
- *     manager (§4.4);
+ *   - `nested` — refused (legacy 981): a step's Worker runs in worker mode, which has no
+ *     `invoke_worker` or `find_workers` tool, so a step cannot start Workers of its own and its
+ *     Handle never carries either (`application/task/step-attempt.ts`). The field stays in the
+ *     schema so a plan stored before can still be read, and `false` is accepted. Teams are the
+ *     advancer's, so budgets and dependencies have one manager (§4.4);
  *   - `maxAttempts` — attempts before a transient failure needs a person (default
  *     {@link DEFAULT_MAX_ATTEMPTS});
  *   - `reconcile` (S11 GO3d, plan §4.7) — for an action the step may raise, how the platform checks
@@ -235,6 +237,12 @@ export function planShape(plan: unknown): GoalPlan {
   return parsed.data;
 }
 
+/** Why a step that says `nested` is refused (legacy 981): said where the plan is written, so the
+ *  step does not run believing it can start a team. */
+export function nestedProblem(key: string): string {
+  return `step "${key}": nested is not supported — a step's Worker has no invoke_worker or find_workers tool, so it cannot start Workers of its own; leave nested out and add the work as steps of the plan`;
+}
+
 /** {@link planShape}, then the plan's size, step graph and declarations — no database. Throws
  *  {@link GoalPlanValidationError} naming every problem found, each where it is. */
 export function parsePlan(plan: unknown): GoalPlan {
@@ -247,6 +255,7 @@ export function parsePlan(plan: unknown): GoalPlan {
   for (const step of shaped.steps) {
     if (keys.has(step.key)) problems.push(`step "${step.key}": the key appears more than once`);
     keys.add(step.key);
+    if (step.nested === true) problems.push(nestedProblem(step.key));
   }
   for (const step of shaped.steps) {
     for (const dependency of step.dependsOn ?? []) {

@@ -249,6 +249,8 @@ export const PlanStepSchema = z
     spec: WorkerSpecSchema.optional(),
     input: z.unknown().optional(),
     dependsOn: z.array(StepKeySchema).max(MAX_PLAN_STEPS).optional(),
+    /** Read here so a stored plan that says it still parses; the kernel's plan check refuses
+     *  `nested: true` (legacy 981): a step's Worker has no `invoke_worker` tool to act on it. */
     nested: z.boolean().optional(),
     maxAttempts: z.number().int().min(1).max(MAX_STEP_ATTEMPTS).optional(),
     reconcile: z.array(StepReconcileSchema).min(1).max(MAX_STEP_RECONCILE_DECLARATIONS).optional(),

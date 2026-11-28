@@ -94,7 +94,7 @@ import {
 } from './advancer.js';
 import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
 import { cancelGoalRun, pauseGoalRun, releaseGoalRunHold, resumeGoalRun } from './control.js';
-import { GoalPlanValidationError } from './plan.js';
+import { GoalPlanValidationError, nestedProblem } from './plan.js';
 import { getGoalRun, getPlanRevision, listStepRuns } from './reads.js';
 import {
   type DueReconcileCheck,
@@ -226,7 +226,6 @@ interface StepSpec {
   readonly dependsOn?: readonly string[];
   readonly maxAttempts?: number;
   readonly input?: unknown;
-  readonly nested?: boolean;
   readonly reconcile?: readonly unknown[];
   readonly acceptance?: readonly unknown[];
 }
@@ -313,7 +312,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           input: step.input ?? { step: step.key },
           ...(step.dependsOn ? { dependsOn: step.dependsOn } : {}),
           ...(step.maxAttempts ? { maxAttempts: step.maxAttempts } : {}),
-          ...(step.nested ? { nested: true } : {}),
           ...(step.reconcile ? { reconcile: step.reconcile } : {}),
           ...(step.acceptance ? { acceptance: step.acceptance } : {}),
         })),
@@ -721,6 +719,77 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           propose({ steps: [{ key: 'a', worker, acceptance: 'always' }] }),
         ).rejects.toBeInstanceOf(GoalPlanValidationError);
+      });
+
+      it('legacy 981: refuses a nested step when proposed, and when a proposal stored before says it is confirmed', async () => {
+        const requester = await newPrincipal();
+        const nestedPlan = { steps: [{ key: 'n', worker, input: { step: 'n' }, nested: true }] };
+        const problemsOf = async (call: Promise<unknown>) => {
+          const err = await call.then(
+            () => null,
+            (thrown: unknown) => thrown,
+          );
+          expect(err).toBeInstanceOf(GoalPlanValidationError);
+          return (err as GoalPlanValidationError).problems;
+        };
+        expect(
+          await problemsOf(
+            asRequester(requester, (client) =>
+              createGoalRun(client, workspaceId, {
+                requesterId: requester,
+                proposedBy: requester,
+                statement: 'a team',
+                plan: nestedPlan,
+                budget: BUDGET,
+              }),
+            ),
+          ),
+        ).toEqual([nestedProblem('n')]);
+
+        // A proposal written before the refusal: confirming it checks the plan again, so the
+        // step never starts on a Handle it would read as able to start a team.
+        const goalRunId = await admin(async (client) => {
+          const goal = await client.query<{ id: string }>(
+            `insert into goal_runs (workspace_id, on_behalf_of, statement, budget_max_tokens,
+               budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds)
+             values ($1, $2, 'a team, proposed before', $3, $4, $5, $6) returning id`,
+            [
+              workspaceId,
+              requester,
+              BUDGET.maxTokens,
+              BUDGET.maxSteps,
+              BUDGET.maxRevisions,
+              BUDGET.maxWallClockSeconds,
+            ],
+          );
+          const id = goal.rows[0]?.id as string;
+          await client.query(
+            `insert into plan_revisions (workspace_id, goal_run_id, revision, plan, proposed_by,
+               validation)
+             values ($1, $2, 1, $3::jsonb, $4, $5::jsonb)`,
+            [
+              workspaceId,
+              id,
+              JSON.stringify(nestedPlan),
+              requester,
+              JSON.stringify({ valid: true, steps: 1, hints: [] }),
+            ],
+          );
+          return id;
+        });
+        expect(
+          await problemsOf(
+            asRequester(requester, (client) =>
+              confirmGoalRun(client, workspaceId, {
+                goalRunId,
+                revision: 1,
+                confirmedBy: requester,
+              }),
+            ),
+          ),
+        ).toEqual([nestedProblem('n')]);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'proposed' });
+        expect(await goalTaskCount(goalRunId)).toBe(0);
       });
     });
 
@@ -2642,10 +2711,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(steps.b).toMatchObject({ status: 'running', attemptCount: 2 });
         expect(Number((await latestAttempt(steps.b?.id as string)).token_budget)).toBe(700);
 
-        // A lone nested step holds all of a goal smaller than the workspace default (200000), and
-        // its Worker can still start a child: half of what the attempt has not spent (review #493
-        // P2-1 on #626).
-        const nested = await startGoal(requester, [{ key: 'n', nested: true }], {
+        // A lone step holds all of a goal smaller than the workspace default (200000), and a child
+        // started under its attempt gets half of what the attempt has not spent (review #493 P2-1
+        // on #626).
+        const nested = await startGoal(requester, [{ key: 'n' }], {
           ...BUDGET,
           maxTokens: 150_000,
         });
@@ -2711,7 +2780,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       // ----- S11 GO3b ---------------------------------------------------------------------------
 
       /** A nested child Task of `stepRunId`, running, carried by a WorkerRun under `parentRunId` —
-       *  as `invoke_worker` records one (the child inherits its caller's goal step). */
+       *  as `invoke_worker` records one (the child inherits its caller's goal step). Written here:
+       *  a step's Handle carries no `invoke_worker` (legacy 981 step 1), and the advancer's handling
+       *  of a step's children stays for when worker mode gets the tool (step 2). */
       async function nestedChild(
         goalRunId: string,
         stepRunId: string,
@@ -2892,7 +2963,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('a step is judged only once its nested child Tasks ended; a request the child raised after its caller finished holds the step', async () => {
         const requester = await newPrincipal();
-        const goalRunId = await startGoal(requester, [{ key: 'n', nested: true }]);
+        const goalRunId = await startGoal(requester, [{ key: 'n' }]);
         await advance(goalRunId, requester);
         const step = (await stepsOf(goalRunId)).n as StepRunRow;
         const child = await nestedChild(goalRunId, step.id, await latestRun(step.id), requester);
@@ -2916,7 +2987,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await goalOf(goalRunId)).status).toBe('verifying');
 
         // A person's retry waits for the step's Tasks too.
-        const retried = await startGoal(requester, [{ key: 'r', nested: true, maxAttempts: 1 }]);
+        const retried = await startGoal(requester, [{ key: 'r', maxAttempts: 1 }]);
         await advance(retried, requester);
         const stepR = (await stepsOf(retried)).r as StepRunRow;
         const childR = await nestedChild(retried, stepR.id, await latestRun(stepR.id), requester);
@@ -2938,7 +3009,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('S8 (default): a revision removes a running step — its Tasks, nested child included, are terminated and its requests withdrawn; a kept step runs on, an added one starts on resume', async () => {
         const requester = await newPrincipal();
-        const goalRunId = await startGoal(requester, [{ key: 'a', nested: true }, { key: 'b' }]);
+        const goalRunId = await startGoal(requester, [{ key: 'a' }, { key: 'b' }]);
         await advance(goalRunId, requester);
         let steps = await stepsOf(goalRunId);
         const stepA = steps.a as StepRunRow;
@@ -3072,7 +3143,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('S8 (let it finish): its Tasks run on but raise nothing new; the released request is decided and runs as usual, the others are withdrawn; the run verifies once nothing of it runs', async () => {
         const requester = await newPrincipal();
-        const goalRunId = await startGoal(requester, [{ key: 'a', nested: true }, { key: 'b' }]);
+        const goalRunId = await startGoal(requester, [{ key: 'a' }, { key: 'b' }]);
         await advance(goalRunId, requester);
         const steps = await stepsOf(goalRunId);
         const stepA = steps.a as StepRunRow;

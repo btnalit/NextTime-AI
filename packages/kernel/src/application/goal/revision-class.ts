@@ -39,10 +39,11 @@ import type { GoalRunRow } from './types.js';
  *     proposed plan that will still run. A check moved to a new step, or a new check added, needs
  *     nobody: what had to hold still has to;
  *   - `execution_step`: a step the revision adds or changes can act — it declares `nested`
- *     (Workers of its own), `reconcile` checks (it raises actions), or its Worker would hold an
- *     execute-class capability with the requester's authority (`resolveStepAuthority`,
- *     `isExecuteClassCapability`: `request_action`, a gate's execute Operations), named on the
- *     reason (`capabilities`);
+ *     (Workers of its own; `parsePlan` refuses it since legacy 981, so a revised plan reaching
+ *     here never says it — the check stays for a plan read any other way), `reconcile` checks (it
+ *     raises actions), or its Worker would hold an execute-class capability with the requester's
+ *     authority (`resolveStepAuthority`, `isExecuteClassCapability`: `request_action`, a gate's
+ *     execute Operations), named on the reason (`capabilities`);
  *   - `gate_added`: a step the revision adds or changes declares a gate (its WorkerSpec's, else its
  *     Worker's) that the plan in force's step under the same key did not — a new key had none —
  *     even one the requester holds and only reads through (the coordinator's call on #866: what
@@ -250,7 +251,6 @@ export async function plannerRevisionFacts(
       workspaceId,
       goal.onBehalfOf,
       step.worker,
-      step.nested === true,
       step.spec ?? null,
     );
     if (authority.kind === 'refused') {

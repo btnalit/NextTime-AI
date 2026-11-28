@@ -537,7 +537,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           handle: { gatekeepers: [gate] },
         });
         // Invariant 1 — only narrows: within the Worker ceiling and the requester's scope; the
-        // derivation capabilities stay out without `nested`; the budget is the least of the caps.
+        // derivation capabilities always stay out (legacy 981); the budget is the least of the
+        // caps.
         const ceiling = new Set(WORKER_CEILING_CAPABILITIES);
         for (const name of snapshot.handle.capabilities) expect(ceiling.has(name)).toBe(true);
         expect(snapshot.handle.capabilities).toContain('request_action');
@@ -1138,7 +1139,6 @@ describe.runIf(DATABASE_URL !== undefined)(
               worker,
               spec,
               input: null,
-              nested: false,
               outputSchema: null,
               reworkOf: null,
               previous: from,

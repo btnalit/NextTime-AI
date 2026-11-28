@@ -15,6 +15,7 @@ import {
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
   type PlanStep,
+  nestedProblem,
   parsePlan,
   planAsRead,
   planHints,
@@ -44,15 +45,27 @@ function problemsOf(plan: unknown): readonly string[] {
 }
 
 describe('parsePlan', () => {
-  it('accepts a plan with dependencies, nesting and an attempt limit', () => {
+  it('accepts a plan with dependencies and an attempt limit', () => {
     const plan = parsePlan({
       steps: [
         step('a', { input: { anything: [1, 2] } }),
         step('b'),
-        step('c', { dependsOn: ['a', 'b'], nested: true, maxAttempts: MAX_STEP_ATTEMPTS }),
+        step('c', { dependsOn: ['a', 'b'], maxAttempts: MAX_STEP_ATTEMPTS }),
       ],
     });
     expect(plan.steps.map((entry) => entry.key)).toEqual(['a', 'b', 'c']);
+  });
+
+  // Legacy 981: a step's Worker has no invoke_worker / find_workers, so `nested: true` would
+  // start a Worker that cannot do what it was asked. The plan is refused, naming the step.
+  it('refuses a nested step and says why, but takes nested: false as written', () => {
+    expect(problemsOf({ steps: [step('a'), step('c', { nested: true })] })).toEqual([
+      nestedProblem('c'),
+    ]);
+    expect(nestedProblem('c')).toContain('step "c"');
+    expect(nestedProblem('c')).toContain('invoke_worker');
+    const plan = parsePlan({ steps: [step('a', { nested: false })] });
+    expect(plan.steps[0]?.nested).toBe(false);
   });
 
   it('refuses unknown fields rather than ignoring them', () => {

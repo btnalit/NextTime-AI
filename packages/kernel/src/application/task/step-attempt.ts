@@ -71,12 +71,14 @@ import {
  *
  * Authority (I-G7): the parent of the attempt's Handle is the requester's entry scope **now** —
  * `entryScope` over `entryGatekeeperIds(readExecuteAccess(...))`, what their entry agent would be
- * minted with this minute — never a scope captured at confirmation. A step's Handle carries no
- * `invoke_worker` / `find_workers` unless its plan entry says `nested` (§4.4: teams are the
- * advancer's). Unlike `invoke_worker`, which leaves out an observe-only gate the caller does not
- * hold, an attempt whose WorkerDefinition declares a gate the requester can no longer act on does
- * not start: the plan the requester confirmed needs it, so the goal pauses `authority_lost` for a
- * person (scenario S9) instead of running a narrower Worker than the one planned.
+ * minted with this minute — never a scope captured at confirmation. A step's Handle never carries
+ * `invoke_worker` / `find_workers` (§4.4: teams are the advancer's; legacy 981: its Worker runs in
+ * worker mode, which has neither tool, so a plan entry that says `nested` — refused since, kept in
+ * a plan stored before — does not add them). Unlike `invoke_worker`, which leaves out an
+ * observe-only gate the caller does not hold, an attempt whose WorkerDefinition declares a gate
+ * the requester can no longer act on does not start: the plan the requester confirmed needs it, so
+ * the goal pauses `authority_lost` for a person (scenario S9) instead of running a narrower Worker
+ * than the one planned.
  *
  * Pinned configuration (§4.4 "新尝试读快照"): the first attempt resolves the WorkerDefinition version
  * the plan names, the Skills it uses (latest published, as `invoke_worker` does), the model (the
@@ -208,7 +210,6 @@ export interface CreateStepAttemptInput {
   /** S11 GO8a: the plan entry's WorkerSpec (`null`: it sets none). */
   readonly spec: WorkerSpec | null;
   readonly input: unknown;
-  readonly nested: boolean;
   /** S11 GO5d-1: the step's output schema the attempt's result is held to (`null`: none). */
   readonly outputSchema: OutputSchema | null;
   /** S11 GO5d-1: the previous attempt this one redoes, when that one ended without an accepted
@@ -256,7 +257,7 @@ export type CreateStepAttemptResult =
 export const STEP_ATTEMPT_PAUSED_DETAIL =
   'the evaluation seal paused the agents acting for the requester, so no Worker starts for them until the workspace owner releases the pause';
 
-/** Capabilities a step's Handle carries only when its plan entry declares `nested`. */
+/** Capabilities a step's Handle never carries (legacy 981: worker mode has no tool for either). */
 const DERIVATION_CAPABILITIES: ReadonlySet<string> = new Set(['invoke_worker', 'find_workers']);
 
 /** The parent scope of a step's Handle — see the module doc comment (I-G7) — with who reads the
@@ -272,7 +273,6 @@ async function stepParentScope(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
-  nested: boolean,
 ): Promise<StepParent | { readonly refusal: StepAttemptRefusal }> {
   if (await principalDisabled(client, workspaceId, requesterId)) {
     return {
@@ -305,9 +305,7 @@ async function stepParentScope(
   }
   return {
     scope: {
-      capabilities: nested
-        ? entry.capabilities
-        : entry.capabilities.filter((name) => !DERIVATION_CAPABILITIES.has(name)),
+      capabilities: entry.capabilities.filter((name) => !DERIVATION_CAPABILITIES.has(name)),
       resources: entry.resources,
     },
     viewer: { principalId: requesterId, role: access.role },
@@ -325,7 +323,7 @@ export async function requesterStartAuthority(
   workspaceId: string,
   requesterId: string,
 ): Promise<{ readonly refusal: StepAttemptRefusal } | { readonly role: Role }> {
-  const parent = await stepParentScope(client, workspaceId, requesterId, false);
+  const parent = await stepParentScope(client, workspaceId, requesterId);
   return 'refusal' in parent ? { refusal: parent.refusal } : { role: parent.viewer.role };
 }
 
@@ -369,7 +367,6 @@ export async function resolveStepAuthority(
   workspaceId: string,
   requesterId: string,
   ref: { readonly definitionId: string; readonly version: number },
-  nested: boolean,
   spec: WorkerSpec | null = null,
 ): Promise<StepAuthority | { readonly kind: 'refused'; readonly refusal: StepAttemptRefusal }> {
   const refused = (refusal: StepAttemptRefusal) => ({ kind: 'refused' as const, refusal });
@@ -401,7 +398,7 @@ export async function resolveStepAuthority(
     defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
   const declaredGates = spec?.gates ?? content.gates ?? [];
 
-  const parent = await stepParentScope(client, workspaceId, requesterId, nested);
+  const parent = await stepParentScope(client, workspaceId, requesterId);
   if ('refusal' in parent) return refused(parent.refusal);
   const heldGates = new Set(parent.scope.resources.gatekeeper ?? []);
   const missingGates = declaredGates.filter((gate) => !heldGates.has(gate));
@@ -726,14 +723,7 @@ export async function createStepAttemptTask(
       });
     }
   }
-  const authority = await resolveStepAuthority(
-    client,
-    workspaceId,
-    requesterId,
-    ref,
-    input.nested,
-    input.spec,
-  );
+  const authority = await resolveStepAuthority(client, workspaceId, requesterId, ref, input.spec);
   if (authority.kind === 'refused') return refused(authority.refusal);
   const { definition, content, declaredCapabilities, declaredGates, parent, childScope } =
     authority;
