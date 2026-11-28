@@ -453,8 +453,9 @@ export async function projectProcedureObject(
  *  confirmed the Object exists and the transition is legal (`governance/gatekeepers/manifest.ts`
  *  reads it first and runs it through `PUBLISHABLE_TRANSITIONS`) — this function does not check
  *  either, matching `upsertObject`'s own "no identity → always insert" behavior: calling this for
- *  an identity that does not yet exist would silently create an incomplete Object rather than
- *  erroring, which is exactly the mistake callers are expected to avoid by reading first. The
+ *  an identity that does not yet exist would try to insert an incomplete Object past draft — the
+ *  mistake callers avoid by reading first, and one the database refuses since legacy 484 (core
+ *  0065: an Operation row is inserted only as a draft). The
  *  *superseded* version a publish retires goes through `deprecatePublishedOperationObjects` below
  *  instead (R-08), which matches by identity fields and status rather than by one exact key. */
 export async function setOperationStatusObject(

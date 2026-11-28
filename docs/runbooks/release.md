@@ -835,6 +835,21 @@ Alpine 源——这是验收仍剩的出网点（遗留 139）。拉取或验签
 - 第 2 步（在 worker 模式接通 `invoke_worker`）挂起，等到有真实的嵌套需求时单独设计。
 - 下一次主机升级的提示要带上本节。
 
+### 3.229 Operation 行只能以草稿插入（遗留 484 第 2 步，core 0065，0.70.1 之后的下一版）
+
+> 主机步骤：无；维护者本人：否
+
+**迁移 core 0065**：在 `objects` 上加一个 AFTER INSERT 触发器 `objects_operation_insert_draft`，随正常升级自动执行，不动数据、不扫表，只看之后新插入的行。
+
+- **以前**：Operation 行的更新由 core 0047 守着（状态只沿生命周期走，离开草稿后定义不变），插入却不检查。按身份写状态的 `setOperationStatusObject` 如果碰上一个不存在的身份，会插出一行只有 `status`、已经是 `published`（或 `deprecated`、`discarded`）的 Operation：没有定义，也没走过生命周期。产品路径都先读到行再写，所以今天没发生过，但数据库不拦。
+- **现在**：新插入的 Operation 行只能是草稿（没有 `status`、或 JSON null，也算草稿，和所有读取方一致）；其余一律拒绝，整条插入不落库。工作区角色和登录角色都受约束。
+  - 用 AFTER 而不是 BEFORE：图存储写对象用 `insert … on conflict do update`，BEFORE INSERT 在冲突改成更新时也会对拟插入的行触发，会误拒发布一个已存在的草稿；AFTER INSERT 只对真正插入的行触发，更新仍归 core 0047。
+  - 不证明谁能发布：草稿翻成已发布仍是任何写入者都能走的一条边，由 `publish_operation` 决定谁可以。
+- **对已有数据的影响**：没有。触发器不看已存在的行。
+- **升级影响**：没有需要手工执行的步骤。产品路径（导入、提议、发布、弃用、丢弃、改说明、刷新治理字段）行为不变。
+- **回滚**（见 §6 一行）：只需回退代码。上一版只插草稿，产品路径和测试夹具都是（遗留 484 第 1 步，#1287，v0.70.0 起）。要连 schema 一起撤：`drop trigger objects_operation_insert_draft on objects; drop function objects_operation_insert_draft();`，再删 `schema_migrations` 里 core 65 那一行。
+- 下一次主机升级的提示要带上本节。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1037,6 +1052,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | 0.69.2 之后的下一版 | task `0016_worker_run_tool_calls`（#1531，遗留 155）：新表 `worker_run_tool_calls`（WorkerRun 的工具调用记录，每个调用 id 一条、每个运行至多 200 条，`nexttime_app` 只有 SELECT / INSERT），工作区行级隔离，不回填 | 可逆 | 只加新表：上一版从不读写它；上一版的扩展不调 `report_tool_calls`，新扩展遇到上一版内核时 Handle 里没有这个能力，也不调 | 只需回退代码。要撤 schema：`drop table worker_run_tool_calls`，再删 `schema_migrations` 里 task 16 那一行（记录随之丢失） |
 | 0.69.2 之后的下一版 | governance `0049_session_note`（#1549，遗留 168 补充）：`sessions` 加可空列 `note`（签发 Handle 时写的备注）和约束 `sessions_note_bounded`（为空，或 1–200 个字符且首尾没有空格）；不回填 | 可逆 | 只加一列：上一版按列名插入 `sessions`、从不读写 `note`，空值总满足约束；新版本写下的备注上一版看不到，不影响它的行为 | 只需回退代码。要撤 schema：`alter table sessions drop column note`，再删 `schema_migrations` 里 governance 49 那一行（备注随之丢失） |
 | 0.69.2 之后的下一版 | core `0064_lookup_users_for_owner`（遗留 150）：`security definer` 函数 `lookup_users_for_owner(text, integer)`，只回答本工作区有效的 owner，返回可添加用户的登录名和显示名（最多 21 行），不改数据 | 可逆 | 只加函数：上一版从不调它 | 只需回退代码。要撤 schema：`drop function lookup_users_for_owner(text, integer);`，再删 `schema_migrations` 里 core 64 那一行 |
+| 0.70.1 之后的下一版 | core `0065_operation_insert_draft`（遗留 484）：`objects` 加 AFTER INSERT 触发器 `objects_operation_insert_draft`，新插入的 Operation 行只能是草稿（没有 `status` 或 JSON null 也算），其余拒绝；`insert … on conflict do update` 落到更新时不触发，更新仍归 core 0047 | 可逆 | 读了 v0.70.1 的写入：产品路径只经 `registerOperationDraftObject` 插草稿，`setOperationStatusObject` 的三处调用（发布、弃用、丢弃）都先读到那一行、不存在就报 `OperationNotFoundError`，所以落到更新；v0.70.1 的测试夹具在遗留 484 第 1 步（#1287，v0.70.0 起）已改成先插草稿再翻状态。CI 可逆性探针在本 PR 上对 v0.70.1 实测 | 只需回退代码。要撤 schema：`drop trigger objects_operation_insert_draft on objects; drop function objects_operation_insert_draft();`，再删 `schema_migrations` 里 core 65 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
