@@ -91,7 +91,8 @@ const RUN_CHARS = 8;
 
 /** Which secret characters of `row` an output shows, read without lining it up: a character is
  *  shown where some `RUN_CHARS` of its secret's characters around it (all of a shorter secret) are
- *  in the output as written. For the stored rows (`Row.stored`), whose rewrite is not its input
+ *  in the output as written. For the stored rows (`Row.stored`), and for a stored rewrite of what
+ *  the release wrote when either side's does not line up with it, whose rewrite is not its input
  *  with stretches masked — `repairSplitQuotedMasks` writes `\"[redacted]\"` where it read
  *  `[redacted]"…\"` — and which `shown` would count as showing every one. */
 export function shownInRuns(row: Row, places: Uint8Array, output: string): Uint8Array {
@@ -489,14 +490,24 @@ export function compare(
     if (nowOverWhole) info.streamShowsMoreThanWhole.now += 1;
     if (beforeOverWhole) info.streamShowsMoreThanWhole.before += 1;
 
-    // Rows the release wrote, rewritten on upgrade by each.
+    // Rows the release wrote, rewritten on upgrade by each. A rewrite that is not what the release
+    // wrote with stretches masked — v0.70.1's `repairSplitQuotedMasks` writes `\"[redacted]\"`
+    // where it read `[redacted]"…\"` — lines up with nothing, and `shownThrough` would count it as
+    // showing every secret character the release wrote: then both sides are read by `shownInRuns`,
+    // as the stored rows are (review #501 on #1639: dropping the repair left values shown that
+    // v0.70.1's rewrite hid, and this column did not see it).
     const stNow = now.stored(wBefore.value).value;
     const stBefore = before.stored(wBefore.value).value;
+    const aligned =
+      keptChars(wBefore.value, stNow) !== undefined &&
+      keptChars(wBefore.value, stBefore) !== undefined;
     if (
-      showsMore(
-        shownThrough(row, places, wBefore.value, stNow),
-        shownThrough(row, places, wBefore.value, stBefore),
-      )
+      aligned
+        ? showsMore(
+            shownThrough(row, places, wBefore.value, stNow),
+            shownThrough(row, places, wBefore.value, stBefore),
+          )
+        : showsMore(shownInRuns(row, places, stNow), shownInRuns(row, places, stBefore))
     ) {
       note('stored', row.t, stNow, stBefore);
     }
